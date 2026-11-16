@@ -110,19 +110,19 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
                 let kind = source_type(&fixture.meta.path)?;
                 let parsed = Parser::new(&allocator, &fixture.source, kind).parse();
                 let parse_ns = parse_started.elapsed().as_nanos();
-            black_box(parsed.diagnostics.len());
-            black_box(parsed.program.body.len());
+                black_box(parsed.diagnostics.len());
+                black_box(parsed.program.body.len());
 
-            let mut semantic_ns = 0;
-            if full {
-                let semantic_started = Instant::now();
-                let result = SemanticBuilder::new()
-                    .with_check_syntax_error(true)
-                    .build(&parsed.program);
-                semantic_ns = semantic_started.elapsed().as_nanos();
-                black_box(result.diagnostics.len());
-                black_box(result.semantic);
-            }
+                let mut semantic_ns = 0;
+                if full {
+                    let semantic_started = Instant::now();
+                    let result = SemanticBuilder::new()
+                        .with_check_syntax_error(true)
+                        .build(&parsed.program);
+                    semantic_ns = semantic_started.elapsed().as_nanos();
+                    black_box(result.diagnostics.len());
+                    black_box(result.semantic);
+                }
 
                 if measured {
                     parse_elapsed_ns += parse_ns;
