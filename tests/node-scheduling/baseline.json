@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "reference": {
+    "runtime": "Node.js",
+    "version": "26.13.0",
+    "sourceCommit": "18b32a3b1552e199a01f1a8d9fd64aa756d3b75b",
+    "sourceUrl": "https://github.com/nodejs/node/tree/18b32a3b1552e199a01f1a8d9fd64aa756d3b75b",
+    "profile": "Ogma Node.js Compatibility Profile 1.0.0"
+  },
+  "command": "node tests/node-scheduling/run.mjs",
+  "testCommand": [
+    "--test",
+    "--test-reporter=spec",
+    "tests/node-scheduling/scheduler.test.mjs"
+  ],
+  "fixtures": {
+    "commonjsCheckpoint": {
+      "file": "commonjs-checkpoint.cjs",
+      "expected": [
+        "sync:start",
+        "sync:end",
+        "nextTick:outer",
+        "nextTick:nested",
+        "promise:outer",
+        "microtask:outer",
+        "promise:from-nextTick",
+        "microtask:from-nextTick",
+        "promise:nested",
+        "nextTick:from-promise",
+        "immediate"
+      ]
+    },
+    "esmCheckpoint": {
+      "file": "esm-checkpoint.mjs",
+      "expected": [
+        "sync:start",
+        "sync:end",
+        "promise:entry",
+        "microtask:entry",
+        "after:top-level-await",
+        "nextTick:entry",
+        "immediate"
+      ]
+    },
+    "ioPhaseOrder": {
+      "file": "io-phase-order.cjs",
+      "expected": [
+        "io:complete",
+        "nextTick:io",
+        "promise:io",
+        "immediate:io",
+        "immediate:nested",
+        "timer:io"
+      ]
+    },
+    "cancellation": {
+      "file": "cancellation.cjs",
+      "expected": [
+        "nextTick",
+        "promise",
+        "immediate:survived",
+        "timer:survived"
+      ]
+    },
+    "intervalCancellation": {
+      "file": "interval-cancellation.cjs",
+      "expected": [
+        "interval:1",
+        "interval:2",
+        "after-clear"
+      ]
+    },
+    "errors": {
+      "file": "errors.cjs",
+      "expected": [
+        "uncaught:tick-failure",
+        "unhandled:promise-failure",
+        "immediate"
+      ]
+    }
+  }
+}
