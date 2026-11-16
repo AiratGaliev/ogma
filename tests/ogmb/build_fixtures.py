@@ -233,8 +233,8 @@ def main() -> None:
     merge_instructions = [
         instruction(0, 1, "constant", [1], {"pop": 0, "push": 1}, None, constant_refs=[0]),
         instruction(1, 2, "branch", [2, 3], {"pop": 1, "push": 0}, None, operands=[2, 3]),
-        instruction(2, 3, "constant", [4], {"pop": 0, "push": 1}, None, constant_refs=[1]),
-        instruction(3, 4, "nop", [4], {"pop": 0, "push": 0}, None),
+        instruction(2, 3, "constant", [3], {"pop": 0, "push": 1}, None, constant_refs=[1]),
+        instruction(3, 4, "jump", [4], {"pop": 0, "push": 0}, None, operands=[4]),
         instruction(4, 5, "return", [], {"pop": 1, "push": 0}, None),
     ]
     build_container("stack-merge.ogmb", merge_code, ["left", "right"])
