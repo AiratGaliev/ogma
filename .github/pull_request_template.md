@@ -20,7 +20,7 @@
 | Focused tests / proof harness | <!-- PASS / FAIL / NOT RUN / N/A --> | |
 | Formatting / static checks / compilation | <!-- PASS / FAIL / NOT RUN / N/A --> | |
 | Fast CI | <!-- PASS / FAIL / PENDING / N/A --> | |
-| Full promotion suite (promotion PR only) | <!-- PASS / FAIL / NOT RUN / N/A --> | |
+| Conformance promotion gate (PR to test/main only) | <!-- PASS / FAIL / PENDING / BLOCKED --> | |
 | Benchmark / resource measurements | <!-- PASS / FAIL / NOT RUN / N/A --> | |
 
 **Exact commands and results:**

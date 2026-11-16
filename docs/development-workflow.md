@@ -151,6 +151,8 @@ Separate routine engineering feedback from full-system conformance and release a
 
 ### Fast CI — topic PR → dev
 
+The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator itself, and compiles the Python CI helpers. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
+
 The routine gate should remain fast and scoped. As each subsystem becomes available, it should include checks applicable to changed files, such as:
 
 - formatting and static checks for Rust and other repository languages;
@@ -165,6 +167,8 @@ Do not run the complete Test262 corpus, full differential suite, full interprete
 A documentation-only PR should run documentation checks and should not be forced to build the Rust engine when no code/build files changed.
 
 ### Promotion CI — dev → test
+
+The [Conformance Promotion](../.github/workflows/conformance-promotion.yml) workflow exposes the stable required context **conformance-promotion** for PRs targeting test or main. It validates the permitted source/target route and currently fails closed because the pinned Test262/differential runner and deterministic shard aggregator do not exist yet. This is intentional: a route check is not conformance evidence, and a promotion must not pass until OGM-35 supplies the real runner.
 
 The promotion PR is the first mandatory full integration gate. As the relevant systems become available, require:
 
@@ -198,18 +202,21 @@ Keep Ogma execution/dispatch costs separate from host physics, ECS, synchronizat
 
 ### Current enforcement state
 
-As of the initial workflow documentation, the repository has no Cargo workspace, test runner or GitHub Actions workflows. The dev, test and main branches exist, but no active GitHub branch rulesets were found for this repository. Therefore, the policies above are mandatory contributor rules but are **not yet technically enforced** by CI or branch protection.
+The bootstrap workflows are authored on the current topic branch and will become the repository's active PR checks only after they are integrated into the relevant permanent branches. The repository still has no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator.
 
-M0 issue [OGM-35 — Fast CI and Test262 promotion-gate proof](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) owns the first CI/ruleset implementation and verification. Do not document status checks as required or branch protection as active until GitHub readback confirms the actual configuration.
+- .github/workflows/ci.yml provides the Fast CI job with stable status context **fast-checks**.
+- .github/workflows/conformance-promotion.yml provides **conformance-promotion** on PRs targeting test/main and deliberately fails until the full runner is implemented.
+- .gitattributes pins LF for Markdown, Rust, TOML, YAML, Python and shell files; the local validator tolerates Windows CRLF checkouts while GitHub's Linux runner enforces LF.
+- Fast CI is a bootstrap repository gate, not evidence that an Ogma runtime exists or that Rust/Test262 conformance has passed.
 
-The intended ruleset policy is:
+M0 issue [OGM-35 — Fast CI and Test262 promotion-gate proof](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) remains the owner of the complete conformance runner, deterministic shard aggregator and success/failure/missing-shard proof. Do not mark that issue Done based on this bootstrap gate.
 
-- all permanent branches: require PRs, prevent deletion and non-fast-forward updates, and disallow bypass actors;
-- dev: require the Fast CI status;
-- test and main: require Fast CI plus the full conformance-promotion status;
-- preserve status-check names once referenced by rulesets; changing a job name requires a coordinated ruleset update.
+The required branch ruleset policy mirrors Codogma Engine while using Ogma's actual status contexts:
 
-The precise status-check names are finalized when the CI workflows are introduced.
+- all permanent branches: require PRs, prevent deletion and non-fast-forward updates, and have no bypass actors;
+- dev: require **fast-checks**;
+- test and main: require **fast-checks** plus **conformance-promotion**;
+- keep the check names stable once GitHub rulesets reference them.
 
 ## 7. Manual and consumer acceptance
 

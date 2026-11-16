@@ -38,8 +38,10 @@ Notion is the authority for architecture and milestone scope. Linear tracks exec
 
 - Derive commands from files and tools that actually exist. Do not claim Cargo, Test262, differential, fuzz, AOT or runtime tests passed when the workspace/runner/path is not implemented or the check was not run.
 - Run focused checks for the modified scope. Preserve meaningful negative coverage; never weaken tests to obtain a green result.
-- Topic PRs into dev use Fast CI: formatting, compile/static checks, focused tests and security/dependency checks, with only a bounded conformance smoke when available. Do not run full Test262/differential/E2E suites on topic PRs.
-- Full pinned Test262, full differential and the integrated promotion gate run on dev → test and later release promotions. Long fuzz/stress/GC/resource-limit and broad target matrices use scheduled/manual lanes.
+- Every PR targeting dev, test or main and every push to a permanent branch runs .github/workflows/ci.yml (job context: fast-checks). It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator and compiles Python CI helpers.
+- When a root Cargo.toml exists, Fast CI also runs cargo fmt, Clippy and workspace tests. Until then, Rust checks are explicitly not applicable; do not report them as passed.
+- .github/workflows/conformance-promotion.yml runs only for PRs targeting test or main. It validates branch direction and currently fails closed because the pinned Test262/differential runner and deterministic shard aggregator are not implemented. Complete OGM-35 before replacing this fail-closed step with the actual suite.
+- Do not run full Test262/differential/E2E suites on topic PRs. Long fuzz/stress/GC/resource-limit and broad target matrices use scheduled/manual lanes.
 - Develop focused tests alongside implementation even though aggregate suites are deferred to promotion.
 
 ## Git and pull requests

@@ -57,7 +57,10 @@ The permanent branch flow is:
 - Test coverage is still developed with the implementation. Add or update focused regression, parser, ABI and integration fixtures in the same topic PR when the changed contract needs them; delaying the full-suite run must not delay creating tests.
 - Long-running fuzzing, stress, GC/lifecycle, resource-limit and broad platform matrices belong in scheduled/manual lanes unless a specific change requires a focused check.
 - M0 benchmark spikes are task-scoped experiments, not an unconditional benchmark job for every PR. Every result must identify its commit, toolchain, workload, configuration, repetitions, metrics and limitations.
-- Do not invent Cargo commands or claim a CI gate exists before the repository has the corresponding Cargo workspace/workflows. M0 task [OGM-35](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) owns the initial CI and promotion-gate proof.
+- The implemented bootstrap `CI Fast` workflow validates PR routing, Markdown encoding/structure/local links, its own validator tests and Python helper syntax. Rust formatting, Clippy and workspace tests are added conditionally when a root `Cargo.toml` exists; the current repository has no Rust workspace, so these steps are not reported as passing.
+- `Conformance Promotion` runs only for PRs targeting test or main. It validates the promotion route and deliberately fails closed until OGM-35 supplies the pinned Test262/differential runner and deterministic shard aggregator. Promotion is therefore intentionally blocked rather than silently accepted without conformance evidence.
+- Full Test262, full differential, interpreter/AOT equivalence and integrated runtime checks do not run on topic PRs. Keep those checks on the dev -> test and test -> main promotion path after the runner is implemented.
+- Do not invent Cargo commands or claim runtime/conformance checks passed when the corresponding workspace or runner does not exist. M0 task [OGM-35](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) owns completion of the conformance gate.
 
 ### Current repository bootstrap status
 
