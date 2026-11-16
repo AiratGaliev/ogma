@@ -317,8 +317,8 @@ The target Node 26.13.0 compatibility surface includes:
 - CommonJS wrapper scope with module, exports, require, __filename and __dirname; preserve module.exports identity, cache and cycle behaviour.
 - ESM ↔ CJS interop for explicitly tested import/require forms. require(esm) and less common interop edge cases remain deferred until Node 26.13.0 behaviour is pinned by fixtures.
 - Built-in modules are registered under explicit node: specifiers. Bare aliases are exposed only where the pinned Node profile defines them.
-- Planned CJS/module-reference selectors are taken from the pinned Node source: test/parallel/test-module-*.js and test/parallel/test-require-*.js.
-- Planned ESM reference fixtures are taken from `test/es-module` in the same pinned Node source revision, including test-esm-basic-imports.mjs, test-esm-live-binding.mjs, test-esm-imports.mjs, test-esm-exports.mjs, test-esm-cjs-exports.js, test-esm-cjs-builtins.js, test-esm-package-map-basic.mjs, test-esm-package-map-exports.mjs, test-esm-package-map-boundaries.mjs and test-esm-package-map-errors.mjs. The two test/parallel/test-esm-loader-hooks-inspect* files are not used as the ESM semantics baseline.
+- Planned CJS/module-reference selectors are taken from the pinned Node source: `test/parallel/test-module-*.js`, `test/parallel/test-require-*.js`, and `test/es-module/test-require-*` for ESM/CommonJS interop and cycle coverage.
+- Planned ESM reference fixtures are taken from `test/es-module` in the same pinned Node source revision, including test-esm-basic-imports.mjs, test-esm-live-binding.mjs, test-esm-imports.mjs, test-esm-exports.mjs, test-esm-cjs-exports.js, test-esm-cjs-builtins.js, test-esm-package-map-basic.mjs, test-esm-package-map-exports.mjs, test-esm-package-map-boundaries.mjs and test-esm-package-map-errors.mjs.
 
 ### 5.3. Package manifest and resolver rules
 

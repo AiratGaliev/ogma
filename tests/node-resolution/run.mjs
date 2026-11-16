@@ -15,6 +15,13 @@ const baseline = JSON.parse(baselineText);
 if (baseline.reference.version !== nodeVersion) {
   throw new Error(`Baseline Node.js version ${baseline.reference.version} does not match .node-version ${nodeVersion}`);
 }
+if (process.versions.node !== nodeVersion) {
+  throw new Error(`Expected Node.js v${nodeVersion} from .node-version, got v${process.versions.node}`);
+}
+if (!Array.isArray(baseline.testCommand) || baseline.testCommand.length === 0 ||
+    !baseline.testCommand.every((argument) => typeof argument === "string")) {
+  throw new Error("baseline.testCommand must be a non-empty array of string arguments");
+}
 
 const temporaryRoot = await mkdtemp(join(tmpdir(), "ogma-node-resolution-"));
 const testRoot = join(temporaryRoot, "tests", "node-resolution");
@@ -35,10 +42,10 @@ try {
     await writeFile(destination, content, "utf8");
   }
 
-  process.stdout.write(`Node.js reference ${baseline.reference.version} (${baseline.reference.sourceCommit})\n`);
+  process.stdout.write(`Node.js runtime v${process.versions.node}; pinned source ${baseline.reference.sourceCommit}\n`);
   const result = spawnSync(
     process.execPath,
-    ["--test", "--test-reporter=spec", "tests/node-resolution/resolver.test.mjs"],
+    baseline.testCommand,
     { cwd: temporaryRoot, encoding: "utf8" },
   );
   if (result.stdout) process.stdout.write(result.stdout);

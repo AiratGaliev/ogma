@@ -28,7 +28,9 @@ test("reference version and test command match the pinned baseline", () => {
   assert.equal(baseline.reference.runtime, "Node.js");
   assert.equal(baseline.reference.version, pinnedNodeVersion);
   assert.equal(baseline.reference.sourceCommit, "18b32a3b1552e199a01f1a8d9fd64aa756d3b75b");
-  assert.equal(baseline.command, "node --test --test-reporter=spec tests/node-resolution/resolver.test.mjs");
+  assert.equal(baseline.command, "node tests/node-resolution/run.mjs");
+  assert.deepEqual(baseline.testCommand, ["--test", "--test-reporter=spec", "tests/node-resolution/resolver.test.mjs"]);
+  assert.equal(process.versions.node, pinnedNodeVersion);
 });
 test("package.json type selects ESM semantics for .js", async () => {
   const module = await importPackage("@ogma/fixture/typed");

@@ -7,7 +7,7 @@
     "sourceUrl": "https://github.com/nodejs/node/tree/18b32a3b1552e199a01f1a8d9fd64aa756d3b75b",
     "profile": "Ogma Node.js Compatibility Profile 1.0.0"
   },
-  "command": "node --test --test-reporter=spec tests/node-resolution/resolver.test.mjs",
+  "command": "node tests/node-resolution/run.mjs",
   "expected": {
     "packageTypeEsm": "type-module",
     "packageTypeCommonJs": "type-commonjs",
@@ -38,6 +38,7 @@
   "sourceTestSelectors": [
     "test/parallel/test-module-*.js",
     "test/parallel/test-require-*.js",
+    "test/es-module/test-require-*",
     "test/es-module/test-esm-basic-imports.mjs",
     "test/es-module/test-esm-live-binding.mjs",
     "test/es-module/test-esm-imports.mjs",
@@ -48,5 +49,10 @@
     "test/es-module/test-esm-package-map-exports.mjs",
     "test/es-module/test-esm-package-map-boundaries.mjs",
     "test/es-module/test-esm-package-map-errors.mjs"
+  ],
+  "testCommand": [
+    "--test",
+    "--test-reporter=spec",
+    "tests/node-resolution/resolver.test.mjs"
   ]
 }
