@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [test, main]
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,6 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate promotion route
+        if: github.event_name == 'pull_request'
         env:
           BASE_BRANCH: ${{ github.base_ref }}
           HEAD_BRANCH: ${{ github.head_ref }}
