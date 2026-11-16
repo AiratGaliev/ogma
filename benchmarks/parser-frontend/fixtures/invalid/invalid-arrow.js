@@ -1,0 +1,1 @@
+const callback = (value) => => value;

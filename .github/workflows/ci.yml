@@ -114,3 +114,37 @@ jobs:
       - name: Report Rust checks are not applicable yet
         if: hashFiles('Cargo.toml') == ''
         run: echo "::notice::No Cargo.toml is present yet; Rust build, Clippy and tests are not applicable to this documentation/bootstrap repository."
+
+  parser-frontend-benchmark:
+    name: OGM-14 parser frontend benchmark
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-14-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Python for result collection
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run parser frontend benchmark and focused checks
+        run: bash benchmarks/parser-frontend/run.sh
+
+      - name: Upload raw measurements, lockfile and environment metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-14-parser-frontend-benchmark
+          path: |
+            benchmarks/parser-frontend/Cargo.lock
+            benchmarks/parser-frontend/results/
+          if-no-files-found: warn
+          retention-days: 30

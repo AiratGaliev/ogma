@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "ecmaProfile": "Ogma Compatibility Profile 1.0.0 — ECMA-262 17th edition (ECMAScript 2026)",
+  "fixtures": [
+    { "path": "valid/modern-syntax.js", "group": "valid", "features": ["optional-chaining", "nullish-coalescing", "destructuring", "spread", "template-literals"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "valid/classes.js", "group": "valid", "features": ["classes", "private-fields", "static-blocks"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "valid/async-iteration.js", "group": "valid", "features": ["async-functions", "async-generators", "for-await-of"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "valid/modules.mjs", "group": "valid", "features": ["modules", "top-level-import-meta", "top-level-await"], "module": true, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "valid/unicode-regexp.js", "group": "valid", "features": ["unicode-identifiers", "regexp-named-captures", "regexp-unicode-properties"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "valid/object-iteration.js", "group": "valid", "features": ["proxy", "reflect", "object-spread", "iterators"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "consumer/codogma-ai-chat.mjs", "group": "consumer", "features": ["modules", "async-functions", "optional-chaining", "nullish-coalescing"], "module": true, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "consumer/codogma-mcp-bridge.mjs", "group": "consumer", "features": ["modules", "websocket-callbacks", "async-functions", "optional-chaining"], "module": true, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "consumer/codogma-help-file.js", "group": "consumer", "features": ["commonjs", "object-iteration", "template-literals"], "module": false, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "consumer/codogma-imgsize.mjs", "group": "consumer", "features": ["modules", "typed-array-indexing", "regular-expressions"], "module": true, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "consumer/codogma-stdio.mjs", "group": "consumer", "features": ["modules", "async-functions", "async-iteration", "optional-chaining"], "module": true, "expectedParse": true, "compareParse": true, "expectedSemanticError": false },
+    { "path": "invalid/unterminated-string.js", "group": "invalid-syntax", "features": ["unterminated-string"], "module": false, "expectedParse": false, "compareParse": true, "expectedSemanticError": null },
+    { "path": "invalid/missing-delimiter.js", "group": "invalid-syntax", "features": ["delimiter-error"], "module": false, "expectedParse": false, "compareParse": true, "expectedSemanticError": null },
+    { "path": "invalid/invalid-arrow.js", "group": "invalid-syntax", "features": ["arrow-function-error"], "module": false, "expectedParse": false, "compareParse": true, "expectedSemanticError": null },
+    { "path": "invalid/nullish-precedence.js", "group": "invalid-syntax", "features": ["nullish-mixing-early-error"], "module": false, "expectedParse": false, "compareParse": true, "expectedSemanticError": null },
+    { "path": "invalid/recoverable-errors.js", "group": "invalid-syntax", "features": ["multiple-syntax-errors", "error-recovery"], "module": false, "expectedParse": false, "compareParse": true, "expectedSemanticError": null },
+    { "path": "semantic/duplicate-lexical-binding.js", "group": "semantic-error", "features": ["lexical-binding-early-error", "scope-analysis"], "module": false, "expectedParse": true, "compareParse": false, "expectedSemanticError": true }
+  ]
+}
