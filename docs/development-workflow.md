@@ -237,6 +237,7 @@ Keep one clear source of truth per concern:
 | AGENTS.md | Durable repository-wide agent instructions. |
 | docs/development-workflow.md | Detailed Git, PR, testing, Linear and Definition-of-Done rules. |
 | Notion architecture specification | Normative engine architecture and milestone requirements. |
+| docs/compatibility-profile.md | Single repository source of truth for versioned ECMAScript, TypeScript, Node.js API, package and consumer compatibility claims. |
 | Linear project and issues | Work planning, ownership, dependencies, status and execution evidence. |
 | ADRs | Accepted, durable architecture decisions once a decision is mature enough to freeze. |
 | Benchmark reports/proof artifacts | Reproducible evidence used to make M0 decisions. |
