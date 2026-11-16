@@ -109,20 +109,17 @@
           },
           {
             "id": "oversized_number",
-            "op": "js.strict_equal",
-            "operands": [
-              "arg_left",
-              "arg_right"
-            ],
+            "op": "js.constant",
+            "operands": [],
             "result": {
               "id": "oversized_value",
               "kind": "value",
-              "semantic_type": "boolean",
-              "representation": "i1"
+              "semantic_type": "number",
+              "representation": "f64"
             },
             "attributes": {
               "literal": "number",
-              "value": 9007199254740993
+              "value": 9007199254740992
             },
             "effects": {
               "may_allocate": false,

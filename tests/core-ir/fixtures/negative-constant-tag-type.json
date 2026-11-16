@@ -109,16 +109,13 @@
           },
           {
             "id": "bad_literal_tag",
-            "op": "js.strict_equal",
-            "operands": [
-              "arg_left",
-              "arg_right"
-            ],
+            "op": "js.constant",
+            "operands": [],
             "result": {
               "id": "bad_literal_value",
               "kind": "value",
-              "semantic_type": "boolean",
-              "representation": "i1"
+              "semantic_type": "number",
+              "representation": "f64"
             },
             "attributes": {
               "literal": [],
