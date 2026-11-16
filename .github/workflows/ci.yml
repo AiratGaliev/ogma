@@ -1,0 +1,94 @@
+name: CI Fast
+
+on:
+  pull_request:
+    branches: [dev, test, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [dev, test, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate pull request routing
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BASE_BRANCH" in
+            dev)
+              case "$HEAD_BRANCH" in
+                feat/*|fix/*|refactor/*|test/*|docs/*|chore/*) ;;
+                *)
+                  echo "::error::Topic PRs to dev must use feat/*, fix/*, refactor/*, test/*, docs/* or chore/*."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            test)
+              if [[ "$HEAD_BRANCH" != "dev" ]]; then
+                echo "::error::Only dev may be promoted to test."
+                exit 1
+              fi
+              ;;
+            main)
+              case "$HEAD_BRANCH" in
+                test|hotfix/*) ;;
+                *)
+                  echo "::error::Only test or an explicitly documented hotfix/* branch may target main."
+                  exit 1
+                  ;;
+              esac
+              ;;
+          esac
+
+      - name: Validate repository documentation
+        run: python .github/scripts/validate_repository.py
+
+      - name: Test repository validator
+        run: python -m unittest discover -s .github/scripts -p "test_*.py" -v
+
+      - name: Compile CI helper scripts
+        run: python -m compileall -q .github/scripts
+
+      - name: Set up Rust toolchain when a workspace exists
+        if: hashFiles('Cargo.toml') != ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting, lint and tests
+        if: hashFiles('Cargo.toml') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+
+      - name: Report Rust checks are not applicable yet
+        if: hashFiles('Cargo.toml') == ''
+        run: echo "::notice::No Cargo.toml is present yet; Rust build, Clippy and tests are not applicable to this documentation/bootstrap repository."

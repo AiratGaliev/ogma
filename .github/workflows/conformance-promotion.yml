@@ -1,0 +1,61 @@
+name: Conformance Promotion
+
+on:
+  pull_request:
+    branches: [test, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conformance-promotion-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance-promotion:
+    name: conformance-promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate promotion route
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BASE_BRANCH" in
+            test)
+              if [[ "$HEAD_BRANCH" != "dev" ]]; then
+                echo "::error::Conformance promotion to test is allowed only from dev."
+                exit 1
+              fi
+              ;;
+            main)
+              case "$HEAD_BRANCH" in
+                test|hotfix/*) ;;
+                *)
+                  echo "::error::Release promotion to main is allowed only from test or an approved hotfix/* branch."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "::error::Unsupported promotion target: $BASE_BRANCH"
+              exit 1
+              ;;
+          esac
+
+      - name: Fail closed until the conformance runner is implemented
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error title=Conformance gate unavailable::The pinned Test262/differential runner and deterministic shard aggregator are not implemented in this M0 repository. Complete OGM-35 and wire its verified runner here before allowing dev-to-test or test-to-main promotion."
+          exit 1
