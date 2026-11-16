@@ -11,7 +11,7 @@ use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const WARMUP_ROUNDS: usize = 2;
 const MEASURED_ROUNDS: usize = 12;
@@ -47,7 +47,8 @@ fn fixture_root() -> PathBuf {
 
 fn load_fixtures() -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let root = fixture_root();
-    let manifest: Manifest = serde_json::from_str(&fs::read_to_string(root.join("manifest.json"))?)?;
+    let manifest: Manifest =
+        serde_json::from_str(&fs::read_to_string(root.join("manifest.json"))?)?;
     let mut fixtures = Vec::with_capacity(manifest.fixtures.len());
 
     for meta in manifest.fixtures {
@@ -75,11 +76,16 @@ fn peak_rss_bytes() -> Option<u64> {
 }
 
 fn rate_per_second(operations: usize, elapsed_ns: u128) -> f64 {
-    if elapsed_ns == 0 { 0.0 } else { operations as f64 * 1_000_000_000.0 / elapsed_ns as f64 }
+    if elapsed_ns == 0 {
+        0.0
+    } else {
+        operations as f64 * 1_000_000_000.0 / elapsed_ns as f64
+    }
 }
 
 fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::error::Error>> {
-    let selected: Vec<&Fixture> = fixtures.iter()
+    let selected: Vec<&Fixture> = fixtures
+        .iter()
         .filter(|fixture| fixture.meta.compare_parse && fixture.meta.expected_parse)
         .collect();
     if selected.is_empty() {
@@ -133,7 +139,8 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
     let pipeline_mib_per_second = if total_elapsed_ns == 0 {
         0.0
     } else {
-        measured_source_bytes as f64 / (1024.0 * 1024.0)
+        measured_source_bytes as f64
+            / (1024.0 * 1024.0)
             / (total_elapsed_ns as f64 / 1_000_000_000.0)
     };
 
@@ -245,7 +252,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "parse" => benchmark(&fixtures, false)?,
         "full" => benchmark(&fixtures, true)?,
         "diagnostics" => diagnostics(&fixtures)?,
-        other => return Err(format!("unknown mode: {other}; expected parse, full or diagnostics").into()),
+        other => {
+            return Err(
+                format!("unknown mode: {other}; expected parse, full or diagnostics").into(),
+            );
+        }
     };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
@@ -258,9 +269,21 @@ mod tests {
     #[test]
     fn fixture_manifest_covers_parser_semantic_and_consumer_cases() {
         let fixtures = load_fixtures().expect("manifest and fixture files must load");
-        assert!(fixtures.iter().any(|item| item.meta.compare_parse && item.meta.expected_parse));
-        assert!(fixtures.iter().any(|item| item.meta.compare_parse && !item.meta.expected_parse));
-        assert!(fixtures.iter().any(|item| item.meta.expected_semantic_error == Some(true)));
+        assert!(
+            fixtures
+                .iter()
+                .any(|item| item.meta.compare_parse && item.meta.expected_parse)
+        );
+        assert!(
+            fixtures
+                .iter()
+                .any(|item| item.meta.compare_parse && !item.meta.expected_parse)
+        );
+        assert!(
+            fixtures
+                .iter()
+                .any(|item| item.meta.expected_semantic_error == Some(true))
+        );
         assert!(fixtures.iter().any(|item| item.meta.group == "consumer"));
     }
 }

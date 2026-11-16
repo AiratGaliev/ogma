@@ -1,16 +1,10 @@
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    hint::black_box,
-    path::PathBuf,
-    time::Instant,
-};
+use std::{collections::BTreeMap, env, fs, hint::black_box, path::PathBuf, time::Instant};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
-use swc_common::{sync::Lrc, FileName, SourceMap};
+use serde_json::{Value, json};
+use swc_common::{FileName, SourceMap, sync::Lrc};
 use swc_ecma_ast::EsVersion;
-use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, StringInput, Syntax};
+use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax, lexer::Lexer};
 
 const WARMUP_ROUNDS: usize = 2;
 const MEASURED_ROUNDS: usize = 12;
@@ -44,7 +38,8 @@ fn fixture_root() -> PathBuf {
 
 fn load_fixtures() -> Result<Vec<Fixture>, Box<dyn std::error::Error>> {
     let root = fixture_root();
-    let manifest: Manifest = serde_json::from_str(&fs::read_to_string(root.join("manifest.json"))?)?;
+    let manifest: Manifest =
+        serde_json::from_str(&fs::read_to_string(root.join("manifest.json"))?)?;
     let mut fixtures = Vec::with_capacity(manifest.fixtures.len());
 
     for meta in manifest.fixtures {
@@ -68,12 +63,16 @@ fn peak_rss_bytes() -> Option<u64> {
 }
 
 fn rate_per_second(operations: usize, elapsed_ns: u128) -> f64 {
-    if elapsed_ns == 0 { 0.0 } else { operations as f64 * 1_000_000_000.0 / elapsed_ns as f64 }
+    if elapsed_ns == 0 {
+        0.0
+    } else {
+        operations as f64 * 1_000_000_000.0 / elapsed_ns as f64
+    }
 }
 
 fn parse_one(fixture: &Fixture) -> Result<(bool, bool, usize, u128), Box<dyn std::error::Error>> {
-    // Construct the source map/file outside the timed parser section. The parser setup
-    // and full lex/parse operation are timed, as they are for the Oxc implementation.
+    // Include SWC source-map and parser front-end setup in the timed operation.
+    let started = Instant::now();
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         FileName::Custom(fixture.meta.path.clone()).into(),
@@ -87,7 +86,6 @@ fn parse_one(fixture: &Fixture) -> Result<(bool, bool, usize, u128), Box<dyn std
         None,
     );
     let mut parser = Parser::new_from(lexer);
-    let started = Instant::now();
     let parsed = if fixture.meta.path.ends_with(".mjs") {
         parser.parse_module().map(|_| ())
     } else {
@@ -101,7 +99,8 @@ fn parse_one(fixture: &Fixture) -> Result<(bool, bool, usize, u128), Box<dyn std
 }
 
 fn benchmark(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>> {
-    let selected: Vec<&Fixture> = fixtures.iter()
+    let selected: Vec<&Fixture> = fixtures
+        .iter()
         .filter(|fixture| fixture.meta.compare_parse && fixture.meta.expected_parse)
         .collect();
     if selected.is_empty() {
@@ -126,7 +125,8 @@ fn benchmark(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>> 
     let mib_per_second = if parse_elapsed_ns == 0 {
         0.0
     } else {
-        measured_source_bytes as f64 / (1024.0 * 1024.0)
+        measured_source_bytes as f64
+            / (1024.0 * 1024.0)
             / (parse_elapsed_ns as f64 / 1_000_000_000.0)
     };
 
@@ -204,7 +204,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = match mode.as_str() {
         "parse" => benchmark(&fixtures)?,
         "diagnostics" => diagnostics(&fixtures)?,
-        other => return Err(format!("unknown mode: {other}; expected parse or diagnostics").into()),
+        other => {
+            return Err(format!("unknown mode: {other}; expected parse or diagnostics").into());
+        }
     };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
@@ -217,8 +219,16 @@ mod tests {
     #[test]
     fn fixture_manifest_covers_parser_and_consumer_cases() {
         let fixtures = load_fixtures().expect("manifest and fixture files must load");
-        assert!(fixtures.iter().any(|item| item.meta.compare_parse && item.meta.expected_parse));
-        assert!(fixtures.iter().any(|item| item.meta.compare_parse && !item.meta.expected_parse));
+        assert!(
+            fixtures
+                .iter()
+                .any(|item| item.meta.compare_parse && item.meta.expected_parse)
+        );
+        assert!(
+            fixtures
+                .iter()
+                .any(|item| item.meta.compare_parse && !item.meta.expected_parse)
+        );
         assert!(fixtures.iter().any(|item| item.meta.group == "consumer"));
         assert!(fixtures.iter().all(|item| !item.meta.features.is_empty()));
     }
