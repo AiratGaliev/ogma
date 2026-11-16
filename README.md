@@ -67,7 +67,7 @@ The permanent branch flow is:
 The repository remains in M0 bootstrap: there is no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator. GitHub Actions and branch protections are now configured:
 
 - CI Fast runs on PRs to dev/test/main and pushes to those permanent branches. Its fast-checks job passed on PR #1; Rust fmt/Clippy/tests remain conditional on a future Cargo workspace.
-- Conformance Promotion runs on PRs to test/main and intentionally fails closed until OGM-35 implements the real conformance runner and deterministic shard aggregation. This prevents an unverified candidate from being promoted.
+- Conformance Promotion runs automatically on PRs to test/main; manual dispatch is diagnostic only. Both paths intentionally fail closed until OGM-35 implements the real conformance runner and deterministic shard aggregation. No promotion PR has exercised this gate yet, so it is configured but not reported as a passed check.
 - Active GitHub rulesets protect dev, test and main. All three require PRs, block deletion and non-fast-forward updates, and have no bypass actors. dev requires fast-checks; test and main require fast-checks plus conformance-promotion.
 - The active rulesets are [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038).
 

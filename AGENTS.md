@@ -40,7 +40,7 @@ Notion is the authority for architecture and milestone scope. Linear tracks exec
 - Run focused checks for the modified scope. Preserve meaningful negative coverage; never weaken tests to obtain a green result.
 - Every PR targeting dev, test or main and every push to a permanent branch runs .github/workflows/ci.yml (job context: fast-checks). It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator and compiles Python CI helpers.
 - When a root Cargo.toml exists, Fast CI also runs cargo fmt, Clippy and workspace tests. Until then, Rust checks are explicitly not applicable; do not report them as passed.
-- .github/workflows/conformance-promotion.yml runs only for PRs targeting test or main. It validates branch direction and currently fails closed because the pinned Test262/differential runner and deterministic shard aggregator are not implemented. Complete OGM-35 before replacing this fail-closed step with the actual suite.
+- .github/workflows/conformance-promotion.yml runs automatically for PRs targeting test or main; workflow_dispatch is diagnostic only. The PR path validates branch direction, and both paths currently fail closed because the pinned Test262/differential runner and deterministic shard aggregator are not implemented. No promotion PR has exercised this gate yet. Complete OGM-35 before replacing the fail-closed step with the actual suite.
 - Do not run full Test262/differential/E2E suites on topic PRs. Long fuzz/stress/GC/resource-limit and broad target matrices use scheduled/manual lanes.
 - Develop focused tests alongside implementation even though aggregate suites are deferred to promotion.
 
