@@ -1,10 +1,10 @@
 # Ogma Compatibility Profile
 
-**Profile ID:** ogma-compatibility-profile
-**Profile version:** 1.0.0
-**Status:** M0 decision baseline; target contract, not an implementation claim
-**Baseline captured:** 2026-11-16
-**Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
+- **Profile ID:** ogma-compatibility-profile
+- **Profile version:** 1.0.0
+- **Status:** M0 decision baseline; target contract, not an implementation claim
+- **Baseline captured:** 2026-11-16
+- **Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
 
 This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. At this repository revision there is no Ogma Rust workspace or runtime implementation, so no runtime/API feature is reported as implemented or conformant.
 
@@ -156,7 +156,7 @@ The first pinned consumer is [AiratGaliev/solidjs-native](https://github.com/Air
 | pnpm-lock.yaml | Git blob SHA 9c35ab8401a96ef04d9b1e88cab4a0e5a031b034 | Exact dependency graph snapshot at the pinned SolidJS Native revision |
 | rquickjs (Rust workspace) | 0.14.0 | Existing consumer-side reference integration; not part of Ogma's target architecture |
 
-The first SolidJS workload should cover TSX/JSX lowering, solid-js/jsx-runtime integration, reactive computations/effects, component functions, module imports and calls across the Rust host boundary. Vite, its plugin, TypeScript CLI and pnpm are development/build tools; their use of Node.js does not make them runtime dependencies of a packaged native application.
+The first SolidJS workload should cover TSX/JSX lowering, solid-js/jsx-runtime integration, reactive computations/effects, component functions, module imports and calls across the Rust host boundary. The pinned package manifest exposes pnpm check (typecheck, build and Rust workspace tests) and pnpm smoke (build plus native runtime launch) as candidate consumer commands; they must be rerun against the Ogma adapter when that integration exists. They were not run for this documentation task. Vite, its plugin, TypeScript CLI and pnpm are development/build tools; their use of Node.js does not make them runtime dependencies of a packaged native application.
 
 [AiratGaliev/codogma-engine](https://github.com/AiratGaliev/codogma-engine) revision 982d25c26da94c1f73d61457bf55da682413eff2 is a secondary future integration workload identified by the architecture. Its current root package is a Node-based editor/tooling application; it is not evidence that an Ogma-native consumer or a particular Node API is already supported. Promote it into the executable consumer corpus only after a concrete Ogma integration path and exact package/lockfile revision are selected.
 
@@ -219,7 +219,7 @@ All Host modules require an explicit capability grant and a Rust host adapter. T
 | node:dns | Selected lookup/resolve operations with bounded results and explicit resolver policy | network.dns | Windows, Linux, macOS; x86_64 and ARM64 | selected test/parallel/test-dns*.js cases | deferred |
 | node:dgram | UDP socket subset, bind/send/receive/close and lifecycle | network.udp | Windows, Linux, macOS; x86_64 and ARM64 | selected test/parallel/test-dgram*.js cases | deferred |
 
-The Host layer must not implement cryptography itself; it uses vetted Rust/OS providers. Filesystem APIs must be mediated by a host-provided filesystem/VFS with explicit roots and path permissions. Synchronous filesystem APIs, where ever enabled, must declare blocking behaviour. Networking APIs require explicit endpoint/bind policy, quotas, timeouts and cancellation.
+The Host layer must not implement cryptography itself; it uses vetted Rust/OS providers. Filesystem APIs must be mediated by a host-provided filesystem/VFS with explicit roots and path permissions. Synchronous filesystem APIs, wherever enabled, must declare blocking behaviour. Networking APIs require explicit endpoint/bind policy, quotas, timeouts and cancellation.
 
 ### 4.5. Node Workers profile
 
@@ -292,7 +292,8 @@ The initial resolver contract covers the following fields and rules, subject to 
 - package.json: type, main, exports, imports.
 - Package self-references, subpath exports/imports and package encapsulation.
 - ESM and CommonJS entry points, extension rules and module cache/identity.
-- Conditional exports conditions enabled by the selected profile: node, import, require, default, plus explicitly configured ogma, development or production conditions.
+- Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; default is the final fallback; ogma, development and production require explicit profile/build configuration.
+- The node condition is enabled only when the selected Node API profile and the package's required Node APIs are actually implemented and available. It is not a blanket marker for any Ogma runtime. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
 - node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
 - browser is not an implicit condition for a native application. A host may opt into it only in a separate explicit profile.
 
