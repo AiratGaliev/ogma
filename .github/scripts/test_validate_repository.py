@@ -37,6 +37,16 @@ class ValidateMarkdownTests(unittest.TestCase):
         self.assertTrue(any("CR characters" in error for error in errors))
         self.assertTrue(any("final newline" in error for error in errors))
 
+    def test_links_inside_fenced_and_inline_code_are_ignored(self) -> None:
+        content = (
+            b"# Examples\n\n"
+            b"\x60\x60\x60markdown\n[not a link](missing-fenced.md)\n\x60\x60\x60\n\n"
+            b"Inline code: \x60[not a link](missing-inline.md)\x60.\n\n"
+            b"[A real link](target.md)\n"
+        )
+        path = self.write_markdown(content)
+        self.assertEqual(validate_markdown(path, self.root), [])
+
     def test_trailing_whitespace_and_unclosed_fence_are_reported(self) -> None:
         path = self.write_markdown(b"# Title  \n\n```text\nunfinished\n")
         errors = validate_markdown(path, self.root)
