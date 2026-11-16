@@ -151,7 +151,7 @@ class CoreIRHardeningTests(unittest.TestCase):
     def test_oversized_integer_is_rejected_without_overflow(self):
         doc = fixture("positive-ssa-branch.json")
         append_constant(doc, "number", 10 ** 1000, "number", "f64", "oversized")
-        self.assertIn("schema.type", codes(doc))
+        self.assertIn("operation.literal_value", codes(doc))
 
     def test_lexical_environment_cannot_parent_itself(self):
         doc = fixture("positive-ssa-branch.json")
