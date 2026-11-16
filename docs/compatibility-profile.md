@@ -122,7 +122,7 @@ Ogma has three distinct responsibilities:
 
 Type assertions, any, external JavaScript, dynamic properties and reflection mean TypeScript types are not proof of runtime representation, object layout, pointer safety or absence of aliasing. Native AOT may use compiler facts only with a valid proof/guard and a generic runtime fallback.
 
-### 3.3.1. Pinned consumer compiler and JSX configuration
+### 3.3. Pinned consumer compiler and JSX configuration
 
 The SolidJS Native consumer revision pins its actual TypeScript configuration in `tsconfig.json` and its JSX transform in `packages/solid-native/vite.config.ts`. These are the first concrete TSX compatibility fixtures; they are not generic defaults for every Ogma application.
 
@@ -137,9 +137,11 @@ The SolidJS Native consumer revision pins its actual TypeScript configuration in
 | Vite build target | `es2020`, IIFE library output |
 | Solid JSX transform | `vite-plugin-solid` with `moduleName: solid-native` and `generate: universal` |
 
-TypeScript's `noEmit` means the consumer compiler performs diagnostics/type checking without emitting JavaScript or lowering JSX. The Vite/Solid plugin performs the JSX transform. Ogma's frontend must therefore validate TS/TSX syntax and the configured `solid-native/jsx-runtime` contract; it must not assume that TypeScript's JSX emitter is the consumer's runtime transform. The consumer's ES2020 build target is a bundler output target and does not reduce the normative ECMAScript 2026 semantics baseline of Ogma.
+TypeScript's `noEmit` means the consumer compiler performs diagnostics/type checking without emitting JavaScript or lowering JSX. The Vite/Solid plugin performs the JSX transform. Ogma's frontend must therefore validate TS/TSX syntax and the configured `solid-native/jsx-runtime` contract; it must not assume that TypeScript's JSX emitter is the consumer's runtime transform. The consumer's `moduleResolution: Bundler` is a build/type-check resolver setting and does not replace Ogma's separate Node package resolver contract. The consumer's ES2020 build target is a bundler output target and does not reduce the normative ECMAScript 2026 semantics baseline of Ogma.
 
-### 3.3. TypeScript syntax and transform matrix
+TypeScript emit behaviour is compiler-option-sensitive. Every transform fixture must pin the relevant options (including `target`, `module`, `jsx`, `jsxImportSource`, `experimentalDecorators`, `emitDecoratorMetadata`, `useDefineForClassFields`, `preserveConstEnums` and `isolatedModules` when they affect the tested construct). Do not claim one universal enum/decorator/class-field lowering independent of its compiler options.
+
+### 3.4. TypeScript syntax and transform matrix
 
 All rows are deferred until Ogma implements the frontend and passes fixtures. “Erase” means the syntax has no direct runtime representation; it does not mean Ogma executes TypeScript types.
 
@@ -159,7 +161,7 @@ All rows are deferred until Ogma implements the frontend and passes fixtures. �
 
 TypeScript source maps and source spans must remain associated with lowered code for diagnostics/debugging. Any TS transform that emits runtime operations must preserve evaluation order, this binding, lexical scope, exception behaviour and observable property access.
 
-### 3.4. Consumer-relevant TypeScript/JSX workload
+### 3.5. Consumer-relevant TypeScript/JSX workload
 
 The first pinned consumer is [AiratGaliev/solidjs-native](https://github.com/AiratGaliev/solidjs-native), repository revision bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 (main at baseline capture):
 
@@ -323,7 +325,7 @@ The initial resolver contract covers the following fields and rules, subject to 
 - package.json: type, main, exports, imports.
 - Package self-references, subpath exports/imports and package encapsulation.
 - ESM and CommonJS entry points, extension rules and module cache/identity.
-- Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; default is the final fallback; ogma, development and production require explicit profile/build configuration.
+- Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; ogma, development and production require explicit profile/build configuration. Preserve the package's conditional object key order exactly; Node resolves the first matching condition in that order. Package authors should place default last, and the resolver must not reorder it to prefer a later key.
 - The node condition is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the Node API adapters in that build's capability/module manifest. It is not a blanket marker for any Ogma Runtime and does not claim universal Node API coverage; an API outside the selected profile still fails deterministically when imported or invoked. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
 - browser is not an implicit condition for a native application. A host may opt into it only in a separate explicit profile.
 
@@ -361,7 +363,7 @@ The corpus is versioned independently from the Node API matrix. Every executable
 
 | Consumer | Pinned repository revision | Initial workload | Scope classification |
 |---|---|---|---|
-| SolidJS Native | AiratGaliev/solidjs-native@bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 | solid-js@1.9.18, local solid-native@0.1.0, TSX/JSX runtime, reactivity/effects, module graph, Rust host bindings | Primary runtime consumer |
+| SolidJS Native | AiratGaliev/solidjs-native@bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 | solid-js@1.9.18, local solid-native@0.1.0, TSX/JSX runtime, reactivity/effects, custom renderer and future Rust-host bridge | Primary planned runtime consumer; current smoke is still backed by rquickjs, not Ogma |
 | Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary reference repository only; not yet an executable Ogma consumer and therefore has no compatibility result or consumer-lockfile pin in profile 1.0.0 |
 
 For SolidJS Native, keep these categories separate:
@@ -370,6 +372,19 @@ For SolidJS Native, keep these categories separate:
 - Build/test tools: typescript@7.0.2, vite@8.3.7, vite-plugin-solid@2.11.15, pnpm 12.18.0.
 - Type-only declarations: @types/node@26.6.6; declarations do not establish runtime Node API support.
 - Existing reference integration: rquickjs@0.14.0 in the consumer's Rust workspace; it is not a dependency Ogma should retain.
+- The current demo's `globalThis.__sn_emit` callback is optional and is not registered by its Rust launcher. The smoke currently validates SolidJS rendering/reactivity only; it does not yet prove a Rust host-callback bridge.
+- The Vite config imports `node:url` only in build tooling. The bundled application source does not import a Node built-in at runtime; `@types/node` is type-only. Therefore the current SolidJS smoke requires no Node Host API capability from the packaged Runtime.
+
+**Pinned consumer verification contract (future Ogma adapter):**
+
+| Dimension | Baseline |
+|---|---|
+| Target OS/architecture | The six Rust target triples in section 4.7; each remains unverified until a platform run is recorded |
+| Build profile | Locked workspace dependencies; Vite production bundle targeting ES2020; Rust debug/test profile for `cargo test` and `pnpm smoke` |
+| Required Runtime host capabilities | None for the current counter/render/reactivity smoke; a future registered `__sn_emit` host sink would be a separate explicitly granted capability |
+| Exact commands | `pnpm typecheck`; `pnpm build`; `cargo test --workspace --locked`; `pnpm smoke` |
+| Expected observable results | TypeScript accepts the pinned TS/TSX source; Vite emits `dist/solid-native-demo.js`; Rust workspace tests pass; the bundle mounts the View/Text/Button tree, the button callback runs, and the displayed counter changes from 0 to 1 |
+| Current evidence state | These commands currently exercise the pinned rquickjs prototype only; none is an Ogma compatibility pass. Re-run them against the Ogma adapter before promoting this consumer entry to supported |
 
 Do not claim universal npm compatibility. A package becomes part of the supported corpus only after its exact version and lockfile are pinned and its install/build/runtime path is exercised. Transitive dependencies must be included in the captured lockfile graph. Native addons, install scripts and platform-specific binaries require separate review and do not become compatible merely because a pure-JS package imports successfully.
 
