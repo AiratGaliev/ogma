@@ -59,6 +59,28 @@ def _pairs(pairs):
 def _constant(value):
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
+def _finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, ValueError):
+        return False
+
+def _valid_number_literal(value):
+    # JSON numbers are binary64 at runtime. Reject integers that silently round
+    # when converted to binary64; encode ECMAScript special values explicitly.
+    if isinstance(value, str):
+        return value in {"NaN", "Infinity", "-Infinity", "-0"}
+    if not _finite_number(value):
+        return False
+    if isinstance(value, int):
+        try:
+            return int(float(value)) == value
+        except (OverflowError, ValueError):
+            return False
+    return True
+
 def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
 
@@ -89,7 +111,7 @@ def schema_check(value, rule, defs, path="$", errors=None):
             return {"object": lambda: isinstance(value, dict), "array": lambda: isinstance(value, list),
                     "string": lambda: isinstance(value, str), "boolean": lambda: isinstance(value, bool),
                     "integer": lambda: isinstance(value, int) and not isinstance(value, bool),
-                    "number": lambda: isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
+                    "number": lambda: _finite_number(value),
                     "null": lambda: value is None}[t]()
         if not any(match(t) for t in expected):
             errors.append(("schema.type", path, f"expected {' or '.join(expected)}"))
@@ -140,6 +162,8 @@ class Verifier:
         f = doc["function"]
         if not self.valid_id(f["id"]): self.err("id.invalid", "$.function.id", "invalid function identity")
         files, env = {}, f["environment"]
+        if env["parent"] == env["id"]:
+            self.err("environment.parent_cycle", "$.function.environment.parent", "lexical environment cannot be its own parent")
         for i, source_file in enumerate(f["source_files"]):
             p = f"$.function.source_files[{i}]"; sid, name = source_file["id"], source_file["path"]
             if sid in files: self.err("source.duplicate_file", p, "duplicate source file id")
@@ -148,13 +172,32 @@ class Verifier:
             if posix.is_absolute() or ".." in posix.parts or "\\" in name or posix.as_posix() != name or name == ".":
                 self.err("source.path", p + ".path", "source path must be normalized repository-relative POSIX")
         bindings = {}
+        mutable_kinds = {"var", "let", "parameter", "catch"}
         for i, b in enumerate(env["bindings"]):
-            if b["id"] in bindings: self.err("environment.duplicate_binding", f"$.function.environment.bindings[{i}]", "duplicate binding id")
-            bindings[b["id"]] = b; self.rep(b, f"$.function.environment.bindings[{i}]")
-            if b["kind"] in {"const", "import"} and b["mutable"]: self.err("environment.binding_mutability", f"$.function.environment.bindings[{i}]", "const/import bindings cannot be mutable")
+            bp = f"$.function.environment.bindings[{i}]"
+            if b["id"] in bindings: self.err("environment.duplicate_binding", bp, "duplicate binding id")
+            bindings[b["id"]] = b; self.rep(b, bp)
+            if b["mutable"] != (b["kind"] in mutable_kinds):
+                self.err("environment.binding_mutability", bp, "binding mutability must match its declaration kind")
         captures = {}
+        capture_ids, capture_bindings, capture_aliases = set(), set(), {}
         for i, c in enumerate(f["captures"]):
-            p = f"$.function.captures[{i}]"; captures[c["id"]] = c; captures[c["binding"]] = c; self.rep(c, p)
+            p = f"$.function.captures[{i}]"
+            if c["id"] in capture_ids:
+                self.err("closure.duplicate_capture", p + ".id", "capture ids must be unique")
+            if c["binding"] in capture_bindings:
+                self.err("closure.duplicate_capture", p + ".binding", "a lexical binding may be imported only once")
+            capture_ids.add(c["id"]); capture_bindings.add(c["binding"])
+            aliases = [c["id"]]
+            if c["binding"] != c["id"]:
+                aliases.append(c["binding"])
+            for alias in aliases:
+                if alias in bindings:
+                    self.err("closure.capture_identifier_collision", p, "capture identifiers must not collide with local lexical bindings")
+                if alias in capture_aliases and capture_aliases[alias] != c["id"]:
+                    self.err("closure.capture_identifier_collision", p, "capture ID and imported binding aliases must be unambiguous")
+                capture_aliases[alias] = c["id"]
+            captures.setdefault(c["id"], c); captures.setdefault(c["binding"], c); self.rep(c, p)
             if c["source_environment"] == env["id"]: self.err("closure.capture_origin", p, "captured binding must originate outside current environment")
             if c["mutable"] and c["mode"] != "cell": self.err("closure.capture_mode", p, "mutable captures must use cell mode")
         params = {}
@@ -298,6 +341,7 @@ class Verifier:
             return (d[2].get("semantic_type"), d[2].get("representation")) if d and d[3] != "effect" else ("effect","effect") if d else None
         # Source metadata, operation contracts, operand uses and exception shape.
         all_effectful=False
+        suspension_ids = set()
         for bi,b in enumerate(f["blocks"]):
             bid=b["id"]; bp=f"$.function.blocks[{bi}]"
             for ii,ins in enumerate(b["instructions"]):
@@ -321,12 +365,25 @@ class Verifier:
                 elif ins["result"]:
                     res=ins["result"]; expected=result_kind
                     if expected=="literal":
+                        literal = ins["attributes"].get("literal")
+                        value = ins["attributes"].get("value")
                         kinds={"undefined":"undefined","null":"null","boolean":"boolean","number":"number","bigint":"bigint","string":"string"}
-                        if kinds.get(ins["attributes"].get("literal")) != res["semantic_type"]: self.err("operation.literal_type",ip+".result","literal attribute and result semantic type differ")
+                        literal_kind = literal if isinstance(literal, str) else None
+                        if kinds.get(literal_kind) != res["semantic_type"]: self.err("operation.literal_type",ip+".result","literal attribute and result semantic type differ")
+                        valid_payload = isinstance(literal_kind, str) and (
+                            (literal_kind in {"undefined", "null"} and value is None)
+                            or (literal_kind == "boolean" and isinstance(value, bool))
+                            or (literal_kind == "number" and _valid_number_literal(value))
+                            or (literal_kind == "bigint" and isinstance(value, str) and re.fullmatch(r"(?:0|-?[1-9][0-9]*)", value) is not None)
+                            or (literal_kind == "string" and isinstance(value, str))
+                        )
+                        if not valid_payload: self.err("operation.literal_value",ip+".attributes.value","literal payload does not match its kind or canonical encoding")
                     elif expected=="binding":
-                        ref=ins["attributes"].get("binding"); target=bindings.get(ref) or captures.get(ref)
-                        if target and (res["semantic_type"],res["representation"]) != (target["semantic_type"],target["representation"]): self.err("environment.binding_type",ip+".result","environment result type differs from binding")
-                        if not target: self.err("environment.unknown_binding",ip+".attributes.binding","unknown binding or capture")
+                        ref=ins["attributes"].get("binding")
+                        target=(bindings.get(ref) or captures.get(ref)) if self.valid_id(ref) else None
+                        if not self.valid_id(ref): self.err("environment.binding_id",ip+".attributes.binding","binding reference must be a stable identifier")
+                        elif target and (res["semantic_type"],res["representation"]) != (target["semantic_type"],target["representation"]): self.err("environment.binding_type",ip+".result","environment result type differs from binding")
+                        if self.valid_id(ref) and not target: self.err("environment.unknown_binding",ip+".attributes.binding","unknown binding or capture")
                     elif expected.startswith("operand:"):
                         ix=int(expected.split(":")[1]); actual=value_type(ins["operands"][ix]) if ix<len(ins["operands"]) else None
                         if actual and actual!=(res["semantic_type"],res["representation"]): self.err("operation.result_type",ip+".result","assignment result must preserve assigned operand type")
@@ -334,34 +391,54 @@ class Verifier:
                     if expected=="dynamic" and res["representation"]!="boxed": self.err("operation.dynamic_representation",ip+".result","dynamic JS result must remain boxed")
                 if op in {"js.get_property","js.set_property"} and not isinstance(ins["attributes"].get("key"),str): self.err("operation.property_key",ip+".attributes.key","property key must be a string")
                 if op in {"env.load","env.store"}:
-                    ref=ins["attributes"].get("binding"); target=bindings.get(ref) or captures.get(ref)
-                    if not target:
-                        self.err("environment.unknown_binding",ip+".attributes.binding","unknown binding or capture")
+                    ref=ins["attributes"].get("binding")
+                    target=(bindings.get(ref) or captures.get(ref)) if self.valid_id(ref) else None
+                    if not self.valid_id(ref):
+                        if op == "env.store": self.err("environment.binding_id",ip+".attributes.binding","binding reference must be a stable identifier")
+                    elif not target:
+                        if op == "env.store": self.err("environment.unknown_binding",ip+".attributes.binding","unknown binding or capture")
                     elif op=="env.store":
-                        if not target["mutable"] or (ref in captures and target["mode"]!="cell"):
+                        is_capture = captures.get(ref) is target
+                        if not target["mutable"] or (is_capture and target["mode"]!="cell"):
                             self.err("environment.immutable_store",ip+".attributes.binding","cannot store to immutable or by-value captured binding")
                         source_type=value_type(ins["operands"][0]) if ins["operands"] else None
                         expected_type=(target["semantic_type"],target["representation"])
                         if source_type is not None and source_type!=expected_type:
                             self.err("environment.store_type",ip+".operands[0]","stored value type differs from lexical binding")
                 if op=="closure.create":
+                    if not self.valid_id(ins["attributes"].get("function")):
+                        self.err("closure.function_id",ip+".attributes.function","closure target must be a stable function identifier")
                     seen=set()
                     closure_captures=ins["attributes"].get("captures",[])
+                    if not isinstance(closure_captures, list):
+                        self.err("closure.capture_list",ip+".attributes.captures","closure captures must be an array")
+                        closure_captures=[]
                     for ci,c in enumerate(closure_captures):
                         cp=f"{ip}.attributes.captures[{ci}]"
-                        if not isinstance(c,dict) or set(c)!={"binding","mode"}:
-                            self.err("closure.capture_descriptor",cp,"capture descriptor must contain only binding and mode")
+                        if (not isinstance(c,dict) or set(c)!={"binding","mode"}
+                                or not self.valid_id(c.get("binding"))
+                                or not isinstance(c.get("mode"), str) or c.get("mode") not in {"cell", "value"}):
+                            self.err("closure.capture_descriptor",cp,"capture descriptor must contain a stable binding id and mode cell/value")
                             continue
                         ref=c["binding"]; mode=c["mode"]; target=bindings.get(ref) or captures.get(ref)
-                        if ref in seen: self.err("closure.duplicate_capture",cp,"closure capture binding must be unique")
-                        seen.add(ref)
+                        capture_key = target["id"] if target and captures.get(ref) is target else ref
+                        if capture_key in seen: self.err("closure.duplicate_capture",cp,"closure capture binding must be unique")
+                        seen.add(capture_key)
                         if not target: self.err("closure.unknown_capture",cp,"closure references an unknown lexical binding")
                         else:
-                            required_mode="cell" if target["mutable"] or (ref in captures and target["mode"]=="cell") else "value"
+                            is_capture = captures.get(ref) is target
+                            required_mode="cell" if target["mutable"] or (is_capture and target["mode"]=="cell") else "value"
                             if mode!=required_mode:
                                 self.err("closure.capture_mode",cp+".mode",f"capture of this binding requires {required_mode!r} mode")
+                if op == "host.call" and not self.valid_id(ins["attributes"].get("symbol")):
+                    self.err("host.symbol_id",ip+".attributes.symbol","host capability symbol must be a stable identifier")
                 for oi,oid in enumerate(ins["operands"]): use(oid,bid,ii,f"{ip}.operands[{oi}]")
                 self._source(ins["source"],ip+".source",files,env,bindings,captures,op=="async.await")
+                if op == "async.await":
+                    suspension = ins["source"]["suspension"]
+                    if suspension in suspension_ids:
+                        self.err("source.suspension_duplicate",ip+".source.suspension","suspension-point ids must be unique within a function")
+                    suspension_ids.add(suspension)
                 # Validate effect token input/output and ensure exceptional edges forward effect_out.
                 if ef.get("may_throw") and ins["exception"] and ins["exception"]["kind"]=="edge":
                     e=ins["exception"]; target=blocks.get(e["target"])

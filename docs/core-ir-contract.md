@@ -34,7 +34,43 @@ A function document has exactly this top-level shape:
 
 The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
 
-IDs are stable identifiers within one function document (except source-file IDs, lexical IDs and block/instruction IDs, which each have their own declared namespace). SSA value IDs and effect-token IDs must be unique across the function. Block IDs and instruction IDs must also be unique in their function.
+All identifiers use the stable ASCII grammar `^[A-Za-z_][A-Za-z0-9_.:-]{0,127}# Ogma Core IR Contract v1
+
+- **Contract ID:** `ogma.core-ir`
+- **Contract version:** `1.0.0`
+- **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
+- **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
+- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
+- **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
+
+## 1. Purpose and boundaries
+
+Core IR is Ogma's backend-neutral, function-level semantic boundary between frontend analysis and execution backends. The same verified function representation is the input contract for:
+
+1. **Portable path:** Core IR → bytecode lowering → verifier → portable `.ogmb` → interpreter.
+2. **Native path:** Core IR → native lowering → selected code generator → target object → linker.
+
+Both paths must preserve the same ECMAScript-visible values, exceptions, side effects, host calls and source-level provenance, and use the shared Ogma Runtime/ABI contracts. The IR producer and verifier must not depend on Cranelift, LLVM, a register VM, a stack VM, target pointer width, native calling conventions or a particular object layout.
+
+Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
+
+The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
+
+## 2. Document envelope and versioning
+
+A function document has exactly this top-level shape:
+
+```json
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {}
+}
+```
+
+The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
+
+. SSA value IDs and effect-token IDs are unique across a function; block IDs and instruction IDs are unique in their own function-wide namespaces. Lexical binding IDs are unique in the environment, capture IDs and imported binding IDs are individually unique, and capture aliases may not collide with local lexical binding IDs or one another. Nullable references (`parent`, `scope`, `suspension`, `effect_entry`, `effect_in` and `effect_out`) use the same grammar when non-null.
 
 ## 3. Function and control-flow model
 
@@ -88,7 +124,7 @@ A representation conversion must be an explicit semantic operation or a separate
 
 ## 5. JavaScript semantic operations
 
-The operation name identifies language/runtime semantics, never a backend opcode. Unknown operations are rejected until added to a versioned contract. The v1 operation set is intentionally small and focused on proving the contract boundary. `js.constant` supports `undefined`, `null`, `boolean`, `number`, `bigint` and `string`; a BigInt literal is stored as a canonical decimal string so JSON number precision cannot alter its value.
+The operation name identifies language/runtime semantics, never a backend opcode. Unknown operations are rejected until added to a versioned contract. The v1 operation set is intentionally small and focused on proving the contract boundary. `js.constant` supports `undefined`, `null`, `boolean`, `number`, `bigint` and `string`. `undefined` and `null` use a JSON null payload; booleans and strings use matching JSON types. BigInt uses a canonical base-10 integer string (`0` or an optional minus followed by a non-zero digit and digits). Number uses a finite JSON number exactly representable as binary64, or one of the explicit string sentinels `NaN`, `Infinity`, `-Infinity` and `-0`; these preserve ECMAScript Number values that JSON cannot represent directly, including overflow from a JS numeric literal such as `1e400`.
 
 | Operation | Operand convention | Result | Minimum effect summary |
 |---|---|---|---|
@@ -118,12 +154,12 @@ The minimum summaries are conservative lower bounds, not exact effect summaries.
 
 ### 5.1 Closure and lexical environment facts
 
-Every function carries an `environment` descriptor: a stable lexical environment ID, optional parent environment ID and declared bindings. Each binding specifies name, declaration kind, mutability, semantic type and representation. `var`, `let`, `parameter` and `catch` bindings are mutable; `const` and `import` bindings are immutable. The binding kind `implicit` is not in v1; implicit function state must be represented by explicit frontend semantic operations until a compatible extension defines its capture rules. Function `captures` describe bindings imported from an outer lexical environment and identify their source environment, source binding and capture mode:
+Every function carries an `environment` descriptor: a stable lexical environment ID, optional parent environment ID and declared bindings. Each binding specifies name, declaration kind, mutability, semantic type and representation. `var`, `let`, `parameter` and `catch` bindings must be mutable; `const` and `import` bindings must be immutable. The verifier enforces both directions rather than only rejecting mutable `const`/`import` bindings. A lexical environment cannot name itself as its parent. The binding kind `implicit` is not in v1; implicit function state must be represented by explicit frontend semantic operations until a compatible extension defines its capture rules. Function `captures` describe bindings imported from an outer lexical environment and identify their source environment, source binding and capture mode:
 
 - `cell`: shared mutable lexical storage; mutations remain observable by all closures sharing the cell.
 - `value`: immutable captured value copied into the closure environment. A mutable binding cannot use this mode.
 
-`env.load` and `env.store` reference binding IDs, not backend frame slots or object offsets. `env.store` cannot target immutable bindings or by-value captures. `closure.create` names a target function and lists each captured binding with its capture mode. Mutable bindings must be captured by cell; an imported by-value capture cannot later be promoted to a shared cell. Function and binding IDs are metadata identifiers, not object addresses.
+`env.load` and `env.store` reference stable binding IDs, not backend frame slots or object offsets. `env.store` cannot target immutable bindings or by-value captures. `closure.create` names a stable target function ID and lists each captured binding with its capture mode; the capture list must be an array of exact `{binding, mode}` descriptors, where `mode` is `cell` or `value`. One imported lexical binding may be captured only once, including through an alias. Mutable bindings must be captured by cell; an imported by-value capture cannot later be promoted to a shared cell. Function and binding IDs are metadata identifiers, not object addresses.
 
 ## 6. Effect and exception contract
 
@@ -171,7 +207,7 @@ Every instruction and terminator carries source metadata. A source record has:
 
 Source spans use one-based lines, zero-based UTF-16 code-unit columns and an exclusive end position. File paths are normalized repository-relative POSIX paths. Source file IDs are local to a function and must not be guessed from filenames.
 
-Compiler-generated instructions use `origin: "generated"` and a non-empty `reason`; they must not be assigned a fabricated user span. They may still retain lexical scope, binding identities and suspension provenance. `async.await` requires a unique suspension-point ID; other v1 operations and terminators must leave it null.
+Compiler-generated instructions use `origin: "generated"` and a non-empty `reason`; they must not be assigned a fabricated user span. They may still retain lexical scope, binding identities and suspension provenance. `async.await` requires a stable suspension-point ID that is unique within the function; other v1 operations and terminators must leave it null. `host.call` names a stable capability identifier, not an address or free-form native symbol.
 
 Source identity/spans, scope, binding identity, inline provenance and suspension provenance are first-class metadata. A semantics-preserving transformation must preserve or correctly remap them. If it cannot map a synthesized instruction to a precise user span, it marks that instruction as generated and records why. Future inline provenance/source-map chains can be added by a compatible schema extension or a new contract version; they must never be reconstructed heuristically after lowering.
 
@@ -204,9 +240,9 @@ python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json 
 
 The corpus manifest defines expected acceptance/rejection and, for negative cases, required diagnostic codes. The report is deterministic JSON containing contract/verifier versions, a per-fixture result, structured diagnostics (`code`, JSONPath-like `path`, `message`) and summary totals. Exit code `0` means all fixture expectations matched; `1` means a fixture was unexpectedly accepted/rejected or an expected diagnostic was absent; `2` means verifier invocation, manifest or JSON input failed to load.
 
-The verifier checks JSON Schema structure plus semantic invariants: unique IDs, legal type/representation pairs, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. It rejects duplicate JSON object keys and non-finite JSON numbers.
+The verifier checks JSON Schema structure plus semantic invariants: stable ID references, declaration-kind/mutability consistency, canonical literal payload encodings, unique capture/suspension identities, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/instruction-level dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. It rejects duplicate JSON object keys, non-finite JSON numbers and malformed attribute payloads without crashing.
 
-The fixture corpus deliberately includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow and invalid source-span cases. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
+The fixture corpus contains 25 cases (4 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
 
 ## 10. Compatibility and change policy
 

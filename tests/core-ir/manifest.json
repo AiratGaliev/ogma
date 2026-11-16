@@ -1,1 +1,170 @@
-{"contract":"ogma.core-ir","version":"1.0.0","fixtures":[{"path":"tests/core-ir/fixtures/positive-ssa-branch.json","expect":"accepted"},{"path":"tests/core-ir/fixtures/positive-dynamic-exception.json","expect":"accepted"},{"path":"tests/core-ir/fixtures/positive-closure-source.json","expect":"accepted"},{"path":"tests/core-ir/fixtures/positive-async-suspension.json","expect":"accepted"},{"path":"tests/core-ir/fixtures/negative-malformed-cfg.json","expect":"rejected","diagnostics":["cfg.edge_target"]},{"path":"tests/core-ir/fixtures/negative-ssa-dominance.json","expect":"rejected","diagnostics":["ssa.dominance"]},{"path":"tests/core-ir/fixtures/negative-edge-type.json","expect":"rejected","diagnostics":["cfg.edge_argument_type"]},{"path":"tests/core-ir/fixtures/negative-effect-underreport.json","expect":"rejected","diagnostics":["effect.underreported"]},{"path":"tests/core-ir/fixtures/negative-representation.json","expect":"rejected","diagnostics":["representation.unsupported"]},{"path":"tests/core-ir/fixtures/negative-exception-edge.json","expect":"rejected","diagnostics":["exception.metadata_missing"]},{"path":"tests/core-ir/fixtures/negative-source-span.json","expect":"rejected","diagnostics":["source.unknown_file","source.invalid_span"]}]}
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "fixtures": [
+    {
+      "path": "tests/core-ir/fixtures/positive-ssa-branch.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-dynamic-exception.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-closure-source.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-async-suspension.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-malformed-cfg.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "cfg.edge_target"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-ssa-dominance.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "ssa.dominance"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-edge-type.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "cfg.edge_argument_type"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-effect-underreport.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "effect.underreported"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-representation.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "representation.unsupported"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-exception-edge.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "exception.metadata_missing"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-source-span.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "source.unknown_file",
+        "source.invalid_span"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-binding-mutability.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "environment.binding_mutability"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-constant-payload.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "operation.literal_value"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-duplicate-suspension.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "source.suspension_duplicate"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-duplicate-capture.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.duplicate_capture"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-invalid-reference-id.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "schema.oneOf"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-closure-function-id.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.function_id"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-host-symbol-id.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "host.symbol_id"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-closure-capture-list.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.capture_list"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-environment-binding-id.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "environment.binding_id"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-constant-tag-type.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "operation.literal_type"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-oversized-number.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "operation.literal_value"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-closure-capture-descriptor.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.capture_descriptor"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-duplicate-capture-alias.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.duplicate_capture"
+      ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-capture-id-collision.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "closure.capture_identifier_collision"
+      ]
+    }
+  ]
+}

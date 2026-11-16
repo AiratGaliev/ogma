@@ -1,0 +1,258 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn0",
+    "name": "sample",
+    "parameters": [
+      {
+        "id": "arg_left",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "left",
+        "binding": "bind_left"
+      },
+      {
+        "id": "arg_right",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "right",
+        "binding": "bind_right"
+      }
+    ],
+    "return": {
+      "semantic_type": "number",
+      "representation": "f64"
+    },
+    "source_files": [
+      {
+        "id": "src0",
+        "path": "fixtures/sample.js",
+        "language": "javascript"
+      }
+    ],
+    "environment": {
+      "id": "env_fn",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "bind_left",
+          "name": "left",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        },
+        {
+          "id": "bind_right",
+          "name": "right",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": null,
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "cmp",
+            "op": "js.strict_equal",
+            "operands": [
+              "arg_left",
+              "arg_right"
+            ],
+            "result": {
+              "id": "same",
+              "kind": "value",
+              "semantic_type": "boolean",
+              "representation": "i1"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": false,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 4
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": null,
+            "effect_out": null,
+            "exception": null
+          },
+          {
+            "id": "bad_constant",
+            "op": "js.strict_equal",
+            "operands": [
+              "arg_left",
+              "arg_right"
+            ],
+            "result": {
+              "id": "bad_constant_value",
+              "kind": "value",
+              "semantic_type": "boolean",
+              "representation": "i1"
+            },
+            "attributes": {
+              "literal": "number",
+              "value": "not-a-number"
+            },
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": false,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 4
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": null,
+            "effect_out": null,
+            "exception": null
+          }
+        ],
+        "terminator": {
+          "kind": "branch",
+          "condition": "same",
+          "then": {
+            "target": "left_block",
+            "arguments": [
+              "arg_left"
+            ]
+          },
+          "else": {
+            "target": "right_block",
+            "arguments": [
+              "arg_right"
+            ]
+          },
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 4
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      },
+      {
+        "id": "left_block",
+        "parameters": [
+          {
+            "id": "left_value",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [],
+        "terminator": {
+          "kind": "return",
+          "value": "left_value",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 4
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      },
+      {
+        "id": "right_block",
+        "parameters": [
+          {
+            "id": "right_value",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [],
+        "terminator": {
+          "kind": "return",
+          "value": "right_value",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 4
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}
