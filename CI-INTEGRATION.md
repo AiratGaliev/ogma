@@ -1,6 +1,6 @@
 # CI Fast integration for OGM-15
 
-Add the following two steps immediately after the existing `Test repository validator` step in `.github/workflows/ci.yml` and before `Compile CI helper scripts`:
+The following two steps are already integrated immediately after the existing `Test repository validator` step in `.github/workflows/ci.yml` and before `Compile CI helper scripts`:
 
 ```yaml
       - name: Verify Core IR v1 contract and fixture corpus

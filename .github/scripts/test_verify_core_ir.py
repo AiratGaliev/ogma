@@ -66,6 +66,44 @@ class CoreIRVerifierTests(unittest.TestCase):
     def test_exception_edge_forwards_effect_out(self):
         doc = fixture("positive-dynamic-exception.json"); doc["function"]["blocks"][0]["instructions"][0]["exception"]["arguments"] = ["e0"]
         self.assertIn("effect.exception_edge", codes(doc))
+    def test_exception_handler_cannot_use_a_later_definition_from_throwing_block(self):
+        doc = fixture("positive-dynamic-exception.json")
+        blocks = {block["id"]: block for block in doc["function"]["blocks"]}
+        source = blocks["entry"]["instructions"][0]["source"]
+        blocks["entry"]["instructions"].append({
+            "id": "after_throwing_site", "op": "js.to_boolean", "operands": ["lhs"],
+            "result": {"id": "after_throw_value", "kind": "value", "semantic_type": "boolean", "representation": "i1"},
+            "attributes": {}, "effects": {key: False for key in EFFECTS}, "source": source,
+            "effect_in": None, "effect_out": None, "exception": None,
+        })
+        handler_source = blocks["handler"]["instructions"][0]["source"]
+        blocks["handler"]["instructions"].insert(0, {
+            "id": "handler_use", "op": "js.to_boolean", "operands": ["after_throw_value"],
+            "result": {"id": "handler_result", "kind": "value", "semantic_type": "boolean", "representation": "i1"},
+            "attributes": {}, "effects": {key: False for key in EFFECTS}, "source": handler_source,
+            "effect_in": None, "effect_out": None, "exception": None,
+        })
+        self.assertIn("ssa.dominance", codes(doc))
+
+    def test_exception_edge_cannot_pass_the_throwing_instruction_result(self):
+        doc = fixture("positive-dynamic-exception.json")
+        blocks = {block["id"]: block for block in doc["function"]["blocks"]}
+        blocks["handler"]["parameters"].insert(0, {
+            "id": "exception_value", "kind": "value", "semantic_type": "dynamic", "representation": "boxed"
+        })
+        blocks["entry"]["instructions"][0]["exception"]["arguments"] = ["sum", "e1"]
+        self.assertIn("ssa.use_before_definition", codes(doc))
+
+    def test_exception_edge_can_forward_value_defined_before_throw(self):
+        doc = fixture("positive-dynamic-exception.json")
+        blocks = {block["id"]: block for block in doc["function"]["blocks"]}
+        blocks["handler"]["parameters"].insert(0, {
+            "id": "pre_throw_value", "kind": "value", "semantic_type": "dynamic", "representation": "boxed"
+        })
+        blocks["entry"]["instructions"][0]["exception"]["arguments"] = ["lhs", "e1"]
+        self.assertNotIn("ssa.dominance", codes(doc))
+        self.assertNotIn("ssa.use_before_definition", codes(doc))
+
 
     def test_normal_edge_forwards_current_effect_token(self):
         doc = fixture("positive-dynamic-exception.json"); doc["function"]["blocks"][0]["terminator"]["arguments"][-1] = "e0"

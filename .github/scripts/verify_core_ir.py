@@ -220,20 +220,78 @@ class Verifier:
             if exc_preds[bid] and not blocks[bid]["exception_parameter"]: self.err("exception.handler_parameter", f"$.function.blocks[{order.index(bid)}]", "exception target needs exception_parameter")
             if blocks[bid]["exception_parameter"] and not exc_preds[bid]: self.err("exception.unused_parameter", f"$.function.blocks[{order.index(bid)}]", "exception_parameter needs incoming exception edge")
             if blocks[bid]["exception_parameter"] and normal_preds[bid]: self.err("exception.normal_predecessor", f"$.function.blocks[{order.index(bid)}]", "handler block cannot have normal predecessors")
-        dom={b: ({b} if b==entry else set(reachable)) for b in reachable}
-        changed=True
+        # Compute instruction-level dominance, not only block-level dominance.
+        # An exception edge leaves at the throwing instruction, before that
+        # instruction's normal result is defined. Block-only dominance would
+        # incorrectly allow a handler to read values produced later in the
+        # throwing block (or the result of the throwing instruction itself).
+        node_succ = {}
+        node_preds = {}
+        for bid, block in blocks.items():
+            for index in range(len(block["instructions"]) + 1):
+                node = (bid, index)
+                node_succ[node] = set()
+                node_preds[node] = set()
+        for bid, block in blocks.items():
+            count = len(block["instructions"])
+            for index, ins in enumerate(block["instructions"]):
+                node = (bid, index)
+                normal_next = (bid, index + 1)
+                node_succ[node].add(normal_next)
+                node_preds[normal_next].add(node)
+                edge = ins["exception"]
+                if edge and edge["kind"] == "edge" and edge["target"] in blocks:
+                    exceptional_next = (edge["target"], 0)
+                    node_succ[node].add(exceptional_next)
+                    node_preds[exceptional_next].add(node)
+            term_node = (bid, count)
+            for edge in term_edges(block["terminator"]):
+                if edge["target"] in blocks:
+                    target_node = (edge["target"], 0)
+                    node_succ[term_node].add(target_node)
+                    node_preds[target_node].add(term_node)
+
+        entry_node = (entry, 0)
+        node_reachable = set()
+        node_work = [entry_node] if entry in blocks else []
+        while node_work:
+            node = node_work.pop()
+            if node in node_reachable:
+                continue
+            node_reachable.add(node)
+            node_work.extend(node_succ[node] - node_reachable)
+        node_dom = {node: ({node} if node == entry_node else set(node_reachable)) for node in node_reachable}
+        changed = True
         while changed:
-            changed=False
-            for bid in reachable-{entry}:
-                ps=preds[bid]&reachable; new=({*set.intersection(*(dom[p] for p in ps))} if ps else set())|{bid}
-                if new != dom[bid]: dom[bid]=new; changed=True
-        def use(ident, ub, ui, path, effect=False):
-            d=defs.get(ident)
-            if not d: self.err("ssa.undefined_value", path, f"undefined SSA value {ident!r}"); return None
-            db, di, item, kind=d
-            if kind == "effect" and not effect: self.err("ssa.effect_as_value", path, "effect tokens cannot be used as JavaScript values")
-            if db is not None and ((db==ub and di>=ui) or (db!=ub and db not in dom.get(ub,set()))):
-                self.err("ssa.dominance" if db!=ub else "ssa.use_before_definition", path, f"definition of {ident!r} does not dominate this use")
+            changed = False
+            for node in node_reachable - {entry_node}:
+                ps = node_preds[node] & node_reachable
+                common = set.intersection(*(node_dom[pred] for pred in ps)) if ps else set()
+                new = common | {node}
+                if new != node_dom[node]:
+                    node_dom[node] = new
+                    changed = True
+
+        def use(ident, ub, ui, path, effect=False, exception_out=None):
+            d = defs.get(ident)
+            if not d:
+                self.err("ssa.undefined_value", path, f"undefined SSA value {ident!r}")
+                return None
+            db, di, item, kind = d
+            if kind == "effect" and not effect:
+                self.err("ssa.effect_as_value", path, "effect tokens cannot be used as JavaScript values")
+            if db is not None:
+                use_node = (ub, ui)
+                # Function/block parameters are available at function/block
+                # entry. Instruction results and effect outputs are available
+                # on the normal successor after the defining instruction.
+                def_node = (db, 0) if di < 0 else (db, di + 1)
+                # A throwing operation's effect_out is carried by its
+                # exceptional edge; its ordinary result is not.
+                exceptional_effect = ident == exception_out and kind == "effect" and effect
+                if not exceptional_effect and def_node not in node_dom.get(use_node, set()):
+                    self.err("ssa.use_before_definition" if db == ub else "ssa.dominance", path,
+                             f"definition of {ident!r} does not dominate this use")
             return item
         def value_type(ident):
             d=defs.get(ident)
@@ -343,7 +401,7 @@ class Verifier:
                     target=blocks[e["target"]]; args=e["arguments"]; pars=target["parameters"]
                     if len(args)!=len(pars): continue
                     for ai,(arg,param) in enumerate(zip(args,pars)):
-                        path=f"$.function.blocks.{bid}.instructions[{ii}].exception.arguments[{ai}]"; use(arg,bid,ii+1,path,effect=param["kind"]=="effect")
+                        path=f"$.function.blocks.{bid}.instructions[{ii}].exception.arguments[{ai}]"; use(arg,bid,ii,path,effect=param["kind"]=="effect",exception_out=ins["effect_out"])
                         if param["kind"]=="effect":
                             if value_type(arg)!=("effect","effect"): self.err("effect.edge_type",path,"effect parameter requires an effect token")
                         elif value_type(arg)!=(param["semantic_type"],param["representation"]): self.err("cfg.edge_argument_type",path,"exception edge argument type differs from target parameter")

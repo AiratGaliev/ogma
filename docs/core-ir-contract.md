@@ -53,13 +53,15 @@ A function declares its parameters, return signature, source-file table, lexical
 The verifier enforces:
 
 1. Every operand, branch condition, return value and edge argument references an existing SSA value.
-2. A value defined in a block is used later in that same block, never before its definition.
-3. A value defined in another block may be used only if its definition block dominates the use block.
+2. A value produced by instruction `i` is available only after that instruction completes on its normal continuation; it cannot be read by the same instruction or before it.
+3. A value defined in another block may be used only when its definition point dominates the exact instruction/terminator use point.
 4. Function parameters dominate all blocks. Block parameters and exception parameters are defined at block entry.
-5. Edge argument arity and representation/type facts exactly match destination block parameters. No implicit conversion is permitted on a CFG edge.
-6. An effect token is never a JavaScript operand or return value.
+5. Exceptional control-flow leaves at the exact throwing instruction. Its ordinary result is unavailable on the exceptional edge, and values defined later in the source block cannot be read by the handler. Values defined before the throwing instruction may be forwarded as edge arguments.
+6. The throwing instruction's `effect_out` token may be forwarded as the final effect argument on its exceptional edge; handlers use their own effect block parameter after entry.
+7. Edge argument arity and representation/type facts exactly match destination block parameters. No implicit conversion is permitted on a CFG edge.
+8. An effect token is never a JavaScript operand or return value.
 
-The verifier computes dominators over both normal and exceptional predecessors. This is a structural SSA verifier, not a proof that arbitrary JavaScript optimization transformations preserve semantics; every future transformation must add its own invariants and regression/property tests.
+The verifier computes dominators over an instruction-level CFG containing normal instruction continuations and exceptional edges from their throwing instruction sites. This prevents block-level dominance from making values defined after a throw site visible inside its handler. This is a structural SSA verifier, not a proof that arbitrary JavaScript optimization transformations preserve semantics; every future transformation must add its own invariants and regression/property tests.
 
 ## 4. Value semantics and physical representations
 
