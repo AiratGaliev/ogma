@@ -7,3 +7,7 @@ setImmediate(() => {
     process.stdout.write(JSON.stringify(events));
   });
 });
+
+setImmediate(() => {
+  events.push("immediate:peer");
+});
