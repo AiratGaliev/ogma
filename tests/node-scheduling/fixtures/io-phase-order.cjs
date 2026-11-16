@@ -9,6 +9,6 @@ fs.readFile(__filename, () => {
   setTimeout(() => {
     record("timer:io");
     process.stdout.write(JSON.stringify(events));
-  }, 20);
+  }, 0);
   setImmediate(() => record("immediate:io"));
 });

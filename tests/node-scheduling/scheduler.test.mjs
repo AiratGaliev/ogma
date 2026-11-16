@@ -45,6 +45,7 @@ test("the fixture manifest is complete and points only to known local fixtures",
     "esmCheckpoint",
     "intervalCancellation",
     "ioPhaseOrder",
+    "nestedImmediate",
   ]);
   for (const fixture of Object.values(baseline.fixtures)) {
     assert.equal(typeof fixture.file, "string");

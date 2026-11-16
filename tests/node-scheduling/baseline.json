@@ -52,6 +52,14 @@
         "timer:io"
       ]
     },
+    "nestedImmediate": {
+      "file": "nested-immediate.cjs",
+      "expected": [
+        "immediate:outer",
+        "immediate:peer",
+        "immediate:nested"
+      ]
+    },
     "cancellation": {
       "file": "cancellation.cjs",
       "expected": [

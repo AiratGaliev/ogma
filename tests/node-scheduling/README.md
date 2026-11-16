@@ -18,12 +18,13 @@ The runner checks the actual Node version before invoking Node's built-in test r
 |---|---|
 | commonjs-checkpoint.cjs | Synchronous CommonJS entry, nextTick priority, recursively queued nextTick, Promise reactions, queueMicrotask and nested scheduling. |
 | esm-checkpoint.mjs | ESM evaluation with top-level await; PromiseJobs/microtasks and nextTick are observed at the module evaluation boundary. |
-| io-phase-order.cjs | Async fs completion, callback checkpoint, and the documented setImmediate-before-timer ordering when both are scheduled from the I/O callback. |
+| io-phase-order.cjs | Async fs completion, callback checkpoint, and `setImmediate()` before `setTimeout(0)` when both are scheduled from the I/O callback. |
+| nested-immediate.cjs | An immediate queued from a running immediate is deferred until a subsequent event-loop check turn. |
 | cancellation.cjs | clearTimeout and clearImmediate suppress callbacks; surviving nextTick, Promise, immediate and timer callbacks are all observed. Timer/immediate order is intentionally not asserted for top-level scheduling. |
 | interval-cancellation.cjs | setInterval runs twice, is cleared from its second callback and does not fire again. |
 | errors.cjs | On Node.js 26.13.0 the fixture observes the nextTick exception, then the immediate callback, then the unhandled Promise rejection event. |
 
-The baseline stores complete event traces, not timing measurements. The tests assert only ordering that the pinned reference process actually demonstrates. In particular, the corpus does not assert a universal ordering between top-level setTimeout() and setImmediate(): the cancellation fixture compares their observed callback set without imposing an order.
+The baseline stores complete event traces, not timing measurements. The I/O fixture pins only the Node-defined `setImmediate()`-before-`setTimeout(0)` order when both are scheduled from the I/O callback; a separate fixture checks nested-immediate deferral. The corpus does not assert a universal ordering between top-level `setTimeout()` and `setImmediate()`: the cancellation fixture compares their observed callback set without imposing an order.
 
 ## Run
 
