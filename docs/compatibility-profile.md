@@ -31,6 +31,8 @@ Use these states in every feature/API matrix:
 
 A feature must never be labelled supported merely because a parser accepts its syntax, TypeScript accepts its types, an API name exists, or an AOT compiler can emit machine code. An UNSUPPORTED test result is not a pass.
 
+The architecture's `implemented` state is published as **supported** in this profile: both mean that the declared behaviour is implemented and has passed its required tests. The architecture's `host-provided` label describes ownership/provisioning, not conformance; it is represented by the required host-capability and provider columns, and it does not by itself mean that an API is supported.
+
 **Current implementation status:** no Ogma runtime, frontend, Node adapter, module resolver or conformance runner exists in this repository. Therefore every planned runtime capability below remains **deferred**. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
 
 ## 2. ECMAScript baseline
@@ -120,6 +122,23 @@ Ogma has three distinct responsibilities:
 
 Type assertions, any, external JavaScript, dynamic properties and reflection mean TypeScript types are not proof of runtime representation, object layout, pointer safety or absence of aliasing. Native AOT may use compiler facts only with a valid proof/guard and a generic runtime fallback.
 
+### 3.3.1. Pinned consumer compiler and JSX configuration
+
+The SolidJS Native consumer revision pins its actual TypeScript configuration in `tsconfig.json` and its JSX transform in `packages/solid-native/vite.config.ts`. These are the first concrete TSX compatibility fixtures; they are not generic defaults for every Ogma application.
+
+| Setting | Pinned consumer value |
+|---|---|
+| TypeScript `target` | `ES2020` |
+| `module` / `moduleResolution` | `ESNext` / `Bundler` |
+| Type-check mode | `strict: true`, `noEmit: true` |
+| JSX | `jsx: preserve`, `jsxImportSource: solid-native` |
+| Type declarations | `vite/client` and `node` |
+| Module path aliases | `solid-native` → `packages/solid-native/src/index.ts`; `solid-native/jsx-runtime` → `packages/solid-native/src/jsx-runtime.ts` |
+| Vite build target | `es2020`, IIFE library output |
+| Solid JSX transform | `vite-plugin-solid` with `moduleName: solid-native` and `generate: universal` |
+
+TypeScript's `noEmit` means the consumer compiler performs diagnostics/type checking without emitting JavaScript or lowering JSX. The Vite/Solid plugin performs the JSX transform. Ogma's frontend must therefore validate TS/TSX syntax and the configured `solid-native/jsx-runtime` contract; it must not assume that TypeScript's JSX emitter is the consumer's runtime transform. The consumer's ES2020 build target is a bundler output target and does not reduce the normative ECMAScript 2026 semantics baseline of Ogma.
+
 ### 3.3. TypeScript syntax and transform matrix
 
 All rows are deferred until Ogma implements the frontend and passes fixtures. “Erase” means the syntax has no direct runtime representation; it does not mean Ogma executes TypeScript types.
@@ -156,7 +175,7 @@ The first pinned consumer is [AiratGaliev/solidjs-native](https://github.com/Air
 | pnpm-lock.yaml | Git blob SHA 9c35ab8401a96ef04d9b1e88cab4a0e5a031b034 | Exact dependency graph snapshot at the pinned SolidJS Native revision |
 | rquickjs (Rust workspace) | 0.14.0 | Existing consumer-side reference integration; not part of Ogma's target architecture |
 
-The first SolidJS workload should cover TSX/JSX lowering, solid-js/jsx-runtime integration, reactive computations/effects, component functions, module imports and calls across the Rust host boundary. The pinned package manifest exposes pnpm check (typecheck, build and Rust workspace tests) and pnpm smoke (build plus native runtime launch) as candidate consumer commands; they must be rerun against the Ogma adapter when that integration exists. They were not run for this documentation task. Vite, its plugin, TypeScript CLI and pnpm are development/build tools; their use of Node.js does not make them runtime dependencies of a packaged native application.
+The first SolidJS workload should cover TSX/JSX parsing/lowering under the pinned `jsx: preserve` / `jsxImportSource: solid-native` contract, the `solid-native/jsx-runtime` module, the Vite Solid plugin's `moduleName: solid-native` / `generate: universal` transform, reactive computations/effects, component functions, module imports and calls across the Rust host boundary. The pinned package manifest exposes `pnpm check` (typecheck, build and Rust workspace tests) and `pnpm smoke` (build plus native runtime launch) as candidate consumer commands; they must be rerun against the Ogma adapter when that integration exists. They were not run for this documentation task. Vite, its plugin, TypeScript CLI and pnpm are development/build tools; their use of Node.js does not make them runtime dependencies of a packaged native application.
 
 [AiratGaliev/codogma-engine](https://github.com/AiratGaliev/codogma-engine) revision 982d25c26da94c1f73d61457bf55da682413eff2 is a secondary future integration workload identified by the architecture. Its current root package is a Node-based editor/tooling application; it is not evidence that an Ogma-native consumer or a particular Node API is already supported. Promote it into the executable consumer corpus only after a concrete Ogma integration path and exact package/lockfile revision are selected.
 
@@ -185,6 +204,8 @@ Node.js 26 was the Active LTS line at baseline capture. Pinning 26.13.0 makes do
 
 The tables below define the candidate v1 API surface, not all exports from each Node module. Each API starts as deferred; only the named sub-surface may later become supported/partial. Unlisted exports remain unsupported until added explicitly.
 
+Node stability is attached to individual public symbols, not uniformly to an entire module. Profile 1.0.0 admits only Node 26.13.0 symbols documented as **Stability 2 — Stable** into a future supported subset by default. Experimental, deprecated and legacy symbols stay unsupported/deferred unless a later profile explicitly adds them with rationale. Before any symbol is promoted to supported/partial, expand the relevant row to record the exact export, its versioned Node documentation stability label, observable behaviour/edge cases, required capability, supported target tuples and selected reference test files. A module-wide wildcard such as `test-buffer*.js` is a discovery family, not sufficient acceptance evidence by itself.
+
 ### 4.3. Node Base API matrix
 
 | Module / global | Candidate v1 surface | Required host capability | Target platforms | Pinned Node reference test family | Current status |
@@ -195,12 +216,13 @@ The tables below define the candidate v1 API surface, not all exports from each 
 | node:util | Selected format/inspect helpers, promisify and callbackify; no undocumented internals | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-util*.js | deferred |
 | node:path | posix and win32 string semantics: normalize, join, resolve, relative, parse/format and separators | none | Windows, Linux, macOS; both variants tested on every target | test/parallel/test-path*.js | deferred |
 | node:url | URL/URLSearchParams and file URL conversion helpers in the declared subset | none; file conversion does not grant file access | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-url*.js | deferred |
+| node:module | createRequire() bound to an explicit parent URL/path, isBuiltin() and read-only builtinModules in the declared resolver profile | none; resolution remains constrained to the selected package graph and builtin registry | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-module-create-require*.js, test/parallel/test-module-isBuiltin.js, test/parallel/test-module-builtin.js | deferred |
 | node:querystring | parse/stringify and documented escaping semantics | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-querystring*.js | deferred |
 | node:string_decoder | StringDecoder and encoding-boundary behaviour | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-string-decoder*.js | deferred |
 | node:stream | Readable, Writable, Duplex, Transform, PassThrough and selected pipeline/backpressure contracts | none for in-memory streams; external I/O requires a Host adapter | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-stream*.js, test/parallel/test-readable*.js | deferred |
-| node:timers and timer globals | setTimeout/setInterval/setImmediate, cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-async-hooks-top-level-clearimmediate.js | deferred |
+| node:timers and timer globals | setTimeout/setInterval/setImmediate, cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-microtask-queue-run-immediate.js | deferred |
 | console global | log/info/warn/error and selected formatting behaviour | console.write | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-console*.js | deferred |
-| process facade | Read-only version/platform/arch metadata; capability-gated env/cwd; nextTick; no process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | selected test/parallel/test-process*.js cases only | deferred |
+| process facade | Read-only version/platform/arch metadata and env values; cwd read; nextTick; no env mutation or process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-process-next-tick.js, test/parallel/test-next-tick*.js plus selected test-process metadata cases | deferred |
 
 ### 4.4. Node Host API matrix
 
@@ -264,7 +286,15 @@ The host owns permissions and resources. Importing a module never grants access.
 | network.dns, network.udp | Resolve names and use UDP | node:dns, node:dgram |
 | workers.spawn, workers.message, workers.shared_memory | Create Isolates and use explicitly supported worker communication | Node Workers profile |
 
-The declared platform target is Windows, Linux and macOS, including x86_64 and ARM64 configurations. A capability is available only if its adapter is compiled, registered and tested for the exact OS/architecture tuple. Mobile, WebAssembly and other targets require a separate platform profile; this document does not imply their support.
+The declared platform target is Windows, Linux and macOS, including x86_64 and ARM64 configurations. The baseline Rust target triples are:
+
+| OS | x86_64 | ARM64 |
+|---|---|---|
+| Windows | `x86_64-pc-windows-msvc` | `aarch64-pc-windows-msvc` |
+| Linux | `x86_64-unknown-linux-gnu` | `aarch64-unknown-linux-gnu` |
+| macOS | `x86_64-apple-darwin` | `aarch64-apple-darwin` |
+
+These are target-build tuples, not a claim that every API already runs on all six targets. Linux glibc minimum and supported distribution floor remain deferred until the Rust/toolchain deployment baseline is selected; musl, Android, iOS, WebAssembly and other targets are outside profile 1.0.0. A capability is available only if its adapter is compiled, registered and tested for the exact tuple.
 
 Capability denial, unavailable host adapters, invalid arguments and unsupported APIs must produce deterministic errors. They must not silently return empty values, access ambient process state or fall back to unrestricted OS access. Quotas, cancellation and audit policy apply to Node facades and direct Rust host calls alike.
 
@@ -283,7 +313,8 @@ The target Node 26.13.0 compatibility surface includes:
 - CommonJS wrapper scope with module, exports, require, __filename and __dirname; preserve module.exports identity, cache and cycle behaviour.
 - ESM ↔ CJS interop for explicitly tested import/require forms. require(esm) and less common interop edge cases remain deferred until Node 26.13.0 behaviour is pinned by fixtures.
 - Built-in modules are registered under explicit node: specifiers. Bare aliases are exposed only where the pinned Node profile defines them.
-- Planned Node reference selectors are taken from the pinned Node source: test/parallel/test-module-*.js, test/parallel/test-require-*.js and test/parallel/test-esm-*.js. Only cases applicable to the declared module/profile surface are selected.
+- Planned CJS/module-reference selectors are taken from the pinned Node source: test/parallel/test-module-*.js and test/parallel/test-require-*.js.
+- Planned ESM reference fixtures are taken from `test/es-module` in the same pinned Node source revision, including test-esm-basic-imports.mjs, test-esm-live-binding.mjs, test-esm-imports.mjs, test-esm-exports.mjs, test-esm-cjs-exports.js, test-esm-cjs-builtins.js, test-esm-package-map-basic.mjs, test-esm-package-map-exports.mjs, test-esm-package-map-boundaries.mjs and test-esm-package-map-errors.mjs. The two test/parallel/test-esm-loader-hooks-inspect* files are not used as the ESM semantics baseline.
 
 ### 5.3. Package manifest and resolver rules
 
@@ -293,8 +324,7 @@ The initial resolver contract covers the following fields and rules, subject to 
 - Package self-references, subpath exports/imports and package encapsulation.
 - ESM and CommonJS entry points, extension rules and module cache/identity.
 - Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; default is the final fallback; ogma, development and production require explicit profile/build configuration.
-- The node condition is enabled only when the selected Node API profile and the package's required Node APIs are actually implemented and available. It is not a blanket marker for any Ogma runtime. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
-- node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
+- The node condition is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the Node API adapters in that build's capability/module manifest. It is not a blanket marker for any Ogma Runtime and does not claim universal Node API coverage; an API outside the selected profile still fails deterministically when imported or invoked. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
 - browser is not an implicit condition for a native application. A host may opt into it only in a separate explicit profile.
 
 The resolver must distinguish an unrecognized condition in a package's conditional map (which is simply not an enabled match) from an invalid condition supplied in Ogma's own profile configuration (which is a deterministic configuration error). If no enabled branch matches, or a package's exports boundary forbids the requested subpath, resolution fails with a stable package-resolution diagnostic. It must not silently fall back to an arbitrary file or bypass package encapsulation.
@@ -307,6 +337,7 @@ Package managers (npm/pnpm/yarn) remain external build-time tools. They provide 
 
 - ECMAScript PromiseJobs/microtasks belong to the shared Ogma Runtime.
 - Node process.nextTick() uses a separate queue from PromiseJobs. Queue checkpoints, re-entrant enqueueing, fairness and observable ordering must match pinned Node reference fixtures; do not reduce both queues to one FIFO.
+- Scheduler fixtures must cover CommonJS entry execution, ESM module evaluation/top-level await, host callback boundaries, nested nextTick/Promise enqueueing, timer/immediate callbacks, async I/O completion and cancellation/error paths. Ordering is asserted per context against Node 26.13.0; do not encode one global nextTick-vs-microtask priority that incorrectly ignores CJS/ESM entry-context differences.
 - setTimeout, setInterval, setImmediate and cancellation are provided by a Node scheduler adapter over host-driven scheduling capabilities.
 - Async I/O completion is delivered through a host scheduler/executor adapter. Rust Future/Waker internals are not exposed through the public ABI.
 - The host controls pump/poll/run-until-idle, pause, shutdown and cancellation. The same observable Promise/Node scheduling contract must hold for game-loop, native UI, desktop and headless hosts.
@@ -326,12 +357,12 @@ Package managers (npm/pnpm/yarn) remain external build-time tools. They provide 
 
 ## 8. Initial consumer and package corpus
 
-The corpus is versioned independently from the Node API matrix. Every entry must record repository commit, lockfile hash, package name/version, target OS/architecture, build profile, required capabilities, exact test command and expected observable behaviour.
+The corpus is versioned independently from the Node API matrix. Every executable consumer entry must record repository commit, lockfile hash, package name/version, target OS/architecture, build profile, required capabilities, exact test command and expected observable behaviour. Future reference repositories that are not yet executable Ogma consumers are listed separately and do not imply a completed package corpus entry.
 
 | Consumer | Pinned repository revision | Initial workload | Scope classification |
 |---|---|---|---|
 | SolidJS Native | AiratGaliev/solidjs-native@bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 | solid-js@1.9.18, local solid-native@0.1.0, TSX/JSX runtime, reactivity/effects, module graph, Rust host bindings | Primary runtime consumer |
-| Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary future consumer; current repository is Node-based tooling, not an Ogma runtime acceptance result |
+| Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary reference repository only; not yet an executable Ogma consumer and therefore has no compatibility result or consumer-lockfile pin in profile 1.0.0 |
 
 For SolidJS Native, keep these categories separate:
 
