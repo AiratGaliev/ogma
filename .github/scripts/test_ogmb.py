@@ -11,6 +11,7 @@ from verify_ogmb import (
     load_json,
     run_corpus,
     strict_json_loads,
+    validate_source_map,
     verify_one,
 )
 
@@ -121,6 +122,69 @@ class OgmbContractTests(unittest.TestCase):
         self.assertEqual(schema["properties"]["version"]["const"], "1.0.0")
         self.assertIn("lexical_scopes", schema["required"])
         self.assertIn("variable_locations", schema["required"])
+
+    def test_source_map_validation_matches_schema_bounds_and_unique_references(self):
+        artifact, errors = load_artifact("positive-source-map.ogmb")
+        self.assertEqual(errors, [])
+        metadata = json.loads(json.dumps(artifact["manifest"]["metadata"]))
+        source_map = json.loads(json.dumps(artifact["source_map"]))
+
+        source_map["files"][0]["path"] = "x" * 4097
+        actual = validate_source_map(source_map, metadata, len(artifact["code"]))
+        self.assertIn("source_map.file_path", codes(actual))
+
+        source_map = json.loads(json.dumps(artifact["source_map"]))
+        source_map["locations"][0]["source"] = {
+            "origin": "generated",
+            "reason": "x" * 513,
+            "scope": None,
+            "bindings": [],
+            "suspension": None,
+            "inline_chain": [],
+        }
+        actual = validate_source_map(source_map, metadata, len(artifact["code"]))
+        self.assertIn("source_map.generated_fields", codes(actual))
+
+        metadata["frame_layout"]["local_count"] = 2
+        metadata["environment"]["bindings"] = [{
+            "id": "binding_a", "name": "x", "kind": "let", "mutable": True,
+            "semantic_type": "number", "representation": "f64",
+        }]
+        metadata["environment"]["locations"] = [
+            {"binding": "binding_a", "kind": "local", "index": 1}
+        ]
+        duplicate = {
+            "version": "1.0.0",
+            "files": [],
+            "locations": [{
+                "offset": 0,
+                "source": {
+                    "origin": "generated", "reason": "compiler generated",
+                    "scope": "scope_a", "bindings": ["binding_a", "binding_a"],
+                    "suspension": None, "inline_chain": [],
+                },
+            }],
+            "lexical_scopes": [{
+                "id": "scope_a", "parent": None, "start_offset": 0, "end_offset": 1,
+                "bindings": ["binding_a", "binding_a"],
+            }],
+            "variable_locations": [{
+                "binding": "binding_a", "kind": "local", "index": True,
+                "start_offset": 0, "end_offset": 1,
+            }],
+        }
+        actual = validate_source_map(duplicate, metadata, len(artifact["code"]))
+        self.assertIn("source_map.binding_ref", codes(actual))
+        self.assertIn("source_map.scope_bindings", codes(actual))
+        self.assertIn("source_map.variable_storage", codes(actual))
+
+    def test_explicit_throw_must_be_marked_as_throwing(self):
+        artifact, errors = load_artifact("positive-exception.ogmb")
+        self.assertEqual(errors, [])
+        program = load_fixture("positive-exception.json")
+        program["instructions"][1]["may_throw"] = False
+        actual = ProgramVerifier().verify(artifact, program)
+        self.assertIn("exception.throw_flag", codes(actual))
 
     def test_container_code_digest_is_verified(self):
         artifact, errors = load_artifact("negative-code-digest.ogmb")

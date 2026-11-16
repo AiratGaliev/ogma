@@ -481,7 +481,7 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
             err("source_map.file_id", path + ".id", "source file id must be stable and unique")
         file_ids.add(ident)
         name = file["path"]
-        if not isinstance(name, str) or not name or "\\" in name or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or PurePosixPath(name).as_posix() != name:
+        if not isinstance(name, str) or not name or len(name) > 4096 or "\\" in name or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or PurePosixPath(name).as_posix() != name:
             err("source_map.file_path", path + ".path", "source path must be normalized repository-relative POSIX")
         if file["language"] not in ("javascript", "typescript", "json", "synthetic"):
             err("source_map.file_language", path + ".language", "unsupported source language")
@@ -507,8 +507,14 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
             err("source_map.scope_parent", path + ".parent", "scope parent must be null or an identifier")
         if not is_uint(scope["start_offset"]) or not is_uint(scope["end_offset"]) or not (scope["start_offset"] < scope["end_offset"] <= code_size):
             err("source_map.scope_range", path, "scope range must be a non-empty code byte range")
-        if not isinstance(scope["bindings"], list) or any(binding not in binding_ids for binding in scope["bindings"]):
-            err("source_map.scope_bindings", path + ".bindings", "scope bindings must reference declared lexical bindings")
+        scope_bindings = scope["bindings"]
+        if (
+            not isinstance(scope_bindings, list)
+            or len(scope_bindings) > 65_536
+            or any(not isinstance(binding, str) or binding not in binding_ids for binding in scope_bindings)
+            or len(set(scope_bindings)) != len(scope_bindings)
+        ):
+            err("source_map.scope_bindings", path + ".bindings", "scope bindings must be unique, bounded references to declared lexical bindings")
     for index, scope in enumerate(scopes):
         if isinstance(scope, dict) and scope.get("parent") is not None and scope["parent"] not in scope_ids:
             err("source_map.scope_parent", f"$.source_map.lexical_scopes[{index}].parent", "scope parent is unknown")
@@ -548,14 +554,29 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
                 if (finish.get("line", 0), finish.get("column", 0)) < (begin.get("line", 0), begin.get("column", 0)):
                     err("source_map.position_order", path + ".source", "source end must not precede source start")
         else:
-            if set(source) != common | {"reason"} or not isinstance(source.get("reason"), str) or not source["reason"]:
-                err("source_map.generated_fields", path + ".source", "generated source requires a non-empty reason and common provenance fields")
+            if (
+                set(source) != common | {"reason"}
+                or not isinstance(source.get("reason"), str)
+                or not source["reason"]
+                or len(source["reason"]) > 512
+            ):
+                err("source_map.generated_fields", path + ".source", "generated source requires a reason of 1..512 characters and common provenance fields")
                 continue
-        if source.get("scope") is not None and source["scope"] not in scope_ids:
+        if source.get("scope") is not None and (
+            not isinstance(source["scope"], str) or source["scope"] not in scope_ids
+        ):
             err("source_map.scope_ref", path + ".source.scope", "source references an unknown lexical scope")
-        if not isinstance(source.get("bindings"), list) or any(binding not in binding_ids for binding in source["bindings"]):
-            err("source_map.binding_ref", path + ".source.bindings", "source references an unknown lexical binding")
-        if source.get("suspension") is not None and source["suspension"] not in suspensions:
+        source_bindings = source.get("bindings")
+        if (
+            not isinstance(source_bindings, list)
+            or len(source_bindings) > 65_536
+            or any(not isinstance(binding, str) or binding not in binding_ids for binding in source_bindings)
+            or len(set(source_bindings)) != len(source_bindings)
+        ):
+            err("source_map.binding_ref", path + ".source.bindings", "source bindings must be unique, bounded references to declared lexical bindings")
+        if source.get("suspension") is not None and (
+            not isinstance(source["suspension"], str) or source["suspension"] not in suspensions
+        ):
             err("source_map.suspension_ref", path + ".source.suspension", "source references an unknown suspension point")
         if not isinstance(source.get("inline_chain"), list) or len(source["inline_chain"]) > 64:
             err("source_map.inline_chain", path + ".source.inline_chain", "inline chain must be a bounded array")
@@ -588,14 +609,22 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
             err("source_map.variable_fields", path, "variable location has missing or unknown fields")
             continue
         binding = variable["binding"]
-        key = (binding, variable["start_offset"], variable["end_offset"])
-        if binding not in binding_ids or key in seen_variables:
-            err("source_map.variable_binding", path + ".binding", "variable location references unknown/duplicate binding")
-        seen_variables.add(key)
-        expected = meta_locations.get(binding)
-        if expected and (variable["kind"], variable["index"]) != (expected["kind"], expected["index"]):
+        start_offset, end_offset = variable["start_offset"], variable["end_offset"]
+        if not isinstance(binding, str) or not ID_RE.fullmatch(binding) or binding not in binding_ids:
+            err("source_map.variable_binding", path + ".binding", "variable location references an unknown binding")
+        elif is_uint(start_offset) and is_uint(end_offset):
+            key = (binding, start_offset, end_offset)
+            if key in seen_variables:
+                err("source_map.variable_binding", path + ".binding", "variable location duplicates an existing binding range")
+            seen_variables.add(key)
+
+        kind, slot = variable["kind"], variable["index"]
+        if not isinstance(kind, str) or kind not in LOCATION_KINDS or not is_uint(slot):
+            err("source_map.variable_storage", path, "variable storage kind/index must use a supported kind and uint32 index")
+        expected = meta_locations.get(binding) if isinstance(binding, str) else None
+        if expected and (kind, slot) != (expected["kind"], expected["index"]):
             err("source_map.variable_storage", path, "debug variable location differs from canonical frame/environment binding location")
-        if not is_uint(variable["start_offset"]) or not is_uint(variable["end_offset"]) or not (variable["start_offset"] < variable["end_offset"] <= code_size):
+        if not is_uint(start_offset) or not is_uint(end_offset) or not (start_offset < end_offset <= code_size):
             err("source_map.variable_range", path, "variable location range must be a non-empty code byte range")
 
     return errors
@@ -899,6 +928,8 @@ class ProgramVerifier:
                 self.err("exception.throw_flag", path + ".may_throw", "may_throw must be boolean")
             if not isinstance(ins["may_suspend"], bool):
                 self.err("suspension.flag", path + ".may_suspend", "may_suspend must be boolean")
+            if ins["operation"] == "throw" and ins["may_throw"] is not True:
+                self.err("exception.throw_flag", path + ".may_throw", "throw operation must declare may_throw=true")
             if ins["operation"] == "suspend" and ins["may_suspend"] is not True:
                 self.err("suspension.operation_flag", path + ".may_suspend", "suspend operation must declare may_suspend=true")
             if model == "stack":

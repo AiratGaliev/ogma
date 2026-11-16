@@ -76,7 +76,7 @@
         "start": { "$ref": "#/$defs/position" },
         "end": { "$ref": "#/$defs/position" },
         "scope": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
-        "bindings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "suspension": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "inline_chain": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/sourceFrame" } }
       }
@@ -89,7 +89,7 @@
         "origin": { "const": "generated" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
         "scope": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
-        "bindings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
         "suspension": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "inline_chain": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/sourceFrame" } }
       }
@@ -112,7 +112,7 @@
         "parent": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "start_offset": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
         "end_offset": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
-        "bindings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
       }
     },
     "variableLocation": {

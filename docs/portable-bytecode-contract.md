@@ -164,6 +164,7 @@ Instructions exactly and contiguously cover the code section from byte offset ze
 - Opcode IDs, offsets, sizes, operands, constant indexes and targets must fit the uint32 verification model.
 - Operand arrays are bounded to at most 64 uint32 values. Call arity is bounded to 0..1024.
 - Every constant reference is checked against the decoded constant-pool length; `constant` requires exactly one existing entry.
+- A semantic `throw` instruction must declare `may_throw=true`, so protected exception ranges include its exceptional edge.
 - Local slot operands must be below the function's declared `frame_layout.local_count`, which must be within `max_locals`.
 - Register operands, entry registers and binding storage locations must fit the function's declared `frame_layout.register_count`, not merely the global `max_registers` ceiling.
 - Binding locations are explicit and stable: `local`, `register`, `environment` or `capture` plus an index. Each lexical binding has one canonical storage location; mutable captures must use cell mode.
@@ -209,8 +210,8 @@ The metadata schema is versioned independently from Core IR and `.ogmb`. Binding
 The optional `source_map` section conforms to [`source-map.schema.json`](../contracts/ogmb/v1/source-map.schema.json). It carries:
 
 - stable source-file identities, normalized repository-relative paths, language and optional source SHA-256;
-- per-instruction user or generated provenance, line/column spans, lexical scope/binding references, suspension-point references and an inline-frame chain;
-- optional lexical scope ranges and binding membership;
+- per-instruction user or generated provenance, line/column spans, lexical scope/binding references, suspension-point references and an inline-frame chain; source paths are limited to 4096 characters and generated-source reasons to 512;
+- optional lexical scope ranges and binding membership; binding-reference arrays are unique and bounded to 65,536 entries;
 - optional variable-location ranges mapping a Core IR binding to the same canonical local/register/environment/capture storage location in the manifest metadata.
 
 Every byte offset/range must align to decoded instruction boundaries (an exclusive end may equal code_size). Source files, lexical scopes, bindings, captures, functions and suspension points are referenced by stable identifiers, not pointers or runtime addresses. Source-level information is optional for stripped artifacts; if present, malformed or dangling references are rejected.
