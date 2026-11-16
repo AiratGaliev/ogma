@@ -211,6 +211,11 @@ def main() -> None:
     ]
     build_container("positive-register-exception.ogmb", register_exception_code, ["value"], register_exception_regions, execution_model="register", register_count=2, max_register_index=1)
     write_program("positive-register-exception.json", register_exception_program)
+    build_container("negative-register-exception-frame.ogmb", register_exception_code, ["value"], [
+        {"start": 1, "end": 2, "handler": 2, "kind": "catch", "handler_registers": [2]}
+    ], execution_model="register", register_count=2, max_register_index=1)
+    build_container("negative-register-summary-frame.ogmb", register_exception_code, ["value"],
+                    execution_model="register", register_count=2, max_register_index=2)
 
     # Portable suspension metadata is bound to an explicit suspend operation and resume edge.
     suspension_code = b"\x25\x26\x27"
@@ -354,6 +359,8 @@ def main() -> None:
             {"artifact": "tests/ogmb/.generated/fixtures/positive-register.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-register.json", "expect": "accepted"},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-exception.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-exception.json", "expect": "accepted"},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-register-exception.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-register-exception.json", "expect": "accepted"},
+            {"artifact": "tests/ogmb/.generated/fixtures/negative-register-exception-frame.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-register-exception.json", "expect": "rejected", "diagnostics": ["exception.handler_registers"]},
+            {"artifact": "tests/ogmb/.generated/fixtures/negative-register-summary-frame.ogmb", "expect": "rejected", "diagnostics": ["metadata.verifier_summary_register"]},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-unknown-optional.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-stack.json", "expect": "accepted"},
             {"artifact": "tests/ogmb/.generated/fixtures/negative-truncated.ogmb", "expect": "rejected", "diagnostics": ["container.truncated_header"]},
             {"artifact": "tests/ogmb/.generated/fixtures/negative-unknown-version.ogmb", "expect": "rejected", "diagnostics": ["container.version"]},

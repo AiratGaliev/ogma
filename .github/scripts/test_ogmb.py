@@ -39,7 +39,7 @@ class OgmbContractTests(unittest.TestCase):
         report = run_corpus(ROOT, MANIFEST)
         self.assertEqual(
             report["summary"],
-            {"total": 26, "passed": 26, "failed": 0, "accepted": 7, "rejected": 19},
+            {"total": 28, "passed": 28, "failed": 0, "accepted": 7, "rejected": 21},
         )
 
     def test_stack_register_and_exception_contracts_are_accepted(self):
@@ -220,6 +220,17 @@ class OgmbContractTests(unittest.TestCase):
         actual = ProgramVerifier().verify(artifact, load_fixture("positive-register-exception.json"))
         self.assertIn("exception.handler_register_state", codes(actual))
 
+    def test_exception_handler_registers_must_fit_function_frame(self):
+        artifact, errors = load_artifact("negative-register-exception-frame.ogmb")
+        self.assertEqual(errors, [])
+        actual = ProgramVerifier().verify(artifact, load_fixture("positive-register-exception.json"))
+        self.assertIn("exception.handler_registers", codes(actual))
+
+    def test_verifier_summary_register_index_must_fit_function_frame(self):
+        artifact, errors = load_artifact("negative-register-summary-frame.ogmb")
+        self.assertIsNone(artifact)
+        self.assertIn("metadata.verifier_summary_register", codes(errors))
+
     def test_artifact_without_decoder_output_is_not_accepted_for_execution(self):
         report = run_corpus(ROOT, MANIFEST)
         missing = next(item for item in report["fixtures"] if item["artifact"].endswith("positive-stack.ogmb") and item["program"] is None)
@@ -234,6 +245,11 @@ class OgmbContractTests(unittest.TestCase):
         deeply_nested = "[" * 1500 + "0" + "]" * 1500
         with self.assertRaisesRegex(ValueError, "JSON nesting"):
             strict_json_loads(deeply_nested)
+        at_limit = "[" * 32 + "0" + "]" * 32
+        strict_json_loads(at_limit)
+        embedded_text = 'brackets ]]} {{{[ and quote " plus slash ' + chr(92)
+        embedded_brackets = json.dumps({"text": embedded_text})
+        self.assertEqual(strict_json_loads(embedded_brackets)["text"], embedded_text)
 
     def test_fixture_paths_cannot_escape_repository_root(self):
         result = verify_one(ROOT, {"artifact": "../outside.ogmb", "expect": "rejected"})

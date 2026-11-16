@@ -83,6 +83,29 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON number is not permitted: {value}")
 
 
+def _check_json_nesting(raw: str, maximum: int = 32) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > maximum:
+                raise ValueError(f"JSON nesting exceeds hard limit of {maximum}")
+        elif character in "]}" and depth:
+            depth -= 1
+
+
 def strict_json_loads(raw: bytes | str) -> Any:
     if isinstance(raw, bytes):
         if len(raw) > MAX_JSON_BYTES:
@@ -90,6 +113,7 @@ def strict_json_loads(raw: bytes | str) -> Any:
         raw = raw.decode("utf-8", errors="strict")
     elif len(raw.encode("utf-8")) > MAX_JSON_BYTES:
         raise ValueError(f"JSON exceeds hard limit of {MAX_JSON_BYTES} bytes")
+    _check_json_nesting(raw)
     try:
         return json.loads(raw, object_pairs_hook=_object_pairs, parse_constant=_reject_constant)
     except RecursionError as exc:
@@ -411,8 +435,12 @@ def validate_function_metadata(metadata: Any, limits: dict[str, int], code_diges
             if not is_uint(summary[key], maximum):
                 err("metadata.verifier_summary_range", f"$.manifest.metadata.verifier_summary.{key}", "summary count/depth exceeds the declared resource limit")
         register_index = summary["max_register_index"]
-        if register_index is not None and not is_uint(register_index, max(0, limits["max_registers"] - 1)):
-            err("metadata.verifier_summary_register", "$.manifest.metadata.verifier_summary.max_register_index", "max_register_index is outside declared register bounds")
+        frame_register_count = frame.get("register_count", 0)
+        if register_index is not None and (
+            not is_uint(frame_register_count, limits["max_registers"])
+            or not is_uint(register_index, max(0, frame_register_count - 1))
+        ):
+            err("metadata.verifier_summary_register", "$.manifest.metadata.verifier_summary.max_register_index", "max_register_index is outside the function's declared register frame")
         if metadata["execution_model"] == "stack" and register_index is not None:
             err("metadata.verifier_summary_model", "$.manifest.metadata.verifier_summary.max_register_index", "stack model requires null max_register_index")
         if metadata["execution_model"] == "register" and register_index is None:
@@ -930,7 +958,9 @@ class ProgramVerifier:
         if self.errors:
             return self._sorted_errors()
 
-        exception_edges = self._verify_exceptions(artifact["exceptions"], by_offset, boundaries, code_size, limits, model)
+        exception_edges = self._verify_exceptions(
+            artifact["exceptions"], by_offset, boundaries, code_size, limits, model, frame["register_count"]
+        )
         if self.errors:
             return self._sorted_errors()
 
@@ -1036,7 +1066,8 @@ class ProgramVerifier:
             self.err("register.effect_mismatch", path + ".register_effects", f"{ins['operation']} requires {expected_reads} reads and {expected_writes} writes")
 
     def _verify_exceptions(self, regions: Any, by_offset: dict[int, dict[str, Any]], boundaries: set[int],
-                           code_size: int, limits: dict[str, int], model: str) -> dict[int, list[tuple[int, dict[str, Any]]]]:
+                           code_size: int, limits: dict[str, int], model: str,
+                           frame_register_count: int) -> dict[int, list[tuple[int, dict[str, Any]]]]:
         edges: dict[int, list[tuple[int, dict[str, Any]]]] = {}
         if not isinstance(regions, list):
             self.err("exception.shape", "$.sections.exceptions", "exception metadata must be an array")
@@ -1080,10 +1111,10 @@ class ProgramVerifier:
                     self.err("exception.handler_stack", path + "." + expected_state, "handler stack depth exceeds declared stack bounds")
             else:
                 registers = region[expected_state]
-                if not isinstance(registers, list) or any(
-                    not is_uint(register) or register >= limits["max_registers"] for register in registers
+                if not isinstance(registers, list) or len(registers) > frame_register_count or any(
+                    not is_uint(register) or register >= frame_register_count for register in registers
                 ):
-                    self.err("exception.handler_registers", path + "." + expected_state, "handler registers must fit declared register bounds")
+                    self.err("exception.handler_registers", path + "." + expected_state, "handler registers must fit the function's declared register frame")
                 elif len(set(registers)) != len(registers):
                     self.err("exception.handler_registers", path + "." + expected_state, "handler registers must be unique")
 
