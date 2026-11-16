@@ -384,14 +384,21 @@ The profile's runtime compatibility states remain **deferred** until an Ogma Nod
 
 ## 6. Scheduling and async semantics
 
-- ECMAScript PromiseJobs/microtasks belong to the shared Ogma Runtime.
-- Node process.nextTick() uses a separate queue from PromiseJobs. Queue checkpoints, re-entrant enqueueing, fairness and observable ordering must match pinned Node reference fixtures; do not reduce both queues to one FIFO.
-- Scheduler fixtures must cover CommonJS entry execution, ESM module evaluation/top-level await, host callback boundaries, nested nextTick/Promise enqueueing, timer/immediate callbacks, async I/O completion and cancellation/error paths. Ordering is asserted per context against Node 26.13.0; do not encode one global nextTick-vs-microtask priority that incorrectly ignores CJS/ESM entry-context differences.
-- setTimeout, setInterval, setImmediate and cancellation are provided by a Node scheduler adapter over host-driven scheduling capabilities.
-- Async I/O completion is delivered through a host scheduler/executor adapter. Rust Future/Waker internals are not exposed through the public ABI.
-- The host controls pump/poll/run-until-idle, pause, shutdown and cancellation. The same observable Promise/Node scheduling contract must hold for game-loop, native UI, desktop and headless hosts.
-- Ogma does not require Tokio or libuv as a mandatory runtime dependency and does not create a hidden second event loop.
-- Tests compare observable callback order and completion/error behaviour with Node 26.13.0. Ogma does not need to reproduce libuv internal phases, thread pool or implementation details where the declared observable API contract is preserved.
+The normative host-pump and Node scheduler contract is [Host Pump and Node-Compatible Scheduler Contract](host-pump-contract.md), contract version 1.0.0. It defines queue ownership, context-specific callback checkpoints, host pumping, fairness, pause/resume, shutdown, cancellation, error handling and the explicit limits of the observable compatibility claim.
+
+The compatibility boundaries are:
+
+- ECMAScript PromiseJobs and queueMicrotask belong to the shared Ogma Runtime core.
+- Node process.nextTick uses a separate FIFO queue in the optional Node compatibility adapter. Checkpoint priority is context-sensitive: CommonJS entry execution and ESM module evaluation/top-level-await must not be collapsed into one global ordering rule.
+- setTimeout, setInterval, setImmediate and their cancellation APIs belong to the Node scheduler adapter, using host-provided monotonic time and wake-ups.
+- Async I/O and Rust executor completions are delivered as owned host events to the Runtime owner thread. Completion threads never execute JavaScript, and Rust Future/Waker internals are not exposed through the public ABI.
+- The host owns pump/poll/run-until-idle, pause, resume, shutdown and the executor/event loop. Runtime work is non-blocking and thread-affine; no hidden second event loop is created.
+- The ECMAScript core does not depend on Node-specific scheduling APIs. The Node adapter is layered above generic Runtime job and host-callback contracts.
+- Tokio and libuv are not mandatory Runtime dependencies. A host may provide an executor or I/O adapter without changing the observable Promise and declared Node scheduling contract.
+
+The pinned black-box reference corpus is [tests/node-scheduling](../tests/node-scheduling/README.md). It records Node.js 26.13.0 callback traces for CommonJS and ESM/top-level-await checkpoints, nested nextTick/Promise scheduling, I/O callback ordering with timers and immediates, timer/immediate cancellation, interval cancellation and error reporting.
+
+These are M0 reference observations and an implementation contract, not an Ogma conformance result. Scheduling API states remain deferred until an Ogma Runtime and Node adapter execute equivalent fixtures and pass differential checks. The small reference corpus does not replace the full Node.js test suite or the promotion-only conformance work owned by OGM-35.
 
 ## 7. Interpreter, AOT and deterministic fallback
 

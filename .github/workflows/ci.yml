@@ -93,6 +93,9 @@ jobs:
       - name: Run Node package-resolution reference fixtures
         run: node tests/node-resolution/run.mjs
 
+      - name: Run Node scheduling reference fixtures
+        run: node tests/node-scheduling/run.mjs
+
       - name: Set up Rust toolchain when a workspace exists
         if: hashFiles('Cargo.toml') != ''
         uses: dtolnay/rust-toolchain@stable
