@@ -51,11 +51,17 @@ test("the fixture manifest is complete and points only to known local fixtures",
     assert.match(fixture.file, /^[a-z0-9-]+\.(?:cjs|mjs)$/);
     assert.ok(Array.isArray(fixture.expected));
     assert.ok(fixture.expected.every((event) => typeof event === "string"));
+    assert.ok(fixture.order === undefined || fixture.order === "unordered");
   }
 });
 
 for (const [name, fixture] of Object.entries(baseline.fixtures)) {
   test("pinned Node.js callback order: " + name, () => {
-    assert.deepEqual(runFixture(fixture), fixture.expected);
+    const actual = runFixture(fixture);
+    if (fixture.order === "unordered") {
+      assert.deepEqual([...actual].sort(), [...fixture.expected].sort());
+      return;
+    }
+    assert.deepEqual(actual, fixture.expected);
   });
 }

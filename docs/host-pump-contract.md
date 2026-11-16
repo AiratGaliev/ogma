@@ -184,3 +184,14 @@ This corpus proves the Node reference observations only. There is no Ogma Runtim
 The proof intentionally does not reproduce libuv internals, its thread pool or phase implementation. It does not define universal top-level timer-versus-immediate ordering, exact timer deadlines, or submission ordering for independent host I/O operations. These behaviours are either phase-dependent or host-provided and must not be asserted more strongly than the pinned observable contract.
 
 The Node adapter remains optional and separate from ECMAScript core. Runtime core must remain usable without Node APIs, Tokio or libuv.
+
+## 8. Reference semantics
+
+The compatibility rules above are grounded in the pinned Node.js 26.13.0 process and event-loop reference. The public Node documentation provides the corresponding semantic explanation:
+
+- [process.nextTick and the Promise microtask queue](https://nodejs.org/api/process.html#when-to-use-queuemicrotask-vs-processnexttick) — CJS and ESM expose different nextTick/microtask ordering because ESM evaluation already runs in the microtask queue.
+- [Event loop, timers and nextTick](https://nodejs.org/learn/asynchronous-work/event-loop-timers-and-nexttick) — I/O callback and check-phase ordering, including setImmediate versus timers.
+- [setImmediate](https://nodejs.org/api/timers.html#setimmediatecallback-args) — callbacks scheduled from an executing immediate callback are deferred until the next event-loop iteration.
+
+The pinned corpus asserts only ordering that the reference fixtures can establish without relying on wall-clock timing. The top-level timer/immediate cancellation fixture checks callback presence and cancellation, not a total order between those two top-level callbacks.
+

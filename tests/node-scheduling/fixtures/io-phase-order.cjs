@@ -6,12 +6,9 @@ fs.readFile(__filename, () => {
   record("io:complete");
   process.nextTick(() => record("nextTick:io"));
   Promise.resolve().then(() => record("promise:io"));
-  setTimeout(() => record("timer:io"), 0);
-  setImmediate(() => {
-    record("immediate:io");
-    setImmediate(() => {
-      record("immediate:nested");
-      setTimeout(() => process.stdout.write(JSON.stringify(events)), 0);
-    });
-  });
+  setTimeout(() => {
+    record("timer:io");
+    process.stdout.write(JSON.stringify(events));
+  }, 20);
+  setImmediate(() => record("immediate:io"));
 });

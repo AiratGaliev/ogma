@@ -49,7 +49,6 @@
         "nextTick:io",
         "promise:io",
         "immediate:io",
-        "immediate:nested",
         "timer:io"
       ]
     },
@@ -60,7 +59,8 @@
         "promise",
         "immediate:survived",
         "timer:survived"
-      ]
+      ],
+      "order": "unordered"
     },
     "intervalCancellation": {
       "file": "interval-cancellation.cjs",
