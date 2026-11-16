@@ -171,7 +171,7 @@ Shutdown is a host lifecycle operation, not a promise to reproduce Node process.
 
 A synchronous exception thrown by a timer, immediate or I/O callback is reported through the Runtime error boundary and then handled by the Node adapter's declared uncaught-exception policy. It must not unwind through Rust host frames.
 
-A rejected Promise is observed through the microtask checkpoint and the Node adapter's unhandled-rejection policy. The reference fixture pins the ordering of a nextTick exception, an unhandled rejection and a later immediate callback; it does not claim that this small fixture proves every Node process-exit or rejectionHandled edge case.
+A rejected Promise is observed through the microtask checkpoint and the Node adapter's unhandled-rejection policy. The reference fixture pins the order observed for this combined scenario on Node.js 26.13.0: the nextTick exception is reported, the immediate callback runs, and the unhandledRejection event is emitted afterward. This is a version-specific interaction, not a universal ordering rule that unhandled rejections always follow immediates. The small fixture does not prove every Node process-exit or rejectionHandled edge case.
 
 Host I/O/executor failures are delivered as owned completion errors and mapped by the compatibility adapter. Rust panics must not cross the public ABI. Error reporting must preserve the original callback/job identity sufficiently for deterministic diagnostics.
 

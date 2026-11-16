@@ -21,7 +21,7 @@ The runner checks the actual Node version before invoking Node's built-in test r
 | io-phase-order.cjs | Async fs completion, callback checkpoint, setImmediate and zero-delay timer scheduling from the I/O callback, and a nested immediate. |
 | cancellation.cjs | clearTimeout and clearImmediate suppress callbacks; surviving nextTick, Promise, immediate and timer callbacks remain observable. |
 | interval-cancellation.cjs | setInterval runs twice, is cleared from its second callback and does not fire again. |
-| errors.cjs | A throwing nextTick callback, an unhandled Promise rejection and a later immediate are observed through their registered error events. |
+| errors.cjs | On Node.js 26.13.0 the fixture observes the nextTick exception, then the immediate callback, then the unhandled Promise rejection event. |
 
 The baseline stores complete event arrays, not timing measurements. The tests assert only ordering that the pinned reference process actually demonstrates. In particular, the corpus does not assert a universal ordering between top-level setTimeout(0) and setImmediate.
 

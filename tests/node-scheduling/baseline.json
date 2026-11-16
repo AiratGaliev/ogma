@@ -74,8 +74,8 @@
       "file": "errors.cjs",
       "expected": [
         "uncaught:tick-failure",
-        "unhandled:promise-failure",
-        "immediate"
+        "immediate",
+        "unhandled:promise-failure"
       ]
     }
   }
