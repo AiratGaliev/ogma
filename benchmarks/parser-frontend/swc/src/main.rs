@@ -8,6 +8,7 @@ use swc_ecma_parser::{EsSyntax, Parser, StringInput, Syntax, lexer::Lexer};
 
 const WARMUP_ROUNDS: usize = 2;
 const MEASURED_ROUNDS: usize = 12;
+const REPEATS_PER_FIXTURE: usize = 2_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,16 +113,18 @@ fn benchmark(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>> 
     for round in 0..(WARMUP_ROUNDS + MEASURED_ROUNDS) {
         let measured = round >= WARMUP_ROUNDS;
         for fixture in &selected {
-            let (_, _, _, elapsed_ns) = parse_one(fixture)?;
-            black_box(elapsed_ns);
-            if measured {
-                parse_elapsed_ns += elapsed_ns;
+            for _ in 0..REPEATS_PER_FIXTURE {
+                let (_, _, _, elapsed_ns) = parse_one(fixture)?;
+                black_box(elapsed_ns);
+                if measured {
+                    parse_elapsed_ns += elapsed_ns;
+                }
             }
         }
     }
 
-    let operations = selected.len() * MEASURED_ROUNDS;
-    let measured_source_bytes = source_bytes_per_round * MEASURED_ROUNDS;
+    let operations = selected.len() * MEASURED_ROUNDS * REPEATS_PER_FIXTURE;
+    let measured_source_bytes = source_bytes_per_round * MEASURED_ROUNDS * REPEATS_PER_FIXTURE;
     let mib_per_second = if parse_elapsed_ns == 0 {
         0.0
     } else {
@@ -137,6 +140,7 @@ fn benchmark(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>> 
         "fixtureCountPerRound": selected.len(),
         "warmupRounds": WARMUP_ROUNDS,
         "measuredRounds": MEASURED_ROUNDS,
+        "repeatsPerFixture": REPEATS_PER_FIXTURE,
         "operations": operations,
         "sourceBytesPerRound": source_bytes_per_round,
         "measuredSourceBytes": measured_source_bytes,

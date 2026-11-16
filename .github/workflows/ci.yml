@@ -113,7 +113,7 @@ jobs:
 
       - name: Report Rust checks are not applicable yet
         if: hashFiles('Cargo.toml') == ''
-        run: echo "::notice::No root Cargo.toml is present; Rust build, Clippy and tests are not applicable to this bootstrap repository."
+        run: echo "::notice::No Cargo.toml is present yet; Rust build, Clippy and tests are not applicable to this documentation/bootstrap repository."
 
   parser-frontend-benchmark:
     name: OGM-14 parser frontend benchmark

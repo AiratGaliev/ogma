@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 const WARMUP_ROUNDS: usize = 2;
 const MEASURED_ROUNDS: usize = 12;
+const REPEATS_PER_FIXTURE: usize = 2_000;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,11 +104,12 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
     for round in 0..(WARMUP_ROUNDS + MEASURED_ROUNDS) {
         let measured = round >= WARMUP_ROUNDS;
         for fixture in &selected {
-            let allocator = Allocator::default();
-            let kind = source_type(&fixture.meta.path)?;
-            let parse_started = Instant::now();
-            let parsed = Parser::new(&allocator, &fixture.source, kind).parse();
-            let parse_ns = parse_started.elapsed().as_nanos();
+            for _ in 0..REPEATS_PER_FIXTURE {
+                let parse_started = Instant::now();
+                let allocator = Allocator::default();
+                let kind = source_type(&fixture.meta.path)?;
+                let parsed = Parser::new(&allocator, &fixture.source, kind).parse();
+                let parse_ns = parse_started.elapsed().as_nanos();
             black_box(parsed.diagnostics.len());
             black_box(parsed.program.body.len());
 
@@ -122,20 +124,21 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
                 black_box(result.semantic);
             }
 
-            if measured {
-                parse_elapsed_ns += parse_ns;
-                semantic_elapsed_ns += semantic_ns;
-                arena_bytes_sum += allocator.used_bytes() as u128;
-                arena_samples += 1;
-                max_arena_used_bytes = max_arena_used_bytes.max(allocator.used_bytes());
-                max_arena_capacity_bytes = max_arena_capacity_bytes.max(allocator.capacity());
+                if measured {
+                    parse_elapsed_ns += parse_ns;
+                    semantic_elapsed_ns += semantic_ns;
+                    arena_bytes_sum += allocator.used_bytes() as u128;
+                    arena_samples += 1;
+                    max_arena_used_bytes = max_arena_used_bytes.max(allocator.used_bytes());
+                    max_arena_capacity_bytes = max_arena_capacity_bytes.max(allocator.capacity());
+                }
             }
         }
     }
 
-    let operations = selected.len() * MEASURED_ROUNDS;
+    let operations = selected.len() * MEASURED_ROUNDS * REPEATS_PER_FIXTURE;
     let total_elapsed_ns = parse_elapsed_ns + semantic_elapsed_ns;
-    let measured_source_bytes = source_bytes_per_round * MEASURED_ROUNDS;
+    let measured_source_bytes = source_bytes_per_round * MEASURED_ROUNDS * REPEATS_PER_FIXTURE;
     let pipeline_mib_per_second = if total_elapsed_ns == 0 {
         0.0
     } else {
@@ -151,6 +154,7 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
         "fixtureCountPerRound": selected.len(),
         "warmupRounds": WARMUP_ROUNDS,
         "measuredRounds": MEASURED_ROUNDS,
+        "repeatsPerFixture": REPEATS_PER_FIXTURE,
         "operations": operations,
         "sourceBytesPerRound": source_bytes_per_round,
         "measuredSourceBytes": measured_source_bytes,

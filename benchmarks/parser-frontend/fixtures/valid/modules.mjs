@@ -1,5 +1,8 @@
 import { readFile } from "node:fs/promises";
 
+const initialization = await Promise.resolve("ogma");
+export const runtimeName = initialization;
+
 export const loadText = (path) => readFile(path, "utf8");
 
 export default async function start(path) {

@@ -28,7 +28,7 @@ The corpus is a bounded M0 decision fixture, not a Test262 run. Ogma Compatibili
 ## Measurement protocol
 
 - Rust toolchain: 1.100.0; exact Oxc/SWC crate versions are in the manifests and resolved dependencies in `Cargo.lock`.
-- Two warm-up rounds, then twelve measured rounds; each accepted fixture is parsed once per round.
+- Two warm-up rounds, then twelve measured rounds with 2,000 parses per accepted fixture per round. This keeps aggregate timed work in the multi-second range instead of relying on sub-millisecond samples.
 - Throughput excludes fixture disk I/O and is reported as files/second and MiB/second.
 - Oxc parse-only, Oxc parse+semantic and SWC parse-only run as separate processes.
 - Peak RSS is Linux `getrusage(RUSAGE_SELF).ru_maxrss`, converted from KiB to bytes. It includes process/code and the preloaded fixture corpus, so it is a process high-water mark, not a parser-allocation-only metric. SWC's SourceMap/source-file construction is included in its timed parser entrypoint because it is part of the adapter cost; fixture disk I/O is excluded for both.
@@ -51,6 +51,6 @@ The task-specific GitHub Actions job runs this proof on the OGM-14 topic PR and 
 
 - This suite is a reproducible comparison workload, not a full grammar or conformance proof. Test262 and the pinned TypeScript compiler corpus remain the relevant references for their separate language layers.
 - Parser acceptance/error recovery is reported separately from Oxc semantic diagnostics. The recovery counter is a coarse fixture-level signal (partial AST after Oxc parser diagnostics, or successful SWC parse with recoverable errors); it is not treated as a directly equivalent parser-recovery score.
-- Oxc allocates syntax nodes in an arena; AST and semantic references are bounded by that allocator's lifetime. This supports bulk reclamation but means retained compiler data must be copied/lowered into an owned representation before the compile-unit arena is dropped.
+- Oxc includes allocator construction in the timed frontend operation and allocates syntax nodes in an arena; AST and semantic references are bounded by that allocator's lifetime. This supports bulk reclamation but means retained compiler data must be copied/lowered into an owned representation before the compile-unit arena is dropped.
 - SWC's parser produces an owned AST with source positions backed by a `SourceMap`; this has a different allocation and source-management profile.
 - Neither candidate is adopted as production dependency by this benchmark. The measured trade-offs inform a later frontend decision after the Rust workspace and representative TS/TSX lowering proof exist.
