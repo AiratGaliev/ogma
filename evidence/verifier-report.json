@@ -1,0 +1,345 @@
+{
+  "contract": "ogma.core-ir",
+  "contract_version": "1.0.0",
+  "verifier_version": "1.0.0",
+  "fixtures": [
+    {
+      "fixture": "tests/core-ir/fixtures/positive-ssa-branch.json",
+      "expected": "accepted",
+      "actual": "accepted",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/positive-dynamic-exception.json",
+      "expected": "accepted",
+      "actual": "accepted",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/positive-closure-source.json",
+      "expected": "accepted",
+      "actual": "accepted",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/positive-async-suspension.json",
+      "expected": "accepted",
+      "actual": "accepted",
+      "passed": true,
+      "diagnostics": []
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-malformed-cfg.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "cfg.edge_target",
+          "path": "$.function.blocks",
+          "message": "normal edge targets unknown block 'missing_block'"
+        },
+        {
+          "code": "cfg.unreachable_block",
+          "path": "$.function.blocks[1]",
+          "message": "block is unreachable from entry"
+        },
+        {
+          "code": "ssa.use_before_definition",
+          "path": "$.function.blocks[1].terminator.value",
+          "message": "definition of 'left_value' does not dominate this use"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-ssa-dominance.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "ssa.dominance",
+          "path": "$.function.blocks[3].instructions[0].operands[0]",
+          "message": "definition of 'branch_only' does not dominate this use"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-edge-type.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "cfg.edge_argument_type",
+          "path": "$.function.blocks.entry.terminator.edge[0].arguments[0]",
+          "message": "edge argument type differs from target parameter"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-effect-underreport.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "effect.underreported",
+          "path": "$.function.blocks[0].instructions[0].effects.may_gc",
+          "message": "js.add requires may_gc=true"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-representation.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "representation.unsupported",
+          "path": "$.function.return",
+          "message": "'object_ref' is not valid for 'number'"
+        },
+        {
+          "code": "representation.unsupported",
+          "path": "$.function.blocks[0].instructions[0].result",
+          "message": "'object_ref' is not valid for 'number'"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-exception-edge.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "exception.metadata_missing",
+          "path": "$.function.blocks[0].instructions[0].exception",
+          "message": "may_throw requires exactly one exception flow record"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-source-span.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "source.unknown_file",
+          "path": "$.function.blocks[0].instructions[0].source.file",
+          "message": "unknown source file 'missing-source'"
+        },
+        {
+          "code": "source.invalid_span",
+          "path": "$.function.blocks[0].instructions[0].source",
+          "message": "span end precedes start"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-binding-mutability.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "environment.binding_mutability",
+          "path": "$.function.environment.bindings[0]",
+          "message": "binding mutability must match its declaration kind"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-constant-payload.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "operation.literal_value",
+          "path": "$.function.blocks[0].instructions[1].attributes.value",
+          "message": "literal payload does not match its kind or canonical encoding"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-duplicate-suspension.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "source.suspension_duplicate",
+          "path": "$.function.blocks[0].instructions[1].source.suspension",
+          "message": "suspension-point ids must be unique within a function"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-duplicate-capture.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.duplicate_capture",
+          "path": "$.function.blocks[0].instructions[0].attributes.captures[2]",
+          "message": "closure capture binding must be unique"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-invalid-reference-id.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "schema.oneOf",
+          "path": "$.function.blocks[0].instructions[0].source",
+          "message": "value does not satisfy oneOf"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-closure-function-id.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.function_id",
+          "path": "$.function.blocks[0].instructions[0].attributes.function",
+          "message": "closure target must be a stable function identifier"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-host-symbol-id.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "host.symbol_id",
+          "path": "$.function.blocks[0].instructions[0].attributes.symbol",
+          "message": "host capability symbol must be a stable identifier"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-closure-capture-list.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.capture_list",
+          "path": "$.function.blocks[0].instructions[0].attributes.captures",
+          "message": "closure captures must be an array"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-environment-binding-id.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "environment.binding_id",
+          "path": "$.function.blocks[0].instructions[1].attributes.binding",
+          "message": "binding reference must be a stable identifier"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-constant-tag-type.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "operation.literal_type",
+          "path": "$.function.blocks[0].instructions[1].result",
+          "message": "literal attribute and result semantic type differ"
+        },
+        {
+          "code": "operation.literal_value",
+          "path": "$.function.blocks[0].instructions[1].attributes.value",
+          "message": "literal payload does not match its kind or canonical encoding"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-oversized-number.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "operation.literal_value",
+          "path": "$.function.blocks[0].instructions[1].attributes.value",
+          "message": "literal payload does not match its kind or canonical encoding"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-closure-capture-descriptor.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.capture_descriptor",
+          "path": "$.function.blocks[0].instructions[0].attributes.captures[0]",
+          "message": "capture descriptor must contain a stable binding id and mode cell/value"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-duplicate-capture-alias.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.duplicate_capture",
+          "path": "$.function.blocks[0].instructions[0].attributes.captures[2]",
+          "message": "closure capture binding must be unique"
+        }
+      ]
+    },
+    {
+      "fixture": "tests/core-ir/fixtures/negative-capture-id-collision.json",
+      "expected": "rejected",
+      "actual": "rejected",
+      "passed": true,
+      "diagnostics": [
+        {
+          "code": "closure.capture_identifier_collision",
+          "path": "$.function.captures[0]",
+          "message": "capture identifiers must not collide with local lexical bindings"
+        },
+        {
+          "code": "closure.capture_mode",
+          "path": "$.function.blocks[0].instructions[0].attributes.captures[0].mode",
+          "message": "capture of this binding requires 'value' mode"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "accepted": 4,
+    "failed": 0,
+    "passed": 25,
+    "rejected": 21,
+    "total": 25
+  }
+}

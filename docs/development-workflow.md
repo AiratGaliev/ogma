@@ -151,7 +151,7 @@ Separate routine engineering feedback from full-system conformance and release a
 
 ### Fast CI — topic PR → dev
 
-The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator itself, compiles the Python CI helpers, and runs the pinned Node.js package-resolution and scheduling reference corpora from `.node-version`. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
+The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the repository validator and Core IR verifier, validates the versioned Core IR v1 schema and positive/negative fixture corpus, uploads a machine-readable verifier report, compiles the Python CI helpers, and runs the pinned Node.js package-resolution and scheduling reference corpora from `.node-version`. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
 
 The routine gate should remain fast and scoped. As each subsystem becomes available, it should include checks applicable to changed files, such as:
 
@@ -238,6 +238,7 @@ Keep one clear source of truth per concern:
 | docs/development-workflow.md | Detailed Git, PR, testing, Linear and Definition-of-Done rules. |
 | Notion architecture specification | Normative engine architecture and milestone requirements. |
 | docs/compatibility-profile.md | Single repository source of truth for versioned ECMAScript, TypeScript, Node.js API, package and consumer compatibility claims. |
+| docs/core-ir-contract.md and contracts/core-ir/v1/schema.json | Versioned backend-neutral function-level Core IR v1 semantics, structural schema, verifier invariants and machine-readable proof corpus. |
 | Linear project and issues | Work planning, ownership, dependencies, status and execution evidence. |
 | ADRs | Accepted, durable architecture decisions once a decision is mature enough to freeze. |
 | Benchmark reports/proof artifacts | Reproducible evidence used to make M0 decisions. |

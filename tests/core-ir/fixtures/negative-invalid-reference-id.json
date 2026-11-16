@@ -1,0 +1,126 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn_async",
+    "name": "await_value",
+    "parameters": [
+      {
+        "id": "promise",
+        "kind": "value",
+        "semantic_type": "dynamic",
+        "representation": "boxed",
+        "name": "promise",
+        "binding": "bind_promise"
+      }
+    ],
+    "return": {
+      "semantic_type": "dynamic",
+      "representation": "boxed"
+    },
+    "source_files": [
+      {
+        "id": "src0",
+        "path": "fixtures/sample.js",
+        "language": "javascript"
+      }
+    ],
+    "environment": {
+      "id": "env_async",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "bind_promise",
+          "name": "promise",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "dynamic",
+          "representation": "boxed"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": "e0",
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [
+          {
+            "id": "e0",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "await",
+            "op": "async.await",
+            "operands": [
+              "promise"
+            ],
+            "result": {
+              "id": "resolved",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": true,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 4
+              },
+              "scope": "env_async",
+              "bindings": [
+                "bind_promise"
+              ],
+              "suspension": "not a valid id",
+              "inline_chain": []
+            },
+            "effect_in": "e0",
+            "effect_out": "e1",
+            "exception": {
+              "kind": "propagate"
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "return",
+          "value": "resolved",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 4
+            },
+            "scope": "env_async",
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}
