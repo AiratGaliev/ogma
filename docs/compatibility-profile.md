@@ -1,9 +1,9 @@
 # Ogma Compatibility Profile
 
-**Profile ID:** ogma-compatibility-profile  
-**Profile version:** 1.0.0  
-**Status:** M0 decision baseline; target contract, not an implementation claim  
-**Baseline captured:** 2026-11-16  
+**Profile ID:** ogma-compatibility-profile
+**Profile version:** 1.0.0
+**Status:** M0 decision baseline; target contract, not an implementation claim
+**Baseline captured:** 2026-11-16
 **Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
 
 This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. At this repository revision there is no Ogma Rust workspace or runtime implementation, so no runtime/API feature is reported as implemented or conformant.
