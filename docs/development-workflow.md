@@ -151,7 +151,7 @@ Separate routine engineering feedback from full-system conformance and release a
 
 ### Fast CI — topic PR → dev
 
-The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator itself, and compiles the Python CI helpers. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
+The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the validator itself, compiles the Python CI helpers, and runs the pinned Node.js package-resolution reference corpus from `.node-version`. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
 
 The routine gate should remain fast and scoped. As each subsystem becomes available, it should include checks applicable to changed files, such as:
 

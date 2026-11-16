@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "reference": {
+    "runtime": "Node.js",
+    "version": "26.13.0",
+    "sourceCommit": "18b32a3b1552e199a01f1a8d9fd64aa756d3b75b",
+    "sourceUrl": "https://github.com/nodejs/node/tree/18b32a3b1552e199a01f1a8d9fd64aa756d3b75b",
+    "profile": "Ogma Node.js Compatibility Profile 1.0.0"
+  },
+  "command": "node --test --test-reporter=spec tests/node-resolution/resolver.test.mjs",
+  "expected": {
+    "packageTypeEsm": "type-module",
+    "packageTypeCommonJs": "type-commonjs",
+    "packageMain": "legacy-main",
+    "dualImport": "esm-entry",
+    "dualRequire": "cjs-entry",
+    "nodeCondition": "node-condition",
+    "defaultFirst": "default-first",
+    "unknownConditionFallsThrough": "default-fallback",
+    "ogmaCondition": "ogma-condition",
+    "developmentCondition": "development-condition",
+    "productionCondition": "production-condition",
+    "importsMap": "internal-target",
+    "selfReference": "esm-entry:self-feature",
+    "subpathExport": "self-feature",
+    "exportsRoot": "esm-entry",
+    "cjsCycleObservation": "a-initializing",
+    "esmCycleObservation": "esm-initializing",
+    "esmCycleFinalState": "esm-ready",
+    "nodePathJoin": "a/b"
+  },
+  "errors": {
+    "exportsBoundary": "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    "noConditionalMatch": "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    "undefinedPackageImport": "ERR_PACKAGE_IMPORT_NOT_DEFINED",
+    "unknownNodeBuiltin": "ERR_UNKNOWN_BUILTIN_MODULE"
+  },
+  "sourceTestSelectors": [
+    "test/parallel/test-module-*.js",
+    "test/parallel/test-require-*.js",
+    "test/es-module/test-esm-basic-imports.mjs",
+    "test/es-module/test-esm-live-binding.mjs",
+    "test/es-module/test-esm-imports.mjs",
+    "test/es-module/test-esm-exports.mjs",
+    "test/es-module/test-esm-cjs-exports.js",
+    "test/es-module/test-esm-cjs-builtins.js",
+    "test/es-module/test-esm-package-map-basic.mjs",
+    "test/es-module/test-esm-package-map-exports.mjs",
+    "test/es-module/test-esm-package-map-boundaries.mjs",
+    "test/es-module/test-esm-package-map-errors.mjs"
+  ]
+}
