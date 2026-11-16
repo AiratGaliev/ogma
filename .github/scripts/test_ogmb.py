@@ -39,7 +39,7 @@ class OgmbContractTests(unittest.TestCase):
         report = run_corpus(ROOT, MANIFEST)
         self.assertEqual(
             report["summary"],
-            {"total": 22, "passed": 22, "failed": 0, "accepted": 5, "rejected": 17},
+            {"total": 26, "passed": 26, "failed": 0, "accepted": 7, "rejected": 19},
         )
 
     def test_stack_register_and_exception_contracts_are_accepted(self):
@@ -48,6 +48,8 @@ class OgmbContractTests(unittest.TestCase):
             ("positive-register.ogmb", "positive-register.json"),
             ("positive-exception.ogmb", "positive-exception.json"),
             ("positive-register-exception.ogmb", "positive-register-exception.json"),
+            ("positive-suspension.ogmb", "positive-suspension.json"),
+            ("positive-source-map.ogmb", "positive-stack.json"),
             ("positive-unknown-optional.ogmb", "positive-stack.json"),
         )
         for artifact_name, program_name in cases:
@@ -83,6 +85,42 @@ class OgmbContractTests(unittest.TestCase):
         artifact, errors = load_artifact("positive-unknown-optional.ogmb")
         self.assertEqual(errors, [])
         self.assertIsNotNone(artifact)
+
+    def test_suspension_metadata_must_match_resume_control_flow(self):
+        artifact, errors = load_artifact("negative-suspension-target.ogmb")
+        self.assertEqual(errors, [])
+        actual = ProgramVerifier().verify(artifact, load_fixture("positive-suspension.json"))
+        self.assertIn("suspension.resume_target", codes(actual))
+
+    def test_frame_layout_limits_actual_local_and_register_windows(self):
+        artifact, errors = load_artifact("negative-local-bounds.ogmb")
+        self.assertEqual(errors, [])
+        local_program = load_fixture("negative-local-bounds.json")
+        self.assertIn("operand.local_bounds", codes(ProgramVerifier().verify(artifact, local_program)))
+        register_artifact, errors = load_artifact("positive-register.ogmb")
+        self.assertEqual(errors, [])
+        register_program = load_fixture("positive-register.json")
+        register_program["instructions"][2]["register_effects"]["reads"] = [0, 3]
+        self.assertIn("register.bounds", codes(ProgramVerifier().verify(register_artifact, register_program)))
+
+    def test_function_metadata_schema_is_present_and_versioned(self):
+        schema = load_json(ROOT / "contracts" / "ogmb" / "v1" / "manifest-metadata.schema.json")
+        self.assertEqual(schema["$id"], "https://ogma.dev/contracts/ogmb/v1/manifest-metadata.schema.json")
+        self.assertIn("frame_layout", schema["required"])
+        self.assertIn("suspension_points", schema["required"])
+        self.assertIn("code_generation", schema["required"])
+        self.assertIn("code_cache", schema["required"])
+
+    def test_source_map_references_are_verified(self):
+        artifact, errors = load_artifact("negative-source-map-reference.ogmb")
+        self.assertIsNone(artifact)
+        self.assertIn("source_map.file_ref", codes(errors))
+
+    def test_source_map_schema_is_versioned(self):
+        schema = load_json(ROOT / "contracts" / "ogmb" / "v1" / "source-map.schema.json")
+        self.assertEqual(schema["properties"]["version"]["const"], "1.0.0")
+        self.assertIn("lexical_scopes", schema["required"])
+        self.assertIn("variable_locations", schema["required"])
 
     def test_container_code_digest_is_verified(self):
         artifact, errors = load_artifact("negative-code-digest.ogmb")
@@ -125,6 +163,24 @@ class OgmbContractTests(unittest.TestCase):
                 actual = ProgramVerifier().verify(artifact, load_fixture(program_name))
                 self.assertIn(expected, codes(actual))
 
+    def test_control_flow_cannot_reenter_function_entry(self):
+        artifact, errors = load_artifact("positive-stack.ogmb")
+        self.assertEqual(errors, [])
+        program = load_fixture("positive-stack.json")
+        program["instructions"][0].update(
+            operation="jump", operands=[0], constant_refs=[], successors=[0],
+            stack_effect={"pop": 0, "push": 0}
+        )
+        actual = ProgramVerifier().verify(artifact, program)
+        self.assertIn("cfg.entry_predecessor", codes(actual))
+
+    def test_verifier_summary_is_recomputed_not_trusted(self):
+        artifact, errors = load_artifact("positive-stack.ogmb")
+        self.assertEqual(errors, [])
+        artifact["manifest"]["metadata"]["verifier_summary"]["instruction_count"] += 1
+        actual = ProgramVerifier().verify(artifact, load_fixture("positive-stack.json"))
+        self.assertIn("verifier_summary.instruction_count", codes(actual))
+
     def test_wrong_stack_effect_is_rejected(self):
         artifact, errors = load_artifact("positive-stack.ogmb")
         self.assertEqual(errors, [])
@@ -137,6 +193,19 @@ class OgmbContractTests(unittest.TestCase):
         self.assertEqual(errors, [])
         actual = ProgramVerifier().verify(artifact, load_fixture("positive-exception.json"))
         self.assertIn("exception.range", codes(actual))
+
+    def test_duplicate_exception_regions_are_rejected(self):
+        artifact, errors = load_artifact("positive-exception.ogmb")
+        self.assertEqual(errors, [])
+        artifact["exceptions"].append(dict(artifact["exceptions"][0]))
+        actual = ProgramVerifier().verify(artifact, load_fixture("positive-exception.json"))
+        self.assertIn("exception.duplicate_region", codes(actual))
+
+    def test_verification_schema_is_valid_json_and_names_the_contract(self):
+        schema = load_json(ROOT / "contracts" / "ogmb" / "v1" / "verification-input.schema.json")
+        self.assertEqual(schema["properties"]["schema"]["const"], "ogma.bytecode-verification")
+        self.assertEqual(schema["properties"]["version"]["const"], "1.0.0")
+        self.assertEqual(schema["properties"]["execution_model"]["enum"], ["stack", "register"])
 
     def test_register_reads_require_definite_initialization(self):
         artifact, errors = load_artifact("register-uninitialized.ogmb")
@@ -162,6 +231,9 @@ class OgmbContractTests(unittest.TestCase):
             strict_json_loads('{"v":1,"v":2}')
         with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
             strict_json_loads('{"value":NaN}')
+        deeply_nested = "[" * 1500 + "0" + "]" * 1500
+        with self.assertRaisesRegex(ValueError, "JSON nesting"):
+            strict_json_loads(deeply_nested)
 
     def test_fixture_paths_cannot_escape_repository_root(self):
         result = verify_one(ROOT, {"artifact": "../outside.ogmb", "expect": "rejected"})

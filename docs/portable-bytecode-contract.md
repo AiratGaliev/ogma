@@ -92,11 +92,38 @@ The manifest has exactly these fields:
     "max_call_depth": 256,
     "max_exception_regions": 1000
   },
-  "metadata": {}
+  "metadata": {
+    "execution_model": "stack",
+    "function": { "id": "fn_main", "name": "main" },
+    "code_generation": { "id": "ogma_codegen", "version": "1" },
+    "code_cache": { "id": "cache_main_v1", "version": "1" },
+    "frame_layout": { "parameter_count": 0, "local_count": 2, "register_count": 0 },
+    "environment": {
+      "id": "env_main",
+      "parent": null,
+      "bindings": [],
+      "captures": [],
+      "locations": []
+    },
+    "suspension_points": [],
+    "inline_cache_slots": [],
+    "verifier_summary": {
+      "schema": "ogma.bytecode-verification-summary",
+      "version": "1.0.0",
+      "code_sha256": "<same code digest>",
+      "instruction_count": 3,
+      "max_stack_depth": 1,
+      "max_register_index": null,
+      "exception_region_count": 0,
+      "constant_count": 1
+    }
+  }
 }
 ```
 
-`encoding_id` is a stable ASCII identifier, not a memory address or runtime-loaded plugin path. Decoder registration is controlled by the host/build, never by an artifact. `code_sha256` binds decoder output to the exact code bytes. JSON parsers reject duplicate object keys, non-finite numbers, invalid UTF-8, oversized structures and unknown manifest fields.
+`metadata` is a typed function/CodeBlock contract, not a free-form extension bag. Its JSON Schema is [`manifest-metadata.schema.json`](../contracts/ogmb/v1/manifest-metadata.schema.json). It carries stable function identity, code-generation and cache identity/version, declared frame sizes, lexical environment/binding/capture metadata, explicit binding storage locations, suspension-state descriptors, optional inline-cache slots (empty when unused) and a verifier summary. The summary is untrusted producer metadata: the verifier recomputes instruction count, stack depth/register index, exception count and constant count after decoder verification, and rejects any mismatch. A summary alone never makes an artifact trusted.
+
+`encoding_id` is a stable ASCII identifier, not a memory address or runtime-loaded plugin path. Decoder registration is controlled by the host/build, never by an artifact. `code_sha256` binds decoder output and the verifier summary to the exact code bytes. JSON parsers reject duplicate object keys, non-finite numbers, invalid UTF-8, oversized structures and unknown manifest fields.
 
 All eight resource limits are mandatory positive integers bounded by hard verifier ceilings:
 
@@ -122,12 +149,12 @@ The normalized input contains:
 - `encoding_id` and `code_sha256` matching the loaded container manifest and actual code section;
 - `execution_model`, currently `stack` or `register`, describing the abstract execution state;
 - entry byte offset and a non-empty ordered instruction list;
-- each instruction's byte offset, encoded size, uint32 opcode identifier, semantic operation class, bounded uint32 operands, constant references, normal successor offsets, `may_throw`, and exactly one applicable execution-state effect;
+- each instruction's byte offset, encoded size, uint32 opcode identifier, semantic operation class, bounded uint32 operands, constant references, normal successor offsets, `may_throw`, `may_suspend`, and exactly one applicable execution-state effect;
 - `entry_registers` for register-model parameters; stack mode requires this list to be empty.
 
 The operation class is a verifier-facing semantic category (`constant`, `binary`, `call`, `jump`, etc.), not an encoded opcode number. The numeric opcode space, operand bit packing and actual instruction decoder are owned by each registered encoding. OGM-36 does not assign numeric opcode IDs, freeze binary operand layout, choose a stack/register winner or define a final VM ISA.
 
-The reference semantic operation vocabulary is `nop`, `constant`, `unary`, `binary`, `call`, `load_local`, `store_local`, `jump`, `branch`, `return` and `throw`. Immediate operand arity is checked by operation: zero for ordinary arithmetic/call/terminal operations, one for local loads/stores and unconditional jumps, and two for conditional branches. A local slot operand must be below `max_locals`. A constant operation references exactly one constant-pool entry; other operations in this v1 vocabulary do not carry constant references.
+The reference semantic operation vocabulary is `nop`, `constant`, `unary`, `binary`, `call`, `load_local`, `store_local`, `jump`, `branch`, `return`, `throw` and `suspend`. Immediate operand arity is checked by operation: zero for ordinary arithmetic/call/terminal operations, one for local loads/stores and unconditional jumps, and two for conditional branches. A local slot operand must be below the function's `frame_layout.local_count` (which itself cannot exceed `max_locals`). A constant operation references exactly one constant-pool entry; other operations in this v1 vocabulary do not carry constant references. `suspend` is the normalized operation class for await/yield suspension; it must set `may_suspend=true` and have one normal resume successor.
 
 Instructions exactly and contiguously cover the code section from byte offset zero to `code_size`. Offsets, sizes, opcode IDs, operands, local indexes, constant indexes and branch targets are uint32 values; booleans are not integers for this purpose. Instruction offsets are unique and sizes are positive. Branch targets and exception boundaries resolve to instruction boundaries (the exclusive end of an exception range may equal `code_size`). Decoder output must not contain host pointers, Rust references, Rust type/layout identifiers, native addresses, target calling-convention values or target object offsets.
 
@@ -137,7 +164,9 @@ Instructions exactly and contiguously cover the code section from byte offset ze
 - Opcode IDs, offsets, sizes, operands, constant indexes and targets must fit the uint32 verification model.
 - Operand arrays are bounded to at most 64 uint32 values. Call arity is bounded to 0..1024.
 - Every constant reference is checked against the decoded constant-pool length; `constant` requires exactly one existing entry.
-- Local slot operands must be below `max_locals`.
+- Local slot operands must be below the function's declared `frame_layout.local_count`, which must be within `max_locals`.
+- Register operands, entry registers and binding storage locations must fit the function's declared `frame_layout.register_count`, not merely the global `max_registers` ceiling.
+- Binding locations are explicit and stable: `local`, `register`, `environment` or `capture` plus an index. Each lexical binding has one canonical storage location; mutable captures must use cell mode.
 - Stack and register effects are not trusted as free-form numbers: they must match the reference operation-class contract. A decoder cannot claim a zero-pop `binary` or a multi-result `constant` to bypass state checks.
 - Unknown semantic operations, malformed operand arrays, overflow and out-of-range references produce stable diagnostics.
 
@@ -152,10 +181,39 @@ Decoded instructions form a complete, non-overlapping byte-range partition. Norm
 - `branch` has two ordered successors matching its target operands;
 - `return` and `throw` have no normal successors;
 - every target names an instruction boundary;
+- the function entry is not a target of normal or exceptional control flow; function-local loops must target an explicit instruction after entry rather than re-enter the entry state;
 - fallthrough beyond the code section, duplicate successors and a non-boundary entry point are rejected;
 - every instruction is reachable from the entry through normal or valid exceptional control flow. V1 rejects dead/unreachable code instead of leaving it to backend-specific interpretation.
 
 The verifier does not infer control flow from opcode bytes or guess instruction lengths. The registered decoder supplies decoded sizes and edges; the common verifier checks them against the original code size and digest.
+
+## 7.1 Function, frame, environment and generation metadata
+
+Each `.ogmb` artifact in v1 represents one function/CodeBlock. A module/package layer may index multiple function artifacts without changing the function-local container. The typed manifest metadata provides:
+
+- stable function id/name;
+- code-generation identity/version and code-cache identity/version, so debugger frames, breakpoints and cache entries can be tied to a code generation rather than a mutable address;
+- exact parameter/local/register counts, bounded by the manifest resource limits;
+- lexical environment id/parent, Core IR-compatible binding descriptors and capture descriptors;
+- an explicit storage mapping for each lexical binding. Stack frames use local slots/environment/captures; register frames may use registers as well. These abstract location kinds do not choose a bytecode opcode layout;
+- a list of suspension points, each with stable id, `await`/`yield`/`yield_delegate` kind, bytecode and resume offsets, live locals, and the model-specific saved state (`stack_depth` or `live_registers`);
+- inline-cache slot identities and kinds, optional through an empty array when no IC metadata is emitted;
+- a verifier summary which is checked against recomputed facts and is never trusted as a replacement for verification.
+
+The normalized decoder input declares the execution model and instruction effects. It must match `metadata.execution_model`. A stack frame declares zero registers; a register frame's actual register indexes must be below its frame count. A stack parameter window is bounded by local_count; a register parameter window is bounded by register_count. All identifiers are stable strings. The manifest contains no pointers, Rust layouts, native addresses or target calling-convention data.
+
+The metadata schema is versioned independently from Core IR and `.ogmb`. Binding descriptors intentionally reuse Core IR's semantic type/representation vocabulary, but the Core IR contract remains the sole authority for JavaScript semantics and lexical binding meaning. This contract only records the portable frame/environment mapping needed by a function artifact.
+
+## 7.2 Source positions, lexical scopes and variable locations
+
+The optional `source_map` section conforms to [`source-map.schema.json`](../contracts/ogmb/v1/source-map.schema.json). It carries:
+
+- stable source-file identities, normalized repository-relative paths, language and optional source SHA-256;
+- per-instruction user or generated provenance, line/column spans, lexical scope/binding references, suspension-point references and an inline-frame chain;
+- optional lexical scope ranges and binding membership;
+- optional variable-location ranges mapping a Core IR binding to the same canonical local/register/environment/capture storage location in the manifest metadata.
+
+Every byte offset/range must align to decoded instruction boundaries (an exclusive end may equal code_size). Source files, lexical scopes, bindings, captures, functions and suspension points are referenced by stable identifiers, not pointers or runtime addresses. Source-level information is optional for stripped artifacts; if present, malformed or dangling references are rejected.
 
 ## 8. Stack and register state
 
@@ -167,9 +225,9 @@ Each instruction declares `{ "pop": n, "push": m }`. The verifier checks the exa
 
 ### Register candidate
 
-Each instruction declares `register_effects.reads` and `register_effects.writes`. Every index must be below `max_registers`; duplicates within a read or write list are rejected. Read/write arity must match the operation class. A forward must-analysis intersects initialized-register sets at CFG merges; a read is valid only if it is definitely initialized on every incoming path. Entry registers represent initialized parameters.
+Each instruction declares `register_effects.reads` and `register_effects.writes`. Every index must be below the function's `frame_layout.register_count`; duplicates within a read or write list are rejected. Read/write arity must match the operation class. A forward must-analysis intersects initialized-register sets at CFG merges; a read is valid only if it is definitely initialized on every incoming path. Entry registers represent initialized parameters.
 
-For an exceptional edge, handler live-ins must already be initialized in the state *before* the throwing instruction. The result written by a potentially throwing instruction is not assumed to exist on its exceptional path. Handler registers are checked against `max_registers` and the throw-site state.
+For an exceptional edge, handler live-ins must already be initialized in the state *before* the throwing instruction. The result written by a potentially throwing instruction is not assumed to exist on its exceptional path. Handler registers are checked against the function's declared register window and the throw-site state.
 
 Neither model is selected by OGM-36. OGM-16 owns the same-Core-IR stack/register comparison and encoding recommendation. OGM-36 defines the invariant each candidate must satisfy.
 
@@ -197,7 +255,7 @@ python .github/scripts/verify_ogmb.py --container path/to/artifact.ogmb --progra
 
 Diagnostics are deterministic and contain stable `code`, JSONPath-like `path` and human-readable `message` fields. A corpus report records contract/verifier versions, expected and actual outcomes, diagnostics and summary totals. Exit code 0 means the complete corpus matched its declared expectations; 1 means an artifact failed or a fixture expectation did not match; 2 means the invocation or corpus could not be loaded.
 
-The checked-in corpus covers valid stack/register candidates and exception flow, truncated headers, unknown versions/features/required sections, optional unknown sections, overlapping sections, digest mismatch, invalid jumps, uint32 operand overflow, bad constant references, local-slot bounds, inconsistent stack effects, stack underflow and merge mismatch, malformed exception boundaries, uninitialized register reads and missing decoder output. The generator writes only to the ignored `tests/ogmb/.generated/` directory. These are container/verifier contract tests, not runtime execution, fuzzing, Test262, interpreter equivalence or proof that a production decoder exists.
+The checked-in corpus covers valid stack/register candidates, exception and suspension flow, truncated headers, unknown versions/features/required sections, optional unknown sections, overlapping sections, digest mismatch, invalid jumps, uint32 operand overflow, bad constant references, local-slot and register-frame bounds, inconsistent stack effects, stack underflow and merge mismatch, malformed exception boundaries, invalid suspension resume metadata, uninitialized register reads, missing decoder output and verifier-summary mismatches. The generator writes only to the ignored `tests/ogmb/.generated/` directory. These are container/verifier contract tests, not runtime execution, fuzzing, Test262, interpreter equivalence or proof that a production decoder exists.
 
 ## 11. Compatibility and exclusions
 

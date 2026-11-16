@@ -39,16 +39,44 @@ def build_container(
     feature_flags: int = 0,
     digest_override: str | None = None,
     extra_sections: list[tuple[int, int, bytes]] | None = None,
+    execution_model: str = "stack",
+    local_count: int = 0,
+    register_count: int = 0,
+    max_stack_depth: int = 2,
+    max_register_index: int | None = None,
+    suspension_points: list[dict[str, object]] | None = None,
 ) -> Path:
     constants = [] if constants is None else constants
     exceptions = [] if exceptions is None else exceptions
+    code_digest = hashlib.sha256(code).hexdigest()
+    safe_name = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in Path(name).stem)
+    metadata = {
+        "execution_model": execution_model,
+        "function": {"id": "fixture_" + safe_name, "name": Path(name).stem},
+        "code_generation": {"id": "ogma_fixture_codegen", "version": "1"},
+        "code_cache": {"id": "cache_" + hashlib.sha256((name + code_digest).encode()).hexdigest()[:24], "version": "1"},
+        "frame_layout": {"parameter_count": 0, "local_count": local_count, "register_count": register_count},
+        "environment": {"id": "env_" + safe_name, "parent": None, "bindings": [], "captures": [], "locations": []},
+        "suspension_points": [] if suspension_points is None else suspension_points,
+        "inline_cache_slots": [],
+        "verifier_summary": {
+            "schema": "ogma.bytecode-verification-summary",
+            "version": "1.0.0",
+            "code_sha256": code_digest,
+            "instruction_count": len(code),
+            "max_stack_depth": max_stack_depth if execution_model == "stack" else 0,
+            "max_register_index": max_register_index if execution_model == "register" else None,
+            "exception_region_count": len(exceptions),
+            "constant_count": len(constants),
+        },
+    }
     manifest = {
         "format": "ogma.ogmb",
         "version": "1.0",
         "encoding_id": ENCODING_ID,
-        "code_sha256": digest_override or hashlib.sha256(code).hexdigest(),
+        "code_sha256": digest_override or code_digest,
         "resource_limits": LIMITS,
-        "metadata": {"fixture": name},
+        "metadata": metadata,
     }
     sections = [
         (1, 0, json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()),
@@ -94,6 +122,7 @@ def instruction(
     constant_refs: list[int] | None = None,
     may_throw: bool = False,
     argument_count: int | None = None,
+    may_suspend: bool = False,
 ) -> dict[str, object]:
     return {
         "offset": offset,
@@ -104,6 +133,7 @@ def instruction(
         "constant_refs": [] if constant_refs is None else constant_refs,
         "successors": successors,
         "may_throw": may_throw,
+        "may_suspend": may_suspend,
         "stack_effect": stack_effect,
         "register_effects": register_effects,
         "argument_count": argument_count,
@@ -152,7 +182,7 @@ def main() -> None:
         instruction(3, 20, "return", [], None, {"reads": [2], "writes": []}),
     ]
     register_program = program(register_code, "register", register_instructions)
-    build_container("positive-register.ogmb", register_code, ["left", "right"])
+    build_container("positive-register.ogmb", register_code, ["left", "right"], execution_model="register", register_count=3, max_register_index=2)
     write_program("positive-register.json", register_program)
 
     # Exception edge transfers to an out-of-line handler.
@@ -166,7 +196,7 @@ def main() -> None:
     exception_regions = [
         {"start": 1, "end": 2, "handler": 2, "kind": "catch", "handler_stack_depth": 1}
     ]
-    build_container("positive-exception.ogmb", exception_code, ["value"], exception_regions)
+    build_container("positive-exception.ogmb", exception_code, ["value"], exception_regions, max_stack_depth=1)
     write_program("positive-exception.json", exception_program)
 
     register_exception_code = b"\x31\x32\x33"
@@ -179,8 +209,58 @@ def main() -> None:
     register_exception_regions = [
         {"start": 1, "end": 2, "handler": 2, "kind": "catch", "handler_registers": [0]}
     ]
-    build_container("positive-register-exception.ogmb", register_exception_code, ["value"], register_exception_regions)
+    build_container("positive-register-exception.ogmb", register_exception_code, ["value"], register_exception_regions, execution_model="register", register_count=2, max_register_index=1)
     write_program("positive-register-exception.json", register_exception_program)
+
+    # Portable suspension metadata is bound to an explicit suspend operation and resume edge.
+    suspension_code = b"\x25\x26\x27"
+    suspension_instructions = [
+        instruction(0, 1, "constant", [1], {"pop": 0, "push": 1}, None, constant_refs=[0]),
+        instruction(1, 2, "suspend", [2], {"pop": 1, "push": 1}, None, may_suspend=True),
+        instruction(2, 3, "return", [], {"pop": 1, "push": 0}, None),
+    ]
+    suspension_program = program(suspension_code, "stack", suspension_instructions)
+    suspension_metadata = [
+        {"id": "suspend_await_0", "kind": "await", "offset": 1, "resume_offset": 2,
+         "live_locals": [], "stack_depth": 1, "live_registers": None}
+    ]
+    build_container("positive-suspension.ogmb", suspension_code, ["awaited"], max_stack_depth=1,
+                    suspension_points=suspension_metadata)
+    write_program("positive-suspension.json", suspension_program)
+
+    bad_suspension_metadata = [
+        {"id": "suspend_await_0", "kind": "await", "offset": 1, "resume_offset": 0,
+         "live_locals": [], "stack_depth": 1, "live_registers": None}
+    ]
+    build_container("negative-suspension-target.ogmb", suspension_code, ["awaited"], max_stack_depth=1,
+                    suspension_points=bad_suspension_metadata)
+
+    # Optional source map records stable source identity and instruction-level provenance.
+    valid_source_map = {
+        "version": "1.0.0",
+        "files": [{"id": "file_main", "path": "src/main.js", "language": "javascript"}],
+        "locations": [{
+            "offset": 0,
+            "source": {
+                "origin": "user", "file": "file_main",
+                "start": {"line": 1, "column": 0}, "end": {"line": 1, "column": 5},
+                "scope": None, "bindings": [], "suspension": None, "inline_chain": []
+            }
+        }],
+        "lexical_scopes": [],
+        "variable_locations": []
+    }
+    build_container("positive-source-map.ogmb", stack_code, ["left", "right"],
+                    max_stack_depth=2,
+                    extra_sections=[(5, 1, json.dumps(valid_source_map, sort_keys=True, separators=(",", ":")).encode())])
+    invalid_source_map = dict(valid_source_map)
+    invalid_source_map["locations"] = [{
+        "offset": 0,
+        "source": dict(valid_source_map["locations"][0]["source"], file="missing_file")
+    }]
+    build_container("negative-source-map-reference.ogmb", stack_code, ["left", "right"],
+                    max_stack_depth=2,
+                    extra_sections=[(5, 1, json.dumps(invalid_source_map, sort_keys=True, separators=(",", ":")).encode())])
 
     # Envelope failures: truncated header, unknown version/flags, digest mismatch.
     (FIXTURES / "negative-truncated.ogmb").write_bytes(b"OGMB\x01\x00")
@@ -225,7 +305,7 @@ def main() -> None:
         instruction(0, 1, "binary", [1], {"pop": 2, "push": 1}, None),
         instruction(1, 2, "return", [], {"pop": 1, "push": 0}, None),
     ]
-    build_container("negative-stack-underflow.ogmb", underflow_code, ["value"])
+    build_container("negative-stack-underflow.ogmb", underflow_code, ["value"], max_stack_depth=1)
     write_program("negative-stack-underflow.json", program(underflow_code, "stack", underflow))
 
     # Two paths reach offset 4 with different stack depths.
@@ -237,7 +317,7 @@ def main() -> None:
         instruction(3, 4, "jump", [4], {"pop": 0, "push": 0}, None, operands=[4]),
         instruction(4, 5, "return", [], {"pop": 1, "push": 0}, None),
     ]
-    build_container("stack-merge.ogmb", merge_code, ["left", "right"])
+    build_container("stack-merge.ogmb", merge_code, ["left", "right"], max_stack_depth=2)
     write_program("negative-stack-merge.json", program(merge_code, "stack", merge_instructions))
 
     # Malformed exception boundaries.
@@ -251,7 +331,7 @@ def main() -> None:
         instruction(0, 1, "unary", [1], None, {"reads": [0], "writes": [1]}),
         instruction(1, 2, "return", [], None, {"reads": [1], "writes": []}),
     ]
-    build_container("register-uninitialized.ogmb", register_bad_code, ["value"])
+    build_container("register-uninitialized.ogmb", register_bad_code, ["value"], execution_model="register", register_count=2, max_register_index=1)
     write_program("negative-register-uninitialized.json", program(register_bad_code, "register", register_bad))
 
     # Local slot indexes are bounded by the manifest's max_locals.
@@ -260,7 +340,7 @@ def main() -> None:
         instruction(0, 1, "load_local", [1], {"pop": 0, "push": 1}, None, operands=[16]),
         instruction(1, 2, "return", [], {"pop": 1, "push": 0}, None),
     ])
-    build_container("negative-local-bounds.ogmb", local_code, ["value"])
+    build_container("negative-local-bounds.ogmb", local_code, ["value"], local_count=16, max_stack_depth=1)
     write_program("negative-local-bounds.json", local_program)
 
     wrong_digest = dict(stack_program, code_sha256="f" * 64)
@@ -284,6 +364,10 @@ def main() -> None:
             {"artifact": "tests/ogmb/.generated/fixtures/positive-stack.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-invalid-jump.json", "expect": "rejected", "diagnostics": ["cfg.target"]},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-stack.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-operand-overflow.json", "expect": "rejected", "diagnostics": ["operand.range"]},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-stack.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-constant-reference.json", "expect": "rejected", "diagnostics": ["constant.reference_bounds"]},
+            {"artifact": "tests/ogmb/.generated/fixtures/positive-suspension.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-suspension.json", "expect": "accepted"},
+            {"artifact": "tests/ogmb/.generated/fixtures/positive-source-map.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-stack.json", "expect": "accepted"},
+            {"artifact": "tests/ogmb/.generated/fixtures/negative-source-map-reference.ogmb", "expect": "rejected", "diagnostics": ["source_map.file_ref"]},
+            {"artifact": "tests/ogmb/.generated/fixtures/negative-suspension-target.ogmb", "program": "tests/ogmb/.generated/fixtures/positive-suspension.json", "expect": "rejected", "diagnostics": ["suspension.resume_target"]},
             {"artifact": "tests/ogmb/.generated/fixtures/positive-stack.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-stack-effect.json", "expect": "rejected", "diagnostics": ["stack.effect_mismatch"]},
             {"artifact": "tests/ogmb/.generated/fixtures/negative-stack-underflow.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-stack-underflow.json", "expect": "rejected", "diagnostics": ["stack.underflow"]},
             {"artifact": "tests/ogmb/.generated/fixtures/negative-local-bounds.ogmb", "program": "tests/ogmb/.generated/fixtures/negative-local-bounds.json", "expect": "rejected", "diagnostics": ["operand.local_bounds"]},
