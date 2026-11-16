@@ -1,0 +1,148 @@
+{
+  "contract": "ogma.core-ir",
+  "contract_version": "1.0.0",
+  "fixtures": [
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "tests/core-ir/fixtures/positive-ssa-branch.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "tests/core-ir/fixtures/positive-dynamic-exception.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "tests/core-ir/fixtures/positive-closure-source.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "tests/core-ir/fixtures/positive-async-suspension.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "cfg.edge_target",
+          "message": "normal edge targets unknown block 'missing_block'",
+          "path": "$.function.blocks"
+        },
+        {
+          "code": "cfg.unreachable_block",
+          "message": "block is unreachable from entry",
+          "path": "$.function.blocks[1]"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-malformed-cfg.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "ssa.dominance",
+          "message": "definition of 'branch_only' does not dominate this use",
+          "path": "$.function.blocks[3].instructions[0].operands[0]"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-ssa-dominance.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "cfg.edge_argument_type",
+          "message": "edge argument type differs from target parameter",
+          "path": "$.function.blocks.entry.terminator.edge[0].arguments[0]"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-edge-type.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "effect.underreported",
+          "message": "js.add requires may_gc=true",
+          "path": "$.function.blocks[0].instructions[0].effects.may_gc"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-effect-underreport.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "representation.unsupported",
+          "message": "'object_ref' is not valid for 'number'",
+          "path": "$.function.return"
+        },
+        {
+          "code": "representation.unsupported",
+          "message": "'object_ref' is not valid for 'number'",
+          "path": "$.function.blocks[0].instructions[0].result"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-representation.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "exception.metadata_missing",
+          "message": "may_throw requires exactly one exception flow record",
+          "path": "$.function.blocks[0].instructions[0].exception"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-exception-edge.json",
+      "passed": true
+    },
+    {
+      "actual": "rejected",
+      "diagnostics": [
+        {
+          "code": "source.unknown_file",
+          "message": "unknown source file 'missing-source'",
+          "path": "$.function.blocks[0].instructions[0].source.file"
+        },
+        {
+          "code": "source.invalid_span",
+          "message": "span end precedes start",
+          "path": "$.function.blocks[0].instructions[0].source"
+        }
+      ],
+      "expected": "rejected",
+      "fixture": "tests/core-ir/fixtures/negative-source-span.json",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "accepted": 4,
+    "failed": 0,
+    "passed": 11,
+    "rejected": 7,
+    "total": 11
+  },
+  "verifier_version": "1.0.0"
+}

@@ -71,6 +71,18 @@ jobs:
       - name: Test repository validator
         run: python -m unittest discover -s .github/scripts -p "test_*.py" -v
 
+      - name: Verify Core IR v1 contract and fixture corpus
+        run: python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json --report "$RUNNER_TEMP/core-ir-verifier-report.json"
+
+      - name: Upload Core IR verifier report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-v1-verifier-report
+          path: ${{ runner.temp }}/core-ir-verifier-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Compile CI helper scripts
         run: python -m compileall -q .github/scripts
 

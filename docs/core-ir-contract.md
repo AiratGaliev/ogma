@@ -1,0 +1,220 @@
+# Ogma Core IR Contract v1
+
+- **Contract ID:** `ogma.core-ir`
+- **Contract version:** `1.0.0`
+- **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
+- **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
+- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
+- **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
+
+## 1. Purpose and boundaries
+
+Core IR is Ogma's backend-neutral, function-level semantic boundary between frontend analysis and execution backends. The same verified function representation is the input contract for:
+
+1. **Portable path:** Core IR → bytecode lowering → verifier → portable `.ogmb` → interpreter.
+2. **Native path:** Core IR → native lowering → selected code generator → target object → linker.
+
+Both paths must preserve the same ECMAScript-visible values, exceptions, side effects, host calls and source-level provenance, and use the shared Ogma Runtime/ABI contracts. The IR producer and verifier must not depend on Cranelift, LLVM, a register VM, a stack VM, target pointer width, native calling conventions or a particular object layout.
+
+Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
+
+The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
+
+## 2. Document envelope and versioning
+
+A function document has exactly this top-level shape:
+
+```json
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {}
+}
+```
+
+The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
+
+IDs are stable identifiers within one function document (except source-file IDs, lexical IDs and block/instruction IDs, which each have their own declared namespace). SSA value IDs and effect-token IDs must be unique across the function. Block IDs and instruction IDs must also be unique in their function.
+
+## 3. Function and control-flow model
+
+A function declares its parameters, return signature, source-file table, lexical environment, imported captures, entry block, optional effect-entry token and basic blocks.
+
+- Function parameters are SSA definitions available at function entry and dominate every block. Each parameter names its lexical `parameter` binding; type and representation facts must agree.
+- Every block has a unique ID, ordered block parameters, an optional exception parameter, an ordered instruction list and exactly one terminator.
+- Block parameters are SSA block arguments (the phi-equivalent mechanism). They are not backend registers or stack slots. Every incoming edge passes exactly one argument for each declared block parameter, in order and with exactly matching semantic type and representation.
+- The entry block has no incoming edges. Every declared block must be reachable from the entry through normal or exceptional control flow. An entry edge or an orphan block is invalid in v1.
+- A `branch` condition is a JavaScript boolean value. JavaScript truthiness must be represented explicitly by `js.to_boolean`; the branch instruction itself must not hide a JS conversion.
+- A `return` value must match the function's declared return signature. A `null` return signature means the function returns no value.
+- `jump`, `branch`, `return` and `unreachable` are the v1 terminators. `unreachable` has an explicit `reason`: `after_throw` is valid only after a final `js.throw`; `proven_unreachable` records a frontend/compiler proof obligation and must not be used as a substitute for an ordinary branch.
+
+### 3.1 SSA use and dominance invariants
+
+The verifier enforces:
+
+1. Every operand, branch condition, return value and edge argument references an existing SSA value.
+2. A value defined in a block is used later in that same block, never before its definition.
+3. A value defined in another block may be used only if its definition block dominates the use block.
+4. Function parameters dominate all blocks. Block parameters and exception parameters are defined at block entry.
+5. Edge argument arity and representation/type facts exactly match destination block parameters. No implicit conversion is permitted on a CFG edge.
+6. An effect token is never a JavaScript operand or return value.
+
+The verifier computes dominators over both normal and exceptional predecessors. This is a structural SSA verifier, not a proof that arbitrary JavaScript optimization transformations preserve semantics; every future transformation must add its own invariants and regression/property tests.
+
+## 4. Value semantics and physical representations
+
+Each JavaScript value definition separates `semantic_type` from `representation`. The representation says how the compiler currently carries a value; it does not change ECMAScript semantics and is not an ABI promise.
+
+| Semantic type | Permitted v1 representations |
+|---|---|
+| `dynamic`, `undefined`, `null` | `boxed` |
+| `boolean` | `boxed`, `i1` |
+| `number` | `boxed`, `i32`, `u32`, `f64` |
+| `string` | `boxed`, `string_ref` |
+| `symbol` | `boxed`, `symbol_ref` |
+| `bigint` | `boxed`, `bigint_ref` |
+| `object` | `boxed`, `object_ref` |
+| `array` | `boxed`, `array_ref`, `object_ref` |
+| `function` | `boxed`, `function_ref`, `object_ref` |
+| `exception` | `boxed`, `exception_ref` |
+
+These are abstract Ogma representations. `*_ref` means an opaque GC-managed reference, not a raw Rust pointer, C pointer, tagged address or target machine address. `i32`/`u32` are allowed only when semantic analysis proves the value range and its use remains valid; a TypeScript annotation alone is insufficient. `i1` carries an already-computed JS boolean, not a truthiness conversion.
+
+Representation facts travel with parameters, instruction results, block arguments, returns, loop-carried values and environment bindings. A backend may keep an unboxed representation across locals and CFG edges while it remains valid. It must box or invoke the appropriate semantic helper at dynamic operations, runtime/host ABI boundaries or any point where the proof no longer holds. Dynamic JS results from v1 generic operations remain `dynamic/boxed`; a backend must not silently specialize them based on an assumed static type.
+
+A representation conversion must be an explicit semantic operation or a separately specified, verifiable compiler transformation. A backend must not reinterpret a value's representation by changing metadata alone.
+
+## 5. JavaScript semantic operations
+
+The operation name identifies language/runtime semantics, never a backend opcode. Unknown operations are rejected until added to a versioned contract. The v1 operation set is intentionally small and focused on proving the contract boundary. `js.constant` supports `undefined`, `null`, `boolean`, `number`, `bigint` and `string`; a BigInt literal is stored as a canonical decimal string so JSON number precision cannot alter its value.
+
+| Operation | Operand convention | Result | Minimum effect summary |
+|---|---|---|---|
+| `js.constant` | no operands; attributes `literal`, `value` | type follows literal kind | none |
+| `js.add` | `[left, right]`; full ECMAScript `+` semantics | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.get_property` | `[object]`; string `attributes.key` (including the empty string) | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.set_property` | `[object, value]`; string `attributes.key` (including the empty string) | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.get_element` | `[object, key]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.set_element` | `[object, key, value]` | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.call` | `[callee, thisArg, ...arguments]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.construct` | `[constructor, newTarget, ...arguments]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.to_boolean` | `[value]` | boolean | none |
+| `js.to_number` | `[value]` | number | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.to_string` | `[value]` | string | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.strict_equal` | `[left, right]` | boolean | none |
+| `js.typeof` | `[value]` | string | none |
+| `env.load` | no operands; `attributes.binding` identifies a local/captured binding | binding's type/representation | throw (for TDZ and applicable lexical errors) |
+| `env.store` | `[value]`; `attributes.binding` identifies a mutable local/cell capture | assigned value's type/representation | throw |
+| `closure.create` | no operands; attributes `function`, `captures` | function | allocate, GC |
+| `host.call` | host arguments; `attributes.symbol` is a stable host capability name | `dynamic/boxed` | allocate, GC, call host, re-enter, mutate shape, throw |
+| `async.await` | `[awaitable]` | `dynamic/boxed` | allocate, GC, throw, suspend |
+| `js.throw` | `[exceptionValue]` | no result | throw |
+
+The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` can invoke `ToPrimitive`, call user code and allocate a string. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
+
+`js.call` explicitly carries the receiver (`thisArg`) and `js.construct` explicitly carries `newTarget`; backends must not reconstruct these from syntax or guess them from the callee. Computed property keys use `js.get_element`/`js.set_element`; named property operations carry an explicit string key. `host.call` names a capability-bound host symbol, not an arbitrary native address.
+
+### 5.1 Closure and lexical environment facts
+
+Every function carries an `environment` descriptor: a stable lexical environment ID, optional parent environment ID and declared bindings. Each binding specifies name, declaration kind, mutability, semantic type and representation. `var`, `let`, `parameter` and `catch` bindings are mutable; `const` and `import` bindings are immutable. The binding kind `implicit` is not in v1; implicit function state must be represented by explicit frontend semantic operations until a compatible extension defines its capture rules. Function `captures` describe bindings imported from an outer lexical environment and identify their source environment, source binding and capture mode:
+
+- `cell`: shared mutable lexical storage; mutations remain observable by all closures sharing the cell.
+- `value`: immutable captured value copied into the closure environment. A mutable binding cannot use this mode.
+
+`env.load` and `env.store` reference binding IDs, not backend frame slots or object offsets. `env.store` cannot target immutable bindings or by-value captures. `closure.create` names a target function and lists each captured binding with its capture mode. Mutable bindings must be captured by cell; an imported by-value capture cannot later be promoted to a shared cell. Function and binding IDs are metadata identifiers, not object addresses.
+
+## 6. Effect and exception contract
+
+Every instruction declares exactly seven boolean effects:
+
+`may_allocate`, `may_gc`, `may_throw`, `may_suspend`, `may_call_host`, `may_reenter`, `may_mutate_shape`.
+
+These flags are independent semantic/compiler facts. For example, allocation may trigger GC but the flags are distinct; an explicit collection opportunity need not allocate. A producer must conservatively summarize behaviour, not merely the current fast path. Effects constrain code motion and specialization, root-map/safepoint placement, exception handling, callback reentrancy and shape-dependent fast-path invalidation.
+
+### 6.1 Effect SSA chain
+
+A function with at least one effectful instruction has an explicit effect-token chain:
+
+1. Every block declares exactly one final block parameter with `kind: "effect"`.
+2. `function.effect_entry` names the final effect parameter of the entry block.
+3. Every instruction with any true effect flag consumes the current token through `effect_in` and defines the next token through `effect_out`.
+4. A pure instruction has both effect fields null and leaves the current token unchanged.
+5. Every normal outgoing edge forwards the current token as its final block argument.
+6. A throwing instruction with a local handler forwards its newly defined `effect_out` as the final exception-edge argument. A `propagate` exception flow exits the function's current exceptional continuation and needs no local handler edge.
+7. A pure function has no effect parameters, no `effect_entry` and no instruction effect tokens.
+
+This creates an explicit ordering dependency for stateful/observable operations without pretending that all operations mutate one global memory cell. It gives later backends a shared place to reason about effect ordering, GC roots and reentrancy.
+
+### 6.2 Exception flow
+
+An instruction with `may_throw=true` must declare exactly one of:
+
+- `{ "kind": "propagate" }` — the exception leaves the current function through its caller-visible exceptional completion; or
+- `{ "kind": "edge", "target": "...", "arguments": [...] }` — control transfers to a local handler block.
+
+A local handler block declares `exception_parameter` with type `exception/exception_ref`; only exception edges may enter that block. Its ordinary block parameters are still passed explicitly by the exception edge. If the function uses effects, the effect token is the last ordinary block parameter and the throwing instruction's `effect_out` must be passed there. An instruction with `may_throw=false` cannot declare exception flow.
+
+`js.throw` is a semantic operation: it has no result, must declare `may_throw`, and must be the final instruction before an `unreachable` terminator with reason `after_throw`. A thrown JS value is not implicitly converted to a Rust panic or allowed to unwind through the host ABI.
+
+## 7. Source/debug metadata
+
+Every instruction and terminator carries source metadata. A source record has:
+
+- `origin`: `user` or `generated`;
+- `file`, `start`, `end` for user-authored spans; a file ID resolves through the function's `source_files` table;
+- `scope`: lexical environment ID or null when no single lexical scope applies;
+- `bindings`: stable lexical binding/capture identities relevant to the node;
+- `suspension`: stable suspension-point ID or null;
+- `inline_chain`: ordered inlining provenance frames (inlined function ID plus call-site file/span), nearest inlining call site first.
+
+Source spans use one-based lines, zero-based UTF-16 code-unit columns and an exclusive end position. File paths are normalized repository-relative POSIX paths. Source file IDs are local to a function and must not be guessed from filenames.
+
+Compiler-generated instructions use `origin: "generated"` and a non-empty `reason`; they must not be assigned a fabricated user span. They may still retain lexical scope, binding identities and suspension provenance. `async.await` requires a unique suspension-point ID; other v1 operations and terminators must leave it null.
+
+Source identity/spans, scope, binding identity, inline provenance and suspension provenance are first-class metadata. A semantics-preserving transformation must preserve or correctly remap them. If it cannot map a synthesized instruction to a precise user span, it marks that instruction as generated and records why. Future inline provenance/source-map chains can be added by a compatible schema extension or a new contract version; they must never be reconstructed heuristically after lowering.
+
+## 8. Backend neutrality and lowering obligations
+
+The v1 schema intentionally has no backend, target, native opcode, register number, stack slot, pointer, object layout or machine address field. Unknown fields are rejected in the envelope, function, block, instruction and source structures. Operation attributes are validated against each operation's explicit v1 attribute set.
+
+Bytecode stack-vs-register encoding is a separate VM-backend decision. Cranelift CLIF and LLVM IR are native-lowering targets, not Ogma Core IR. The same Core IR function must be lowerable by both execution paths without rewriting JS semantics between them. Runtime helpers/operations and shared Runtime invariants own observable JS behaviour; backend instruction handlers must not independently redefine it.
+
+A backend lowering is responsible for:
+
+- preserving values, exceptions, side effects, host interactions, receiver/new-target semantics and suspension behaviour;
+- respecting effect-token order and exception edges;
+- preserving representation proofs or inserting explicit conversions/guards;
+- forwarding closure/environment identity and capture modes;
+- keeping source/scope/binding/suspension provenance through bytecode PCs or native debug metadata;
+- using a shared Runtime/GC/root/ABI contract rather than backend-private JS semantics.
+
+This contract and verifier do not claim that interpreter/AOT prototypes already exist. The OGM-31 proof must consume the same positive fixtures through both paths and compare observable outputs, exceptions, side effects and host calls. It must not introduce a semantic translation layer between two different IR dialects.
+
+## 9. Verifier and diagnostics
+
+Run the dependency-free verifier from the repository root:
+
+```bash
+python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json
+python .github/scripts/verify_core_ir.py --input tests/core-ir/fixtures/positive-dynamic-exception.json
+python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json --report .artifacts/core-ir-report.json
+```
+
+The corpus manifest defines expected acceptance/rejection and, for negative cases, required diagnostic codes. The report is deterministic JSON containing contract/verifier versions, a per-fixture result, structured diagnostics (`code`, JSONPath-like `path`, `message`) and summary totals. Exit code `0` means all fixture expectations matched; `1` means a fixture was unexpectedly accepted/rejected or an expected diagnostic was absent; `2` means verifier invocation, manifest or JSON input failed to load.
+
+The verifier checks JSON Schema structure plus semantic invariants: unique IDs, legal type/representation pairs, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. It rejects duplicate JSON object keys and non-finite JSON numbers.
+
+The fixture corpus deliberately includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow and invalid source-span cases. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
+
+## 10. Compatibility and change policy
+
+- Update the schema, this document, verifier and fixtures together for any v1 contract change.
+- Keep existing v1 semantics stable. Do not reuse an existing operation name with different ECMAScript behaviour or weaken an effect/exception guarantee.
+- Add a fixture for every newly supported semantic case and a negative fixture for every newly rejected malformed case.
+- An additional operation/representation/effect semantic that old consumers may not safely ignore requires an explicit compatibility decision; do not silently extend the operation registry.
+- A backend-specific encoding decision belongs in its own contract and must not leak into Core IR.
+- Production Rust crate boundaries remain deferred until real compile/runtime API boundaries require them; this proof does not create empty `ogma-ir` crates or start M1.
+
+## 11. Current proof limits
+
+Verified in this change: the v1 schema/semantic verifier and checked-in fixture corpus. Not yet verified because the repository has no corresponding implementation: real frontend-to-Core-IR production, interpreter consumption, AOT consumption, optimizer transformation preservation, Test262/runtime behavior, and cross-backend equivalence. The latter is owned by OGM-31 after this foundational contract is delivered. Full Test262, differential, fuzz and promotion suites remain outside topic PR Fast CI as required by the repository workflow.
