@@ -202,21 +202,17 @@ Keep Ogma execution/dispatch costs separate from host physics, ECS, synchronizat
 
 ### Current enforcement state
 
-The bootstrap workflows are authored on the current topic branch and will become the repository's active PR checks only after they are integrated into the relevant permanent branches. The repository still has no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator.
+GitHub Actions and branch rulesets are active. The workflow files are currently on the topic branch and have executed against PR #1; the Fast CI check passed. The repository still has no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator.
 
-- .github/workflows/ci.yml provides the Fast CI job with stable status context **fast-checks**.
-- .github/workflows/conformance-promotion.yml provides **conformance-promotion** on PRs targeting test/main and deliberately fails until the full runner is implemented.
+- .github/workflows/ci.yml runs for PRs targeting dev/test/main and pushes to permanent branches. Its required job context is **fast-checks**.
+- .github/workflows/conformance-promotion.yml runs for PRs targeting test/main. Its required job context is **conformance-promotion**; it checks the promotion direction and deliberately fails closed until OGM-35 provides the actual conformance runner and deterministic shard aggregator.
 - .gitattributes pins LF for Markdown, Rust, TOML, YAML, Python and shell files; the local validator tolerates Windows CRLF checkouts while GitHub's Linux runner enforces LF.
 - Fast CI is a bootstrap repository gate, not evidence that an Ogma runtime exists or that Rust/Test262 conformance has passed.
+- Active rulesets: [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038). Each requires PRs, blocks deletion/non-fast-forward updates and has no bypass actors. dev requires **fast-checks**; test/main require **fast-checks** and **conformance-promotion**.
 
-M0 issue [OGM-35 — Fast CI and Test262 promotion-gate proof](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) remains the owner of the complete conformance runner, deterministic shard aggregator and success/failure/missing-shard proof. Do not mark that issue Done based on this bootstrap gate.
+M0 issue [OGM-35 — Fast CI and Test262 promotion-gate proof](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) remains open and owns the complete conformance runner, deterministic shard aggregator and success/failure/missing-shard proof. Do not mark that issue Done based on the bootstrap gate.
 
-The required branch ruleset policy mirrors Codogma Engine while using Ogma's actual status contexts:
-
-- all permanent branches: require PRs, prevent deletion and non-fast-forward updates, and have no bypass actors;
-- dev: require **fast-checks**;
-- test and main: require **fast-checks** plus **conformance-promotion**;
-- keep the check names stable once GitHub rulesets reference them.
+Keep the check names stable once GitHub rulesets reference them.
 
 ## 7. Manual and consumer acceptance
 

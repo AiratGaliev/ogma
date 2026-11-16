@@ -62,4 +62,4 @@ Follow [docs/development-workflow.md](docs/development-workflow.md):
 - Preserve upstream licenses and notices. Never put secrets or personal data into source, logs, fixtures, PRs or issue comments.
 - Report exact files changed, branch/PR state, checks actually executed, CI evidence, skipped checks and limitations.
 
-This file guides contributors; it does not enforce GitHub permissions. Branch rulesets, required checks and CI must enforce critical rules once implemented.
+GitHub actively enforces the permanent-branch workflow through protect-dev, protect-test and protect-main rulesets. Do not bypass these rules or merge without explicit authorization. dev requires fast-checks; test/main additionally require conformance-promotion, which remains fail-closed until OGM-35 implements the full runner.

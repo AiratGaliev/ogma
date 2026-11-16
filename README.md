@@ -64,7 +64,14 @@ The permanent branch flow is:
 
 ### Current repository bootstrap status
 
-At the time this workflow was introduced, the repository contains the license and project documentation only. There is no Cargo.toml, Rust workspace, test runner or GitHub Actions workflow yet. The dev, test and main branches exist, but GitHub branch rulesets are not yet active. These are observed bootstrap facts, not permanent architecture decisions. Until CI and rulesets are implemented, the branch and PR policies in this document remain mandatory contributor rules but are not technically enforced by GitHub.
+The repository remains in M0 bootstrap: there is no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator. GitHub Actions and branch protections are now configured:
+
+- CI Fast runs on PRs to dev/test/main and pushes to those permanent branches. Its fast-checks job passed on PR #1; Rust fmt/Clippy/tests remain conditional on a future Cargo workspace.
+- Conformance Promotion runs on PRs to test/main and intentionally fails closed until OGM-35 implements the real conformance runner and deterministic shard aggregation. This prevents an unverified candidate from being promoted.
+- Active GitHub rulesets protect dev, test and main. All three require PRs, block deletion and non-fast-forward updates, and have no bypass actors. dev requires fast-checks; test and main require fast-checks plus conformance-promotion.
+- The active rulesets are [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038).
+
+These protections enforce repository workflow, but they do not imply that Ogma runtime code or the full conformance suite already exists. OGM-35 remains open until the actual runner and shard success/failure/missing-result proof are delivered.
 
 ## Source of truth and project links
 
