@@ -317,8 +317,8 @@ The target Node 26.13.0 compatibility surface includes:
 - CommonJS wrapper scope with module, exports, require, __filename and __dirname; preserve module.exports identity, cache and cycle behaviour.
 - ESM ↔ CJS interop for explicitly tested import/require forms. require(esm) and less common interop edge cases remain deferred until Node 26.13.0 behaviour is pinned by fixtures.
 - Built-in modules are registered under explicit node: specifiers. Bare aliases are exposed only where the pinned Node profile defines them.
-- Planned CJS/module-reference selectors are taken from the pinned Node source: test/parallel/test-module-*.js and test/parallel/test-require-*.js.
-- Planned ESM reference fixtures are taken from `test/es-module` in the same pinned Node source revision, including test-esm-basic-imports.mjs, test-esm-live-binding.mjs, test-esm-imports.mjs, test-esm-exports.mjs, test-esm-cjs-exports.js, test-esm-cjs-builtins.js, test-esm-package-map-basic.mjs, test-esm-package-map-exports.mjs, test-esm-package-map-boundaries.mjs and test-esm-package-map-errors.mjs. The two test/parallel/test-esm-loader-hooks-inspect* files are not used as the ESM semantics baseline.
+- Planned CJS/module-reference selectors are taken from the pinned Node source: `test/parallel/test-module-*.js`, `test/parallel/test-require-*.js`, and `test/es-module/test-require-*` for ESM/CommonJS interop and cycle coverage.
+- Planned ESM reference fixtures are taken from `test/es-module` in the same pinned Node source revision, including test-esm-basic-imports.mjs, test-esm-live-binding.mjs, test-esm-imports.mjs, test-esm-exports.mjs, test-esm-cjs-exports.js, test-esm-cjs-builtins.js, test-esm-package-map-basic.mjs, test-esm-package-map-exports.mjs, test-esm-package-map-boundaries.mjs and test-esm-package-map-errors.mjs.
 
 ### 5.3. Package manifest and resolver rules
 
@@ -336,6 +336,51 @@ The resolver must distinguish an unrecognized condition in a package's condition
 Unknown node:* built-ins, unsupported package entry points, denied host capabilities and unsupported module formats fail deterministically. Error identity/message mapping to Node error codes is part of the tested compatibility surface, not an excuse to silently resolve another path.
 
 Package managers (npm/pnpm/yarn) remain external build-time tools. They provide a lockfile and resolved dependency graph; Ogma Toolchain consumes that graph and builds the application bundle. Runtime startup must not require Node, npm, Corepack, network registry access or a source node_modules tree. Package lifecycle/install scripts are untrusted build-time code and are never run automatically when an embedded application starts.
+
+### 5.4. Resolver precedence, diagnostics and module identity
+
+The Node package resolver is a compatibility-policy adapter over the generic ModuleLoader contract. It is not part of ECMAScript Core and must not make the shared Runtime depend on Node.js concepts.
+
+A resolution request is defined by the specifier, referrer/package scope, active mode (`import` or `require`), explicitly enabled compatibility conditions and the host-provided package/module manifest. The host supplies package graph and filesystem/VFS access through an explicit capability. The resolver must not acquire ambient filesystem or network access. Its result identifies a canonical module resource and format (ESM, CommonJS or registered host module), or returns a structured diagnostic. Generic ModuleLoader primitives own module records, graph linking, instantiation, evaluation and language-level module identity.
+
+The initial resolution order and boundaries are:
+
+1. A `node:` specifier is resolved only against the built-in module registry of the selected Node profile. An unregistered built-in fails; it is never retried as a package or file path.
+2. A package `#imports` specifier is resolved only through the `imports` map of the owning package scope. A missing mapping fails with `ERR_PACKAGE_IMPORT_NOT_DEFINED`.
+3. A package self-reference is resolved by matching the nearest owning package's declared name and then applying that package's `exports` map. Self-reference does not bypass package encapsulation.
+4. A bare package specifier is located through the host-supplied package graph. Package discovery is a host responsibility; the resolver does not walk arbitrary process directories outside the granted package graph.
+5. For a located package, `exports` governs the package root and requested subpaths. Only when `exports` is absent may the legacy `main` field select the package-root entry. An existing `exports` map is authoritative: failure to match it must not fall back to `main`, an unexported file or an arbitrary path.
+6. `.mjs` and `.cjs` explicitly identify ESM and CommonJS. For `.js`, the nearest package's `type` selects the format. The proof corpus pins these cases; broader extension and directory probing is not implied by this initial subset.
+
+Conditional maps are evaluated in their original JSON insertion order. The first enabled key wins; `default` is unconditional only when reached in that order and is not promoted ahead of earlier keys. The profile rules are:
+
+- `import` and `require` are enabled by the active resolution mode.
+- `node` is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the corresponding Node adapters. A plain Ogma Runtime must not enable it implicitly.
+- `ogma`, `development` and `production` are enabled only by explicit profile/build configuration.
+- `browser` is not implicit for a native application. `node-addons` is disabled in profile 1.0.0.
+- An unknown key in a package-authored conditional map is an unavailable branch and is skipped. An invalid condition in Ogma's own profile configuration is a configuration error (Ogma diagnostic `ERR_OGMA_INVALID_CONDITION`), not a reason to silently enable a branch.
+
+When no branch matches, or an `exports` boundary denies a requested subpath, resolution fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Missing `imports` mappings fail with `ERR_PACKAGE_IMPORT_NOT_DEFINED`; unknown `node:` built-ins fail with `ERR_UNKNOWN_BUILTIN_MODULE`. Other missing-module and unsupported-format diagnostics must be mapped to the pinned Node baseline for the active ESM/CJS mode before they are claimed as compatible. Diagnostics have a stable code and normalized specifier/referrer/reason fields. Human-readable messages may include platform paths and are not the cross-platform identity contract.
+
+Module identity and cache ownership are separated by format:
+
+- The generic ModuleLoader owns ESM module records and their identity within a loader/realm. Repeated imports of the same canonical module resource reuse the record; graph cycles link once and preserve live-binding observations.
+- The CommonJS adapter owns a cache entry keyed by the canonical resolved filename within the loader/realm. It installs the in-progress module record before evaluation, so a cycle can observe partially initialized exports; repeated `require()` returns the same `module.exports` identity.
+- This proof does not claim untested cross-format identity equivalence for one file imported through both ESM and CommonJS.
+
+#### M0 reference proof
+
+The black-box reference corpus lives in `tests/node-resolution/`. It does not implement an Ogma resolver and does not promote any deferred runtime feature to supported. It records observable Node.js behaviour for the minimum package-resolution cases in this issue.
+
+The reference is pinned to Node.js **26.13.0**, source commit `18b32a3b1552e199a01f1a8d9fd64aa756d3b75b`. `.node-version` pins the executable used by CI; `tests/node-resolution/baseline.json` pins the source revision, expected resolution observations, diagnostic codes and reference test selectors. Run the corpus with:
+
+```sh
+node tests/node-resolution/run.mjs
+```
+
+The fixtures cover package `type` and legacy `main`, ESM/CJS package entry points, `node`/mode/default/selected Ogma conditions, insertion-order precedence, `imports`, self-reference, explicit subpaths, exports encapsulation, `node:` built-ins, unsupported branches, ESM/CJS cycles and cache identity. The selected upstream Node test selectors are recorded for later expansion; this focused M0 corpus does not claim to run the full upstream Node test suite or the complete package-resolution surface (for example wildcard/pattern exports, array targets, directory probing, custom loaders, native addons or `require(esm)`).
+
+The profile's runtime compatibility states remain **deferred** until an Ogma Node resolver/adapter exists and passes its own differential and regression tests.
 
 ## 6. Scheduling and async semantics
 

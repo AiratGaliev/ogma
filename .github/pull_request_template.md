@@ -18,6 +18,7 @@
 | Check | Result | Evidence |
 |---|---|---|
 | Focused tests / proof harness | <!-- PASS / FAIL / NOT RUN / N/A --> | |
+| Pinned Node.js package-resolution reference fixtures | <!-- PASS / FAIL / NOT RUN / N/A --> | |
 | Formatting / static checks / compilation | <!-- PASS / FAIL / NOT RUN / N/A --> | |
 | Fast CI | <!-- PASS / FAIL / PENDING / N/A --> | |
 | Conformance promotion gate (PR to test/main only) | <!-- PASS / FAIL / PENDING / BLOCKED --> | |
