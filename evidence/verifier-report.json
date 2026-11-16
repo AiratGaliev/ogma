@@ -189,13 +189,8 @@
       "diagnostics": [
         {
           "code": "closure.duplicate_capture",
-          "path": "$.function.captures[1].id",
-          "message": "capture ids must be unique"
-        },
-        {
-          "code": "closure.duplicate_capture",
-          "path": "$.function.captures[1].binding",
-          "message": "a lexical binding may be imported only once"
+          "path": "$.function.blocks[0].instructions[0].attributes.captures[2]",
+          "message": "closure capture binding must be unique"
         }
       ]
     },
