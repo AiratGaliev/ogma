@@ -153,6 +153,7 @@ The first pinned consumer is [AiratGaliev/solidjs-native](https://github.com/Air
 | vite-plugin-solid | 2.11.15 | Build-time JSX transform only |
 | @types/node | 26.6.6 | Compile-time declarations only; does not imply Node runtime API use |
 | pnpm | 12.18.0 | External package manager; not shipped in Ogma Runtime |
+| pnpm-lock.yaml | Git blob SHA 9c35ab8401a96ef04d9b1e88cab4a0e5a031b034 | Exact dependency graph snapshot at the pinned SolidJS Native revision |
 | rquickjs (Rust workspace) | 0.14.0 | Existing consumer-side reference integration; not part of Ogma's target architecture |
 
 The first SolidJS workload should cover TSX/JSX lowering, solid-js/jsx-runtime integration, reactive computations/effects, component functions, module imports and calls across the Rust host boundary. Vite, its plugin, TypeScript CLI and pnpm are development/build tools; their use of Node.js does not make them runtime dependencies of a packaged native application.
@@ -196,8 +197,8 @@ The tables below define the candidate v1 API surface, not all exports from each 
 | node:url | URL/URLSearchParams and file URL conversion helpers in the declared subset | none; file conversion does not grant file access | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-url*.js | deferred |
 | node:querystring | parse/stringify and documented escaping semantics | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-querystring*.js | deferred |
 | node:string_decoder | StringDecoder and encoding-boundary behaviour | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-string-decoder*.js | deferred |
-| node:stream | Readable, Writable, Duplex, Transform, PassThrough and selected pipeline/backpressure contracts | none for in-memory streams; external I/O requires a Host adapter | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-stream*.js, readable/writable suites | deferred |
-| node:timers and timer globals | setTimeout/setInterval/setImmediate, cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-immediate*.js | deferred |
+| node:stream | Readable, Writable, Duplex, Transform, PassThrough and selected pipeline/backpressure contracts | none for in-memory streams; external I/O requires a Host adapter | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-stream*.js, test/parallel/test-readable*.js | deferred |
+| node:timers and timer globals | setTimeout/setInterval/setImmediate, cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-async-hooks-top-level-clearimmediate.js | deferred |
 | console global | log/info/warn/error and selected formatting behaviour | console.write | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-console*.js | deferred |
 | process facade | Read-only version/platform/arch metadata; capability-gated env/cwd; nextTick; no process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | selected test/parallel/test-process*.js cases only | deferred |
 
@@ -282,6 +283,7 @@ The target Node 26.13.0 compatibility surface includes:
 - CommonJS wrapper scope with module, exports, require, __filename and __dirname; preserve module.exports identity, cache and cycle behaviour.
 - ESM ↔ CJS interop for explicitly tested import/require forms. require(esm) and less common interop edge cases remain deferred until Node 26.13.0 behaviour is pinned by fixtures.
 - Built-in modules are registered under explicit node: specifiers. Bare aliases are exposed only where the pinned Node profile defines them.
+- Planned Node reference selectors are taken from the pinned Node source: test/parallel/test-module-*.js, test/parallel/test-require-*.js and test/parallel/test-esm-*.js. Only cases applicable to the declared module/profile surface are selected.
 
 ### 5.3. Package manifest and resolver rules
 
