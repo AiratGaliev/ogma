@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/contracts/ogmb/v1/source-map.schema.json",
+  "title": "Ogma .ogmb v1 source map and debug metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "files", "locations", "lexical_scopes", "variable_locations"],
+  "properties": {
+    "version": { "const": "1.0.0" },
+    "files": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": { "$ref": "#/$defs/sourceFile" }
+    },
+    "locations": {
+      "type": "array",
+      "maxItems": 1000000,
+      "items": { "$ref": "#/$defs/location" }
+    },
+    "lexical_scopes": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": { "$ref": "#/$defs/lexicalScope" }
+    },
+    "variable_locations": {
+      "type": "array",
+      "maxItems": 131072,
+      "items": { "$ref": "#/$defs/variableLocation" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "position": {
+      "type": "object",
+      "required": ["line", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "line": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "column": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "required": ["id", "path", "language"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "language": { "enum": ["javascript", "typescript", "json", "synthetic"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "sourceFrame": {
+      "type": "object",
+      "required": ["function", "file", "start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "function": { "$ref": "#/$defs/id" },
+        "file": { "$ref": "#/$defs/id" },
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" }
+      }
+    },
+    "userSource": {
+      "type": "object",
+      "required": ["origin", "file", "start", "end", "scope", "bindings", "suspension", "inline_chain"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": { "const": "user" },
+        "file": { "$ref": "#/$defs/id" },
+        "start": { "$ref": "#/$defs/position" },
+        "end": { "$ref": "#/$defs/position" },
+        "scope": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "suspension": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "inline_chain": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/sourceFrame" } }
+      }
+    },
+    "generatedSource": {
+      "type": "object",
+      "required": ["origin", "reason", "scope", "bindings", "suspension", "inline_chain"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": { "const": "generated" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "scope": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "suspension": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "inline_chain": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/sourceFrame" } }
+      }
+    },
+    "location": {
+      "type": "object",
+      "required": ["offset", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "source": { "oneOf": [{ "$ref": "#/$defs/userSource" }, { "$ref": "#/$defs/generatedSource" }] }
+      }
+    },
+    "lexicalScope": {
+      "type": "object",
+      "required": ["id", "parent", "start_offset", "end_offset", "bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "parent": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "start_offset": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "end_offset": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "bindings": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "variableLocation": {
+      "type": "object",
+      "required": ["binding", "kind", "index", "start_offset", "end_offset"],
+      "additionalProperties": false,
+      "properties": {
+        "binding": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["local", "register", "environment", "capture"] },
+        "index": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "start_offset": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "end_offset": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    }
+  }
+}

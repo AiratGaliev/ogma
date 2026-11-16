@@ -1,0 +1,600 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/contracts/ogmb/v1/manifest-metadata.schema.json",
+  "title": "Ogma .ogmb v1 function metadata",
+  "description": "Portable per-function metadata. It contains no host pointers, runtime object layouts, or target-native addresses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "execution_model",
+    "function",
+    "code_generation",
+    "code_cache",
+    "frame_layout",
+    "environment",
+    "suspension_points",
+    "inline_cache_slots",
+    "verifier_summary"
+  ],
+  "properties": {
+    "execution_model": {
+      "enum": [
+        "stack",
+        "register"
+      ]
+    },
+    "function": {
+      "$ref": "#/$defs/function"
+    },
+    "code_generation": {
+      "$ref": "#/$defs/versionedIdentity"
+    },
+    "code_cache": {
+      "$ref": "#/$defs/versionedIdentity"
+    },
+    "frame_layout": {
+      "$ref": "#/$defs/frameLayout"
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "suspension_points": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": {
+        "$ref": "#/$defs/suspensionPoint"
+      }
+    },
+    "inline_cache_slots": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": {
+        "$ref": "#/$defs/inlineCacheSlot"
+      }
+    },
+    "verifier_summary": {
+      "$ref": "#/$defs/verifierSummary"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "function": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "versionedIdentity": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "frameLayout": {
+      "type": "object",
+      "required": [
+        "parameter_count",
+        "local_count",
+        "register_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "parameter_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "local_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "register_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "mutable",
+        "semantic_type",
+        "representation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "kind": {
+          "enum": [
+            "var",
+            "let",
+            "const",
+            "parameter",
+            "catch",
+            "import"
+          ]
+        },
+        "mutable": {
+          "type": "boolean"
+        },
+        "semantic_type": {
+          "enum": [
+            "dynamic",
+            "undefined",
+            "null",
+            "boolean",
+            "number",
+            "string",
+            "symbol",
+            "bigint",
+            "object",
+            "array",
+            "function",
+            "exception"
+          ]
+        },
+        "representation": {
+          "enum": [
+            "boxed",
+            "i1",
+            "i32",
+            "u32",
+            "f64",
+            "string_ref",
+            "symbol_ref",
+            "bigint_ref",
+            "object_ref",
+            "array_ref",
+            "function_ref",
+            "exception_ref"
+          ]
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": [
+        "id",
+        "source_environment",
+        "binding",
+        "name",
+        "mutable",
+        "semantic_type",
+        "representation",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "source_environment": {
+          "$ref": "#/$defs/id"
+        },
+        "binding": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "mutable": {
+          "type": "boolean"
+        },
+        "semantic_type": {
+          "enum": [
+            "dynamic",
+            "undefined",
+            "null",
+            "boolean",
+            "number",
+            "string",
+            "symbol",
+            "bigint",
+            "object",
+            "array",
+            "function",
+            "exception"
+          ]
+        },
+        "representation": {
+          "enum": [
+            "boxed",
+            "i1",
+            "i32",
+            "u32",
+            "f64",
+            "string_ref",
+            "symbol_ref",
+            "bigint_ref",
+            "object_ref",
+            "array_ref",
+            "function_ref",
+            "exception_ref"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "cell",
+            "value"
+          ]
+        }
+      }
+    },
+    "bindingLocation": {
+      "type": "object",
+      "required": [
+        "binding",
+        "kind",
+        "index"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "local",
+            "register",
+            "environment",
+            "capture"
+          ]
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "id",
+        "parent",
+        "bindings",
+        "captures",
+        "locations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "parent": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindings": {
+          "type": "array",
+          "maxItems": 65536,
+          "items": {
+            "$ref": "#/$defs/binding"
+          }
+        },
+        "captures": {
+          "type": "array",
+          "maxItems": 65536,
+          "items": {
+            "$ref": "#/$defs/capture"
+          }
+        },
+        "locations": {
+          "type": "array",
+          "maxItems": 131072,
+          "items": {
+            "$ref": "#/$defs/bindingLocation"
+          }
+        }
+      }
+    },
+    "suspensionPoint": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "offset",
+        "resume_offset",
+        "live_locals",
+        "stack_depth",
+        "live_registers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "await",
+            "yield",
+            "yield_delegate"
+          ]
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "resume_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "live_locals": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 65536,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "stack_depth": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65536
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "live_registers": {
+          "oneOf": [
+            {
+              "type": "array",
+              "uniqueItems": true,
+              "maxItems": 65536,
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "inlineCacheSlot": {
+      "type": "object",
+      "required": [
+        "id",
+        "offset",
+        "slot",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "kind": {
+          "enum": [
+            "property",
+            "element",
+            "call",
+            "construct"
+          ]
+        }
+      }
+    },
+    "verifierSummary": {
+      "type": "object",
+      "required": [
+        "schema",
+        "version",
+        "code_sha256",
+        "instruction_count",
+        "max_stack_depth",
+        "max_register_index",
+        "exception_region_count",
+        "constant_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "ogma.bytecode-verification-summary"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "code_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "instruction_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "max_stack_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "max_register_index": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exception_region_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "constant_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "execution_model": {
+            "const": "stack"
+          }
+        },
+        "required": [
+          "execution_model"
+        ]
+      },
+      "then": {
+        "properties": {
+          "frame_layout": {
+            "properties": {
+              "register_count": {
+                "const": 0
+              }
+            }
+          },
+          "verifier_summary": {
+            "properties": {
+              "max_register_index": {
+                "type": "null"
+              }
+            }
+          },
+          "suspension_points": {
+            "items": {
+              "properties": {
+                "stack_depth": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "live_registers": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "execution_model": {
+            "const": "register"
+          }
+        },
+        "required": [
+          "execution_model"
+        ]
+      },
+      "then": {
+        "properties": {
+          "frame_layout": {
+            "properties": {
+              "register_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              }
+            }
+          },
+          "verifier_summary": {
+            "properties": {
+              "max_stack_depth": {
+                "const": 0
+              },
+              "max_register_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 65535
+              }
+            }
+          },
+          "suspension_points": {
+            "items": {
+              "properties": {
+                "stack_depth": {
+                  "type": "null"
+                },
+                "live_registers": {
+                  "type": "array"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
