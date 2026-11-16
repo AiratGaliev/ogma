@@ -9,7 +9,7 @@ This is a task-scoped M0 experiment. It does not implement an Ogma frontend or a
 | Oxc | `oxc_parser`, `oxc_semantic`, `oxc_allocator` 0.158.0 | parser-only; parser + semantic syntax checks |
 | SWC | `swc_ecma_parser` 47.0.1, `swc_common` 27.0.0, `swc_ecma_ast` 30.0.2 | parser-only |
 
-Both parser implementations consume the same source files and valid-fixture selection from `fixtures/manifest.json`. Oxc uses an arena allocator and `SemanticBuilder::with_check_syntax_error(true)`. SWC uses its standalone ECMAScript parser.
+Both implementations consume the same source strings and valid-fixture selection from `fixtures/manifest.json`. The timed metric is **adapter-inclusive parse throughput**, not isolated parser-core throughput: Oxc includes source-type detection, arena allocator and parser construction; SWC includes `SourceMap`/`SourceFile` construction (including a source-string clone), lexer and parser construction. This deliberately captures each library's in-memory-source-to-AST integration path. The asymmetry in source ownership/setup is material and is not removed by the benchmark. Oxc uses `SemanticBuilder::with_check_syntax_error(true)` for the separate semantic pass.
 
 The SWC parser package has no semantic-diagnostics stage equivalent to Oxc's semantic builder. SWC resolver passes provide binding/scope context, but are not counted as equivalent early-error/semantic diagnostics here. This experiment therefore reports that comparison as unavailable rather than making an apples-to-oranges claim.
 
@@ -29,7 +29,7 @@ The corpus is a bounded M0 decision fixture, not a Test262 run. Ogma Compatibili
 
 - Rust toolchain: 1.100.0; exact Oxc/SWC crate versions are in the manifests. The complete resolved dependency graph is pinned in the committed `Cargo.lock.gz` snapshot. `run.sh` materializes `Cargo.lock` and verifies SHA-256 `73ffa651c29a26e0831f163b6c448ecb4a50e5af4d504173e1d177bafc0731c0` before any Cargo command; it never generates a new resolution.
 - Two warm-up rounds, then twelve measured rounds with 2,000 parses per accepted fixture per round. This keeps aggregate timed work in the multi-second range instead of relying on sub-millisecond samples.
-- Throughput excludes fixture disk I/O and is reported as files/second and MiB/second.
+- Adapter-inclusive throughput excludes fixture disk I/O and source-file preloading, and is reported as files/second and MiB/second. It includes each backend's required per-parse setup; it must not be read as a pure parser algorithm comparison.
 - Oxc parse-only, Oxc parse+semantic and SWC parse-only run as separate processes.
 - Peak RSS is Linux `getrusage(RUSAGE_SELF).ru_maxrss`, converted from KiB to bytes. It includes process/code and the preloaded fixture corpus, so it is a process high-water mark, not a parser-allocation-only metric. SWC's SourceMap/source-file construction is included in its timed parser entrypoint because it is part of the adapter cost; fixture disk I/O is excluded for both.
 - Oxc also records arena used bytes and capacity. SWC has no directly comparable arena counter; RSS is the shared memory metric.
@@ -62,9 +62,9 @@ The committed baseline was measured by GitHub Actions run [43873014136](https://
 
 | Metric | Oxc | SWC |
 | --- | ---: | ---: |
-| Parser-only throughput | 173,606 files/s | 54,933 files/s |
-| Parser-only throughput | 236.38 MiB/s | 74.80 MiB/s |
-| Parser-only process peak RSS | 3,452,928 bytes | 4,882,432 bytes |
+| Adapter-inclusive parse throughput | 173,606 files/s | 54,933 files/s |
+| Adapter-inclusive parse throughput | 236.38 MiB/s | 74.80 MiB/s |
+| Adapter process peak RSS | 3,452,928 bytes | 4,882,432 bytes |
 | Normal transitive dependency closure | 84 packages | 90 packages |
 | Per-AST arena usage | mean 12,349 bytes; max 34,792 bytes | not applicable |
 
@@ -81,10 +81,10 @@ The complete per-mode JSON, dependency closure, Cargo.lock SHA-256 and runner me
 
 ## M0 recommendation
 
-**Keep Oxc as the leading candidate for Ogma's next JavaScript frontend proof, but do not adopt it as a production dependency yet.** In this bounded workload Oxc was about 3.16× faster than the SWC parser adapter and used about 29% less parser-only process peak RSS. Oxc also provides the parser and semantic-analysis stages in one integrated API, and the measured semantic pass detected the expected duplicate lexical binding. Its normal dependency closure was six packages smaller in this experiment.
+**Keep Oxc as the leading candidate for Ogma's next JavaScript frontend proof, but do not adopt it as a production dependency yet.** In this bounded workload Oxc's measured adapter-inclusive parse path was about 3.16× faster and its process peak RSS was about 29% lower than the SWC adapter path. This is an integration-path result, not evidence that Oxc's parser core alone is 3.16× faster: SWC's timed path includes `SourceMap`/`SourceFile` allocation and source-string cloning, while Oxc parses a borrowed source string. The extra SWC setup is itself a relevant ownership/API integration cost, but it contributes to the throughput and RSS difference. Oxc also provides the parser and semantic-analysis stages in one integrated API, and the measured semantic pass detected the expected duplicate lexical binding. Its normal dependency closure was six packages smaller in this experiment.
 
 The principal integration cost is Oxc's arena lifetime: syntax and semantic references are tied to the compile-unit allocator. Ogma should keep the allocator alive for the required compile phase and lower/copy only the durable information into an owned internal representation before releasing it. SWC's owned AST and SourceMap-based source positions may be easier to retain across phases, but the parser-only dependency does not provide the equivalent semantic-diagnostics stage measured here.
 
 A handwritten minimal parser was not used as a competing baseline: implementing only a small grammar subset would make the result incomparable and would not be a meaningful alternative for Ogma's JavaScript compatibility target. SWC is the more useful established parser reference for this M0 decision.
 
-These measurements come from one CI runner and one measured run over a small, repeatedly parsed fixture corpus. They are evidence for prioritizing the next proof, not a stable cross-machine performance ranking. Before production selection, Ogma still needs the separate TypeScript 7.0.2 parser/lowering proof, TSX/JSX coverage where applicable, broader Test262 and differential/fuzz coverage, and a concrete ownership/lowering integration prototype. **No TypeScript frontend completion or full ECMAScript conformance is inferred from this JavaScript-only result.**
+These measurements come from one CI runner and one measured run over a small, repeatedly parsed fixture corpus. They are evidence for prioritizing the next proof, not a stable cross-machine performance ranking or an isolated parser-core speed comparison. Before production selection, Ogma still needs the separate TypeScript 7.0.2 parser/lowering proof, TSX/JSX coverage where applicable, broader Test262 and differential/fuzz coverage, and a concrete ownership/lowering integration prototype. **No TypeScript frontend completion or full ECMAScript conformance is inferred from this JavaScript-only result.**

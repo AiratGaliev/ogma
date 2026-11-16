@@ -137,6 +137,7 @@ fn benchmark(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>> 
         "schemaVersion": 1,
         "backend": "swc",
         "mode": "parse-only",
+        "timingScope": "in-memory SWC SourceMap/SourceFile construction (including source String clone) + lexer/parser construction + parse; fixture disk I/O/preloading excluded",
         "fixtureCountPerRound": selected.len(),
         "warmupRounds": WARMUP_ROUNDS,
         "measuredRounds": MEASURED_ROUNDS,

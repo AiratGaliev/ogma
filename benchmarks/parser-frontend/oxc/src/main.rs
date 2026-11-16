@@ -151,6 +151,7 @@ fn benchmark(fixtures: &[Fixture], full: bool) -> Result<Value, Box<dyn std::err
         "schemaVersion": 1,
         "backend": "oxc",
         "mode": if full { "parse-plus-semantic" } else { "parse-only" },
+        "timingScope": "in-memory source type detection + Oxc allocator construction + parser construction + parse; fixture disk I/O/preloading excluded",
         "fixtureCountPerRound": selected.len(),
         "warmupRounds": WARMUP_ROUNDS,
         "measuredRounds": MEASURED_ROUNDS,
