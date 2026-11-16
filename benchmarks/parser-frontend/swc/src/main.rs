@@ -76,7 +76,7 @@ fn parse_one(fixture: &Fixture) -> Result<(bool, bool, usize, u128), Box<dyn std
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         FileName::Custom(fixture.meta.path.clone()).into(),
-        fixture.source.clone().into(),
+        fixture.source.clone(),
     );
     let syntax = Syntax::Es(EsSyntax::default());
     let lexer = Lexer::new(

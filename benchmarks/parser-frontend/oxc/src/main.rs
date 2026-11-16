@@ -205,7 +205,7 @@ fn diagnostics(fixtures: &[Fixture]) -> Result<Value, Box<dyn std::error::Error>
         }
 
         if let Some(expected_error) = fixture.meta.expected_semantic_error {
-            if accepted {
+            if !parsed.program.body.is_empty() {
                 let result = SemanticBuilder::new()
                     .with_check_syntax_error(true)
                     .build(&parsed.program);
