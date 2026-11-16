@@ -6,6 +6,7 @@ node_modules/
 
 # Python bytecode and test/tool caches
 __pycache__/
+tests/ogmb/.generated/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/

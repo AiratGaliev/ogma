@@ -68,7 +68,10 @@ jobs:
       - name: Validate repository documentation
         run: python .github/scripts/validate_repository.py
 
-      - name: Test repository validator
+      - name: Generate portable bytecode verifier fixtures
+        run: python tests/ogmb/build_fixtures.py
+
+      - name: Test repository validator and Core IR/OGMB verifiers
         run: python -m unittest discover -s .github/scripts -p "test_*.py" -v
 
       - name: Verify Core IR v1 contract and fixture corpus
@@ -83,8 +86,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Verify portable .ogmb v1 container and decoder contract
+        run: python .github/scripts/verify_ogmb.py --manifest tests/ogmb/.generated/manifest.json --report "$RUNNER_TEMP/ogmb-verifier-report.json"
+
+      - name: Upload OGMB verifier report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogmb-v1-verifier-report
+          path: ${{ runner.temp }}/ogmb-verifier-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Compile CI helper scripts
-        run: python -m compileall -q .github/scripts
+        run: python -m compileall -q .github/scripts tests/ogmb/build_fixtures.py
 
       - name: Set up pinned Node.js reference runtime
         uses: actions/setup-node@v4
