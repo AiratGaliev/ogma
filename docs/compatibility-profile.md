@@ -148,7 +148,7 @@ All rows are deferred until Ogma implements the frontend and passes fixtures. â€
 | TS/TSX construct | Frontend contract | Runtime effect / policy | Current status |
 |---|---|---|---|
 | Type annotations, interfaces, type aliases, generic declarations/parameters/arguments | Parse and erase | No runtime type object is created | deferred |
-| as / angle-bracket assertions, non-null assertion, satisfies, type-only imports/exports | Parse and erase | No runtime check or cast is introduced | deferred |
+| as / angle-bracket assertions, non-null assertion, satisfies, type-only imports/exports | Parse and erase where allowed by the selected TS grammar; angle-bracket type assertions are rejected in TSX mode where they conflict with JSX syntax | No runtime check or cast is introduced | deferred |
 | declare, ambient declarations, .d.ts, readonly and access modifiers | Parse for diagnostics/type analysis; erase where appropriate | Declaration/type metadata is compile-time only | deferred |
 | Enums, including const enum | Parse and lower according to an explicitly pinned TS-compatible emit mode | Runtime enum objects or inlining must match selected emit options; cross-module const-enum behaviour needs fixtures | deferred |
 | Non-ambient namespaces and namespace merging | Parse and lower only the declared supported subset | May create runtime objects and merge bindings; never treat as type-only by default | deferred |
@@ -222,9 +222,9 @@ Node stability is attached to individual public symbols, not uniformly to an ent
 | node:querystring | parse/stringify and documented escaping semantics | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-querystring*.js | deferred |
 | node:string_decoder | StringDecoder and encoding-boundary behaviour | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-string-decoder*.js | deferred |
 | node:stream | Readable, Writable, Duplex, Transform, PassThrough and selected pipeline/backpressure contracts | none for in-memory streams; external I/O requires a Host adapter | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-stream*.js, test/parallel/test-readable*.js | deferred |
-| node:timers and timer globals | setTimeout/setInterval/setImmediate with clearTimeout/clearInterval/clearImmediate cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-microtask-queue-run-immediate.js | deferred |
+| node:timers and timer globals | setTimeout/setInterval/setImmediate with clearTimeout/clearInterval/clearImmediate cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-timers-clearImmediate.js, test/parallel/test-microtask-queue-run-immediate.js | deferred |
 | console global | log/info/warn/error and selected formatting behaviour | console.write | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-console*.js | deferred |
-| process facade | Read-only version/platform/arch metadata and env values; cwd read; nextTick; no env mutation or process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-process-next-tick.js, test/parallel/test-next-tick*.js plus selected test-process metadata cases | deferred |
+| process facade | Read-only version/platform/arch metadata and env values; cwd read; `process.nextTick()` compatibility exception (Legacy); no env mutation or process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-process-next-tick.js, test/parallel/test-next-tick*.js plus selected test-process metadata cases | deferred |
 
 ### 4.4. Node Host API matrix
 
@@ -325,7 +325,7 @@ The initial resolver contract covers the following fields and rules, subject to 
 - package.json: type, main, exports, imports.
 - Package self-references, subpath exports/imports and package encapsulation.
 - ESM and CommonJS entry points, extension rules and module cache/identity.
-- Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; ogma, development and production require explicit profile/build configuration. Preserve the package's conditional object key order exactly; Node resolves the first matching condition in that order. Package authors should place default last, and the resolver must not reorder it to prefer a later key.
+- Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; `default` matches unconditionally when reached in package key order; ogma, development and production require explicit profile/build configuration. Preserve the package's conditional object key order exactly; Node resolves the first matching condition in that order. Package authors should place `default` last, and the resolver must not reorder it to prefer a later key.
 - The node condition is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the Node API adapters in that build's capability/module manifest. It is not a blanket marker for any Ogma Runtime and does not claim universal Node API coverage; an API outside the selected profile still fails deterministically when imported or invoked. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
 - browser is not an implicit condition for a native application. A host may opt into it only in a separate explicit profile.
 
