@@ -54,6 +54,8 @@ The parser-only corpus is an older supplementary fixture set (2021); it is not s
 
 ECMA-402 / Intl is a separate specification surface. The 2026 Ecma General Assembly approved ECMA-402 13th edition (ECMAScript 2025 Internationalization API) separately from ECMA-262. **Intl is deferred in profile 1.0.0**; no Intl conformance is implied by the ECMA-262 baseline. A later Intl profile must pin its own ECMA-402 edition, data/ICU provider and tests.
 
+**Temporal is an intentional edition boundary exception.** The proposal reached Stage 4 during 2026 and Node.js 26 ships the Temporal API, but TC39's finished-proposals tracking assigns it to the 2027 publication year. It is therefore not part of the pinned June 2026 ECMA-262 17th-edition baseline. Profile 1.0.0 keeps the ECMAScript Temporal global and its associated built-ins **deferred**, even when running with the Node 26.13.0 reference line. A later profile must explicitly adopt the ECMAScript 2027 snapshot (or an individually pinned extension contract) and its Test262/reference fixtures; the Node version alone does not silently add the feature to this edition baseline.
+
 ### 2.2. Initial execution subset
 
 The normative language reference is ECMAScript 2026, but the first executable runtime is intentionally a subset. M1's initial target is the smallest useful JavaScript runtime described by the architecture: values, objects, functions, lexical scopes, control flow, exceptions, module execution and the shared Promise/job model. It is not a claim of full ECMA-262 coverage.
@@ -73,7 +75,7 @@ The normative language reference is ECMAScript 2026, but the first executable ru
 | Proxy, Reflect, Symbol, WeakRef and FinalizationRegistry | No blanket support; each feature requires its own semantics, GC and lifecycle proof | deferred | Corresponding Test262 feature groups |
 | SharedArrayBuffer and Atomics | Requires an explicit memory/concurrency model and host/worker integration | deferred | Test262 shared-memory tests and stress tests |
 | Intl / ECMA-402 | Separate profile only; not in this profile's initial execution contract | deferred | Pinned ECMA-402 suite when adopted |
-| Temporal and post-2026 additions | Not implicitly included by tracking the latest TC39 draft | deferred | New profile revision and corresponding Test262 snapshot |
+| Temporal (Stage 4 in 2026; planned ECMA-262 publication year 2027) and later additions | Explicitly excluded from the ECMA-262 2026 edition baseline in profile 1.0.0, even though Node.js 26 ships Temporal; adoption requires a later profile revision | deferred | Pinned ECMA-262 2027 / extension reference and corresponding Test262 snapshot |
 
 The table describes the target work sequence, not an assertion that all listed features land in M1. M1 must not be expanded into full language conformance by inference. A feature becomes supported only after implementation and tests demonstrate the required observable behaviour. A subset may become partial only when its supported sub-surface and exclusions are recorded explicitly.
 
@@ -410,6 +412,8 @@ This file is the single repository source of truth for compatibility status and 
 - [Node.js v26.13.0 API documentation](https://nodejs.org/docs/v26.13.0/api/)
 - [Node.js v26.13.0 source revision](https://github.com/nodejs/node/tree/18b32a3b1552e199a01f1a8d9fd64aa756d3b75b)
 - [Node.js Release Working Group schedule](https://github.com/nodejs/Release)
+- [TC39 finished proposals — expected publication editions](https://github.com/tc39/proposals/blob/main/finished-proposals.md)
+- [Node.js 26.0.0 release notes — Temporal availability](https://nodejs.org/en/blog/release/v26.0.0#temporal-api)
 - [SolidJS Native pinned consumer](https://github.com/AiratGaliev/solidjs-native/tree/bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668)
 - [Codogma Engine pinned secondary consumer](https://github.com/AiratGaliev/codogma-engine/tree/982d25c26da94c1f73d61457bf55da682413eff2)
 - [Ogma architecture specification — sections 3, 13 and 20](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a)
