@@ -27,7 +27,7 @@ The corpus is a bounded M0 decision fixture, not a Test262 run. Ogma Compatibili
 
 ## Measurement protocol
 
-- Rust toolchain: 1.100.0; exact Oxc/SWC crate versions are in the manifests and resolved dependencies in `Cargo.lock`.
+- Rust toolchain: 1.100.0; exact Oxc/SWC crate versions are in the manifests. The complete resolved dependency graph is pinned in the committed `Cargo.lock.gz` snapshot. `run.sh` materializes `Cargo.lock` and verifies SHA-256 `73ffa651c29a26e0831f163b6c448ecb4a50e5af4d504173e1d177bafc0731c0` before any Cargo command; it never generates a new resolution.
 - Two warm-up rounds, then twelve measured rounds with 2,000 parses per accepted fixture per round. This keeps aggregate timed work in the multi-second range instead of relying on sub-millisecond samples.
 - Throughput excludes fixture disk I/O and is reported as files/second and MiB/second.
 - Oxc parse-only, Oxc parse+semantic and SWC parse-only run as separate processes.
@@ -43,9 +43,9 @@ From the repository root on Linux with Rust/Cargo 1.100.0 and Python 3.12+:
 bash benchmarks/parser-frontend/run.sh
 ```
 
-The first build needs crates.io access. The script formats, tests, lints and builds both isolated benchmark executables, runs all measurement modes, collects JSON results and validates the pinned fixture expectations.
+The first build needs crates.io access to download the exact locked crate sources. The script materializes and verifies the committed lock snapshot, then formats, tests, lints and builds both isolated benchmark executables, runs all measurement modes, collects JSON results and validates the pinned fixture expectations.
 
-The task-specific GitHub Actions job runs this proof on the OGM-14 topic PR and uploads raw results, Cargo.lock and environment metadata. No full Test262, differential suite or E2E run is added to feature PR CI.
+The task-specific GitHub Actions job runs this proof on the OGM-14 topic PR and uploads the materialized `Cargo.lock`, raw results and environment metadata. The compressed lock snapshot is committed; the expanded lock is a reproducible build artifact ignored by Git. No full Test262, differential suite or E2E run is added to feature PR CI.
 
 ## Interpretation limits
 
@@ -77,7 +77,7 @@ Oxc parse + semantic run:
 
 Both backends matched all 16 comparable parse expectations: 11 valid JavaScript fixtures and five invalid-syntax fixtures. Each emitted five parser diagnostics over the invalid corpus. The Oxc semantic pass ran on 12 parseable fixtures, reported the one expected duplicate lexical binding error, and had no semantic expectation mismatches. SWC semantic diagnostics were not measured. The recovery counters were one Oxc fixture and three SWC fixtures; this is a coarse signal and the parsers' recovery behavior is not directly equivalent.
 
-The complete per-mode JSON, dependency closure, Cargo.lock SHA-256 and runner metadata are committed in `results/`. The Cargo lockfile contains 141 package records; the combined release workspace build took 45 seconds on this runner.
+The complete per-mode JSON, dependency closure, Cargo.lock SHA-256 and runner metadata are committed in `results/`; the exact compressed lock snapshot is committed as `Cargo.lock.gz`. The expanded Cargo lock contains 141 package records; the combined release workspace build took 45 seconds on this runner.
 
 ## M0 recommendation
 
