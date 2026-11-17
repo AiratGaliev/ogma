@@ -73,6 +73,19 @@ class PortableBytecodeProofTests(unittest.TestCase):
                 )
                 self.assertEqual(len(workload["cases"]), len(observations))
 
+    def test_value_block_arguments_use_explicit_edge_bridge_copies(self) -> None:
+        for model, functions in self.compiled["control-flow"].items():
+            with self.subTest(model=model):
+                debug_operations = {
+                    item["core_ir"]
+                    for compiled in functions
+                    for item in compiled.debug_map
+                }
+                self.assertIn("edge:entry->when_true:then:stage:0", debug_operations)
+                self.assertIn("edge:entry->when_true:then:commit:0", debug_operations)
+                self.assertIn("edge:entry->when_false:else:stage:0", debug_operations)
+                self.assertIn("edge:entry->when_false:else:commit:0", debug_operations)
+
     def test_register_encoding_reduces_dispatches_for_the_same_core_ir(self) -> None:
         stack_total = 0
         register_total = 0

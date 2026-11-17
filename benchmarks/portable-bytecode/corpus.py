@@ -111,8 +111,11 @@ def basic_block(
     instructions: list[dict[str, Any]],
     terminator: dict[str, Any],
     effect_id: str | None = None,
+    parameters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    params = [] if effect_id is None else [effect_parameter(effect_id)]
+    params = [] if parameters is None else list(parameters)
+    if effect_id is not None:
+        params.append(effect_parameter(effect_id))
     return {
         "id": ident,
         "parameters": params,
@@ -219,23 +222,28 @@ def build_workloads() -> list[dict[str, Any]]:
         [
             basic_block(
                 "entry",
-                [],
+                [
+                    const("true_value", "string", "then", "string", "string_ref"),
+                    const("false_value", "string", "else", "string", "string_ref"),
+                ],
                 {
                     "kind": "branch",
                     "condition": "flag",
-                    "then": edge("when_true"),
-                    "else": edge("when_false"),
+                    "then": edge("when_true", ["true_value_value"]),
+                    "else": edge("when_false", ["false_value_value"]),
                 },
             ),
             basic_block(
                 "when_true",
-                [const("true_value", "string", "then", "string", "string_ref")],
-                {"kind": "return", "value": "true_value_value"},
+                [],
+                {"kind": "return", "value": "true_arg"},
+                parameters=[value("true_arg", "string", "string_ref")],
             ),
             basic_block(
                 "when_false",
-                [const("false_value", "string", "else", "string", "string_ref")],
-                {"kind": "return", "value": "false_value_value"},
+                [],
+                {"kind": "return", "value": "false_arg"},
+                parameters=[value("false_arg", "string", "string_ref")],
             ),
         ],
         effect_entry=None,
