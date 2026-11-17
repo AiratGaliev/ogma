@@ -259,6 +259,28 @@ def core_ir_plan(
     def const_id(value: Any) -> int:
         return add_constant(constants, constant_indexes, value)
 
+    def distinct_register_sources(block_id: str, locations: list[int], source_id: str,
+                                  src: dict[str, Any]) -> list[int]:
+        nonlocal next_location
+        if model != "register":
+            return locations
+        seen: set[int] = set()
+        normalized: list[int] = []
+        for index, location in enumerate(locations):
+            if location in seen:
+                temporary = next_location
+                next_location += 1
+                emit(
+                    block_id, "UNARY",
+                    {"dest": temporary, "source": location, "subop": "copy"},
+                    f"{source_id}:duplicate-read:{index}", src,
+                )
+                normalized.append(temporary)
+            else:
+                normalized.append(location)
+                seen.add(location)
+        return normalized
+
     def edge_target(source_block: str, edge: dict[str, Any], suffix: str,
                     term_source: dict[str, Any]) -> str:
         nonlocal next_location
@@ -343,9 +365,12 @@ def core_ir_plan(
                     emit(block_id, "BINARY", {"subop": subop}, source_id, src, may_throw)
                     emit(block_id, "STORE_LOCAL", {"local": result_loc}, source_id, src)
                 else:
+                    sources = distinct_register_sources(
+                        block_id, [values[operands[0]], values[operands[1]]], source_id, src,
+                    )
                     emit(
                         block_id, "BINARY",
-                        {"dest": result_loc, "left": values[operands[0]], "right": values[operands[1]], "subop": subop},
+                        {"dest": result_loc, "left": sources[0], "right": sources[1], "subop": subop},
                         source_id, src, may_throw,
                     )
 
@@ -388,6 +413,7 @@ def core_ir_plan(
                     emit(block_id, "CALL", {"argument_count": argument_count}, source_id, src, may_throw)
                     emit(block_id, "STORE_LOCAL", {"local": result_loc}, source_id, src)
                 else:
+                    sources = distinct_register_sources(block_id, sources, source_id, src)
                     emit(
                         block_id, "CALL",
                         {"dest": result_loc, "sources": sources, "argument_count": argument_count},
