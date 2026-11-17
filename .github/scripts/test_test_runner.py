@@ -889,6 +889,24 @@ class ParserAndShardingTests(unittest.TestCase):
         self.assertTrue(
             any("invalid result classification" in error for error in aggregate["aggregation"]["errors"])
         )
+        report_path = Path(self.id().replace(".", "_") + ".xml")
+        try:
+            test_runner.write_junit(
+                report_path,
+                "test262",
+                aggregate["results"],
+                aggregate["aggregation"]["errors"],
+            )
+            root = ET.parse(report_path).getroot()
+            self.assertGreater(int(root.attrib["errors"]), 0)
+            self.assertTrue(
+                any(
+                    node.attrib.get("type") == "HARNESS ERROR"
+                    for node in root.findall(".//error")
+                )
+            )
+        finally:
+            report_path.unlink(missing_ok=True)
 
     def test_aggregate_detects_duplicate_shards_and_duplicate_test_results(self) -> None:
         manifest = manifest_for("test262", TEST262_ROOT, ready_profile())
