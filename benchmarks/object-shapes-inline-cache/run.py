@@ -12,7 +12,6 @@ import tracemalloc
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from model import (  # noqa: E402
@@ -103,6 +102,29 @@ def correctness(scenarios: dict, max_cases: int) -> list[dict]:
     return results
 
 
+def shallow_object_graph_size(root: object) -> int:
+    """Count each retained metadata object's shallow sys.getsizeof once."""
+    seen: set[int] = set()
+
+    def visit(value: object) -> int:
+        identity = id(value)
+        if identity in seen:
+            return 0
+        seen.add(identity)
+        total = sys.getsizeof(value)
+        if isinstance(value, dict):
+            total += sum(visit(key) + visit(item) for key, item in value.items())
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            total += sum(visit(item) for item in value)
+        else:
+            attributes = getattr(value, "__dict__", None)
+            if isinstance(attributes, dict):
+                total += visit(attributes)
+        return total
+
+    return visit(root)
+
+
 def profile_memory(objects_per_shape: int = 500) -> dict:
     registry = ShapeRegistry()
     tracemalloc.start()
@@ -137,7 +159,16 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=20000)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--rounds", type=int, default=7)
-    parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", "local-uncommitted"))
+    parser.add_argument(
+        "--revision",
+        default=os.environ.get("GITHUB_HEAD_SHA", os.environ.get("GITHUB_SHA", "local-uncommitted")),
+        help="source revision (the PR head SHA in GitHub Actions)",
+    )
+    parser.add_argument(
+        "--tested-revision",
+        default=os.environ.get("GITHUB_SHA", "local-uncommitted"),
+        help="checked-out revision used by the runner (GitHub's PR merge ref in Actions)",
+    )
     parser.add_argument("--max-cases", type=int, default=4)
     parser.add_argument(
         "--output", type=Path,
@@ -189,15 +220,13 @@ def main() -> int:
             "unique_shapes": len({obj.shape.identity for obj in objects}),
         }
         counters[name] = vars(cache.counters)
-        plans = [cache, cache._entries, *cache._entries]
-        plans.extend(plan.guards for plan in cache._entries)
         memory[name] = {
             "objects": len(objects),
             "unique_shapes": registry.shape_count,
             "shape_property_layouts": sum(len(shape.properties) for shape in registry._shapes.values()),
             "object_slots": sum(len(obj.slots) for obj in objects),
             "ic_cases": cache.case_count,
-            "warmed_ic_metadata_shallow_bytes": sum(sys.getsizeof(item) for item in plans),
+            "warmed_ic_metadata_object_graph_shallow_bytes": shallow_object_graph_size(cache),
         }
 
     # Compare the write IC against the same generic [[Set]] helper on an identical monomorphic workload.
@@ -235,6 +264,7 @@ def main() -> int:
         "schema": "ogm-18-object-shapes-ic-proof-v1",
         "task": "OGM-18",
         "source_revision": args.revision,
+        "tested_revision": args.tested_revision,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "python": sys.version,
