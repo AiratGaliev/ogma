@@ -1097,6 +1097,8 @@ def aggregate_reports(
         for test_id in sorted(result_occurrences)
         if test_id in expected_ids and result_occurrences[test_id]
     ]
+    if not any(result.get("status") == "PASS" for result in results):
+        errors.append("aggregate has no PASS results; no executed conformance evidence is available")
     return {
         "schemaVersion": SCHEMA_VERSION,
         "suite": manifest["suite"],
