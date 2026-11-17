@@ -70,7 +70,7 @@
         "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
         "scopeId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
         "bindingIds": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-        "inlineChain": { "type": "array", "maxItems": 64, "items": { "type": "object" } }
+        "inlineChain": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/inlineFrame" } }
       },
       "allOf": [
         { "if": { "properties": { "origin": { "const": "user" } } }, "then": { "required": ["sourceId", "start", "end"] } },
@@ -114,6 +114,52 @@
         "mutable": { "type": "boolean" },
         "availability": { "enum": ["available", "optimized_out", "unavailable"] },
         "value": { "$ref": "#/$defs/debugValue" }
+      }
+    },
+    "inlineFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "file", "start", "end"],
+      "properties": {
+        "function": { "$ref": "#/$defs/id" },
+        "file": { "$ref": "#/$defs/id" },
+        "start": { "$ref": "#/$defs/sourcePosition" },
+        "end": { "$ref": "#/$defs/sourcePosition" }
+      }
+    },
+    "scopeSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "parentId", "variables"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "parentId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "variables": { "type": "array", "maxItems": 65536, "items": { "$ref": "#/$defs/variable" } }
+      }
+    },
+    "inspectedProperty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "enumerable", "writable", "configurable", "isAccessor"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 1024 },
+        "value": { "$ref": "#/$defs/debugValue" },
+        "enumerable": { "type": "boolean" },
+        "writable": { "type": "boolean" },
+        "configurable": { "type": "boolean" },
+        "isAccessor": { "type": "boolean" }
+      }
+    },
+    "inspectedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectId", "isProxy", "properties", "truncated"],
+      "properties": {
+        "objectId": { "$ref": "#/$defs/id" },
+        "isProxy": { "type": "boolean" },
+        "properties": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/inspectedProperty" } },
+        "truncated": { "type": "boolean" }
       }
     },
     "stackFrame": {
