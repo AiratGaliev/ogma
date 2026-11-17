@@ -93,10 +93,10 @@ class AdapterWorkerTests(unittest.TestCase):
         ]
         request = self.request("// parser: parsed", timeout_ms=50)
         request["test"]["source"] = "x" * (2 * 1024 * 1024)
-        started = __import__("time").monotonic()
+        started = time.monotonic()
         with test_runner.AdapterSession(command) as session:
             response, error = session.run(request, 50)
-        elapsed = __import__("time").monotonic() - started
+        elapsed = time.monotonic() - started
         self.assertIsNone(response)
         self.assertEqual(error["status"], "FAIL")
         self.assertEqual(error["failureKind"], "TIMEOUT")
