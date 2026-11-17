@@ -208,6 +208,8 @@ def core_ir_plan(
     fn = function_doc["function"]
     params = fn["parameters"]
     bindings = fn["environment"]["bindings"]
+    blocks = fn["blocks"]
+    blocks_by_id = {block["id"]: block for block in blocks}
     values: dict[str, int] = {}
     binding_locations: dict[str, int] = {}
     next_location = 0
@@ -222,9 +224,17 @@ def core_ir_plan(
             binding_locations[lexical_binding["id"]] = next_location
             next_location += 1
 
+    # Core IR block parameters are real SSA definitions with edge-specific incoming
+    # values. Give them stable frame locations before allocating instruction results.
+    for block in blocks:
+        for block_parameter in block["parameters"]:
+            if block_parameter["kind"] == "value":
+                values[block_parameter["id"]] = next_location
+                next_location += 1
+
     # Allocate one stable frame location per SSA definition. Environment stores alias
     # their assigned value, while the lexical binding itself has its own mutable slot.
-    for block in fn["blocks"]:
+    for block in blocks:
         for ir_instruction in block["instructions"]:
             result = ir_instruction["result"]
             if result is None:
@@ -236,16 +246,10 @@ def core_ir_plan(
                 values[result_id] = next_location
                 next_location += 1
 
-    local_count = next_location if model == "stack" else 0
-    register_count = next_location if model == "register" else 0
-    if model == "register" and register_count == 0:
-        register_count = 1
-    if max(local_count, register_count) > MAX_FRAME:
-        raise ValueError(f"{fn['id']}: frame exceeds prototype limit {MAX_FRAME}")
-
     plans: list[PlanOp] = []
     block_plans: dict[str, list[PlanOp]] = {}
     debug_map: list[dict[str, Any]] = []
+    synthetic_blocks: list[str] = []
 
     def emit(block_id: str, kind: str, fields: dict[str, Any], source_id: str,
              source: dict[str, Any], may_throw: bool = False) -> None:
@@ -255,7 +259,63 @@ def core_ir_plan(
     def const_id(value: Any) -> int:
         return add_constant(constants, constant_indexes, value)
 
-    for block in fn["blocks"]:
+    def edge_target(source_block: str, edge: dict[str, Any], suffix: str,
+                    term_source: dict[str, Any]) -> str:
+        nonlocal next_location
+        target_id = edge["target"]
+        target = blocks_by_id[target_id]
+        arguments = edge["arguments"]
+        if len(arguments) != len(target["parameters"]):
+            raise ValueError(
+                f"{fn['id']}: edge {source_block}->{target_id} has {len(arguments)} arguments "
+                f"for {len(target['parameters'])} block parameters"
+            )
+
+        assignments: list[tuple[int, int]] = []
+        for block_parameter, argument_id in zip(target["parameters"], arguments):
+            if block_parameter["kind"] == "effect":
+                continue
+            assignments.append((values[argument_id], values[block_parameter["id"]]))
+
+        if not assignments:
+            return target_id
+
+        # Edge arguments have parallel-copy semantics. Stage all sources first so
+        # swaps/self-loop-carried values cannot be corrupted by sequential writes.
+        bridge_id = f"__ogm16_edge_{source_block}_{suffix}"
+        if bridge_id in block_plans or bridge_id in blocks_by_id:
+            raise ValueError(f"{fn['id']}: synthetic edge block ID collision: {bridge_id}")
+        block_plans[bridge_id] = []
+        synthetic_blocks.append(bridge_id)
+        staged: list[tuple[int, int]] = []
+        for index, (source_location, target_location) in enumerate(assignments):
+            temporary = next_location
+            next_location += 1
+            staged.append((temporary, target_location))
+            if model == "stack":
+                emit(bridge_id, "LOAD_LOCAL", {"local": source_location},
+                     f"edge:{source_block}->{target_id}:{suffix}:stage:{index}", term_source)
+                emit(bridge_id, "STORE_LOCAL", {"local": temporary},
+                     f"edge:{source_block}->{target_id}:{suffix}:stage:{index}", term_source)
+            else:
+                emit(bridge_id, "UNARY", {"dest": temporary, "source": source_location, "subop": "copy"},
+                     f"edge:{source_block}->{target_id}:{suffix}:stage:{index}", term_source)
+
+        for index, (temporary, target_location) in enumerate(staged):
+            if model == "stack":
+                emit(bridge_id, "LOAD_LOCAL", {"local": temporary},
+                     f"edge:{source_block}->{target_id}:{suffix}:commit:{index}", term_source)
+                emit(bridge_id, "STORE_LOCAL", {"local": target_location},
+                     f"edge:{source_block}->{target_id}:{suffix}:commit:{index}", term_source)
+            else:
+                emit(bridge_id, "UNARY", {"dest": target_location, "source": temporary, "subop": "copy"},
+                     f"edge:{source_block}->{target_id}:{suffix}:commit:{index}", term_source)
+
+        emit(bridge_id, "JUMP", {"target_label": target_id},
+             f"edge:{source_block}->{target_id}:{suffix}:jump", term_source)
+        return bridge_id
+
+    for block in blocks:
         block_id = block["id"]
         block_plans[block_id] = []
         for ir_instruction in block["instructions"]:
@@ -316,7 +376,6 @@ def core_ir_plan(
                 else:
                     temporary = next_location
                     next_location += 1
-                    register_count = next_location
                     emit(block_id, "CONST", {"dest": temporary, "constant_index": constant_index}, source_id, src)
                     emit(block_id, "UNARY", {"dest": result_loc, "source": temporary, "subop": "make_closure"}, source_id, src)
 
@@ -349,7 +408,6 @@ def core_ir_plan(
                 else:
                     temporary = next_location
                     next_location += 1
-                    register_count = next_location
                     emit(block_id, "CONST", {"dest": temporary, "constant_index": host_constant}, source_id, src)
                     emit(
                         block_id, "CALL",
@@ -373,15 +431,23 @@ def core_ir_plan(
         term_source = terminator["source"]
         source_id = f"terminator:{block_id}:{kind}"
         if kind == "jump":
-            emit(block_id, "JUMP", {"target_label": terminator["target"]}, source_id, term_source)
+            target = edge_target(block_id, {
+                "target": terminator["target"],
+                "arguments": terminator["arguments"],
+            }, "jump", term_source)
+            emit(block_id, "JUMP", {"target_label": target}, source_id, term_source)
         elif kind == "branch":
             condition = values[terminator["condition"]]
+            then_target = edge_target(block_id, terminator["then"], "then", term_source)
+            else_target = edge_target(block_id, terminator["else"], "else", term_source)
+            if model == "stack":
+                emit(block_id, "LOAD_LOCAL", {"local": condition}, source_id, term_source)
             emit(
                 block_id, "BRANCH",
                 {
                     "condition": condition,
-                    "then_label": terminator["then"]["target"],
-                    "else_label": terminator["else"]["target"],
+                    "then_label": then_target,
+                    "else_label": else_target,
                 },
                 source_id, term_source,
             )
@@ -393,26 +459,27 @@ def core_ir_plan(
             else:
                 emit(block_id, "RETURN", {"source": location}, source_id, term_source)
         elif kind == "unreachable":
-            # js.throw already lowers to a terminal VM instruction.
             if not block_plans[block_id] or block_plans[block_id][-1].kind != "THROW":
                 raise ValueError(f"{fn['id']}: unreachable terminator is not preceded by js.throw")
         else:
             raise ValueError(f"{fn['id']}: unsupported Core IR terminator {kind!r}")
 
-    # Register temporaries introduced by closure/host calls are allocated during lowering.
-    if model == "register":
-        register_count = max(register_count, next_location)
+    ordered_block_ids = [block["id"] for block in blocks] + synthetic_blocks
+    local_count = next_location if model == "stack" else 0
+    register_count = next_location if model == "register" else 0
+    if max(local_count, register_count) > MAX_FRAME:
+        raise ValueError(f"{fn['id']}: frame exceeds prototype limit {MAX_FRAME}")
 
-    for block in fn["blocks"]:
-        plans.extend(block_plans[block["id"]])
+    for block_id in ordered_block_ids:
+        plans.extend(block_plans[block_id])
 
     # Layout uses fixed-width absolute branch offsets, so one pass is sufficient.
     offsets: dict[int, int] = {}
     block_offsets: dict[str, int] = {}
     cursor = 0
-    for block in fn["blocks"]:
-        block_offsets[block["id"]] = cursor
-        for item in block_plans[block["id"]]:
+    for block_id in ordered_block_ids:
+        block_offsets[block_id] = cursor
+        for item in block_plans[block_id]:
             offsets[id(item)] = cursor
             cursor += item.size(model)
 
@@ -433,7 +500,6 @@ def core_ir_plan(
         })
 
     return plans, offsets, block_offsets, local_count, register_count, debug_map
-
 
 def encode_instruction(item: PlanOp, offset: int, model: str, offsets: dict[int, int],
                        block_offsets: dict[str, int]) -> bytes:
