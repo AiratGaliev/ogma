@@ -306,6 +306,24 @@ jobs:
       - name: Run ABI contract tests
         run: cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
 
+      - name: Build shared library for C ABI consumer
+        run: cargo build --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --lib
+
+      - name: Compile C11 ABI consumer smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -I benchmarks/rust-abi/include \
+            benchmarks/rust-abi/tests/c_abi_smoke.c \
+            -L benchmarks/rust-abi/target/release \
+            -Wl,-rpath,"$PWD/benchmarks/rust-abi/target/release" \
+            -logma_rust_abi_proof \
+            -o "$RUNNER_TEMP/ogma-abi-c-smoke"
+
+      - name: Run C11 ABI consumer smoke test
+        run: "$RUNNER_TEMP/ogma-abi-c-smoke"
+
       - name: Run reproducible ABI boundary benchmark
         env:
           RUSTC_VERSION: ${{ steps.rust_toolchain.outputs.rustc_version }}
