@@ -157,7 +157,7 @@ def main() -> int:
     memory = {}
 
     for name, (registry, objects) in scenarios.items():
-        cache = InlineCache("value", max_cases=max_cases)
+        cache = InlineCache("value", max_cases=args.max_cases)
         # Warm the IC outside timing so the samples measure the steady-state site.
         for obj in objects:
             cache.get(obj)
