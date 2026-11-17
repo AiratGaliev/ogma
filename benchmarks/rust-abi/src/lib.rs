@@ -88,11 +88,6 @@ macro_rules! define_token {
                 Self { opaque }
             }
         }
-        impl $name {
-            fn is_zero(self) -> bool {
-                self.opaque == [0; 5]
-            }
-        }
     };
 }
 define_token!(OgmaContextHandle);
@@ -100,6 +95,12 @@ define_token!(OgmaHandle);
 define_token!(OgmaRootScopeHandle);
 define_token!(OgmaPersistentHandle);
 define_token!(OgmaCallbackHandle);
+
+impl OgmaHandle {
+    fn is_zero(self) -> bool {
+        self.opaque == [0; 5]
+    }
+}
 
 pub const COMPLETION_NORMAL: u32 = 0;
 pub const COMPLETION_THROW: u32 = 1;
@@ -115,6 +116,7 @@ pub struct OgmaCompletion {
     pub value: OgmaHandle,
 }
 impl OgmaCompletion {
+    #[cfg(test)]
     fn normal(value: OgmaHandle) -> Self {
         Self {
             kind: COMPLETION_NORMAL,
@@ -189,9 +191,7 @@ fn arena_remove<T>(slots: &mut [ArenaSlot<T>], id: TokenId) -> Result<T, OgmaSta
         return Err(OgmaStatus::STALE_HANDLE);
     }
     let value = slot.value.take().ok_or(OgmaStatus::STALE_HANDLE)?;
-    if slot.generation != u64::MAX {
-        slot.generation += 1;
-    }
+    slot.generation = slot.generation.saturating_add(1);
     Ok(value)
 }
 
@@ -245,9 +245,7 @@ impl Heap {
             };
             if slot.value.is_some() && !roots.contains(&id) {
                 slot.value = None;
-                if slot.generation != u64::MAX {
-                    slot.generation += 1;
-                }
+                slot.generation = slot.generation.saturating_add(1);
             }
         }
     }
@@ -442,9 +440,7 @@ impl OgmaRuntime {
             return Err(OgmaStatus::STALE_HANDLE);
         }
         slot.state = None;
-        if slot.generation != u64::MAX {
-            slot.generation += 1;
-        }
+        slot.generation = slot.generation.saturating_add(1);
         Ok(())
     }
 }
