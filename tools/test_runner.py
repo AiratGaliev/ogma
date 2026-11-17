@@ -1732,6 +1732,7 @@ def main(argv: list[str] | None = None) -> int:
         baseline = load_baseline(args.baseline)
         profile = load_profile(args.profile)
         manifest = read_json(args.manifest)
+        validate_manifest(manifest)
         pinned = _pinned_source(baseline, manifest["suite"])
         _load_and_check_revision(args.suite_root, pinned["revision"])
         reports = [read_json(path) for path in args.reports]
