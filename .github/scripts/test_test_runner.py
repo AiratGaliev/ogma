@@ -651,6 +651,45 @@ class ParserAndShardingTests(unittest.TestCase):
             {hashlib.sha256(b"normalized-equivalent-parser-fixture").hexdigest()},
         )
 
+    def test_aggregate_independently_rejects_different_parser_ast_fingerprints(self) -> None:
+        profile = ready_profile()
+        manifest = manifest_for("test262-parser-tests", PARSER_ROOT, profile, 1)
+        report = test_runner.run_manifest(
+            manifest,
+            PARSER_ROOT,
+            profile,
+            FAKE_ADAPTER,
+            0,
+            timeout_ms=1000,
+            async_timeout_ms=1000,
+        )
+        pair = [
+            result
+            for result in report["results"]
+            if result.get("equivalenceGroup") == "valid.js"
+        ]
+        pair[1]["variants"][0]["normalizedAstSha256"] = "b" * 64
+        shard_report = {
+            "schemaVersion": 1,
+            "suite": manifest["suite"],
+            "source": manifest["source"],
+            "profile": manifest["profile"],
+            "manifestSha256": manifest["manifestSha256"],
+            "shardIndex": 0,
+            "shardCount": 1,
+            "results": report["results"],
+        }
+        aggregate = test_runner.aggregate_reports(
+            manifest, [shard_report], BASELINE, profile, PARSER_ROOT
+        )
+        self.assertFalse(aggregate["aggregation"]["complete"])
+        self.assertTrue(
+            any(
+                "different normalized AST fingerprints" in error
+                for error in aggregate["aggregation"]["errors"]
+            )
+        )
+
     def test_parser_explicit_ast_mismatch_fails_both_members_of_pair(self) -> None:
         profile = ready_profile()
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, profile, 2)
