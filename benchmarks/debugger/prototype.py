@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import count
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 from threading import get_ident
 from typing import Any, Callable, Mapping
 
@@ -356,10 +356,19 @@ class Debugger:
         verified, message = bool(source_file), None
         if source_file is None:
             verified, message = False, "unknown source file"
+        elif sha256 is not None and (
+            not isinstance(sha256, str) or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+        ):
+            verified, message = False, "source digest must be lowercase SHA-256 hex"
         elif sha256 is not None and source_file.get("sha256") != sha256:
             verified, message = False, "source digest does not match loaded source"
-        if code_generation is not None and code_generation != self._generation():
+        current_generation = self._generation()
+        if not self._capabilities["breakpoints"]:
+            verified, message = False, "breakpoints are not supported by this backend"
+        elif code_generation is not None and code_generation != current_generation:
             verified, message = False, "code generation does not match loaded code"
+        bound_generation = current_generation
         executable = any(
             source.get("origin") == "user"
             and source.get("file") == source_id
@@ -371,7 +380,7 @@ class Debugger:
             verified, message = False, "no executable source location matches this line/column"
         ident = f"bp-{next(self._breakpoint_ids)}"
         breakpoint = Breakpoint(
-            ident, source_id, sha256, code_generation, line, column, verified, message
+            ident, source_id, sha256, bound_generation, line, column, verified, message
         )
         self._breakpoints[ident] = breakpoint
         return breakpoint
@@ -387,13 +396,18 @@ class Debugger:
     def request_pause(self) -> None:
         # Thread-safe command hand-off. The VM applies it only at an owner-thread
         # instruction safepoint; transport threads never touch the frame stack.
+        if not self._capabilities["pause"]:
+            raise DebuggerError("pause is not supported by this backend")
         if self._state == "detached":
             return
         self._commands.put("pause")
 
     def _apply_commands(self) -> None:
-        while not self._commands.empty():
-            command = self._commands.get()
+        while True:
+            try:
+                command = self._commands.get_nowait()
+            except Empty:
+                break
             if command == "pause" and self._state != "detached":
                 self._stop("pause")
 
@@ -465,6 +479,9 @@ class Debugger:
 
     def _begin_step(self, mode: str) -> None:
         self._require_paused()
+        capability = {"into": "stepInto", "over": "stepOver", "out": "stepOut"}[mode]
+        if not self._capabilities[capability]:
+            raise DebuggerError(f"{capability} is not supported by this backend")
         frame = self._frames[-1] if self._frames else None
         base_key = _source_key(frame.function["id"], frame.location) if frame else None
         self._step = (mode, len(self._frames), base_key)
@@ -561,8 +578,11 @@ class Debugger:
         self._skip_breakpoint_at = None
         self._event = None
         self._frames.clear()
-        while not self._commands.empty():
-            self._commands.get()
+        while True:
+            try:
+                self._commands.get_nowait()
+            except Empty:
+                break
         self._state = "detached"
 
 
