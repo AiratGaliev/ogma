@@ -51,3 +51,13 @@ No third-party binding/runtime library is linked into this proof. Therefore actu
 The contention probe characterizes the shared-lock baseline under concurrent producers; it is not a claim that mutable owner-thread Runtime state should be shared across threads. Such work must be transferred as owned commands/tasks and applied by the Runtime owner. Benchmark timings have no machine-independent pass/fail threshold.
 
 The experiment does not implement a production HostExecutionScope, typed host function table, FrameSnapshot, zero-copy buffers, ECS/physics adapters or a production async task bridge. It does not modify the CGE consumer or OGM-19 ABI proof.
+
+## M0 recommendation
+
+Use an owner-thread HostExecutionScope as the default path for host callbacks whose mutable state belongs to the Runtime owner thread. Do not make an application-level Arc<Mutex<HostState>> acquisition mandatory for every callback when no cross-thread sharing is required.
+
+Keep synchronization where the ownership model actually requires it. Calls arriving from other host threads must cross the boundary as owned commands/tasks through a bounded dispatcher with explicit backpressure, cancellation and shutdown. The Runtime owner applies those commands; mutable Runtime state is never shared between threads.
+
+A scope must not retain an exclusive mutable borrow, raw reference or lock across arbitrary JavaScript execution, callback re-entry, await, yield or suspension. Nested execution receives an explicit nested scope; conflicting access fails deterministically. Any synchronization internal to a selected binding/runtime library remains a separate cost and must be measured for that concrete library/version.
+
+This is an architecture recommendation, not a production performance claim. The proof compares dispatch mechanics and host-state locking only. Actual binding-library synchronization and end-to-end Ogma performance remain unmeasured until a real Runtime/binding integration exists.
