@@ -175,3 +175,35 @@ jobs:
             benchmarks/parser-frontend/results/
           if-no-files-found: warn
           retention-days: 30
+
+
+  portable-bytecode-benchmark:
+    name: OGM-16 portable bytecode benchmark
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-16-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Core IR / stack-register equivalence proof and benchmark
+        run: |
+          python -m unittest discover -s .github/scripts -p "test_portable_bytecode.py" -v
+          python benchmarks/portable-bytecode/run.py --iterations 1000 --warmups 3 --compile-rounds 15 --verifier-rounds 15
+
+      - name: Upload OGM-16 raw measurements and verifier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-16-portable-bytecode-evidence
+          path: |
+            benchmarks/portable-bytecode/results/*.json
+            benchmarks/portable-bytecode/fixtures/**/*.json
+          if-no-files-found: warn
+          retention-days: 30
