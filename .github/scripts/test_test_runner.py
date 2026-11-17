@@ -167,6 +167,53 @@ class Test262MetadataTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "UNEXPECTED PASS")
 
+    def test_exact_exclusions_are_visible_and_probeable(self) -> None:
+        profile = ready_profile()
+        profile["exclusions"] = [{
+            "suite": "test262",
+            "testId": "runner/strict-default.js",
+            "reason": "Known unsupported host behaviour",
+            "feature": "Array",
+            "owner": "OGM",
+            "revisitCondition": "Remove after the host hook is implemented",
+        }]
+        excluded = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(excluded["status"], "EXCLUDED")
+        self.assertEqual(excluded["exclusion"]["feature"], "Array")
+        probed = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+            probe_excluded=True,
+        )
+        self.assertEqual(probed["status"], "UNEXPECTED PASS")
+
+    def test_invalid_adapter_protocol_is_a_harness_error(self) -> None:
+        invalid_adapter = [sys.executable, "-c", "print('{}')"]
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            ready_profile(),
+            invalid_adapter,
+            1000,
+            1000,
+        )
+        self.assertEqual(result["status"], "HARNESS ERROR")
+        self.assertIn("invalid protocol envelope", result["variants"][0]["reason"])
+
     def test_json_and_junit_reports_preserve_classifications(self) -> None:
         results = [
             {"id": "pass.js", "status": "PASS", "variants": []},
