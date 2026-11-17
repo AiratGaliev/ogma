@@ -20,7 +20,16 @@ for raw_request in sys.stdin:
         "workerPid": os.getpid(),
     }
 
-    if test["suite"] == "test262-parser-tests":
+    if test.get("sourceType") == "module" and "import_FIXTURE.js" in source:
+        fixture = os.path.join(test["testDirectory"], "import_FIXTURE.js")
+        if not os.path.isfile(fixture):
+            response.update({
+                "outcome": "harness_error",
+                "reason": f"module fixture was not resolvable from test directory: {fixture}",
+            })
+        else:
+            response.update({"outcome": "completed"})
+    elif test["suite"] == "test262-parser-tests":
         if "// parser: parsed" in source:
             response.update({"outcome": "parsed", "phase": "parse"})
         elif "// parser: rejected:early" in source:
