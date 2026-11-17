@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/contracts/debugger/v1/api.schema.json",
+  "title": "Ogma backend-neutral Debugger API v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "version", "request"],
+  "properties": {
+    "protocol": { "const": "ogma.debugger-api" },
+    "version": { "const": "1.0.0" },
+    "request": { "$ref": "#/$defs/request" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "enum": ["initialize", "attach", "launch", "disconnect", "setBreakpoint", "removeBreakpoint", "listBreakpoints", "pause", "resume", "stepInto", "stepOver", "stepOut", "getStack", "getScopes", "getVariables", "evaluate", "inspectObject"]
+        },
+        "arguments": { "type": "object" }
+      }
+    },
+    "sourcePosition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "column"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "column": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "language"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "language": { "enum": ["javascript", "typescript", "json", "synthetic"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "codeGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": { "enum": ["user", "generated"] },
+        "sourceId": { "$ref": "#/$defs/id" },
+        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "start": { "$ref": "#/$defs/sourcePosition" },
+        "end": { "$ref": "#/$defs/sourcePosition" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "scopeId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "bindingIds": { "type": "array", "maxItems": 65536, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "inlineChain": { "type": "array", "maxItems": 64, "items": { "type": "object" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "origin": { "const": "user" } } }, "then": { "required": ["sourceId", "start", "end"] } },
+        { "if": { "properties": { "origin": { "const": "generated" } } }, "then": { "required": ["reason"] } }
+      ]
+    },
+    "breakpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceId", "line", "verified"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "sourceId": { "$ref": "#/$defs/id" },
+        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "codeGeneration": { "$ref": "#/$defs/codeGeneration" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 0 },
+        "verified": { "type": "boolean" },
+        "message": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "debugValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "preview", "availability"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "preview": { "type": "string", "maxLength": 1024 },
+        "objectId": { "$ref": "#/$defs/id" },
+        "availability": { "enum": ["available", "optimized_out", "unavailable", "not_evaluated"] },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bindingId", "name", "mutable", "availability", "value"],
+      "properties": {
+        "bindingId": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "mutable": { "type": "boolean" },
+        "availability": { "enum": ["available", "optimized_out", "unavailable"] },
+        "value": { "$ref": "#/$defs/debugValue" }
+      }
+    },
+    "stackFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "functionId", "functionName", "codeGeneration", "scopeIds", "backend"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "functionId": { "$ref": "#/$defs/id" },
+        "functionName": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "codeGeneration": { "$ref": "#/$defs/codeGeneration" },
+        "location": { "oneOf": [{ "$ref": "#/$defs/sourceLocation" }, { "type": "null" }] },
+        "scopeIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "backend": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "stoppedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "frameId"],
+      "properties": {
+        "reason": { "enum": ["pause", "breakpoint", "step", "exception", "entry", "goto"] },
+        "frameId": { "$ref": "#/$defs/id" },
+        "location": { "oneOf": [{ "$ref": "#/$defs/sourceLocation" }, { "type": "null" }] },
+        "description": { "type": "string", "maxLength": 1024 }
+      }
+    },
+    "exceptionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "frameId", "caught"],
+      "properties": {
+        "value": { "$ref": "#/$defs/debugValue" },
+        "frameId": { "$ref": "#/$defs/id" },
+        "location": { "oneOf": [{ "$ref": "#/$defs/sourceLocation" }, { "type": "null" }] },
+        "caught": { "type": "boolean" }
+      }
+    }
+  }
+}
