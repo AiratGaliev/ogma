@@ -653,6 +653,9 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
     includes = _string_list(metadata, "includes")
     if "_FIXTURE" in PurePosixPath(test_id).name:
         raise RunnerError("Test262 module fixture files must not be run as standalone tests")
+    feature_requirements = list(features)
+    if PurePosixPath(test_id).parts[0] == "intl402" and "Intl" not in feature_requirements:
+        feature_requirements.append("Intl")
     negative = metadata.get("negative")
     if negative is not None:
         if not isinstance(negative, dict):
@@ -673,6 +676,7 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
         "source": source,
         "metadata": metadata,
         "features": features,
+        "featureRequirements": feature_requirements,
         "flags": flags,
         "includes": harness,
         "modes": test262_modes(flags),
@@ -738,7 +742,7 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
     default_status = profile["defaultFeatureStatus"]
     deferred = [
         feature
-        for feature in descriptor["features"]
+        for feature in descriptor.get("featureRequirements", descriptor["features"])
         if feature_status.get(feature, default_status) in {"unsupported", "deferred"}
     ]
     if deferred:
@@ -1053,6 +1057,7 @@ def _run_variant(
             "async": descriptor["async"],
             "flags": descriptor["flags"],
             "features": descriptor["features"],
+            "featureRequirements": descriptor.get("featureRequirements", descriptor["features"]),
             "includes": descriptor["includes"],
             "negative": descriptor["negative"],
             "parseExpectation": descriptor.get("parseExpectation"),
@@ -1215,6 +1220,7 @@ def run_one_test(
         "status": status,
         "reason": reason,
         "features": descriptor["features"],
+        "featureRequirements": descriptor.get("featureRequirements", descriptor["features"]),
         "flags": descriptor["flags"],
         "modes": descriptor["modes"],
         "variants": variants,
