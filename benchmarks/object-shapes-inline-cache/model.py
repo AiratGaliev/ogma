@@ -239,17 +239,8 @@ def get_property(target: ObjectLike, key: str, *, receiver: Any = None) -> Any:
 
 def _define_on_receiver(receiver: Any, key: str, value: Any, strict: bool) -> bool:
     if isinstance(receiver, JSProxy):
-        if receiver.set_trap is not None:
-            accepted = bool(receiver.set_trap(receiver.target, key, value, receiver))
-            if not accepted:
-                return _reject("Proxy set trap returned false", strict)
-            fixed = receiver.target.own_descriptor(key)
-            if fixed and not fixed.configurable:
-                if fixed.kind == "data" and not fixed.writable and not same_value(value, fixed.value):
-                    raise JSRuntimeError("TypeError: Proxy set trap violated frozen data invariant")
-                if fixed.kind == "accessor" and fixed.setter is None:
-                    raise JSRuntimeError("TypeError: Proxy set trap violated setter-less accessor invariant")
-            return True
+        # This is [[DefineOwnProperty]] on the receiver, not [[Set]].
+        # M0 has no defineProperty trap, so the Proxy's default forwarding path applies.
         receiver = receiver.target
     if not isinstance(receiver, JSObject):
         return _reject("receiver is not an object", strict)
