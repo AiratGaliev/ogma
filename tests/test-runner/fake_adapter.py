@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -35,7 +36,17 @@ for raw_request in sys.stdin:
             response.update({"outcome": "completed"})
     elif test["suite"] == "test262-parser-tests":
         if "// parser: parsed" in source:
-            response.update({"outcome": "parsed", "phase": "parse"})
+            fingerprint = hashlib.sha256(b"normalized-equivalent-parser-fixture").hexdigest()
+            if (
+                "--ast-mismatch-explicit" in sys.argv
+                and test.get("equivalenceRole") == "pass-explicit"
+            ):
+                fingerprint = hashlib.sha256(b"deliberately-different-ast").hexdigest()
+            response.update({
+                "outcome": "parsed",
+                "phase": "parse",
+                "normalizedAstSha256": fingerprint,
+            })
         elif "// parser: rejected:early" in source:
             response.update({"outcome": "rejected", "phase": "early"})
         elif "// parser: rejected:parse" in source:
