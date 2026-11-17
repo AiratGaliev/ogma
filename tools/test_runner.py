@@ -614,13 +614,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         ids.add(test_id)
         if not isinstance(shard, int) or not 0 <= shard < count:
             raise RunnerError(f"invalid shard assignment for {test_id}")
-        if manifest["suite"] == "test262-parser-tests":
-            _validate_parser_equivalence_pairs(sorted(ids))
         assignment_key = _shard_assignment_key(manifest["suite"], test_id)
         deterministic = int(hashlib.sha256(assignment_key.encode("utf-8")).hexdigest()[:16], 16) % count
         if deterministic != shard:
             raise RunnerError(f"non-deterministic shard assignment for {test_id}")
         expected[shard].append(test_id)
+    if manifest["suite"] == "test262-parser-tests":
+        _validate_parser_equivalence_pairs(sorted(ids))
     actual_indices: set[int] = set()
     for shard in shards:
         if not isinstance(shard, dict):
@@ -1222,8 +1222,6 @@ def run_one_test(
     if descriptor.get("equivalenceGroup") is not None:
         result["equivalenceGroup"] = descriptor["equivalenceGroup"]
         result["equivalenceRole"] = descriptor["equivalenceRole"]
-    failure_kind = next(
-    }
     failure_kind = next(
         (variant.get("failureKind") for variant in variants if variant.get("failureKind")),
         None,
