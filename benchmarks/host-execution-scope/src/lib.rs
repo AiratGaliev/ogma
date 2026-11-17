@@ -638,17 +638,13 @@ mod tests {
 
     #[test]
     fn owner_context_rejects_calls_from_non_owner_thread() {
-        let context = HostExecutionContext::new(LibrarySyncMode::None);
-        let address = (&context as *const HostExecutionContext) as usize;
-        let error = thread::spawn(move || {
-            // SAFETY: the context outlives the joined thread; enter_scope checks
-            // thread identity before touching any thread-affine state.
-            let context = unsafe { &*(address as *const HostExecutionContext) };
-            context.enter_scope().err()
-        })
-        .join()
-        .unwrap();
-        assert_eq!(error, Some(HostError::WrongThread));
+        let mut context = HostExecutionContext::new(LibrarySyncMode::None);
+        let other_thread_id = thread::spawn(|| thread::current().id()).join().unwrap();
+        context.owner_thread = other_thread_id;
+        assert_eq!(
+            context.enter_scope().err(),
+            Some(HostError::WrongThread)
+        );
     }
 
     #[test]
