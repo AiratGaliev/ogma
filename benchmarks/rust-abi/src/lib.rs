@@ -1405,6 +1405,34 @@ mod tests {
         OgmaStatus::CALLBACK_ERROR
     }
 
+    #[derive(Clone, Copy)]
+    struct CompletionSpec {
+        kind: u32,
+        reserved: u32,
+    }
+
+    unsafe extern "C-unwind" fn emit_completion(
+        _r: *const OgmaRuntime,
+        _c: OgmaContextHandle,
+        _a: *const OgmaHandle,
+        _n: usize,
+        out: *mut OgmaCompletion,
+        data: *mut c_void,
+    ) -> OgmaStatus {
+        if out.is_null() || data.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        let spec = unsafe { *data.cast::<CompletionSpec>() };
+        unsafe {
+            out.write(OgmaCompletion {
+                kind: spec.kind,
+                reserved: spec.reserved,
+                value: OgmaHandle::default(),
+            });
+        }
+        OgmaStatus::OK
+    }
+
     unsafe extern "C-unwind" fn panic_callback(
         _r: *const OgmaRuntime,
         _c: OgmaContextHandle,
@@ -1715,6 +1743,73 @@ mod tests {
             OgmaStatus::PANIC
         );
         assert!(completion_is_empty(completion));
+        cleanup(r);
+    }
+
+    #[test]
+    fn every_completion_kind_is_mapped_and_malformed_payloads_are_rejected() {
+        let (r, c) = setup();
+
+        for kind in [
+            COMPLETION_NORMAL,
+            COMPLETION_RETURN,
+            COMPLETION_BREAK,
+            COMPLETION_CONTINUE,
+        ] {
+            let mut spec = CompletionSpec { kind, reserved: 0 };
+            let (_token, function) = register(
+                r,
+                c,
+                emit_completion,
+                (&mut spec as *mut CompletionSpec).cast(),
+            );
+            let mut completion = OgmaCompletion::default();
+            assert_eq!(
+                unsafe { ogma_context_call(r, c, function, ptr::null(), 0, &mut completion) },
+                OgmaStatus::OK
+            );
+            assert_eq!(completion.kind, kind);
+            assert_eq!(completion.reserved, 0);
+            assert!(completion.value.is_zero());
+        }
+
+        let mut empty_throw = CompletionSpec {
+            kind: COMPLETION_THROW,
+            reserved: 0,
+        };
+        let (_token, throw_function) = register(
+            r,
+            c,
+            emit_completion,
+            (&mut empty_throw as *mut CompletionSpec).cast(),
+        );
+        let mut completion = OgmaCompletion::default();
+        assert_eq!(
+            unsafe {
+                ogma_context_call(r, c, throw_function, ptr::null(), 0, &mut completion)
+            },
+            OgmaStatus::INVALID_COMPLETION
+        );
+        assert!(completion_is_empty(completion));
+
+        let mut reserved_field = CompletionSpec {
+            kind: COMPLETION_NORMAL,
+            reserved: 1,
+        };
+        let (_token, reserved_function) = register(
+            r,
+            c,
+            emit_completion,
+            (&mut reserved_field as *mut CompletionSpec).cast(),
+        );
+        assert_eq!(
+            unsafe {
+                ogma_context_call(r, c, reserved_function, ptr::null(), 0, &mut completion)
+            },
+            OgmaStatus::INVALID_COMPLETION
+        );
+        assert!(completion_is_empty(completion));
+
         cleanup(r);
     }
 
