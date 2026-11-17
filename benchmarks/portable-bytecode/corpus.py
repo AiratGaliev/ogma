@@ -255,19 +255,21 @@ def build_workloads() -> list[dict[str, Any]]:
     loop = function(
         "fn_countdown",
         "countdown",
-        [],
+        [parameter("initial_value", "bind_initial", "initial", "dynamic", "boxed")],
         {"semantic_type": "dynamic", "representation": "boxed"},
-        [binding("bind_counter", "counter", "let", "dynamic", "boxed")],
+        [
+            binding("bind_initial", "initial", "parameter", "dynamic", "boxed"),
+            binding("bind_counter", "counter", "let", "dynamic", "boxed"),
+        ],
         [
             basic_block(
                 "entry",
                 [
-                    const("initial", "number", 5, "number", "f64"),
                     instruction(
                         "initialize_counter",
                         "env.store",
                         ["initial_value"],
-                        value("stored_initial", "number", "f64"),
+                        value("stored_initial", "dynamic", "boxed"),
                         attributes={"binding": "bind_counter"},
                         effect_in="e_entry",
                         effect_out="e_entry_next",
@@ -350,7 +352,7 @@ def build_workloads() -> list[dict[str, Any]]:
         "id": "mutable-loop-locals",
         "entry": "fn_countdown",
         "functions": [loop],
-        "cases": [{"args": [], "expected": {"return": 0, "host_trace": []}}],
+        "cases": [{"args": [5], "expected": {"return": 0, "host_trace": []}}],
         "description": "Loop with mutable lexical binding, loads/stores and back-edge",
     })
 
