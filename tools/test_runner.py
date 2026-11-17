@@ -1287,6 +1287,67 @@ def write_junit(
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
+def _apply_parser_equivalence(results: list[dict[str, Any]]) -> None:
+    groups: dict[str, dict[str, dict[str, Any]]] = {}
+    for result in results:
+        group = result.get("equivalenceGroup")
+        role = result.get("equivalenceRole")
+        if isinstance(group, str) and role in {"pass", "pass-explicit"}:
+            groups.setdefault(group, {})[role] = result
+
+    for group, members in groups.items():
+        if set(members) != {"pass", "pass-explicit"}:
+            raise RunnerError(f"parser equivalence group is incomplete in shard: {group}")
+        original = members["pass"]
+        explicit = members["pass-explicit"]
+        statuses = {original["status"], explicit["status"]}
+        if statuses == {"PASS"}:
+            original_hash = original["variants"][0].get("normalizedAstSha256")
+            explicit_hash = explicit["variants"][0].get("normalizedAstSha256")
+            if original_hash != explicit_hash:
+                for result in (original, explicit):
+                    result["status"] = "FAIL"
+                    result["failureKind"] = "PARSER_AST_MISMATCH"
+                    result["reason"] = (
+                        "pass/ and pass-explicit/ variants produced different "
+                        f"normalized AST fingerprints for {group}"
+                    )
+            continue
+        if len(statuses) == 1:
+            continue
+
+        # A passing half of an equivalence pair is not a complete pass when
+        # its matching explicit-parentheses variant was not comparable.
+        non_pass = [
+            result for result in (original, explicit)
+            if result["status"] != "PASS"
+        ]
+        priority = (
+            "HARNESS ERROR",
+            "FAIL",
+            "UNEXPECTED PASS",
+            "UNSUPPORTED",
+            "EXCLUDED",
+        )
+        target_status = next(
+            (status for status in priority if status in statuses),
+            "FAIL",
+        )
+        target_reason = next(
+            (
+                result.get("reason")
+                for result in non_pass
+                if result.get("reason")
+            ),
+            f"parser equivalence pair {group} did not produce two comparable passes",
+        )
+        for result in (original, explicit):
+            if result["status"] == "PASS":
+                result["status"] = target_status
+                result["reason"] = target_reason
+                result["failureKind"] = "PARSER_EQUIVALENCE_INCOMPLETE"
+
+
 def run_manifest(
     manifest: dict[str, Any],
     suite_root: Path,
@@ -1331,6 +1392,8 @@ def run_manifest(
                     adapter_session,
                 )
             )
+    if manifest["suite"] == "test262-parser-tests":
+        _apply_parser_equivalence(results)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "suite": manifest["suite"],
