@@ -29,7 +29,7 @@ fn parse_config() -> Result<Config, String> {
     let mut cfg = Config {
         iterations: 10_000,
         warmups: 3,
-        samples: 9,
+        samples: 101,
         revision: "unknown".into(),
         tested_revision: "unknown".into(),
         output: None,
@@ -57,8 +57,8 @@ fn parse_config() -> Result<Config, String> {
             _ => return Err(format!("unknown argument: {arg}")),
         }
     }
-    if cfg.iterations == 0 || cfg.samples < 3 || cfg.warmups == 0 {
-        return Err("iterations and warmups must be > 0; samples must be >= 3".into());
+    if cfg.iterations == 0 || cfg.samples < 101 || cfg.warmups == 0 {
+        return Err("iterations and warmups must be > 0; samples must be >= 101 for p95/p99".into());
     }
     Ok(cfg)
 }
