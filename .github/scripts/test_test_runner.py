@@ -433,7 +433,7 @@ class ParserAndShardingTests(unittest.TestCase):
             async_timeout_ms=1000,
             verify_corpus=True,
         )
-        self.assertEqual(report["summary"]["PASS"], 4)
+        self.assertEqual(report["summary"]["PASS"], 6)
         shard = manifest["shards"][0]
         aggregate = test_runner.aggregate_reports(
             manifest,
@@ -486,6 +486,25 @@ class ParserAndShardingTests(unittest.TestCase):
             "aggregate has no PASS results; no executed conformance evidence is available",
             aggregate["aggregation"]["errors"],
         )
+
+    def test_parser_module_fixtures_use_module_grammar(self) -> None:
+        descriptor = test_runner._read_parser_descriptor(
+            PARSER_ROOT, "pass/valid.module.js"
+        )
+        self.assertEqual(descriptor["sourceType"], "module")
+        self.assertEqual(descriptor["modes"], ["module"])
+
+    def test_early_errors_can_use_parse_phase_when_parser_has_no_separate_mode(self) -> None:
+        result = test_runner.run_one_test(
+            PARSER_ROOT,
+            "test262-parser-tests",
+            "early/early-error.js",
+            ready_profile(),
+            FAKE_ADAPTER + ["--no-early-phase"],
+            1000,
+            1000,
+        )
+        self.assertEqual(result["status"], "PASS")
 
     def test_parser_corpus_pass_fail_and_early_error_phases(self) -> None:
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, ready_profile())
