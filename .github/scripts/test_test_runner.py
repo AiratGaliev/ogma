@@ -180,7 +180,11 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(summary["HARNESS ERROR"], 1)
         self.assertEqual(summary["UNEXPECTED PASS"], 1)
         report_path = Path(self.id().replace(".", "_") + ".xml")
+        json_path = report_path.with_suffix(".json")
+        report = {"results": results, "summary": summary}
         try:
+            test_runner.write_json(json_path, report)
+            self.assertEqual(test_runner.read_json(json_path), report)
             test_runner.write_junit(report_path, "test262", results)
             root = ET.parse(report_path).getroot()
             self.assertEqual(root.attrib["tests"], "4")
@@ -189,6 +193,7 @@ class Test262MetadataTests(unittest.TestCase):
             self.assertEqual(root.attrib["skipped"], "1")
         finally:
             report_path.unlink(missing_ok=True)
+            json_path.unlink(missing_ok=True)
 
 
 class ParserAndShardingTests(unittest.TestCase):
@@ -276,6 +281,24 @@ class ParserAndShardingTests(unittest.TestCase):
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(len(aggregate["aggregation"]["missingShards"]), 1)
         self.assertGreaterEqual(len(aggregate["aggregation"]["missingTests"]), 1)
+        report_path = Path(self.id().replace(".", "_") + ".xml")
+        try:
+            test_runner.write_junit(
+                report_path,
+                "test262",
+                aggregate["results"],
+                aggregate["aggregation"]["errors"],
+            )
+            root = ET.parse(report_path).getroot()
+            self.assertGreater(int(root.attrib["errors"]), 0)
+            self.assertTrue(
+                any(
+                    node.attrib.get("type") == "AGGREGATION ERROR"
+                    for node in root.findall(".//error")
+                )
+            )
+        finally:
+            report_path.unlink(missing_ok=True)
 
     def test_aggregate_detects_duplicate_shards_and_duplicate_test_results(self) -> None:
         manifest = test_runner.build_manifest(
