@@ -305,6 +305,36 @@ class ParserAndShardingTests(unittest.TestCase):
             aggregate["aggregation"]["errors"],
         )
 
+    def test_aggregate_fails_when_every_test_is_unsupported(self) -> None:
+        profile = ready_profile()
+        profile["featureStatus"]["Array"] = "deferred"
+        manifest = test_runner.build_manifest(
+            "test262", ["runner/strict-default.js"], BASELINE, profile, 1
+        )
+        shard = manifest["shards"][0]
+        aggregate = test_runner.aggregate_reports(
+            manifest,
+            [{
+                "schemaVersion": 1,
+                "suite": "test262",
+                "source": manifest["source"],
+                "profile": manifest["profile"],
+                "manifestSha256": manifest["manifestSha256"],
+                "shardIndex": shard["index"],
+                "shardCount": 1,
+                "results": [{
+                    "id": "runner/strict-default.js",
+                    "status": "UNSUPPORTED",
+                    "reason": "Array is deferred",
+                }],
+            }],
+        )
+        self.assertFalse(aggregate["aggregation"]["complete"])
+        self.assertIn(
+            "aggregate has no PASS results; no executed conformance evidence is available",
+            aggregate["aggregation"]["errors"],
+        )
+
     def test_parser_corpus_pass_fail_and_early_error_phases(self) -> None:
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, ready_profile())
         report = test_runner.run_manifest(
