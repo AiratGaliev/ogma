@@ -302,6 +302,29 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(result["status"], "HARNESS ERROR")
         self.assertIn("mutually exclusive", result["reason"])
 
+    def test_invalid_negative_phase_type_is_a_harness_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "test").mkdir()
+            (root / "harness").mkdir()
+            for name in ("assert.js", "sta.js"):
+                (root / "harness" / name).write_text("// fixture\n", encoding="utf-8")
+            (root / "test" / "invalid-negative.js").write_text(
+                "/*---\nnegative:\n  phase: []\n  type: SyntaxError\n---*/\n0;\n",
+                encoding="utf-8",
+            )
+            result = test_runner.run_one_test(
+                root,
+                "test262",
+                "invalid-negative.js",
+                ready_profile(),
+                FAKE_ADAPTER,
+                1000,
+                1000,
+            )
+            self.assertEqual(result["status"], "HARNESS ERROR")
+            self.assertIn("negative tests require", result["reason"])
+
     def test_negative_parse_phase_and_error_type_are_checked(self) -> None:
         result = test_runner.run_one_test(
             TEST262_ROOT,
@@ -657,6 +680,17 @@ class ParserAndShardingTests(unittest.TestCase):
             1000,
         )
         self.assertEqual(result["status"], "PASS")
+
+    def test_test_root_symlink_cannot_escape_the_pinned_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "corpus"
+            outside = Path(directory) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "test.js").write_text("// outside\n", encoding="utf-8")
+            (root / "test").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(test_runner.RunnerError, "test root must remain inside"):
+                test_runner._read_test262_descriptor(root, "test.js")
 
     def test_test_and_harness_symlinks_cannot_escape_their_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
