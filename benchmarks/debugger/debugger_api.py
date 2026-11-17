@@ -3,7 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping, Protocol, runtime_checkable
+
+
+def _freeze_snapshot(value: Any) -> Any:
+    """Recursively freeze nested snapshot data before it crosses the port."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_snapshot(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_snapshot(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_snapshot(item) for item in value)
+    return value
 
 
 class DebuggerError(RuntimeError):
@@ -33,6 +45,12 @@ class SourceLocation:
     scope_id: str | None = None
     binding_ids: tuple[str, ...] = ()
     inline_chain: tuple[Mapping[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binding_ids", tuple(self.binding_ids))
+        object.__setattr__(
+            self, "inline_chain", tuple(_freeze_snapshot(item) for item in self.inline_chain)
+        )
 
     @property
     def line(self) -> int | None:
@@ -80,6 +98,9 @@ class ScopeSnapshot:
     parent_id: str | None
     variables: tuple[VariableSnapshot, ...]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "variables", tuple(self.variables))
+
 
 @dataclass(frozen=True)
 class StackFrameSnapshot:
@@ -90,6 +111,9 @@ class StackFrameSnapshot:
     location: SourceLocation | None
     scope_ids: tuple[str, ...]
     backend: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "scope_ids", tuple(self.scope_ids))
 
 
 @dataclass(frozen=True)
@@ -124,6 +148,9 @@ class InspectedObject:
     is_proxy: bool
     properties: tuple[InspectedProperty, ...]
     truncated: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "properties", tuple(self.properties))
 
 
 @dataclass(frozen=True)
