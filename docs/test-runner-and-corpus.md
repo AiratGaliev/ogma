@@ -105,7 +105,7 @@ The source checkout must be at the exact SHA in `conformance/baseline.json` and 
 
 ### 4.1 Test262 metadata
 
-The runner reads the YAML frontmatter at the beginning of every Test262 test. It handles the metadata needed for the runner contract:
+The runner reads the optional YAML frontmatter in the Test262 test prologue. License/copyright or generated-source comments may precede the frontmatter; tests with no frontmatter use the default empty metadata map. It handles the metadata needed for the runner contract:
 
 - `features`;
 - `flags`, including `onlyStrict`, `noStrict`, `module`, `raw` and `async`;
@@ -182,13 +182,14 @@ Every result has exactly one primary classification:
 
 ## 6. Engine adapter protocol
 
-The engine adapter is an executable development/test tool, not a runtime dependency. The runner invokes it without a shell, sends one JSON request on stdin and expects exactly one JSON object on stdout. Adapter diagnostics belong on stderr. A non-zero exit, timeout, invalid JSON or wrong protocol version is a harness error, except a test execution timeout, which is reported as `FAIL`.
+The engine adapter is an executable development/test tool, not a runtime dependency. The runner invokes one long-lived adapter worker per shard, without a shell. It sends newline-delimited JSON requests on stdin and expects exactly one newline-delimited JSON response per request on stdout; stdout is reserved for protocol messages and diagnostics belong on stderr. Every request carries a monotonically increasing `requestId`, which the response must echo. The worker stays alive across tests and both strict/sloppy variants; it must create a fresh ECMAScript Realm for each Test262 test/variant and must not leak globals, jobs or harness state from one request to another. On a request timeout the runner terminates that worker and starts a fresh process for the next request. A worker startup/crash, malformed JSON, missing/mismatched `requestId` or wrong protocol version is `HARNESS ERROR`; a test execution timeout is `FAIL`.
 
 Request envelope:
 
     {
       "protocol": "ogma-test-runner-adapter",
       "version": 1,
+      "requestId": 1,
       "test": {
         "id": "language/example.js",
         "suite": "test262",
@@ -199,8 +200,14 @@ Request envelope:
         "async": false,
         "flags": [],
         "features": [],
-        "includes": [{"name": "sta.js", "source": "..."}],
-        "negative": null
+        "includes": [
+          {"name": "assert.js", "source": "..."},
+          {"name": "sta.js", "source": "..."}
+        ],
+        "negative": null,
+        "corpusRoot": "/path/to/pinned/test262",
+        "testPath": "test/language/example.js",
+        "testDirectory": "/path/to/pinned/test262/test/language"
       },
       "timeoutMs": 10000
     }
@@ -210,14 +217,16 @@ The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsu
     {
       "protocol": "ogma-test-runner-adapter",
       "version": 1,
+      "requestId": 1,
       "outcome": "completed",
-      "asyncDone": true,
       "durationMs": 1.25
     }
 
+For async Test262 tests the runner adds `doneprintHandle.js` to the harness. The adapter's host `print` function must capture the official `Test262:AsyncTestComplete` or `Test262:AsyncTestFailure:…` signal and return it as `asyncSignal`. The worker must not return before that signal or the configured async timeout. This protocol deliberately follows the pinned Test262 harness, not `$DONE`.
+
 Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`.
 
-The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics (including insertion of the strict directive before metadata-driven source transformations), Test262 harness preparation, the `print`-based async protocol, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. Test module requests resolve relative `./` specifiers from the directory containing the test; files whose names contain `_FIXTURE` are dependencies, never standalone tests. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
+The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics (including insertion of the strict directive before metadata-driven source transformations), fresh-realm isolation for every test/variant, Test262 harness preparation, the `print`-based async protocol, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The request's `corpusRoot`, `testPath` and `testDirectory` identify the pinned source file so module requests can resolve relative `./` specifiers from the test directory. Files whose names contain `_FIXTURE` are dependencies, never standalone tests. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
 
 ## 7. Deterministic manifests, reports and aggregation
 
