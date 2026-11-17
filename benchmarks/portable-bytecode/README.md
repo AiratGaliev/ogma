@@ -65,14 +65,15 @@ The successful GitHub Actions run on the task branch measured the six workloads 
 | Decoded instructions | 83 | 39 |
 | Encoded code bytes | 455 | 283 |
 | Dispatches per measurement round | 175,000 | 78,000 |
-| Compile/codegen median samples summed by workload | 1,074,164 ns | 811,898 ns |
-| Verifier median samples summed by workload | 2,139,452 ns | 1,874,432 ns |
-| Python interpreter executions/s, derived from sum of workload medians | 99,897 | 154,162 |
+| Compile/codegen median samples summed by workload | 697,700 ns | 523,961 ns |
+| Compile + in-band validation pipeline median samples | 2,138,571 ns | 1,791,645 ns |
+| Standalone verifier median samples summed by workload | 1,265,903 ns | 1,106,634 ns |
+| Python interpreter executions/s, derived from sum of workload medians | 171,294 | 266,926 |
 | Mean per-workload max Python tracemalloc peak | 1,137 bytes | 925 bytes |
 | Estimated debug sidecar JSON bytes | 20,463 | 9,570 |
 | .ogmb container bytes | 10,510 | 10,406 |
 
-Register lowering reduced instruction count by 53.0%, code bytes by 37.8% and dispatches per measurement round by 55.4%. Its summed compile/codegen medians were 24.4% lower and summed verifier medians 12.4% lower. The derived aggregate Python proof-interpreter throughput was 54.3% higher. Mean per-workload maximum tracemalloc peak was 18.7% lower, but remains only a Python allocation proxy. The container itself was only 1.0% smaller because fixed metadata and JSON sections dominate this small code corpus.
+Register lowering reduced instruction count by 53.0%, code bytes by 37.8% and dispatches per measurement round by 55.4%. Its summed codegen medians were 24.9% lower, compile-plus-in-band-validation wall medians were 16.2% lower, and standalone verifier medians were 12.6% lower. The derived aggregate Python proof-interpreter throughput was 55.8% higher. Mean per-workload maximum tracemalloc peak was 18.7% lower, but remains only a Python allocation proxy. The container itself was only 1.0% smaller because fixed metadata and JSON sections dominate this small code corpus.
 
 **Decision:** select the register-oriented execution model as Ogma's primary candidate for the next Rust-native interpreter proof. The proof consistently favours it across arithmetic/coercion, control flow, mutable locals/loops, calls, host calls and exceptions. Keep the stack candidate as comparative evidence, but do not freeze the prototype opcode numbers, operand widths or a final binary ISA. Keep the OGM-36 portable .ogmb v1 container and normalized verifier boundary unchanged; later Rust-native measurements and broader semantics must validate the model before production adoption.
 
@@ -91,4 +92,4 @@ The raw benchmark report (including all per-round samples) and the Core IR verif
 - `results/benchmark-results.json.gz` — lossless gzip of the complete machine-readable benchmark report. Decompress with `gzip -dc benchmarks/portable-bytecode/results/benchmark-results.json.gz`.
 - `results/core-ir-verifier-report.json` — all seven generated Core IR v1 fixtures accepted, zero failures.
 
-The SHA-256 of the decompressed benchmark JSON is `e3f14e713ba3d6722c751fc71b8ef25c02498ab60a02716b1b3c5fc70618e91f`. It was produced by CI run [44045955802](https://github.com/AiratGaliev/ogma/actions/runs/44045955802) and records source revision `ea63d9512be445fcc2d62cbb8f2951de42ccad5e`, runner environment and the exact measurement protocol.
+The SHA-256 of the decompressed benchmark JSON is `7ee997591cbe9d8d34dc0af9ddbe69f5c4094e831d44f0706b1d62f8ddeec880`. It was produced by CI run [44046656128](https://github.com/AiratGaliev/ogma/actions/runs/44046656128), which passed both `fast-checks` and the task benchmark job for topic HEAD `4935da693d3c7ccaa6806a0611eef225000cc036`. The report's `source_revision` records GitHub's PR merge-checkout commit `e63778e6d7e01a2608f32bd9fc81a8e94e648128`. Environment: CPython 3.12.16, Linux x86_64, Intel Xeon 6975P-C.
