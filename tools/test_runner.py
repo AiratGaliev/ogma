@@ -434,6 +434,25 @@ def discover_test_ids(suite_root: Path, suite: str) -> list[str]:
     raise RunnerError(f"unsupported suite: {suite}")
 
 
+def _manifest_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    execution = profile.get("execution")
+    if not isinstance(execution, dict) or execution.get("state") not in {
+        "not_implemented",
+        "ready",
+    }:
+        raise RunnerError("invalid execution state in active feature profile")
+    parser_status = profile.get("parserStatus", "ready")
+    if parser_status not in {"not_implemented", "ready"}:
+        raise RunnerError("invalid parserStatus in active feature profile")
+    return {
+        "id": profile["profileId"],
+        "version": profile["version"],
+        "sha256": sha256_json(profile),
+        "executionState": execution["state"],
+        "parserStatus": parser_status,
+    }
+
+
 def build_manifest(
     suite: str,
     test_ids: list[str],
@@ -459,13 +478,7 @@ def build_manifest(
         "schemaVersion": SCHEMA_VERSION,
         "suite": suite,
         "source": source,
-        "profile": {
-            "id": profile["profileId"],
-            "version": profile["version"],
-            "sha256": sha256_json(profile),
-            "executionState": profile["execution"]["state"],
-            "parserStatus": profile.get("parserStatus", "ready"),
-        },
+        "profile": _manifest_profile(profile),
         "shardCount": shard_count,
         "tests": tests,
         "shards": [
@@ -495,6 +508,19 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         or profile.get("parserStatus") not in {"not_implemented", "ready"}
     ):
         raise RunnerError("shard manifest has an invalid feature profile descriptor")
+    source = manifest.get("source")
+    if (
+        not isinstance(source, dict)
+        or not isinstance(source.get("repository"), str)
+        or not isinstance(source.get("revision"), str)
+        or len(source["revision"]) != 40
+        or any(char not in "0123456789abcdef" for char in source["revision"])
+    ):
+        raise RunnerError("shard manifest has an invalid pinned source descriptor")
+    if len(profile["sha256"]) != 64 or any(
+        char not in "0123456789abcdef" for char in profile["sha256"]
+    ):
+        raise RunnerError("shard manifest has an invalid feature profile SHA-256")
     tests = manifest.get("tests")
     shards = manifest.get("shards")
     if not isinstance(tests, list) or not isinstance(shards, list) or len(shards) != count:
@@ -844,6 +870,29 @@ def run_one_test(
             "variants": [],
         }
 
+    if suite == "test262" and profile["execution"]["state"] != "ready" and not probe_unsupported:
+        return {
+            "id": test_id,
+            "status": "UNSUPPORTED",
+            "reason": profile["execution"].get(
+                "reason", "the engine execution adapter is not implemented"
+            ),
+            "variants": [],
+        }
+    if (
+        suite == "test262-parser-tests"
+        and profile.get("parserStatus", "ready") != "ready"
+        and not probe_unsupported
+    ):
+        return {
+            "id": test_id,
+            "status": "UNSUPPORTED",
+            "reason": profile.get(
+                "parserReason", "the parser adapter is not implemented"
+            ),
+            "variants": [],
+        }
+
     unsupported_reason = _unsupported_reason(profile, descriptor)
     if unsupported_reason and not probe_unsupported:
         return {
@@ -1008,9 +1057,17 @@ def run_manifest(
 
 
 def aggregate_reports(
-    manifest: dict[str, Any], reports: list[dict[str, Any]]
+    manifest: dict[str, Any],
+    reports: list[dict[str, Any]],
+    baseline: dict[str, Any],
+    profile: dict[str, Any],
 ) -> dict[str, Any]:
     validate_manifest(manifest)
+    expected_source = _pinned_source(baseline, manifest["suite"])
+    if manifest["source"] != expected_source:
+        raise RunnerError("shard manifest source revision does not match the pinned baseline")
+    if manifest["profile"] != _manifest_profile(profile):
+        raise RunnerError("shard manifest feature profile does not match the active profile")
     count = manifest["shardCount"]
     assigned = {
         index: set(shard["testIds"]) for index, shard in
@@ -1139,12 +1196,24 @@ def _load_and_check_revision(suite_root: Path, expected: str) -> None:
             check=True,
             timeout=10,
         )
+        status = subprocess.run(
+            ["git", "-C", str(suite_root), "status", "--porcelain", "--untracked-files=all"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RunnerError(f"cannot inspect source corpus Git revision: {exc}") from exc
+        raise RunnerError(f"cannot inspect source corpus Git state: {exc}") from exc
     actual = process.stdout.strip()
     if actual != expected:
         raise RunnerError(
             f"source corpus revision mismatch: expected {expected}, checked out {actual}"
+        )
+    if status.stdout.strip():
+        raise RunnerError(
+            "source corpus working tree is not clean; modified or untracked files "
+            "would invalidate the pinned test/harness snapshot"
         )
 
 
@@ -1182,6 +1251,7 @@ def build_parser() -> argparse.ArgumentParser:
     aggregate.add_argument("--reports", type=Path, nargs="*", default=[])
     aggregate.add_argument("--report", type=Path, required=True)
     aggregate.add_argument("--junit", type=Path)
+    _add_baseline_profile_arguments(aggregate)
     return parser
 
 
@@ -1233,9 +1303,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report["summary"], sort_keys=True))
             return 1 if any(item["status"] in FAILURE_STATUSES for item in report["results"]) else 0
 
+        baseline = load_baseline(args.baseline)
+        profile = load_profile(args.profile)
         manifest = read_json(args.manifest)
         reports = [read_json(path) for path in args.reports]
-        report = aggregate_reports(manifest, reports)
+        report = aggregate_reports(manifest, reports, baseline, profile)
         write_json(args.report, report)
         if args.junit:
             write_junit(
