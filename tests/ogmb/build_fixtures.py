@@ -45,6 +45,7 @@ def build_container(
     max_stack_depth: int = 2,
     max_register_index: int | None = None,
     suspension_points: list[dict[str, object]] | None = None,
+    environment_metadata: dict[str, object] | None = None,
 ) -> Path:
     constants = [] if constants is None else constants
     exceptions = [] if exceptions is None else exceptions
@@ -56,7 +57,7 @@ def build_container(
         "code_generation": {"id": "ogma_fixture_codegen", "version": "1"},
         "code_cache": {"id": "cache_" + hashlib.sha256((name + code_digest).encode()).hexdigest()[:24], "version": "1"},
         "frame_layout": {"parameter_count": 0, "local_count": local_count, "register_count": register_count},
-        "environment": {"id": "env_" + safe_name, "parent": None, "bindings": [], "captures": [], "locations": []},
+        "environment": {"id": "env_" + safe_name, "parent": None, "bindings": [], "captures": [], "locations": []} if environment_metadata is None else environment_metadata,
         "suspension_points": [] if suspension_points is None else suspension_points,
         "inline_cache_slots": [],
         "verifier_summary": {
