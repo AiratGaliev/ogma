@@ -65,14 +65,14 @@ The successful GitHub Actions run on the task branch measured the six workloads 
 | Decoded instructions | 73 | 33 |
 | Encoded code bytes | 395 | 243 |
 | Dispatches per measurement round | 161,000 | 70,000 |
-| Compile/codegen median samples summed by workload | 993,694 ns | 731,783 ns |
-| Verifier median samples summed by workload | 1,990,928 ns | 1,745,577 ns |
-| Python interpreter executions/s, derived from sum of workload medians | 109,974 | 170,471 |
+| Compile/codegen median samples summed by workload | 1,008,436 ns | 734,339 ns |
+| Verifier median samples summed by workload | 2,043,389 ns | 1,791,745 ns |
+| Python interpreter executions/s, derived from sum of workload medians | 106,616 | 164,825 |
 | Mean per-workload max Python tracemalloc peak | 1,069 bytes | 825 bytes |
 | Estimated debug sidecar JSON bytes | 17,674 | 7,927 |
 | .ogmb container bytes | 10,446 | 10,366 |
 
-Register lowering reduced instruction count by 54.8%, code bytes by 38.5% and dispatches per measurement round by 56.5%. Its summed compile/codegen medians were 26.4% lower and summed verifier medians 12.3% lower. The derived aggregate Python proof-interpreter throughput was 55.0% higher. The container itself was only 0.8% smaller because fixed metadata and JSON sections dominate this small code corpus.
+Register lowering reduced instruction count by 54.8%, code bytes by 38.5% and dispatches per measurement round by 56.5%. Its summed compile/codegen medians were 27.2% lower and summed verifier medians 12.3% lower. The derived aggregate Python proof-interpreter throughput was 54.6% higher. The container itself was only 0.8% smaller because fixed metadata and JSON sections dominate this small code corpus.
 
 **Decision:** select the register-oriented execution model as Ogma's primary candidate for the next Rust-native interpreter proof. The proof consistently favours it across arithmetic/coercion, control flow, mutable locals/loops, calls, host calls and exceptions. Keep the stack candidate as comparative evidence, but do not freeze the prototype opcode numbers, operand widths or a final binary ISA. Keep the OGM-36 portable .ogmb v1 container and normalized verifier boundary unchanged; later Rust-native measurements and broader semantics must validate the model before production adoption.
 
