@@ -460,17 +460,18 @@ def _load_harness_includes(
         if canonical in seen:
             continue
         seen.add(canonical)
-        root_path = harness_root.resolve()
-        file_path = root_path.joinpath(*relative.parts)
         try:
-            resolved_path = file_path.resolve(strict=True)
-            resolved_path.relative_to(root_path)
-            if not resolved_path.is_file():
-                raise RunnerError(f"Test262 harness include is not a file: {canonical}")
-            source = resolved_path.read_text(encoding="utf-8")
+            corpus_root = harness_root.parent.resolve(strict=True)
+            root_path = harness_root.resolve(strict=True)
+            root_path.relative_to(corpus_root)
+            source = _read_source_within(
+                root_path,
+                root_path.joinpath(*relative.parts),
+                f"Test262 harness include {canonical}",
+            )
         except RunnerError:
             raise
-        except (OSError, UnicodeError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise RunnerError(f"cannot safely load Test262 harness include {canonical}: {exc}") from exc
         result.append({"name": canonical, "source": source})
     return result
@@ -691,21 +692,32 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise RunnerError("shard manifest SHA-256 does not match its contents")
 
 
+def _read_source_within(root: Path, path: Path, description: str) -> str:
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_path = path.resolve(strict=True)
+        resolved_path.relative_to(resolved_root)
+        if not resolved_path.is_file():
+            raise RunnerError(f"{description} is not a regular file")
+        return resolved_path.read_text(encoding="utf-8")
+    except RunnerError:
+        raise
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise RunnerError(f"cannot safely read {description}: {exc}") from exc
+
+
 def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
+    if "_FIXTURE" in PurePosixPath(test_id).name:
+        raise RunnerError("Test262 module fixture files must not be run as standalone tests")
     test_root = suite_root / "test"
     path = test_root.joinpath(*_safe_relative_path(test_id).parts)
-    try:
-        source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise RunnerError(f"cannot read Test262 test {test_id}: {exc}") from exc
+    source = _read_source_within(test_root, path, f"Test262 test {test_id}")
     metadata = parse_test262_metadata(source)
     features = _string_list(metadata, "features")
     flags = _string_list(metadata, "flags")
     includes = _string_list(metadata, "includes")
-    if "_FIXTURE" in PurePosixPath(test_id).name:
-        raise RunnerError("Test262 module fixture files must not be run as standalone tests")
     feature_requirements = list(features)
-    if PurePosixPath(test_id).parts[0] == "intl402" and "Intl" not in feature_requirements:
+    if "intl402" in PurePosixPath(test_id).parts and "Intl" not in feature_requirements:
         feature_requirements.append("Intl")
     negative = metadata.get("negative")
     if negative is not None:
@@ -744,10 +756,7 @@ def _read_parser_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
     if category not in {"pass", "pass-explicit", "early", "fail"}:
         raise RunnerError(f"unknown parser-tests category in {test_id}")
     path = suite_root.joinpath(*relative.parts)
-    try:
-        source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise RunnerError(f"cannot read parser test {test_id}: {exc}") from exc
+    source = _read_source_within(suite_root, path, f"parser test {test_id}")
     return {
         "id": test_id,
         "suite": "test262-parser-tests",
@@ -1201,6 +1210,7 @@ def _run_variant(
             "id": descriptor["id"],
             "suite": descriptor["suite"],
             "source": descriptor["source"],
+            "metadata": descriptor["metadata"],
             "mode": mode,
             "sourceType": descriptor["sourceType"],
             "raw": descriptor["raw"],
@@ -1678,6 +1688,7 @@ def aggregate_reports(
             continue
         if (
             report.get("suite") != manifest["suite"]
+            or type(report.get("shardCount")) is not int
             or report.get("shardCount") != count
             or report.get("source") != manifest["source"]
             or report.get("profile") != manifest["profile"]
