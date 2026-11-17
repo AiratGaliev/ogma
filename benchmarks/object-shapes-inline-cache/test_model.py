@@ -173,6 +173,17 @@ class InlineCacheTests(unittest.TestCase):
         self.assertEqual(cache.counters.ic_hits, 1)
         self.assertEqual(cache.counters.guard_failures, 0)
 
+
+
+    def test_prototype_shape_change_invalidates_guarded_chain(self):
+        proto = self.make(12)
+        child = JSObject(self.registry, proto)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(child), 12)
+        define_data_property(proto, "extra", 1)
+        self.assertEqual(cache.get(child), 12)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
     def test_getter_is_never_cached_and_receives_receiver(self):
         receiver = self.make(0)
         calls = []
