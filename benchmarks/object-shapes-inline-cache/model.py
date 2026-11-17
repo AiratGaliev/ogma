@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from itertools import count
 import math
-from typing import Any, Callable, Iterable
+from types import MappingProxyType
+from typing import Any, Callable, Iterable, Mapping
 
 UNDEFINED = object()
 _RECEIVER_UNSET = object()
@@ -32,12 +33,17 @@ class Shape:
     identity: int
     prototype_identity: int | None
     properties: tuple[PropertyLayout, ...]
+    _slot_indices: Mapping[str, int] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_slot_indices",
+            MappingProxyType({item.key: index for index, item in enumerate(self.properties)}),
+        )
 
     def slot_for(self, key: str) -> int | None:
-        for index, item in enumerate(self.properties):
-            if item.key == key:
-                return index
-        return None
+        return self._slot_indices.get(key)
 
 
 class ShapeRegistry:
@@ -210,10 +216,6 @@ def define_accessor_property(obj: JSObject, key: str, *,
     return True
 
 
-def _get_own(target: ObjectLike, key: str) -> PropertyDescriptor | None:
-    return target.target.own_descriptor(key) if isinstance(target, JSProxy) else target.own_descriptor(key)
-
-
 def get_property(target: ObjectLike, key: str, *, receiver: Any = _RECEIVER_UNSET) -> Any:
     _key(key)
     if receiver is _RECEIVER_UNSET:
@@ -290,15 +292,6 @@ def set_property(target: ObjectLike, key: str, value: Any, *,
     if target.prototype is not None:
         return set_property(target.prototype, key, value, receiver=receiver, strict=strict)
     return _define_on_receiver(receiver, key, value, strict)
-
-
-def _find_descriptor(target: ObjectLike, key: str) -> PropertyDescriptor | None:
-    if isinstance(target, JSProxy):
-        return _find_descriptor(target.target, key)
-    own = target.own_descriptor(key)
-    if own:
-        return own
-    return None if target.prototype is None else _find_descriptor(target.prototype, key)
 
 
 def delete_property(target: ObjectLike, key: str, *, strict: bool = False) -> bool:
