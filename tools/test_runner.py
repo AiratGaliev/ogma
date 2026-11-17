@@ -791,8 +791,8 @@ class AdapterSession:
 
     def __init__(self, command: list[str]) -> None:
         self.command = command
-        self.process: subprocess.Popen[str] | None = None
-        self.responses: queue.Queue[str | BaseException | None] | None = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self.responses: queue.Queue[bytes | BaseException | None] | None = None
         self.stderr_lines: deque[str] = deque(maxlen=16)
         self.request_id = 0
         self.start_error: str | None = None
@@ -821,16 +821,13 @@ class AdapterSession:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
+                bufsize=0,
             )
         except OSError as exc:
             self.start_error = f"cannot start engine adapter: {exc}"
             return False
 
-        responses: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
+        responses: queue.Queue[bytes | BaseException | None] = queue.Queue(maxsize=1)
         self.process = process
         self.responses = responses
         self.stderr_lines.clear()
@@ -868,7 +865,7 @@ class AdapterSession:
                     line = process.stderr.readline(4096)
                     if not line:
                         break
-                    self.stderr_lines.append(line[-512:])
+                    self.stderr_lines.append(line.decode("utf-8", errors="replace")[-512:])
             except (OSError, ValueError):
                 pass
 
@@ -880,7 +877,7 @@ class AdapterSession:
         ).start()
         return True
 
-    def _stop(self, force: bool = False) -> subprocess.Popen[str] | None:
+    def _stop(self, force: bool = False) -> subprocess.Popen[bytes] | None:
         process = self.process
         self.process = None
         self.responses = None
@@ -954,8 +951,8 @@ class AdapterSession:
         request_id = self.request_id
         request["requestId"] = request_id
         try:
-            payload = json.dumps(request, ensure_ascii=False) + "\n"
-            if len(payload.encode("utf-8")) > self.MAX_REQUEST_BYTES:
+            payload = (json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8")
+            if len(payload) > self.MAX_REQUEST_BYTES:
                 return None, {
                     "status": "HARNESS ERROR",
                     "reason": "engine adapter request exceeds the 16 MiB protocol limit",
@@ -1028,26 +1025,27 @@ class AdapterSession:
             )
             return None, {"status": "HARNESS ERROR", "reason": reason, "stderr": stderr}
 
-        if not line.endswith("\n"):
+        if not line.endswith(b"\n"):
             stderr = self._stderr_text()
             self._stop(force=True)
             return None, {
                 "status": "HARNESS ERROR",
                 "reason": "engine adapter response is not newline-terminated",
                 "stderr": stderr,
-                "stdout": line[-4000:],
+                "stdout": repr(line[-4000:]),
             }
 
         try:
-            response = json.loads(line)
-        except json.JSONDecodeError as exc:
+            decoded = line.decode("utf-8")
+            response = json.loads(decoded)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             stderr = self._stderr_text()
             self._stop(force=True)
             return None, {
                 "status": "HARNESS ERROR",
-                "reason": f"engine adapter emitted invalid JSON: {exc}",
+                "reason": f"engine adapter emitted invalid UTF-8 JSON: {exc}",
                 "stderr": stderr,
-                "stdout": line[-4000:],
+                "stdout": repr(line[-4000:]),
             }
         if (
             not isinstance(response, dict)
