@@ -1785,9 +1785,7 @@ mod tests {
         );
         let mut completion = OgmaCompletion::default();
         assert_eq!(
-            unsafe {
-                ogma_context_call(r, c, throw_function, ptr::null(), 0, &mut completion)
-            },
+            unsafe { ogma_context_call(r, c, throw_function, ptr::null(), 0, &mut completion) },
             OgmaStatus::INVALID_COMPLETION
         );
         assert!(completion_is_empty(completion));
