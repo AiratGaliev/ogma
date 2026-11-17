@@ -212,7 +212,7 @@ Request envelope:
       "timeoutMs": 10000
     }
 
-The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsupported` or `harness_error`. A thrown completion includes `phase` and `errorName`. Async completion includes `asyncDone: true`.
+The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsupported` or `harness_error`. A thrown completion includes `phase` and `errorName`. Async completion uses the `asyncSignal` field described below.
 
     {
       "protocol": "ogma-test-runner-adapter",
