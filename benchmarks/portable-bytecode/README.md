@@ -83,3 +83,12 @@ Register lowering reduced instruction count by 54.8%, code bytes by 38.5% and di
 - The corpus is a bounded M0 decision workload, not Test262, fuzzing, broad JS compatibility or a production backend proof. It tests explicit exception propagation but does not yet compare local catch/finally handler lowering or suspension.
 - The debug map is retained and measured as an in-memory sidecar estimate. It is not serialized into the optional .ogmb source_map section in this prototype. The call workload carries an explicit thisArg but does not assert observable this binding semantics.
 - Summed per-workload medians are useful comparative aggregates, not a single uninterrupted whole-suite benchmark run. Raw per-workload samples and environment metadata remain in the JSON evidence.
+
+## Committed evidence
+
+The raw benchmark report (including all per-round samples) and the Core IR verifier report from the successful CI run are committed under `results/`:
+
+- `results/benchmark-results.json.gz` — lossless gzip of the complete machine-readable benchmark report. Decompress with `gzip -dc benchmarks/portable-bytecode/results/benchmark-results.json.gz`.
+- `results/core-ir-verifier-report.json` — all seven generated Core IR v1 fixtures accepted, zero failures.
+
+The SHA-256 of the decompressed benchmark JSON is `f6113456432778a7c92f78d511d7a0355c81a253afc9b867c9b62c00174269fe`. The report records its CI `source_revision`, runner environment and exact measurement protocol.

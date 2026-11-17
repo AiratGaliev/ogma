@@ -1,0 +1,15 @@
+{
+  "contract": "ogma.core-ir",
+  "contract_version": "1.0.0",
+  "fixtures": [
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/dynamic-add/fn_dynamic_add.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/control-flow/fn_branch.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/mutable-loop-locals/fn_countdown.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/function-calls/fn_call_sum.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/function-calls/fn_sum.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/host-calls/fn_host_trace.json","passed":true},
+    {"actual":"accepted","diagnostics":[],"expected":"accepted","fixture":"benchmarks/portable-bytecode/fixtures/exceptions/fn_throw.json","passed":true}
+  ],
+  "summary": {"accepted":7,"failed":0,"passed":7,"rejected":0,"total":7},
+  "verifier_version": "1.0.0"
+}
