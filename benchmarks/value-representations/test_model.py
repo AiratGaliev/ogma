@@ -75,8 +75,8 @@ class ValueSemanticsTests(unittest.TestCase):
         self.assertIn("call_heavy", results)
         self.assertIn("phi_and_loops", results)
         self.assertNotEqual(
-            workload_cost("mixed_dynamic", "boxed"),
-            workload_cost("mixed_dynamic", "representation-aware"),
+            workload_cost("numeric", "boxed"),
+            workload_cost("numeric", "representation-aware"),
         )
 
 
