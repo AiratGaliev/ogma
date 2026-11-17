@@ -71,7 +71,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def load_baseline(path: Path) -> dict[str, Any]:
     baseline = read_json(path)
-    if baseline.get("schemaVersion") != SCHEMA_VERSION:
+    if type(baseline.get("schemaVersion")) is not int or baseline.get("schemaVersion") != SCHEMA_VERSION:
         raise RunnerError(f"{path}: unsupported baseline schemaVersion")
     repositories = baseline.get("repositories")
     required = {"test262", "test262-parser-tests", "quickjs-ng"}
@@ -79,8 +79,13 @@ def load_baseline(path: Path) -> dict[str, Any]:
         raise RunnerError(f"{path}: missing pinned repository entries")
     for name in required:
         item = repositories[name]
-        if not isinstance(item, dict) or not item.get("revision"):
-            raise RunnerError(f"{path}: {name} must have an immutable revision")
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("revision"), str)
+            or not isinstance(item.get("url"), str)
+            or not item["url"].strip()
+        ):
+            raise RunnerError(f"{path}: {name} must have an immutable revision and repository URL")
         revision = item["revision"]
         if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
             raise RunnerError(f"{path}: {name}.revision must be a 40-character commit SHA")
@@ -89,27 +94,38 @@ def load_baseline(path: Path) -> dict[str, Any]:
 
 def load_profile(path: Path) -> dict[str, Any]:
     profile = read_json(path)
-    if profile.get("schemaVersion") != SCHEMA_VERSION:
+    if type(profile.get("schemaVersion")) is not int or profile.get("schemaVersion") != SCHEMA_VERSION:
         raise RunnerError(f"{path}: unsupported profile schemaVersion")
-    if not profile.get("profileId") or not profile.get("version"):
-        raise RunnerError(f"{path}: profileId and version are required")
+    if (
+        not isinstance(profile.get("profileId"), str)
+        or not profile["profileId"].strip()
+        or not isinstance(profile.get("version"), str)
+        or not profile["version"].strip()
+    ):
+        raise RunnerError(f"{path}: profileId and version are required strings")
     execution = profile.get("execution")
-    if not isinstance(execution, dict) or execution.get("state") not in {
-        "not_implemented",
-        "ready",
-    }:
+    if (
+        not isinstance(execution, dict)
+        or not isinstance(execution.get("state"), str)
+        or execution.get("state") not in {"not_implemented", "ready"}
+    ):
         raise RunnerError(f"{path}: execution.state must be not_implemented or ready")
     parser_status = profile.get("parserStatus", "not_implemented")
-    if parser_status not in {"not_implemented", "ready"}:
+    if not isinstance(parser_status, str) or parser_status not in {"not_implemented", "ready"}:
         raise RunnerError(f"{path}: parserStatus must be not_implemented or ready")
     default_status = profile.get("defaultFeatureStatus")
-    if default_status not in FEATURE_STATUSES:
+    if not isinstance(default_status, str) or default_status not in FEATURE_STATUSES:
         raise RunnerError(f"{path}: invalid defaultFeatureStatus")
     feature_status = profile.get("featureStatus", {})
     if not isinstance(feature_status, dict):
         raise RunnerError(f"{path}: featureStatus must be an object")
     for feature, status in feature_status.items():
-        if not isinstance(feature, str) or not feature.strip() or status not in FEATURE_STATUSES:
+        if (
+            not isinstance(feature, str)
+            or not feature.strip()
+            or not isinstance(status, str)
+            or status not in FEATURE_STATUSES
+        ):
             raise RunnerError(f"{path}: invalid status for feature {feature!r}")
     supported_tests = profile.get("supportedTests", {})
     if not isinstance(supported_tests, dict):
@@ -142,7 +158,7 @@ def load_profile(path: Path) -> dict[str, Any]:
         if not isinstance(entry, dict):
             raise RunnerError(f"{path}: each exclusion must be an object")
         suite = entry.get("suite", "*")
-        if suite not in {"*", "test262", "test262-parser-tests"}:
+        if not isinstance(suite, str) or suite not in {"*", "test262", "test262-parser-tests"}:
             raise RunnerError(f"{path}: invalid exclusion suite {suite!r}")
         test_id = entry.get("testId")
         required_fields = ("reason", "feature", "owner", "revisitCondition")
@@ -536,13 +552,14 @@ def discover_test_ids(suite_root: Path, suite: str) -> list[str]:
 
 def _manifest_profile(profile: dict[str, Any]) -> dict[str, Any]:
     execution = profile.get("execution")
-    if not isinstance(execution, dict) or execution.get("state") not in {
-        "not_implemented",
-        "ready",
-    }:
+    if (
+        not isinstance(execution, dict)
+        or not isinstance(execution.get("state"), str)
+        or execution.get("state") not in {"not_implemented", "ready"}
+    ):
         raise RunnerError("invalid execution state in active feature profile")
     parser_status = profile.get("parserStatus", "not_implemented")
-    if parser_status not in {"not_implemented", "ready"}:
+    if not isinstance(parser_status, str) or parser_status not in {"not_implemented", "ready"}:
         raise RunnerError("invalid parserStatus in active feature profile")
     return {
         "id": profile["profileId"],
@@ -594,9 +611,9 @@ def build_manifest(
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schemaVersion") != SCHEMA_VERSION:
+    if type(manifest.get("schemaVersion")) is not int or manifest.get("schemaVersion") != SCHEMA_VERSION:
         raise RunnerError("unsupported shard manifest schemaVersion")
-    if manifest.get("suite") not in {"test262", "test262-parser-tests"}:
+    if not isinstance(manifest.get("suite"), str) or manifest.get("suite") not in {"test262", "test262-parser-tests"}:
         raise RunnerError("invalid suite in shard manifest")
     count = manifest.get("shardCount")
     if type(count) is not int or count < 1:
@@ -607,7 +624,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         or not isinstance(profile.get("id"), str)
         or not isinstance(profile.get("version"), str)
         or not isinstance(profile.get("sha256"), str)
+        or not isinstance(profile.get("executionState"), str)
         or profile.get("executionState") not in {"not_implemented", "ready"}
+        or not isinstance(profile.get("parserStatus"), str)
         or profile.get("parserStatus") not in {"not_implemented", "ready"}
     ):
         raise RunnerError("shard manifest has an invalid feature profile descriptor")
@@ -639,6 +658,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise RunnerError("invalid test ID in shard manifest")
         if test_id in ids:
             raise RunnerError(f"duplicate test ID in shard manifest: {test_id}")
+        try:
+            _safe_relative_path(test_id)
+        except RunnerError as exc:
+            raise RunnerError(f"unsafe test ID in shard manifest: {test_id!r}") from exc
         ids.add(test_id)
         if type(shard) is not int or not 0 <= shard < count:
             raise RunnerError(f"invalid shard assignment for {test_id}")
@@ -1644,7 +1667,10 @@ def aggregate_reports(
         errors.append("parser-corpus aggregation requires an implemented parser adapter")
 
     for report in reports:
-        if report.get("schemaVersion") != SCHEMA_VERSION:
+        if not isinstance(report, dict):
+            errors.append("shard report must be a JSON object")
+            continue
+        if type(report.get("schemaVersion")) is not int or report.get("schemaVersion") != SCHEMA_VERSION:
             errors.append("shard report has an unsupported schemaVersion")
             continue
         if report.get("manifestSha256") != manifest["manifestSha256"]:
@@ -1686,8 +1712,11 @@ def aggregate_reports(
             if not isinstance(test_id, str):
                 errors.append(f"shard {index} contains a result without a test ID")
                 continue
-            if result.get("status") not in RESULT_STATUSES:
+            status = result.get("status")
+            if not isinstance(status, str) or status not in RESULT_STATUSES:
                 errors.append(f"test {test_id} has an invalid result classification")
+            elif status in FAILURE_STATUSES:
+                errors.append(f"test {test_id} is blocking aggregate status {status}")
             if test_id in shard_ids:
                 errors.append(f"duplicate test result within shard {index}: {test_id}")
             shard_ids.add(test_id)
