@@ -42,7 +42,7 @@ python benchmarks/portable-bytecode/run.py \
   --measurement-rounds 9
 ```
 
-The benchmark writes results/benchmark-results.json. It records the environment, command parameters, raw timing samples, instruction and dispatch counts, code/container/constant/debug-map sizes, verifier input size and structural work proxies, verifier timings, and Python tracemalloc peak memory. Interpreter throughput is measured over nine independent timed rounds after warm-up; the report retains each round and uses median rates. Compile and verifier costs likewise retain fifteen samples each. The task-scoped GitHub Actions job uploads both JSON reports as an artifact.
+The benchmark writes results/benchmark-results.json. It records the environment, command parameters, raw timing samples, instruction and dispatch counts, code/container/constant/debug-sidecar sizes, verifier input size and structural work proxies, verifier timings, and Python tracemalloc peak memory. Interpreter throughput is measured over nine independent timed rounds after warm-up; the report retains every round and uses median rates. Compile and verifier costs likewise retain fifteen samples each. The task-scoped GitHub Actions job uploads the raw JSON reports and generated Core IR fixtures as an artifact.
 
 ## Measurement interpretation
 
@@ -55,3 +55,31 @@ The benchmark writes results/benchmark-results.json. It records the environment,
 - The supported semantic subset is intentionally limited to the operations used by this corpus. It is not an ECMAScript conformance claim, a general Core IR backend, or a production interpreter.
 
 Any optimization or encoding change must keep both candidates on the same input corpus and preserve the expected observable results, exceptions and host traces.
+
+## Measured result and decision — 2026-11-17
+
+The successful GitHub Actions run on the task branch measured the six workloads with 1,000 iterations per test case, three warm-up executions, fifteen compile rounds, fifteen verifier rounds and nine interpreter measurement rounds. The same expected outcomes, thrown values and host-call traces were observed for both candidates in every case.
+
+| Metric (whole corpus) | Stack | Register |
+|---|---:|---:|
+| Decoded instructions | 73 | 33 |
+| Encoded code bytes | 395 | 243 |
+| Dispatches per measurement round | 161,000 | 70,000 |
+| Compile/codegen median samples summed by workload | 993,694 ns | 731,783 ns |
+| Verifier median samples summed by workload | 1,990,928 ns | 1,745,577 ns |
+| Python interpreter executions/s, derived from sum of workload medians | 109,974 | 170,471 |
+| Mean per-workload max Python tracemalloc peak | 1,069 bytes | 825 bytes |
+| Estimated debug sidecar JSON bytes | 17,674 | 7,927 |
+| .ogmb container bytes | 10,446 | 10,366 |
+
+Register lowering reduced instruction count by 54.8%, code bytes by 38.5% and dispatches per measurement round by 56.5%. Its summed compile/codegen medians were 26.4% lower and summed verifier medians 12.3% lower. The derived aggregate Python proof-interpreter throughput was 55.0% higher. The container itself was only 0.8% smaller because fixed metadata and JSON sections dominate this small code corpus.
+
+**Decision:** select the register-oriented execution model as Ogma's primary candidate for the next Rust-native interpreter proof. The proof consistently favours it across arithmetic/coercion, control flow, mutable locals/loops, calls, host calls and exceptions. Keep the stack candidate as comparative evidence, but do not freeze the prototype opcode numbers, operand widths or a final binary ISA. Keep the OGM-36 portable .ogmb v1 container and normalized verifier boundary unchanged; later Rust-native measurements and broader semantics must validate the model before production adoption.
+
+## Limits of this decision
+
+- These throughput figures compare two Python proof interpreters, not Rust-native VM performance. Register dispatches/s itself is not the decision metric; the register candidate executes substantially fewer dispatches and therefore completes more whole workload cases per second in this prototype.
+- Python tracemalloc peak is an allocation proxy, not native process RSS, Rust heap size or production VM memory.
+- The corpus is a bounded M0 decision workload, not Test262, fuzzing, broad JS compatibility or a production backend proof. It tests explicit exception propagation but does not yet compare local catch/finally handler lowering or suspension.
+- The debug map is retained and measured as an in-memory sidecar estimate. It is not serialized into the optional .ogmb source_map section in this prototype. The call workload carries an explicit thisArg but does not assert observable this binding semantics.
+- Summed per-workload medians are useful comparative aggregates, not a single uninterrupted whole-suite benchmark run. Raw per-workload samples and environment metadata remain in the JSON evidence.

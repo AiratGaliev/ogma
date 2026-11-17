@@ -156,7 +156,9 @@ def benchmark_candidate(
         "code_bytes": sum(len(item.code) for item in compiled),
         "container_bytes": sum(len(item.container) for item in compiled),
         "constant_pool_bytes": sum(len(canonical_json(item.constants)) for item in compiled),
-        "debug_map_bytes": sum(len(canonical_json(item.debug_map)) for item in compiled),
+        # Estimated debug sidecar size only: the current prototype does not serialize
+        # this mapping into the optional .ogmb source_map section.
+        "debug_map_estimate_bytes": sum(len(canonical_json(item.debug_map)) for item in compiled),
         "local_slots": sum(item.local_count for item in compiled),
         "virtual_registers": sum(item.register_count for item in compiled),
         "compile_cost_median_ns": median_or_zero(compile_samples),
@@ -238,6 +240,38 @@ def main() -> int:
     register_total = sum(item["candidates"]["register"]["instruction_count"] for item in all_results)
     stack_code = sum(item["candidates"]["stack"]["code_bytes"] for item in all_results)
     register_code = sum(item["candidates"]["register"]["code_bytes"] for item in all_results)
+
+    def candidate_totals(model: str) -> dict[str, Any]:
+        metrics = [item["candidates"][model] for item in all_results]
+        executions_per_round = sum(item["interpreter"]["executions_per_round"] for item in metrics)
+        elapsed_ns_sum_of_medians = sum(item["interpreter"]["elapsed_ns_median"] for item in metrics)
+        dispatches_per_round = sum(item["interpreter"]["measured_dispatches_per_round"] for item in metrics)
+        return {
+            "instruction_count": sum(item["instruction_count"] for item in metrics),
+            "dispatches_per_round": dispatches_per_round,
+            "executions_per_round": executions_per_round,
+            "sum_of_workload_median_elapsed_ns": elapsed_ns_sum_of_medians,
+            "aggregate_executions_per_second_from_workload_medians": (
+                executions_per_round * 1_000_000_000 / max(1, elapsed_ns_sum_of_medians)
+            ),
+            "code_bytes": sum(item["code_bytes"] for item in metrics),
+            "container_bytes": sum(item["container_bytes"] for item in metrics),
+            "debug_map_estimate_bytes": sum(item["debug_map_estimate_bytes"] for item in metrics),
+            "compile_codegen_median_ns_sum": sum(item["compile_cost_median_ns"] for item in metrics),
+            "compile_pipeline_median_ns_sum": sum(item["compile_pipeline_wall_median_ns"] for item in metrics),
+            "verifier_median_ns_sum": sum(
+                item["verifier_complexity"]["verifier_median_ns"] for item in metrics
+            ),
+            "verifier_structural_work_units": sum(
+                item["verifier_complexity"]["structural_work_units"] for item in metrics
+            ),
+            "mean_workload_max_tracemalloc_peak_bytes": statistics.mean(
+                item["memory"]["tracemalloc_peak_bytes_max"] for item in metrics
+            ),
+        }
+
+    stack_totals = candidate_totals("stack")
+    register_totals = candidate_totals("register")
     report = {
         "schema": "ogma.stack-register-benchmark",
         "version": "1.0.0",
@@ -268,6 +302,34 @@ def main() -> int:
             ),
             "register_code_size_delta_percent": (
                 (register_code - stack_code) * 100 / stack_code if stack_code else 0
+            ),
+            "stack": stack_totals,
+            "register": register_totals,
+            "register_dispatch_reduction_percent": (
+                (stack_totals["dispatches_per_round"] - register_totals["dispatches_per_round"])
+                * 100 / stack_totals["dispatches_per_round"]
+                if stack_totals["dispatches_per_round"] else 0
+            ),
+            "register_aggregate_throughput_gain_percent": (
+                (
+                    register_totals["aggregate_executions_per_second_from_workload_medians"]
+                    / stack_totals["aggregate_executions_per_second_from_workload_medians"] - 1
+                ) * 100
+                if stack_totals["aggregate_executions_per_second_from_workload_medians"] else 0
+            ),
+            "register_compile_codegen_delta_percent": (
+                (
+                    register_totals["compile_codegen_median_ns_sum"]
+                    / stack_totals["compile_codegen_median_ns_sum"] - 1
+                ) * 100
+                if stack_totals["compile_codegen_median_ns_sum"] else 0
+            ),
+            "register_verifier_time_delta_percent": (
+                (
+                    register_totals["verifier_median_ns_sum"]
+                    / stack_totals["verifier_median_ns_sum"] - 1
+                ) * 100
+                if stack_totals["verifier_median_ns_sum"] else 0
             ),
         },
         "workloads": all_results,
