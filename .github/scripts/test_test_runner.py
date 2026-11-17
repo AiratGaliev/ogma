@@ -119,6 +119,23 @@ class AdapterWorkerTests(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertEqual(response["outcome"], "parsed")
 
+    def test_unsolicited_stdout_after_last_response_is_a_harness_error(self) -> None:
+        response_code = (
+            "import json,sys; request=json.loads(sys.stdin.readline()); "
+            "response={'protocol':'ogma-test-runner-adapter','version':1,"
+            "'requestId':request['requestId'],'outcome':'parsed','phase':'parse'}; "
+            "print(json.dumps(response), flush=True); "
+            "print(json.dumps(response), flush=True); sys.stdin.read()"
+        )
+        command = [sys.executable, "-c", response_code]
+        with self.assertRaisesRegex(test_runner.RunnerError, "unsolicited stdout"):
+            with test_runner.AdapterSession(command) as session:
+                response, error = session.run(
+                    self.request("// parser: parsed"), 1000
+                )
+                self.assertIsNone(error)
+                self.assertEqual(response["outcome"], "parsed")
+
     def test_timed_out_worker_is_killed_and_restarted_for_next_test(self) -> None:
         with test_runner.AdapterSession(FAKE_ADAPTER) as session:
             self.assertTrue(session._start())
