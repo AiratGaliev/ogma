@@ -441,7 +441,7 @@ class SourceMetadataTests(unittest.TestCase):
         ).encode("utf-8")
         artifact_path = build_container(
             "ogm33-captured-source-map.ogmb",
-            b"\\x01\\x02\\x03\\x04",
+            b"\x01\x02\x03\x04",
             ["left", "right"],
             execution_model="stack",
             local_count=1,
@@ -470,7 +470,7 @@ class SourceMetadataTests(unittest.TestCase):
         capture_location["index"] = 1
         bad_path = build_container(
             "ogm33-invalid-capture-location.ogmb",
-            b"\\x01\\x02\\x03\\x04",
+            b"\x01\x02\x03\x04",
             ["left", "right"],
             execution_model="stack",
             local_count=1,
