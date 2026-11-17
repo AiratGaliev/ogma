@@ -226,9 +226,9 @@ where
         }
     }
 
+    let mut samples = Vec::with_capacity(config.samples);
     let allocation_before = AllocationSnapshot::now();
     let metrics_before = metrics();
-    let mut samples = Vec::with_capacity(config.samples);
     for _ in 0..config.samples {
         let started = Instant::now();
         for _ in 0..config.iterations {
