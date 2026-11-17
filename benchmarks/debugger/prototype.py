@@ -97,7 +97,7 @@ class Heap:
                 seen.add(marker)
                 for item in value.values():
                     yield from self._references(item, seen)
-        elif isinstance(value, _Closure):
+        elif isinstance(value, ClosureValue):
             marker = id(value)
             if marker not in seen:
                 seen.add(marker)
