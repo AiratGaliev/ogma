@@ -17,5 +17,6 @@
   "featureStatus": {
     "Intl": "deferred"
   },
-  "exclusions": []
+  "exclusions": [],
+  "supportedTests": {}
 }
