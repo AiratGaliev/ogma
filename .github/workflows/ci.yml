@@ -177,6 +177,35 @@ jobs:
           retention-days: 30
 
 
+  value-representation-benchmark:
+    name: OGM-17 Value and SSA representation proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-17-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Value semantic fixtures and SSA structural proof
+        run: |
+          python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
+          python benchmarks/value-representations/run.py
+
+      - name: Upload OGM-17 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-17-value-representation-evidence
+          path: benchmarks/value-representations/results/value-ssa-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
   portable-bytecode-benchmark:
     name: OGM-16 portable bytecode benchmark
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-16-')
