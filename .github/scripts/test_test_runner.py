@@ -247,6 +247,38 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["variants"][0]["failureKind"], "TIMEOUT")
 
+    def test_untagged_intl_suite_is_inferred_as_deferred_profile_requirement(self) -> None:
+        profile = ready_profile()
+        profile["featureStatus"]["Intl"] = "deferred"
+        descriptor = test_runner._read_test262_descriptor(
+            TEST262_ROOT, "intl402/Array/no-feature-tag.js"
+        )
+        self.assertEqual(descriptor["features"], [])
+        self.assertEqual(descriptor["featureRequirements"], ["Intl"])
+        deferred = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "intl402/Array/no-feature-tag.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(deferred["status"], "UNSUPPORTED")
+        self.assertIn("Intl", deferred["reason"])
+
+        profile["featureStatus"]["Intl"] = "supported"
+        supported = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "intl402/Array/no-feature-tag.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(supported["status"], "PASS")
+
     def test_unsupported_feature_is_not_counted_as_pass(self) -> None:
         profile = ready_profile()
         profile["featureStatus"]["Array"] = "deferred"
