@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -600,28 +601,80 @@ class ParserAndShardingTests(unittest.TestCase):
             )
 
     def test_aggregate_detects_duplicate_shards_and_duplicate_test_results(self) -> None:
-        manifest = test_runner.build_manifest(
-            "test262", ["a.js", "b.js"], BASELINE, ready_profile(), 1
+        manifest = manifest_for("test262", TEST262_ROOT, ready_profile())
+        report = report_for_shard(manifest, 0)
+        duplicate = dict(report)
+        duplicate["results"] = [dict(result) for result in report["results"]]
+        duplicate["results"][0]["status"] = "BOGUS"
+        duplicate["results"].append(dict(duplicate["results"][0]))
+        aggregate = test_runner.aggregate_reports(
+            manifest, [report, duplicate], BASELINE, ready_profile(), TEST262_ROOT
         )
-        test_id = manifest["tests"][0]["id"]
-        report = {
-            "schemaVersion": 1,
-            "suite": "test262",
-            "source": manifest["source"],
-            "profile": manifest["profile"],
-            "manifestSha256": manifest["manifestSha256"],
-            "shardIndex": 0,
-            "shardCount": 1,
-            "results": [
-                {"id": test_id, "status": "PASS"},
-                {"id": test_id, "status": "BOGUS"},
-            ],
-        }
-        aggregate = test_runner.aggregate_reports(manifest, [report, report], BASELINE, ready_profile())
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(aggregate["aggregation"]["duplicateShards"], [0])
         self.assertTrue(any("duplicate test result" in error for error in aggregate["aggregation"]["errors"]))
         self.assertTrue(any("invalid result classification" in error for error in aggregate["aggregation"]["errors"]))
+
+    def test_parser_explicit_variants_are_sharded_together_and_ast_compared(self) -> None:
+        profile = ready_profile()
+        manifest = manifest_for("test262-parser-tests", PARSER_ROOT, profile, 4)
+        assignments = {
+            entry["id"]: entry["shardIndex"] for entry in manifest["tests"]
+        }
+        self.assertEqual(
+            assignments["pass/valid.js"],
+            assignments["pass-explicit/valid.js"],
+        )
+        report = test_runner.run_manifest(
+            manifest,
+            PARSER_ROOT,
+            profile,
+            FAKE_ADAPTER,
+            assignments["pass/valid.js"],
+            timeout_ms=1000,
+            async_timeout_ms=1000,
+        )
+        pair_results = [
+            result
+            for result in report["results"]
+            if result.get("equivalenceGroup") == "valid.js"
+        ]
+        self.assertEqual(len(pair_results), 2)
+        self.assertEqual({result["status"] for result in pair_results}, {"PASS"})
+        self.assertEqual(
+            {
+                result["variants"][0]["normalizedAstSha256"]
+                for result in pair_results
+            },
+            {hashlib.sha256(b"normalized-equivalent-parser-fixture").hexdigest()},
+        )
+
+    def test_parser_explicit_ast_mismatch_fails_both_members_of_pair(self) -> None:
+        profile = ready_profile()
+        manifest = manifest_for("test262-parser-tests", PARSER_ROOT, profile, 2)
+        assignments = {
+            entry["id"]: entry["shardIndex"] for entry in manifest["tests"]
+        }
+        report = test_runner.run_manifest(
+            manifest,
+            PARSER_ROOT,
+            profile,
+            FAKE_ADAPTER + ["--ast-mismatch-explicit"],
+            assignments["pass/valid.js"],
+            timeout_ms=1000,
+            async_timeout_ms=1000,
+        )
+        pair_results = [
+            result
+            for result in report["results"]
+            if result.get("equivalenceGroup") == "valid.js"
+        ]
+        self.assertEqual(len(pair_results), 2)
+        self.assertEqual({result["status"] for result in pair_results}, {"FAIL"})
+        self.assertEqual(
+            {result["failureKind"] for result in pair_results},
+            {"PARSER_AST_MISMATCH"},
+        )
 
 
 if __name__ == "__main__":
