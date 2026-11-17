@@ -4,6 +4,7 @@ import hashlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -579,7 +580,7 @@ class ParserAndShardingTests(unittest.TestCase):
             async_timeout_ms=1000,
             verify_corpus=True,
         )
-        self.assertEqual(report["summary"]["PASS"], 4)
+        self.assertEqual(report["summary"]["PASS"], 6)
         self.assertEqual(report["summary"]["FAIL"], 0)
 
     def test_aggregate_rejects_manifest_from_different_pinned_baseline(self) -> None:
