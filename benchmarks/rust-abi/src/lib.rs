@@ -1064,19 +1064,15 @@ pub unsafe extern "C" fn ogma_persistent_release(
                 Err(e) => return e,
             };
             let result = {
-
                 let mut arena = c.persistents.borrow_mut();
 
                 arena_remove(&mut arena, id)
-
             };
 
             match result {
-
                 Ok(_) => OgmaStatus::OK,
 
                 Err(e) => e,
-
             }
         })
     })
@@ -1160,19 +1156,15 @@ pub unsafe extern "C" fn ogma_callback_unregister(
                 Err(e) => return e,
             };
             let result = {
-
                 let mut arena = c.callbacks.borrow_mut();
 
                 arena_remove(&mut arena, id)
-
             };
 
             match result {
-
                 Ok(_) => OgmaStatus::OK,
 
                 Err(e) => e,
-
             }
         })
     })
@@ -1283,13 +1275,13 @@ pub unsafe extern "C" fn ogma_context_call(
                 };
                 // No internal borrow is held while user callback code runs.
                 let status = (callback_entry.callback)(
-                        r,
-                        context,
-                        args_ptr,
-                        copied_args.len(),
-                        &mut result,
-                        callback_entry.user_data,
-                    );
+                    r,
+                    context,
+                    args_ptr,
+                    copied_args.len(),
+                    &mut result,
+                    callback_entry.user_data,
+                );
                 if status != OgmaStatus::OK {
                     return if status.is_known() {
                         status
