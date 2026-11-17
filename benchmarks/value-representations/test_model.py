@@ -144,6 +144,7 @@ class CoreIRDrivenComparisonTests(unittest.TestCase):
         self.assertGreater(aware["box_conversion_count"], 0)
         self.assertGreater(aware["unbox_conversion_count"], 0)
         self.assertGreater(aware["helper_call_sites"], 0)
+        self.assertLess(aware["helper_call_sites"], boxed["helper_call_sites"])
         self.assertLess(
             candidates["tagged-16+representation-aware-ssa"]["aggregate"]["logical_payload_estimate_bytes"],
             candidates["tagged-16+boxed-ssa"]["aggregate"]["logical_payload_estimate_bytes"],
@@ -154,6 +155,25 @@ class CoreIRDrivenComparisonTests(unittest.TestCase):
         self.assertGreater(aggregate["block_value_parameter_count"], 0)
         self.assertGreater(aggregate["phi_value_edge_argument_count"], 0)
         self.assertGreater(aggregate["loop_back_edge_count"], 0)
+
+    def test_local_parameter_return_phi_and_loop_boundaries_are_explicit(self):
+        candidates = {item["candidate_id"]: item for item in self.report["candidate_matrix"]}
+        aware = candidates["tagged-16+representation-aware-ssa"]
+        loop = next(
+            fixture for fixture in aware["per_fixture"]
+            if fixture["fixture"] == "tests/core-ir/fixtures/positive-loop-carried-values.json"
+        )
+        breakdown = loop["conversion_breakdown"]
+        self.assertEqual(breakdown["function_parameters"]["unbox"], 3)
+        self.assertEqual(breakdown["returns"]["box"], 1)
+        self.assertGreater(breakdown["dynamic_semantic_operands"]["box"], 0)
+        self.assertEqual(breakdown["phi_block_arguments"]["box"], 0)
+        self.assertEqual(breakdown["phi_block_arguments"]["unbox"], 0)
+        self.assertEqual(breakdown["loop_carried_edges"]["box"], 0)
+        self.assertEqual(breakdown["loop_carried_edges"]["unbox"], 0)
+        self.assertEqual(breakdown["loop_carried_edges"]["back_edge_count"], 1)
+        self.assertEqual(breakdown["lexical_environment_locals"]["box"], 0)
+        self.assertEqual(breakdown["lexical_environment_locals"]["unbox"], 0)
 
     def test_liveness_is_nonzero_and_reported_as_abstract_payload(self):
         for candidate in self.report["candidate_matrix"]:

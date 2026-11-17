@@ -22,7 +22,7 @@ Four combinations are reported:
 - tagged-16 plus representation-aware SSA
 - nanbox-8 plus representation-aware SSA
 
-Representation-aware SSA preserves the representations declared in Core IR v1. The model counts unboxing at typed public Value parameter boundaries, boxing at typed return boundaries, and boxing before generic dynamic semantic helpers. Core IR CFG edges require exact type and representation agreement, so no implicit phi or loop conversions are inserted; their block parameters, edge arguments and back-edges are counted separately.
+Representation-aware SSA preserves the representations declared in Core IR v1. The report breaks conversions down by function parameters, returns, dynamic semantic operands, exception operands, lexical environment locals, phi/block arguments and loop-carried edges. Typed parameters are unboxed at the modeled public Value ABI boundary; typed returns and operands passed to generic dynamic helpers are boxed. Lexical environment load/store, phi and loop transitions report zero implicit conversions because Core IR v1 requires the stored, incoming and outgoing representations to match. Their slot, edge-argument and back-edge counts are reported alongside the conversion counts.
 
 The helper-call model distinguishes generic dynamic operations from a small set of representation-specializable operations. It is a documented compiler-cost model, not generated machine code.
 

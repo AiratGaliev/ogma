@@ -485,6 +485,7 @@ def _candidate_metrics(function: dict[str, Any], boxed_bytes: int, strategy: str
     box_sites: list[str] = []
     unbox_sites: list[str] = []
     helper_sites: list[str] = []
+    box_categories: Counter[str] = Counter()
     operation_counts: Counter[str] = Counter()
 
     if strategy == "representation-aware":
@@ -494,6 +495,7 @@ def _candidate_metrics(function: dict[str, Any], boxed_bytes: int, strategy: str
         signature = function.get("return")
         if signature and signature["representation"] != "boxed":
             box_sites.append("return")
+            box_categories["return_boundary"] += 1
 
     for block in function["blocks"]:
         for instruction in block["instructions"]:
@@ -508,6 +510,7 @@ def _candidate_metrics(function: dict[str, Any], boxed_bytes: int, strategy: str
                         rep = reps.get(operand)
                         if rep and rep != "boxed":
                             box_sites.append(f"{instruction['id']}:{operand}")
+                            box_categories["dynamic_semantic_operands"] += 1
             elif op in SPECIALIZABLE_OPS:
                 if any(rep == "boxed" for rep in operand_reps):
                     helper_sites.append(instruction["id"])
@@ -518,6 +521,7 @@ def _candidate_metrics(function: dict[str, Any], boxed_bytes: int, strategy: str
                         rep = reps.get(operand)
                         if rep and rep != "boxed":
                             box_sites.append(f"{instruction['id']}:{operand}")
+                            box_categories["exception_operands"] += 1
 
     edges = _all_edges(function)
     dominators = _dominators(function, edges)
@@ -563,6 +567,42 @@ def _candidate_metrics(function: dict[str, Any], boxed_bytes: int, strategy: str
         "representation_conversion_count": conversion_count,
         "box_conversion_sites": box_sites,
         "unbox_conversion_sites": unbox_sites,
+        "conversion_breakdown": {
+            "function_parameters": {
+                "box": 0,
+                "unbox": len(unbox_sites),
+            },
+            "returns": {
+                "box": box_categories["return_boundary"],
+                "unbox": 0,
+            },
+            "lexical_environment_locals": {
+                "box": 0,
+                "unbox": 0,
+                "slot_count": len(environment),
+                "reason": "env.load/env.store must preserve the declared binding representation",
+            },
+            "dynamic_semantic_operands": {
+                "box": box_categories["dynamic_semantic_operands"],
+                "unbox": 0,
+            },
+            "exception_operands": {
+                "box": box_categories["exception_operands"],
+                "unbox": 0,
+            },
+            "phi_block_arguments": {
+                "box": 0,
+                "unbox": 0,
+                "edge_argument_count": edge_value_arguments,
+                "reason": "Core IR verifier requires matching type and representation on CFG edges",
+            },
+            "loop_carried_edges": {
+                "box": 0,
+                "unbox": 0,
+                "back_edge_count": back_edges,
+                "reason": "loop-carried block arguments retain the same verified representation",
+            },
+        },
         "peak_live_ssa_values": peak_live_values,
         "peak_live_ssa_payload_bytes": peak_live_bytes,
         "ssa_slot_payload_bytes": ssa_payload,
