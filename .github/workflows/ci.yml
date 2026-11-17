@@ -300,23 +300,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
 
-      - name: Capture rustfmt diff for failed formatting checks
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all
-          git diff --no-ext-diff -- benchmarks/rust-abi > "$RUNNER_TEMP/ogm-19-rustfmt.patch"
-
-      - name: Upload rustfmt diagnostic patch
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ogm-19-rustfmt-diagnostic
-          path: ${{ runner.temp }}/ogm-19-rustfmt.patch
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Run Clippy
         run: cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
