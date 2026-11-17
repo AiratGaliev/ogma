@@ -1,0 +1,19 @@
+[package]
+name = "ogma-rust-abi-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 prototype of the versioned Ogma Rust embedding ABI"
+
+[lib]
+name = "ogma_rust_abi_proof"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "ogma-abi-bench"
+path = "src/bin/benchmark.rs"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1

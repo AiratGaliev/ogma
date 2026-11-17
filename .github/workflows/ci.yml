@@ -272,3 +272,58 @@ jobs:
           path: ${{ runner.temp }}/ogm-18-object-shapes-ic-report.json
           if-no-files-found: warn
           retention-days: 30
+
+  ogm19-rust-abi-proof:
+    name: OGM-19 versioned Rust ABI proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-19-versioned-rust-abi')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Verify Rust toolchain
+        id: rust-toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run ABI contract tests
+        run: cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
+
+      - name: Run reproducible ABI boundary benchmark
+        env:
+          RUSTC_VERSION: ${{ steps.rust-toolchain.outputs.rustc_version }}
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --bin ogma-abi-bench -- \
+            --iterations 10000 \
+            --warmups 3 \
+            --samples 9 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --tested-revision "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/ogm-19-rust-abi-report.json"
+
+      - name: Upload OGM-19 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-19-rust-abi-evidence
+          path: ${{ runner.temp }}/ogm-19-rust-abi-report.json
+          if-no-files-found: error
+          retention-days: 30
