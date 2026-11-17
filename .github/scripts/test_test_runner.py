@@ -294,6 +294,34 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(result["status"], "UNSUPPORTED")
         self.assertEqual(result["variants"], [])
 
+    def test_partial_feature_runs_only_exact_allowlisted_test_ids(self) -> None:
+        profile = ready_profile()
+        profile["featureStatus"]["Array"] = "partial"
+        profile["supportedTests"] = {
+            "Array": ["runner/strict-default.js"],
+        }
+        supported = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        outside = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(supported["status"], "PASS")
+        self.assertEqual(outside["status"], "UNSUPPORTED")
+        self.assertIn("exact partial-support allowlist", outside["reason"])
+
     def test_unimplemented_runtime_is_unsupported_without_reading_test_metadata(self) -> None:
         profile = ready_profile()
         profile["execution"] = {
