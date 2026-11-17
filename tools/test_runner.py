@@ -109,8 +109,29 @@ def load_profile(path: Path) -> dict[str, Any]:
     if not isinstance(feature_status, dict):
         raise RunnerError(f"{path}: featureStatus must be an object")
     for feature, status in feature_status.items():
-        if not isinstance(feature, str) or status not in FEATURE_STATUSES:
+        if not isinstance(feature, str) or not feature.strip() or status not in FEATURE_STATUSES:
             raise RunnerError(f"{path}: invalid status for feature {feature!r}")
+    supported_tests = profile.get("supportedTests", {})
+    if not isinstance(supported_tests, dict):
+        raise RunnerError(f"{path}: supportedTests must be a feature-to-test-ID mapping")
+    for feature, test_ids in supported_tests.items():
+        if (
+            not isinstance(feature, str)
+            or feature_status.get(feature, default_status) != "partial"
+            or not isinstance(test_ids, list)
+        ):
+            raise RunnerError(
+                f"{path}: supportedTests entries are allowed only for partial features"
+            )
+        if len(test_ids) != len(set(test_ids)):
+            raise RunnerError(f"{path}: supportedTests for {feature} contains duplicates")
+        for test_id in test_ids:
+            try:
+                _safe_relative_path(test_id)
+            except (TypeError, RunnerError) as exc:
+                raise RunnerError(
+                    f"{path}: invalid exact test ID in supportedTests for {feature}"
+                ) from exc
     exclusions = profile.get("exclusions", [])
     if not isinstance(exclusions, list):
         raise RunnerError(f"{path}: exclusions must be an array")
@@ -125,6 +146,10 @@ def load_profile(path: Path) -> dict[str, Any]:
         required_fields = ("reason", "feature", "owner", "revisitCondition")
         if not isinstance(test_id, str) or not test_id:
             raise RunnerError(f"{path}: every exclusion requires an exact testId")
+        try:
+            _safe_relative_path(test_id)
+        except RunnerError as exc:
+            raise RunnerError(f"{path}: exclusion testId must be a safe exact relative path") from exc
         if any(not isinstance(entry.get(key), str) or not entry[key].strip() for key in required_fields):
             raise RunnerError(
                 f"{path}: exclusion {test_id!r} requires reason, feature, owner and revisitCondition"
@@ -741,11 +766,15 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
             return execution.get("reason", "the engine execution adapter is not implemented")
     feature_status = profile.get("featureStatus", {})
     default_status = profile["defaultFeatureStatus"]
-    deferred = [
-        feature
-        for feature in descriptor.get("featureRequirements", descriptor["features"])
-        if feature_status.get(feature, default_status) in {"unsupported", "deferred"}
-    ]
+    deferred: list[str] = []
+    for feature in descriptor.get("featureRequirements", descriptor["features"]):
+        status = feature_status.get(feature, default_status)
+        if status in {"unsupported", "deferred"}:
+            deferred.append(feature)
+        elif status == "partial":
+            supported = profile.get("supportedTests", {}).get(feature, [])
+            if descriptor["id"] not in supported:
+                deferred.append(f"{feature} (outside the exact partial-support allowlist)")
     if deferred:
         return "required features are outside the active execution profile: " + ", ".join(sorted(deferred))
     return None
