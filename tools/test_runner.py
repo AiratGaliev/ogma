@@ -892,15 +892,21 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, int]:
     return summary
 
 
-def write_junit(path: Path, suite_name: str, results: list[dict[str, Any]]) -> None:
+def write_junit(
+    path: Path,
+    suite_name: str,
+    results: list[dict[str, Any]],
+    aggregation_errors: list[str] | None = None,
+) -> None:
     summary = summarize(results)
+    aggregation_errors = aggregation_errors or []
     root = ET.Element(
         "testsuite",
         {
             "name": suite_name,
-            "tests": str(summary["total"]),
+            "tests": str(summary["total"] + len(aggregation_errors)),
             "failures": str(summary["FAIL"] + summary["UNEXPECTED PASS"]),
-            "errors": str(summary["HARNESS ERROR"]),
+            "errors": str(summary["HARNESS ERROR"] + len(aggregation_errors)),
             "skipped": str(summary["UNSUPPORTED"] + summary["EXCLUDED"]),
         },
     )
@@ -916,6 +922,18 @@ def write_junit(path: Path, suite_name: str, results: list[dict[str, Any]]) -> N
             node.text = json.dumps(result.get("variants", []), ensure_ascii=False)
         elif status in {"UNSUPPORTED", "EXCLUDED"}:
             ET.SubElement(case, "skipped", {"message": reason, "type": status})
+    for index, error in enumerate(aggregation_errors, start=1):
+        case = ET.SubElement(
+            root,
+            "testcase",
+            {"name": f"__aggregation_error_{index}__", "classname": suite_name},
+        )
+        node = ET.SubElement(
+            case,
+            "error",
+            {"message": error, "type": "AGGREGATION ERROR"},
+        )
+        node.text = error
     path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
@@ -1199,7 +1217,12 @@ def main(argv: list[str] | None = None) -> int:
         report = aggregate_reports(manifest, reports)
         write_json(args.report, report)
         if args.junit:
-            write_junit(args.junit, manifest["suite"], report["results"])
+            write_junit(
+                args.junit,
+                manifest["suite"],
+                report["results"],
+                report["aggregation"]["errors"],
+            )
         print(json.dumps(report["summary"], sort_keys=True))
         if not report["aggregation"]["complete"]:
             return 1
