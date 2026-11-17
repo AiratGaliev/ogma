@@ -846,20 +846,6 @@ def run_one_test(
     probe_unsupported: bool = False,
     probe_excluded: bool = False,
 ) -> dict[str, Any]:
-    try:
-        descriptor = (
-            _read_test262_descriptor(suite_root, test_id)
-            if suite == "test262"
-            else _read_parser_descriptor(suite_root, test_id)
-        )
-    except RunnerError as exc:
-        return {
-            "id": test_id,
-            "status": "HARNESS ERROR",
-            "reason": str(exc),
-            "variants": [],
-        }
-
     exclusion = _exclusion_for(profile, suite, test_id)
     if exclusion and not probe_excluded:
         return {
@@ -890,6 +876,20 @@ def run_one_test(
             "reason": profile.get(
                 "parserReason", "the parser adapter is not implemented"
             ),
+            "variants": [],
+        }
+
+    try:
+        descriptor = (
+            _read_test262_descriptor(suite_root, test_id)
+            if suite == "test262"
+            else _read_parser_descriptor(suite_root, test_id)
+        )
+    except RunnerError as exc:
+        return {
+            "id": test_id,
+            "status": "HARNESS ERROR",
+            "reason": str(exc),
             "variants": [],
         }
 
