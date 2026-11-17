@@ -327,7 +327,29 @@ class DebuggerApiTests(unittest.TestCase):
         self.assertFalse(initialized["body"]["capabilities"]["supportsConditionalBreakpoints"])
         stack = adapter.dispatch({"command": "stackTrace"})
         self.assertTrue(stack["success"])
+        main_frame_id = stack["body"]["stackFrames"][0]["id"]
         self.assertEqual(stack["body"]["stackFrames"][0]["name"], "main")
+
+        scopes = adapter.dispatch({
+            "command": "scopes",
+            "arguments": {"frameId": main_frame_id},
+        })
+        self.assertTrue(scopes["success"])
+        local_scope_ref = scopes["body"]["scopes"][0]["variablesReference"]
+        variables = adapter.dispatch({
+            "command": "variables",
+            "arguments": {"variablesReference": local_scope_ref},
+        })
+        self.assertTrue(variables["success"])
+        self.assertIn("total", {item["name"] for item in variables["body"]["variables"]})
+
+        evaluated = adapter.dispatch({
+            "command": "evaluate",
+            "arguments": {"frameId": main_frame_id, "expression": "total"},
+        })
+        self.assertTrue(evaluated["success"])
+        self.assertEqual(evaluated["body"]["result"]["preview"], "10")
+
         invalid = adapter.dispatch({
             "command": "setBreakpoints",
             "arguments": {"sourceId": "src_main", "breakpoints": [{"line": True}]},
