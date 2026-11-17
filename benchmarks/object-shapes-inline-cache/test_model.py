@@ -66,8 +66,10 @@ class ShapeIdentityTests(unittest.TestCase):
     def test_non_configurable_property_cannot_be_redefined(self):
         obj = JSObject(self.registry)
         define_data_property(obj, "x", 1, configurable=False)
+        self.assertFalse(define_data_property(obj, "x", 2, configurable=True))
+        self.assertEqual(get_property(obj, "x"), 1)
         with self.assertRaisesRegex(JSRuntimeError, "non-configurable"):
-            define_data_property(obj, "x", 2, configurable=True)
+            define_data_property(obj, "x", 2, configurable=True, strict=True)
 
     def test_non_extensible_object_cannot_gain_new_property(self):
         obj = JSObject(self.registry)
@@ -138,7 +140,8 @@ class InlineCacheTests(unittest.TestCase):
         self.assertEqual(cache.get(child), 12)
         define_data_property(proto, "x", 13)
         self.assertEqual(cache.get(child), 13)
-        self.assertEqual(cache.counters.guard_failures, 1)
+        self.assertEqual(cache.counters.ic_hits, 1)
+        self.assertEqual(cache.counters.guard_failures, 0)
 
     def test_getter_is_never_cached_and_receives_receiver(self):
         receiver = self.make(0)
@@ -225,7 +228,7 @@ class InlineCacheTests(unittest.TestCase):
         before = cache.counters.fallback_calls
         self.assertEqual(cache.get(objects[-1]), 4)
         self.assertEqual(cache.counters.fallback_calls, before + 1)
-        self.assertEqual(cache.counters.megamorphic_fallbacks, 3)
+        self.assertEqual(cache.counters.megamorphic_fallbacks, 4)
 
 
 class ProxyFallbackTests(unittest.TestCase):
@@ -287,8 +290,10 @@ class ProxyFallbackTests(unittest.TestCase):
 
 
     def test_prototype_mutation_invalidates_guarded_chain(self):
-        first_proto = self.make(11)
-        second_proto = self.make(22)
+        first_proto = JSObject(self.registry)
+        second_proto = JSObject(self.registry)
+        define_data_property(first_proto, "x", 11)
+        define_data_property(second_proto, "x", 22)
         receiver = JSObject(self.registry, first_proto)
         cache = InlineCache("x")
         self.assertEqual(cache.get(receiver), 11)
