@@ -242,3 +242,33 @@ jobs:
             benchmarks/portable-bytecode/fixtures/**/*.json
           if-no-files-found: warn
           retention-days: 30
+
+  object-shapes-inline-cache-benchmark:
+    name: OGM-18 object shapes and inline-cache proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-18-object-shapes-inline-cache')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run object-shape and inline-cache semantic regression tests
+        run: python -m unittest discover -s benchmarks/object-shapes-inline-cache -p "test_*.py" -v
+
+      - name: Run OGM-18 throughput and memory proof
+        run: python benchmarks/object-shapes-inline-cache/run.py --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
+
+      - name: Upload OGM-18 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-18-object-shapes-inline-cache-evidence
+          path: ${{ runner.temp }}/ogm-18-object-shapes-ic-report.json
+          if-no-files-found: warn
+          retention-days: 30
