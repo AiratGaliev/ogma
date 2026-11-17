@@ -358,9 +358,17 @@ def test262_modes(flags: list[str]) -> list[str]:
 
 
 def _safe_relative_path(value: str) -> PurePosixPath:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or "\x00" in value
+        or ":" in value
+    ):
+        raise RunnerError(f"unsafe relative path: {value!r}")
     path = PurePosixPath(value)
     if path.is_absolute() or not path.parts or ".." in path.parts or "." in path.parts:
-        raise RunnerError(f"unsafe relative include path: {value!r}")
+        raise RunnerError(f"unsafe relative path: {value!r}")
     return path
 
 
@@ -380,11 +388,18 @@ def _load_harness_includes(harness_root: Path, names: list[str], raw: bool) -> l
         if canonical in seen:
             continue
         seen.add(canonical)
-        file_path = harness_root.joinpath(*relative.parts)
+        root_path = harness_root.resolve()
+        file_path = root_path.joinpath(*relative.parts)
         try:
-            source = file_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise RunnerError(f"cannot load Test262 harness include {canonical}: {exc}") from exc
+            resolved_path = file_path.resolve(strict=True)
+            resolved_path.relative_to(root_path)
+            if not resolved_path.is_file():
+                raise RunnerError(f"Test262 harness include is not a file: {canonical}")
+            source = resolved_path.read_text(encoding="utf-8")
+        except RunnerError:
+            raise
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise RunnerError(f"cannot safely load Test262 harness include {canonical}: {exc}") from exc
         result.append({"name": canonical, "source": source})
     return result
 
@@ -585,9 +600,13 @@ def _exclusion_for(profile: dict[str, Any], suite: str, test_id: str) -> dict[st
 
 
 def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> str | None:
-    execution = profile["execution"]
-    if execution["state"] != "ready":
-        return execution.get("reason", "the engine execution adapter is not implemented")
+    if descriptor["suite"] == "test262-parser-tests":
+        if profile.get("parserStatus", "ready") != "ready":
+            return profile.get("parserReason", "the parser is not available in the active build")
+    else:
+        execution = profile["execution"]
+        if execution["state"] != "ready":
+            return execution.get("reason", "the engine execution adapter is not implemented")
     feature_status = profile.get("featureStatus", {})
     default_status = profile["defaultFeatureStatus"]
     deferred = [
@@ -597,8 +616,6 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
     ]
     if deferred:
         return "required features are outside the active execution profile: " + ", ".join(sorted(deferred))
-    if descriptor["suite"] == "test262-parser-tests" and profile.get("parserStatus", "ready") != "ready":
-        return profile.get("parserReason", "the parser is not available in the active build")
     return None
 
 
