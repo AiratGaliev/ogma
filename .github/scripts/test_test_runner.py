@@ -43,6 +43,47 @@ def manifest_for(suite: str, root: Path, profile: dict, shard_count: int = 1):
     )
 
 
+class AdapterWorkerTests(unittest.TestCase):
+    @staticmethod
+    def request(source: str, suite: str = "test262-parser-tests", timeout_ms: int = 1000):
+        return {
+            "protocol": "ogma-test-runner-adapter",
+            "version": 1,
+            "test": {"suite": suite, "source": source},
+            "timeoutMs": timeout_ms,
+        }
+
+    def test_worker_is_reused_and_responses_are_correlated(self) -> None:
+        with test_runner.AdapterSession(FAKE_ADAPTER) as session:
+            first, first_error = session.run(
+                self.request("// parser: parsed"), 1000
+            )
+            second, second_error = session.run(
+                self.request("// parser: parsed"), 1000
+            )
+        self.assertIsNone(first_error)
+        self.assertIsNone(second_error)
+        self.assertEqual(first["requestId"], 1)
+        self.assertEqual(second["requestId"], 2)
+        self.assertEqual(first["workerPid"], second["workerPid"])
+
+    def test_timed_out_worker_is_killed_and_restarted_for_next_test(self) -> None:
+        with test_runner.AdapterSession(FAKE_ADAPTER) as session:
+            timed_out, timeout_error = session.run(
+                self.request("// result: timeout", suite="test262", timeout_ms=50),
+                50,
+            )
+            recovered, recovery_error = session.run(
+                self.request("// parser: parsed"), 1000
+            )
+        self.assertIsNone(timed_out)
+        self.assertEqual(timeout_error["status"], "FAIL")
+        self.assertEqual(timeout_error["failureKind"], "TIMEOUT")
+        self.assertIsNone(recovery_error)
+        self.assertEqual(recovered["requestId"], 2)
+        self.assertNotEqual(timeout_error.get("workerPid"), recovered["workerPid"])
+
+
 class Test262MetadataTests(unittest.TestCase):
     def test_metadata_includes_features_flags_and_both_default_modes(self) -> None:
         test_id = "runner/strict-default.js"
