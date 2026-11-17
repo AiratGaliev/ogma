@@ -1410,6 +1410,63 @@ def run_manifest(
     }
 
 
+def _validate_parser_equivalence_results(
+    expected_ids: set[str],
+    results_by_id: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    pairs: dict[str, dict[str, str]] = {}
+    for test_id in expected_ids:
+        equivalence_key = _parser_equivalence_key(test_id)
+        if equivalence_key is None:
+            continue
+        category = PurePosixPath(test_id).parts[0]
+        pairs.setdefault(equivalence_key, {})[category] = test_id
+
+    for group, members in pairs.items():
+        original = results_by_id.get(members.get("pass", ""))
+        explicit = results_by_id.get(members.get("pass-explicit", ""))
+        if original is None or explicit is None:
+            # Missing test IDs are reported by the regular coverage checks.
+            continue
+        statuses = {original.get("status"), explicit.get("status")}
+        if statuses == {"PASS"}:
+            for role, result in (("pass", original), ("pass-explicit", explicit)):
+                if (
+                    result.get("equivalenceGroup") != group
+                    or result.get("equivalenceRole") != role
+                ):
+                    errors.append(
+                        f"parser result {result.get('id')} is missing its equivalence metadata"
+                    )
+            original_variants = original.get("variants")
+            explicit_variants = explicit.get("variants")
+            original_hash = (
+                original_variants[0].get("normalizedAstSha256")
+                if isinstance(original_variants, list) and original_variants
+                and isinstance(original_variants[0], dict)
+                else None
+            )
+            explicit_hash = (
+                explicit_variants[0].get("normalizedAstSha256")
+                if isinstance(explicit_variants, list) and explicit_variants
+                and isinstance(explicit_variants[0], dict)
+                else None
+            )
+            if not isinstance(original_hash, str) or not isinstance(explicit_hash, str):
+                errors.append(
+                    f"parser equivalence group {group} lacks normalized AST fingerprints"
+                )
+            elif original_hash != explicit_hash:
+                errors.append(
+                    f"parser equivalence group {group} has different normalized AST fingerprints"
+                )
+        elif "PASS" in statuses:
+            errors.append(
+                f"parser equivalence group {group} did not produce two comparable results"
+            )
+
+
 def aggregate_reports(
     manifest: dict[str, Any],
     reports: list[dict[str, Any]],
@@ -1516,6 +1573,12 @@ def aggregate_reports(
         for test_id in sorted(result_occurrences)
         if test_id in expected_ids and result_occurrences[test_id]
     ]
+    if manifest["suite"] == "test262-parser-tests":
+        _validate_parser_equivalence_results(
+            expected_ids,
+            {result["id"]: result for result in results if isinstance(result.get("id"), str)},
+            errors,
+        )
     if not any(result.get("status") == "PASS" for result in results):
         errors.append("aggregate has no PASS results; no executed conformance evidence is available")
     return {
