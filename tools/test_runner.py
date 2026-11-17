@@ -346,6 +346,10 @@ def _string_list(metadata: dict[str, Any], key: str) -> list[str]:
 def test262_modes(flags: list[str]) -> list[str]:
     if "onlyStrict" in flags and "noStrict" in flags:
         raise RunnerError("Test262 flags onlyStrict and noStrict are mutually exclusive")
+    if "raw" in flags:
+        if "onlyStrict" in flags or "module" in flags or "async" in flags:
+            raise RunnerError("raw tests cannot also specify onlyStrict, module or async")
+        return ["sloppy"]
     if "module" in flags:
         if "onlyStrict" in flags or "noStrict" in flags:
             raise RunnerError("module tests cannot also specify onlyStrict or noStrict")
@@ -372,12 +376,20 @@ def _safe_relative_path(value: str) -> PurePosixPath:
     return path
 
 
-def _load_harness_includes(harness_root: Path, names: list[str], raw: bool) -> list[dict[str, str]]:
+def _load_harness_includes(
+    harness_root: Path,
+    names: list[str],
+    raw: bool,
+    async_test: bool,
+) -> list[dict[str, str]]:
     if raw:
         if names:
             raise RunnerError("raw Test262 tests must not declare harness includes")
         return []
-    ordered_names = ["sta.js", "assert.js", *names]
+    ordered_names = ["assert.js", "sta.js"]
+    if async_test:
+        ordered_names.append("doneprintHandle.js")
+    ordered_names.extend(names)
     result: list[dict[str, str]] = []
     seen: set[str] = set()
     for name in ordered_names:
@@ -418,10 +430,14 @@ def discover_test_ids(suite_root: Path, suite: str) -> list[str]:
         test_root = suite_root / "test"
         if not test_root.is_dir():
             raise RunnerError(f"Test262 test directory does not exist: {test_root}")
-        return sorted(path.relative_to(test_root).as_posix() for path in test_root.rglob("*.js") if path.is_file())
+        return sorted(
+            path.relative_to(test_root).as_posix()
+            for path in test_root.rglob("*.js")
+            if path.is_file() and "_FIXTURE" not in path.name
+        )
     if suite == "test262-parser-tests":
         ids: list[str] = []
-        for category in ("pass", "early", "fail"):
+        for category in ("pass", "pass-explicit", "early", "fail"):
             category_root = suite_root / category
             if not category_root.is_dir():
                 raise RunnerError(f"parser corpus directory does not exist: {category_root}")
@@ -573,6 +589,8 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
     features = _string_list(metadata, "features")
     flags = _string_list(metadata, "flags")
     includes = _string_list(metadata, "includes")
+    if "_FIXTURE" in PurePosixPath(test_id).name:
+        raise RunnerError("Test262 module fixture files must not be run as standalone tests")
     negative = metadata.get("negative")
     if negative is not None:
         if not isinstance(negative, dict):
@@ -583,7 +601,10 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
             raise RunnerError("negative tests require a supported phase and error type")
         negative = {"phase": phase, "type": error_type}
     raw = "raw" in flags
-    harness = _load_harness_includes(suite_root / "harness", includes, raw)
+    async_test = "async" in flags
+    harness = _load_harness_includes(
+        suite_root / "harness", includes, raw, async_test
+    )
     return {
         "id": test_id,
         "suite": "test262",
@@ -595,7 +616,7 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
         "modes": test262_modes(flags),
         "sourceType": "module" if "module" in flags else "script",
         "raw": raw,
-        "async": "async" in flags,
+        "async": async_test,
         "negative": negative,
     }
 
@@ -603,7 +624,7 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
 def _read_parser_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
     relative = _safe_relative_path(test_id)
     category = relative.parts[0]
-    if category not in {"pass", "early", "fail"}:
+    if category not in {"pass", "pass-explicit", "early", "fail"}:
         raise RunnerError(f"unknown parser-tests category in {test_id}")
     path = suite_root.joinpath(*relative.parts)
     try:
@@ -624,7 +645,7 @@ def _read_parser_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
         "async": False,
         "negative": None,
         "parseExpectation": {
-            "outcome": "parsed" if category == "pass" else "rejected",
+            "outcome": "parsed" if category in {"pass", "pass-explicit"} else "rejected",
             "phase": "early" if category == "early" else "parse",
         },
     }
@@ -744,11 +765,22 @@ def _evaluate_test262_response(
             "status": "FAIL",
             "reason": f"unexpected {response.get('errorName', 'exception')} during {response.get('phase', 'execution')}",
         }
-    if descriptor["async"] and response.get("asyncDone") is not True:
+    if descriptor["async"]:
+        async_signal = response.get("asyncSignal")
+        if async_signal == "Test262:AsyncTestComplete":
+            return {"status": "PASS"}
+        if isinstance(async_signal, str) and async_signal.startswith(
+            "Test262:AsyncTestFailure:"
+        ):
+            return {
+                "status": "FAIL",
+                "failureKind": "ASYNC_FAILURE",
+                "reason": async_signal,
+            }
         return {
             "status": "FAIL",
             "failureKind": "ASYNC_NOT_COMPLETED",
-            "reason": "async Test262 test did not complete through the $DONE protocol",
+            "reason": "async Test262 test did not emit the required print completion signal",
         }
     return {"status": "PASS"}
 
