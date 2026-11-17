@@ -41,6 +41,10 @@ class ValueSemanticsTests(unittest.TestCase):
     def test_bigint_plus_bigint_stays_bigint(self):
         self.assertEqual(js_add(bigint(4), bigint(5)), bigint(9))
 
+    def test_bigint_plus_number_throws(self):
+        with self.assertRaises(TypeError):
+            js_add(bigint(4), number(5))
+
     def test_nan_is_not_strictly_equal_to_itself(self):
         nan = number(float("nan"))
         self.assertFalse(strict_equal(nan, nan))
