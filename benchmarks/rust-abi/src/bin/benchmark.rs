@@ -72,7 +72,7 @@ fn measure<F: FnMut()>(name: &'static str, items_per_call: usize, cfg: &Config, 
     }
 }
 fn expect(status: OgmaStatus) {
-    assert_eq!(status, OgmaStatus::Ok, "ABI benchmark operation failed: {status:?}");
+    assert_eq!(status, OgmaStatus::OK, "ABI benchmark operation failed: {status:?}");
 }
 unsafe extern "C-unwind" fn callback_identity(
     _runtime: *const OgmaRuntime, _context: OgmaContextHandle,
@@ -83,7 +83,7 @@ unsafe extern "C-unwind" fn callback_identity(
     unsafe {
         completion.write(OgmaCompletion { kind: COMPLETION_NORMAL, reserved: 0, value: *args });
     }
-    OgmaStatus::Ok
+    OgmaStatus::OK
 }
 fn json_escape(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 8);

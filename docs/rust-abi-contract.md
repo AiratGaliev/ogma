@@ -70,7 +70,7 @@ The callback-backed mock function is a bridge fixture, not a JavaScript function
 
 ## Completion, errors and panic containment
 
-Transport/ABI failures are represented by OgmaStatus. Script completion is represented separately by OgmaCompletion:
+Transport/ABI failures are represented by OgmaStatus, a transparent uint32_t status code. Script completion is represented separately by OgmaCompletion:
 
 | Kind | Meaning |
 |---|---|
@@ -82,7 +82,7 @@ Transport/ABI failures are represented by OgmaStatus. Script completion is repre
 
 A callback can return Ok with a Throw completion; the ABI call itself succeeds and the caller inspects the completion kind. A host callback/transport failure returns a non-OK status. Invalid completion tags, reserved bits or stale completion handles are rejected.
 
-The Rust callback function pointer uses the C-unwind ABI so a Rust panic can be caught by catch_unwind at the enclosing ABI boundary. A caught panic becomes OgmaStatus::Panic; it never becomes an unwind across the exported C ABI. C callbacks must return normally and must not throw across this boundary. The proof uses the unwind panic strategy; panic-abort builds cannot provide this containment guarantee and are not a supported configuration for this proof.
+The Rust callback function pointer uses the C-unwind ABI so a Rust panic can be caught by catch_unwind at the enclosing ABI boundary. A caught panic becomes OgmaStatus::PANIC; it never becomes an unwind across the exported C ABI. C callbacks must return normally and must not throw across this boundary. The proof uses the unwind panic strategy; panic-abort builds cannot provide this containment guarantee and are not a supported configuration for this proof.
 
 ## Reproducible cost measurements
 

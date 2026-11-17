@@ -289,7 +289,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Verify Rust toolchain
-        id: rust-toolchain
+        id: rust_toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -298,7 +298,26 @@ jobs:
           echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
 
       - name: Check formatting
+        id: formatting
+        continue-on-error: true
         run: cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+
+      - name: Normalize source in the CI workspace and capture rustfmt patch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all
+          git diff --no-ext-diff -- benchmarks/rust-abi > "$RUNNER_TEMP/ogm-19-rustfmt.patch"
+
+      - name: Upload rustfmt normalization patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-19-rustfmt-diagnostic
+          path: ${{ runner.temp }}/ogm-19-rustfmt.patch
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run Clippy
         run: cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
@@ -308,7 +327,7 @@ jobs:
 
       - name: Run reproducible ABI boundary benchmark
         env:
-          RUSTC_VERSION: ${{ steps.rust-toolchain.outputs.rustc_version }}
+          RUSTC_VERSION: ${{ steps.rust_toolchain.outputs.rustc_version }}
         run: |
           set -euo pipefail
           cargo run --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --bin ogma-abi-bench -- \
