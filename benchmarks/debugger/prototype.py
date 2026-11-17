@@ -21,7 +21,6 @@ from debugger_api import (
     SourceLocation,
     SourcePosition,
     StackFrameSnapshot,
-    State if False else DebuggerError,
     StoppedEvent,
     VariableSnapshot,
 )
@@ -423,10 +422,10 @@ class Debugger:
 
     def before_instruction(self, frame: Frame, location: SourceLocation | None) -> bool:
         self._require_owner()
+        frame.location = location
         self._apply_commands()
         if self._state != "running":
             return False
-        frame.location = location
         if self._matches_breakpoint(location):
             self._stop("breakpoint")
             return False
