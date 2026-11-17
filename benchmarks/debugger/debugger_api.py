@@ -153,13 +153,6 @@ class InspectedObject:
         object.__setattr__(self, "properties", tuple(self.properties))
 
 
-@dataclass(frozen=True)
-class ExecutionResult:
-    status: str
-    value: Any = None
-    event: StoppedEvent | ExceptionEvent | None = None
-
-
 @runtime_checkable
 class DebuggerPort(Protocol):
     """Stable command port implemented by each execution backend.
