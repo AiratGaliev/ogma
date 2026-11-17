@@ -5,57 +5,382 @@ on:
     branches: [test, main]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Promotion target branch
+        required: true
+        type: choice
+        options: [test, main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: conformance-promotion-${{ github.event.pull_request.number || github.ref }}
+  group: conformance-promotion-${ github.event.pull_request.number || github.ref }
   cancel-in-progress: true
 
 jobs:
-  conformance-promotion:
-    name: conformance-promotion
+  validate-route:
+    name: validate-promotion-route
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Validate promotion route
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_BRANCH: ${{ github.base_ref }}
-          HEAD_BRANCH: ${{ github.head_ref }}
+      - name: Validate exact promotion direction
         shell: bash
+        env:
+          EVENT_NAME: ${ github.event_name }
+          SOURCE_BRANCH: ${ github.event_name == 'pull_request' && github.head_ref || github.ref_name }
+          TARGET_BRANCH: ${ github.event_name == 'pull_request' && github.base_ref || inputs.target_branch }
         run: |
           set -euo pipefail
-          case "$BASE_BRANCH" in
-            test)
-              if [[ "$HEAD_BRANCH" != "dev" ]]; then
-                echo "::error::Conformance promotion to test is allowed only from dev."
-                exit 1
-              fi
+          case "${TARGET_BRANCH}:${SOURCE_BRANCH}" in
+            test:dev)
+              echo "Validated dev → test promotion."
               ;;
-            main)
-              case "$HEAD_BRANCH" in
-                test|hotfix/*) ;;
-                *)
-                  echo "::error::Release promotion to main is allowed only from test or an approved hotfix/* branch."
-                  exit 1
-                  ;;
-              esac
+            main:test)
+              echo "Validated test → main release promotion."
+              ;;
+            main:hotfix/*)
+              echo "Validated documented emergency hotfix → main route."
               ;;
             *)
-              echo "::error::Unsupported promotion target: $BASE_BRANCH"
+              echo "::error::Invalid promotion direction: ${SOURCE_BRANCH} → ${TARGET_BRANCH}. Expected dev → test or test → main (hotfix/* → main is emergency-only)."
               exit 1
               ;;
           esac
 
-      - name: Fail closed until the conformance runner is implemented
+  plan:
+    name: plan-pinned-conformance-shards
+    needs: [validate-route]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${ steps.config.outputs.matrix }
+    steps:
+      - name: Checkout Ogma candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read immutable upstream pins and shard matrix
+        id: config
         shell: bash
         run: |
           set -euo pipefail
-          echo "::error title=Conformance gate unavailable::The pinned Test262/differential runner and deterministic shard aggregator are not implemented in this M0 repository. Complete OGM-35 and wire its verified runner here before allowing dev-to-test or test-to-main promotion."
-          exit 1
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          repositories = json.loads(Path("conformance/baseline.json").read_text(encoding="utf-8"))["repositories"]
+          matrix_items = []
+          for suite, output_name, shard_count in (
+              ("test262", "test262", 8),
+              ("test262-parser-tests", "parser", 4),
+          ):
+              entry = repositories[suite]
+              parsed = urlparse(entry["url"])
+              if parsed.netloc.lower() != "github.com":
+                  raise SystemExit(f"{suite}: expected a pinned github.com repository URL")
+              revision = entry["revision"]
+              if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
+                  raise SystemExit(f"{suite}: revision must be a full lowercase commit SHA")
+              repository = parsed.path.strip("/")
+              if len(repository.split("/")) != 2:
+                  raise SystemExit(f"{suite}: invalid repository URL")
+              print(f"{output_name}_repo={repository}")
+              print(f"{output_name}_sha={revision}")
+              print(f"{output_name}_shard_count={shard_count}")
+              matrix_items.extend({"suite": suite, "shard": index} for index in range(shard_count))
+          print("matrix=" + json.dumps({"include": matrix_items}, separators=(",", ":")))
+          PY
+
+      - name: Checkout pinned Test262 corpus
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.config.outputs.test262_repo }
+          ref: ${ steps.config.outputs.test262_sha }
+          path: .artifacts/upstream/test262
+          fetch-depth: 1
+
+      - name: Checkout pinned parser corpus
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.config.outputs.parser_repo }
+          ref: ${ steps.config.outputs.parser_sha }
+          path: .artifacts/upstream/test262-parser-tests
+          fetch-depth: 1
+
+      - name: Build deterministic full-corpus manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/manifests
+          python tools/test_runner.py plan \
+            --suite test262 \
+            --suite-root .artifacts/upstream/test262 \
+            --shard-count "${ steps.config.outputs.test262_shard_count }" \
+            --output .artifacts/manifests/test262.json
+          python tools/test_runner.py plan \
+            --suite test262-parser-tests \
+            --suite-root .artifacts/upstream/test262-parser-tests \
+            --shard-count "${ steps.config.outputs.parser_shard_count }" \
+            --output .artifacts/manifests/test262-parser-tests.json
+
+      - name: Upload Test262 manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-conformance-test262-manifest
+          path: .artifacts/manifests/test262.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload parser manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-conformance-test262-parser-tests-manifest
+          path: .artifacts/manifests/test262-parser-tests.json
+          if-no-files-found: error
+          retention-days: 7
+
+  run-shards:
+    name: run-deterministic-conformance-shards
+    needs: [plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${ fromJson(needs.plan.outputs.matrix) }
+    steps:
+      - name: Checkout Ogma candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read immutable upstream pins
+        id: pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          repositories = json.loads(Path("conformance/baseline.json").read_text(encoding="utf-8"))["repositories"]
+          for suite, output_name in (("test262", "test262"), ("test262-parser-tests", "parser")):
+              entry = repositories[suite]
+              print(f"{output_name}_repo={urlparse(entry['url']).path.strip('/')}")
+              print(f"{output_name}_sha={entry['revision']}")
+          PY
+
+      - name: Download deterministic shard manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: ogma-conformance-${ matrix.suite }-manifest
+          path: .artifacts/manifests/${ matrix.suite }
+
+      - name: Checkout pinned Test262 corpus
+        if: matrix.suite == 'test262'
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.pins.outputs.test262_repo }
+          ref: ${ steps.pins.outputs.test262_sha }
+          path: .artifacts/upstream/test262
+          fetch-depth: 1
+
+      - name: Checkout pinned parser corpus
+        if: matrix.suite == 'test262-parser-tests'
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.pins.outputs.parser_repo }
+          ref: ${ steps.pins.outputs.parser_sha }
+          path: .artifacts/upstream/test262-parser-tests
+          fetch-depth: 1
+
+      - name: Execute assigned pinned shard
+        shell: bash
+        env:
+          SUITE: ${ matrix.suite }
+          SHARD_INDEX: ${ matrix.shard }
+          OGMA_TEST262_ADAPTER: ${ vars.OGMA_TEST262_ADAPTER }
+          OGMA_PARSER_ADAPTER: ${ vars.OGMA_PARSER_ADAPTER }
+        run: |
+          set -euo pipefail
+          case "$SUITE" in
+            test262)
+              SUITE_ROOT=".artifacts/upstream/test262"
+              ADAPTER_COMMAND="$OGMA_TEST262_ADAPTER"
+              ;;
+            test262-parser-tests)
+              SUITE_ROOT=".artifacts/upstream/test262-parser-tests"
+              ADAPTER_COMMAND="$OGMA_PARSER_ADAPTER"
+              ;;
+            *)
+              echo "::error::Unknown conformance suite: $SUITE"
+              exit 2
+              ;;
+          esac
+
+          mkdir -p .artifacts/results
+          args=(
+            python tools/test_runner.py run
+            --manifest ".artifacts/manifests/$SUITE/$SUITE.json"
+            --suite-root "$SUITE_ROOT"
+            --shard-index "$SHARD_INDEX"
+            --report ".artifacts/results/$SUITE-shard-$SHARD_INDEX.json"
+            --junit ".artifacts/results/$SUITE-shard-$SHARD_INDEX.xml"
+          )
+          if [[ -n "$ADAPTER_COMMAND" ]]; then
+            args+=(--adapter "$ADAPTER_COMMAND")
+          fi
+          "\${args[@]}"
+
+      - name: Upload shard reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-conformance-${ matrix.suite }-shard-${ matrix.shard }
+          path: |
+            .artifacts/results/${ matrix.suite }-shard-${ matrix.shard }.json
+            .artifacts/results/${ matrix.suite }-shard-${ matrix.shard }.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  conformance-promotion:
+    name: conformance-promotion
+    needs: [validate-route, plan, run-shards]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Ogma candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require route validation and successful shard planning
+        env:
+          ROUTE_RESULT: ${ needs.validate-route.result }
+          PLAN_RESULT: ${ needs.plan.result }
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$ROUTE_RESULT" != "success" ]]; then
+            echo "::error::Promotion route validation did not succeed."
+            exit 1
+          fi
+          if [[ "$PLAN_RESULT" != "success" ]]; then
+            echo "::error::Pinned conformance shard planning did not succeed."
+            exit 1
+          fi
+
+      - name: Download Test262 manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: ogma-conformance-test262-manifest
+          path: .artifacts/manifests/test262
+        continue-on-error: true
+
+      - name: Download parser manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: ogma-conformance-test262-parser-tests-manifest
+          path: .artifacts/manifests/test262-parser-tests
+        continue-on-error: true
+
+      - name: Download all completed shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ogma-conformance-*-shard-*
+          path: .artifacts/results
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Read and checkout immutable upstream pins
+        id: pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          repositories = json.loads(Path("conformance/baseline.json").read_text(encoding="utf-8"))["repositories"]
+          for suite, output_name in (("test262", "test262"), ("test262-parser-tests", "parser")):
+              entry = repositories[suite]
+              print(f"{output_name}_repo={urlparse(entry['url']).path.strip('/')}")
+              print(f"{output_name}_sha={entry['revision']}")
+          PY
+
+      - name: Checkout pinned Test262 corpus
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.pins.outputs.test262_repo }
+          ref: ${ steps.pins.outputs.test262_sha }
+          path: .artifacts/upstream/test262
+          fetch-depth: 1
+
+      - name: Checkout pinned parser corpus
+        uses: actions/checkout@v4
+        with:
+          repository: ${ steps.pins.outputs.parser_repo }
+          ref: ${ steps.pins.outputs.parser_sha }
+          path: .artifacts/upstream/test262-parser-tests
+          fetch-depth: 1
+
+      - name: Aggregate every shard and enforce conformance
+        shell: bash
+        env:
+          SHARDS_RESULT: ${ needs.run-shards.result }
+        run: |
+          set -uo pipefail
+          status=0
+
+          aggregate_suite() {
+            local suite="$1"
+            local suite_root=".artifacts/upstream/$suite"
+            local manifest=".artifacts/manifests/$suite/$suite.json"
+            local reports=()
+            if [[ ! -f "$manifest" ]]; then
+              echo "::error::Missing $suite shard manifest."
+              return 1
+            fi
+            if [[ -d ".artifacts/results" ]]; then
+              mapfile -d '' reports < <(find .artifacts/results -maxdepth 1 -type f -name "$suite-shard-*.json" -print0 | sort -z)
+            fi
+            python tools/test_runner.py aggregate \
+              --manifest "$manifest" \
+              --suite-root "$suite_root" \
+              --reports "\${reports[@]}" \
+              --report ".artifacts/results/$suite-aggregate.json" \
+              --junit ".artifacts/results/$suite-aggregate.xml"
+          }
+
+          mkdir -p .artifacts/results
+          aggregate_suite test262 || status=1
+          aggregate_suite test262-parser-tests || status=1
+
+          if [[ "$SHARDS_RESULT" != "success" ]]; then
+            echo "::error::At least one conformance shard job did not complete successfully."
+            status=1
+          fi
+          exit "$status"
+
+      - name: Upload aggregate reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-conformance-aggregate
+          path: .artifacts/results/*-aggregate.*
+          if-no-files-found: ignore
+          retention-days: 30

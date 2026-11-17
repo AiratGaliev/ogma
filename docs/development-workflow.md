@@ -168,16 +168,21 @@ A documentation-only PR should run documentation checks and should not be forced
 
 ### Promotion CI — dev → test
 
-The [Conformance Promotion](../.github/workflows/conformance-promotion.yml) workflow exposes the stable required context **conformance-promotion** for PRs targeting test or main. It validates the permitted source/target route and remains fail-closed. OGM-34 provides the adapter-driven Test262/parser runner, immutable upstream pins, feature-profile filtering, deterministic shard manifests/aggregation and runner self-tests. No executable Ogma engine adapter exists yet; OGM-35 owns actual shard execution, Fast/promotion workflow integration and the CI proof for successful, failed and missing shard results. A route check or fake adapter test is not conformance evidence.
+The [Conformance Promotion](../.github/workflows/conformance-promotion.yml) workflow preserves the required status context **conformance-promotion** and runs only for PRs targeting `test` or `main` (or an explicit manual dispatch). It validates exact source/target direction before planning any suite: `dev → test`, `test → main`, or the documented emergency `hotfix/* → main` route.
 
-The promotion PR is the first mandatory full integration gate. As the relevant systems become available, require:
+The workflow reads immutable repository URLs and full commit SHAs from `conformance/baseline.json`, checks out those exact upstream revisions, and creates deterministic manifests before execution. Test262 uses eight shards; the supplementary parser corpus uses four. Each shard produces JSON and JUnit artifacts. The final **conformance-promotion** job waits for the complete matrix, downloads all available results and invokes the runner's aggregate mode for both suites. Missing manifests, missing shard artifacts, duplicate/misassigned tests, worker failures, timeouts, invalid classifications and other incomplete aggregates fail the required check. A matrix job failure also keeps the aggregate check red.
 
-- the complete pinned Test262 corpus for the declared compatibility profile;
-- the full differential/regression suite against the pinned reference-engine revisions;
-- interpreter/AOT equivalence tests for the implemented feature profile;
-- integrated runtime, Rust ABI/host and consumer checks;
-- deterministic test shards with an aggregate job that fails on a failed, timed-out, duplicate or missing shard;
-- any release-critical platform and security checks defined by the candidate.
+Adapter command strings are supplied through repository Actions variables `OGMA_TEST262_ADAPTER` and `OGMA_PARSER_ADAPTER`. They are optional only while the corresponding readiness flag in `conformance/profile.json` remains `not_implemented`; the runner then reports `UNSUPPORTED`, and aggregate mode fails closed. A profile must not be marked `ready` until the actual parser/runtime adapter exists and is independently verified. If a profile is marked ready without its adapter command, the shard reports a harness error and promotion still fails.
+
+The current repository has no executable Ogma parser or ECMAScript Runtime adapter. Therefore this workflow proves planning, shard execution/report transport and aggregate enforcement, but it is not a successful Ogma conformance run today. Fake-adapter self-tests in Fast CI prove the runner protocol and aggregate algorithm only; they do not satisfy the promotion gate. The pinned QuickJS-NG revision is present in the baseline, but the repository does not yet have an executable differential suite, so differential conformance must not be claimed or silently counted as passed.
+
+The promotion PR is the first mandatory full integration gate. As the relevant engine paths become available, it must cover:
+
+- the complete pinned Test262 corpus within the declared compatibility profile;
+- the complete pinned parser grammar/early-error corpus;
+- the full differential/regression suite against pinned reference revisions once its executable runner is delivered;
+- interpreter/AOT equivalence and integrated runtime/Rust ABI/host/consumer checks when those implementations exist;
+- deterministic shard completion and aggregate verification for every configured suite.
 
 A failed promotion gate stops promotion. Fix the root cause in a topic branch, merge the fix into dev, then create a fresh promotion candidate. Never weaken or delete a test merely to make the gate green.
 
@@ -202,18 +207,19 @@ Keep Ogma execution/dispatch costs separate from host physics, ECS, synchronizat
 
 ### Current enforcement state
 
-GitHub Actions and branch rulesets are active. The workflow files are currently on the topic branch and have executed against PR #1; the Fast CI check passed. The repository still has no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator.
+GitHub Actions and branch rulesets are active. The stable required check contexts are unchanged:
 
-- .github/workflows/ci.yml runs for PRs targeting dev/test/main and pushes to permanent branches. Its required job context is **fast-checks**.
-- .github/workflows/conformance-promotion.yml runs automatically for PRs targeting test/main. Its required job context is **conformance-promotion**; it checks promotion direction and deliberately fails closed until OGM-35 provides the actual conformance runner and deterministic shard aggregator. No PR targeting test/main has exercised this gate yet, so it is configured in the rulesets but not claimed as a passed workflow check.
-- The workflow declares workflow_dispatch for diagnostics, but GitHub exposes manual dispatch only after the workflow file exists on the default branch. Since this file is currently only on the topic branch, manual dispatch is not yet available.
-- .gitattributes pins LF for Markdown, Rust, TOML, YAML, Python and shell files; the local validator tolerates Windows CRLF checkouts while GitHub's Linux runner enforces LF.
-- Fast CI is a bootstrap repository gate, not evidence that an Ogma runtime exists or that Rust/Test262 conformance has passed.
-- Active rulesets: [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038). Each requires PRs, blocks deletion/non-fast-forward updates and has no bypass actors. dev requires **fast-checks**; test/main require **fast-checks** and **conformance-promotion**.
+- `.github/workflows/ci.yml` runs on PRs targeting `dev`, `test`, `main` and pushes to permanent branches. Its required job context is **fast-checks**. The Fast lane runs focused repository/verifier tests and the conformance-runner protocol/aggregate self-tests; it does not check out or execute the full upstream Test262 corpus.
+- `.github/workflows/conformance-promotion.yml` runs for PRs targeting `test` or `main`. Its required aggregate job context remains **conformance-promotion**. It validates the route, plans the complete pinned Test262 and parser corpora, executes deterministic shard matrices, uploads per-shard reports and requires the aggregate job to validate exact coverage and successful outcomes.
+- The currently committed `conformance/profile.json` still marks both parser and runtime execution as `not_implemented`, and no real Ogma adapter exists. Consequently aggregate promotion intentionally fails closed; a run containing only `UNSUPPORTED` results cannot pass. This is expected until actual adapters are implemented and the profile truthfully changes to `ready`.
+- The adapter command variables are `OGMA_TEST262_ADAPTER` and `OGMA_PARSER_ADAPTER`. Do not set them to fake adapters for a real promotion candidate.
+- The workflow also permits manual diagnostic dispatch with an explicit target branch; the checked-out source branch must match the same allowed route.
+- The workflow files and their workflow logic are not evidence of an executed promotion. A promotion check is claimed as verified only after a real PR to `test` or `main` runs it.
+- `.gitattributes` pins LF for Markdown, Rust, TOML, YAML, Python and shell files; the local validator tolerates Windows CRLF checkouts while GitHub's Linux runner enforces LF.
+- Fast CI is a bootstrap/engineering gate, not evidence that a production Ogma runtime exists or that Rust/Test262/differential conformance has passed.
+- Active rulesets: [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038). Each requires PRs, blocks deletion/non-fast-forward updates and has no bypass actors. `dev` requires **fast-checks**; `test` and `main` require **fast-checks** plus **conformance-promotion**. These existing rulesets were read back from GitHub and are not modified by OGM-35.
 
-M0 issue [OGM-35 — Fast CI and Test262 promotion-gate proof](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) remains open and owns the complete conformance runner, deterministic shard aggregator and success/failure/missing-shard proof. Do not mark that issue Done based on the bootstrap gate.
-
-Keep the check names stable once GitHub rulesets reference them.
+Long fuzzing, extended GC/lifecycle/resource-limit stress, sanitizers, Miri where applicable, broad platform/target matrices and performance tracking remain documented nightly/manual work. No such expensive job is added to topic PRs or claimed as an active scheduled workflow.
 
 ## 7. Manual and consumer acceptance
 
