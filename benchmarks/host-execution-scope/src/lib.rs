@@ -641,10 +641,7 @@ mod tests {
         let mut context = HostExecutionContext::new(LibrarySyncMode::None);
         let other_thread_id = thread::spawn(|| thread::current().id()).join().unwrap();
         context.owner_thread = other_thread_id;
-        assert_eq!(
-            context.enter_scope().err(),
-            Some(HostError::WrongThread)
-        );
+        assert_eq!(context.enter_scope().err(), Some(HostError::WrongThread));
     }
 
     #[test]
