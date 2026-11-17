@@ -130,7 +130,7 @@ def make_image():
         ],
         "debug_metadata": function_debug_map([
             user_source(7, 2, ("increment",), "env_update"),
-            user_source(8, 15, ("capture_total", "old_total"), "env_update"),
+            user_source(8, 2, ("capture_total", "old_total"), "env_update"),
             user_source(8, 2, ("old_total", "increment", "next"), "env_update"),
             user_source(9, 2, ("capture_total", "next"), "env_update"),
             user_source(10, 2, ("next",), "env_update"),
@@ -359,12 +359,12 @@ class DebuggerApiTests(unittest.TestCase):
                 "locations": [
                     {"offset": 0, "source": {
                         "origin": "user", "file": "src_throw",
-                        "start": {"line": 1, "column": 0}, "end": {"line": 1, "column": 19},
+                        "start": {"line": 1, "column": 0}, "end": {"line": 1, "column": 21},
                         "scope": "env_main", "bindings": ["error"], "suspension": None, "inline_chain": [],
                     }},
                     {"offset": 1, "source": {
                         "origin": "user", "file": "src_throw",
-                        "start": {"line": 2, "column": 0}, "end": {"line": 2, "column": 11},
+                        "start": {"line": 2, "column": 0}, "end": {"line": 2, "column": 12},
                         "scope": "env_main", "bindings": ["error"], "suspension": None, "inline_chain": [],
                     }},
                 ],
