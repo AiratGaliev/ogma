@@ -83,9 +83,13 @@ def to_js_string(value: JSValue) -> str:
 
 def js_add(left: JSValue, right: JSValue) -> JSValue:
     # This deliberately models only primitive values in the benchmark corpus.
-    if left.tag in (Tag.STRING, Tag.BIGINT) or right.tag in (Tag.STRING, Tag.BIGINT):
-        if left.tag is Tag.BIGINT and right.tag is Tag.BIGINT:
-            return bigint(left.payload + right.payload)
+    # BigInt arithmetic cannot mix with Number, while String concatenation can
+    # stringify either primitive after ToPrimitive.
+    if (left.tag is Tag.BIGINT and right.tag is Tag.NUMBER) or (right.tag is Tag.BIGINT and left.tag is Tag.NUMBER):
+        raise TypeError("Cannot mix BigInt and other types, use explicit conversions")
+    if left.tag is Tag.BIGINT and right.tag is Tag.BIGINT:
+        return bigint(left.payload + right.payload)
+    if left.tag is Tag.STRING or right.tag is Tag.STRING:
         return js_string(to_js_string(left) + to_js_string(right))
     if left.tag is Tag.OBJECT or right.tag is Tag.OBJECT:
         raise NotImplementedError("object ToPrimitive is outside this M0 fixture")
