@@ -45,13 +45,12 @@ def lower_core_ir_debug_metadata(
         extra = sorted(set(instruction_offsets) - expected_ids)
         raise DebuggerError(f"IR/bytecode location map mismatch; missing={missing}, extra={extra}")
 
-    boundaries = set(instruction_boundaries)
-    if (
-        len(boundaries) != len(instruction_boundaries)
-        or any(not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in boundaries)
-        or code_size not in boundaries
-    ):
-        raise DebuggerError("instruction boundaries must be unique non-negative offsets and include code_size")
+    raw_boundaries = list(instruction_boundaries)
+    if any(not isinstance(item, int) or isinstance(item, bool) or item < 0 for item in raw_boundaries):
+        raise DebuggerError("instruction boundaries must be non-negative integer offsets")
+    boundaries = set(raw_boundaries)
+    if len(boundaries) != len(raw_boundaries) or code_size not in boundaries:
+        raise DebuggerError("instruction boundaries must be unique and include code_size")
 
     offsets = list(instruction_offsets.values())
     if any(
