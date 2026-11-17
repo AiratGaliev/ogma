@@ -194,6 +194,7 @@ Request envelope:
         "id": "language/example.js",
         "suite": "test262",
         "source": "...",
+        "metadata": {"locale": ["en", "fr"]},
         "mode": "strict",
         "sourceType": "script",
         "raw": false,
