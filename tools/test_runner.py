@@ -599,7 +599,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("suite") not in {"test262", "test262-parser-tests"}:
         raise RunnerError("invalid suite in shard manifest")
     count = manifest.get("shardCount")
-    if not isinstance(count, int) or count < 1:
+    if type(count) is not int or count < 1:
         raise RunnerError("invalid shardCount in shard manifest")
     profile = manifest.get("profile")
     if (
@@ -640,7 +640,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         if test_id in ids:
             raise RunnerError(f"duplicate test ID in shard manifest: {test_id}")
         ids.add(test_id)
-        if not isinstance(shard, int) or not 0 <= shard < count:
+        if type(shard) is not int or not 0 <= shard < count:
             raise RunnerError(f"invalid shard assignment for {test_id}")
         assignment_key = _shard_assignment_key(manifest["suite"], test_id)
         deterministic = int(hashlib.sha256(assignment_key.encode("utf-8")).hexdigest()[:16], 16) % count
@@ -654,7 +654,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         if not isinstance(shard, dict):
             raise RunnerError("invalid shard record")
         index = shard.get("index")
-        if not isinstance(index, int) or index in actual_indices or not 0 <= index < count:
+        if type(index) is not int or index in actual_indices or not 0 <= index < count:
             raise RunnerError("duplicate or invalid shard index")
         actual_indices.add(index)
         if shard.get("testIds") != expected[index]:
@@ -1512,22 +1512,26 @@ def run_manifest(
     shard = next(item for item in manifest["shards"] if item["index"] == shard_index)
     started = time.monotonic()
     results: list[dict[str, Any]] = []
-    with AdapterSession(adapter_command) as adapter_session:
-        for test_id in shard["testIds"]:
-            results.append(
-                run_one_test(
-                    suite_root,
-                    manifest["suite"],
-                    test_id,
-                    profile,
-                    adapter_command,
-                    timeout_ms,
-                    async_timeout_ms,
-                    probe_unsupported,
-                    probe_excluded,
-                    adapter_session,
+    worker_error: str | None = None
+    try:
+        with AdapterSession(adapter_command) as adapter_session:
+            for test_id in shard["testIds"]:
+                results.append(
+                    run_one_test(
+                        suite_root,
+                        manifest["suite"],
+                        test_id,
+                        profile,
+                        adapter_command,
+                        timeout_ms,
+                        async_timeout_ms,
+                        probe_unsupported,
+                        probe_excluded,
+                        adapter_session,
+                    )
                 )
-            )
+    except RunnerError as exc:
+        worker_error = str(exc)
     if manifest["suite"] == "test262-parser-tests":
         _apply_parser_equivalence(results)
     return {
@@ -1541,6 +1545,7 @@ def run_manifest(
         "results": results,
         "summary": summarize(results),
         "durationMs": round((time.monotonic() - started) * 1000, 3),
+        "workerError": worker_error,
         "probeUnsupported": probe_unsupported,
         "probeExcluded": probe_excluded,
     }
@@ -1656,8 +1661,14 @@ def aggregate_reports(
         ):
             errors.append("shard report suite, source, profile or shardCount does not match the manifest")
             continue
+        worker_error = report.get("workerError")
+        if worker_error is not None:
+            if not isinstance(worker_error, str) or not worker_error.strip():
+                errors.append(f"shard report {report.get('shardIndex')} has an invalid workerError")
+            else:
+                errors.append(f"shard {report.get('shardIndex')} adapter worker error: {worker_error}")
         index = report.get("shardIndex")
-        if not isinstance(index, int) or not 0 <= index < count:
+        if type(index) is not int or not 0 <= index < count:
             errors.append(f"invalid shardIndex in report: {index!r}")
             continue
         if index in shard_seen:
@@ -1747,8 +1758,6 @@ def _parse_adapter_command(value: str | None) -> list[str]:
 
 
 def _load_and_check_revision(suite_root: Path, expected: str) -> None:
-    if not (suite_root / ".git").exists():
-        raise RunnerError(f"source corpus is not a Git checkout: {suite_root}")
     try:
         process = subprocess.run(
             ["git", "-C", str(suite_root), "rev-parse", "HEAD"],
@@ -1861,9 +1870,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             write_json(args.report, report)
             if args.junit:
-                write_junit(args.junit, manifest["suite"], report["results"])
+                write_junit(
+                    args.junit,
+                    manifest["suite"],
+                    report["results"],
+                    [report["workerError"]] if report["workerError"] else [],
+                )
             print(json.dumps(report["summary"], sort_keys=True))
-            return 1 if any(item["status"] in FAILURE_STATUSES for item in report["results"]) else 0
+            return 1 if report["workerError"] or any(
+                item["status"] in FAILURE_STATUSES for item in report["results"]
+            ) else 0
 
         baseline = load_baseline(args.baseline)
         profile = load_profile(args.profile)
