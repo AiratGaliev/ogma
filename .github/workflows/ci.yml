@@ -71,7 +71,7 @@ jobs:
       - name: Generate portable bytecode verifier fixtures
         run: python tests/ogmb/build_fixtures.py
 
-      - name: Test repository validator and Core IR/OGMB verifiers
+      - name: Run repository, verifier and conformance-runner self-tests
         run: python -m unittest discover -s .github/scripts -p "test_*.py" -v
 
       - name: Verify Core IR v1 contract and fixture corpus
@@ -99,7 +99,7 @@ jobs:
           retention-days: 30
 
       - name: Compile CI helper scripts
-        run: python -m compileall -q .github/scripts tests/ogmb/build_fixtures.py
+        run: python -m compileall -q .github/scripts tools tests/ogmb/build_fixtures.py
 
       - name: Set up pinned Node.js reference runtime
         uses: actions/setup-node@v4

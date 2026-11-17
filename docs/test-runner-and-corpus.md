@@ -329,17 +329,23 @@ Other engine-level suites remain independent of Test262:
 
 Benchmarks report reproducible measurements, not conformance classifications. Keep compiler, runtime, host interop, consumer orchestration and GC costs separated. Fuzzing and long stress runs save seed/crash/timeout artifacts; every minimized correctness failure becomes a deterministic regression case.
 
-## 9. CI lane policy and OGM-35 boundary
+## 9. CI lane policy and OGM-35 integration
 
-Runner self-tests are bounded and belong in Fast CI. The complete Test262 suite, full differential corpus and extended regression suites do not belong on feature PRs.
+Runner protocol self-tests and the aggregate proof cases are part of Fast CI's bounded Python unit suite. Feature PRs and ordinary `dev` pushes do not check out or execute the complete upstream Test262 or parser corpora.
 
-| Lane | Required test scope |
+The promotion workflow is the only lane that plans and executes the pinned full conformance corpora:
+
+| Lane | Behaviour |
 |---|---|
-| Feature PR → `dev` / ordinary `dev` CI | Focused unit/integration/contract tests for changed code; parser/verifier regressions where applicable; runner self-tests; bounded stable smoke only after the adapter exists |
-| Promotion PR `dev → test` | Full pinned Test262 within the declared profile, complete deterministic corpus, extended differential tests, all applicable embedding/backend equivalence and aggregate verification |
-| Nightly / manual | Long fuzzing, extended GC/lifecycle/resource-limit stress, broad platform/target matrices and performance tracking |
-| Release qualification | Reproducible reports for the exact release candidate, ABI/bytecode compatibility and applicable consumer integration evidence |
+| Feature PR → `dev` / ordinary `dev` CI | Focused changed-scope tests, Core IR/OGMB verifier checks, Node reference fixtures and runner/aggregate self-tests. No full Test262 checkout or execution. |
+| Promotion PR `dev → test` | Eight deterministic Test262 shards plus four parser-corpus shards; each writes JSON/JUnit artifacts; a required aggregate job validates every report and the complete pinned test-ID set. |
+| Release PR `test → main` | Repeats the same pinned promotion checks against the release candidate. |
+| Nightly / manual | Long fuzzing, extended GC/lifecycle/resource-limit stress, sanitizer/Miri coverage where supported, broad platform/target matrices and performance tracking. |
 
-OGM-34 delivers the runner contract, source pins, profile filtering, deterministic shard manifest/aggregation implementation and self-test coverage. OGM-35 owns the workflow integration: Fast lane wiring, promotion branch checks, shard matrix/artifact handling, aggregate gate, and simulated successful, failed and missing-shard CI cases. Do not pull that separate workflow task into this change.
+The workflow reads immutable upstream URLs and SHA pins from `conformance/baseline.json`; the pin is not duplicated in YAML. It creates the manifests before running shards, stores each manifest as an artifact, executes the assigned shard with the existing runner, and downloads every available shard report before aggregation. The aggregate blocks missing/duplicate/misassigned tests, worker errors, failed classifications, invalid reports, incomplete parser-equivalence pairs, missing shard artifacts and incomplete execution profiles. A failed matrix is never converted to success merely because some shard artifacts exist.
 
-Until OGM-35 wires the actual runtime adapter and promotion pipeline, `.github/workflows/conformance-promotion.yml` must remain fail-closed. A runner self-test or a fake adapter is not grounds to remove that gate.
+`OGMA_TEST262_ADAPTER` and `OGMA_PARSER_ADAPTER` repository Actions variables supply the command strings for real engine/parser adapter processes. While the corresponding readiness fields remain `not_implemented`, the runner emits `UNSUPPORTED` reports and aggregate mode rejects promotion. Marking either adapter `ready` without a configured executable command produces harness errors. The workflow must not use `tests/test-runner/fake_adapter.py` for real promotion execution.
+
+The current profile remains `not_implemented`: Ogma has no executable ECMAScript Runtime or parser adapter, and full conformance therefore cannot pass yet. The fake adapter is strictly a deterministic test double used by runner self-tests. Those self-tests include successful aggregation, failed-result rejection, missing-shard rejection, worker-shutdown error rejection and readiness fail-closed coverage; they prove the gate's bookkeeping contract, not JavaScript execution.
+
+The pinned QuickJS-NG revision remains a development/test reference only. No executable differential test suite is present in this repository, so the workflow does not claim differential conformance; it must be added to the promotion aggregate when its real execution path is delivered.
