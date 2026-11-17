@@ -303,7 +303,7 @@ def validate_function_metadata(metadata: Any, limits: dict[str, int], code_diges
                 err("metadata.capture_fields", path, "capture must define the exact portable Core IR capture fields")
                 continue
             ident, binding_id = capture["id"], capture["binding"]
-            if not stable_id(ident) or ident in captures_by_id:
+            if not stable_id(ident) or ident in captures_by_id or ident in bindings_by_id:
                 err("metadata.capture_id", path + ".id", "capture id must be valid and unique")
             else:
                 captures_by_id[ident] = capture
@@ -489,7 +489,9 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
             err("source_map.file_digest", path + ".sha256", "source digest must be lowercase SHA-256 hex")
 
     meta_env = metadata["environment"]
-    binding_ids = {b["id"] for b in meta_env["bindings"]}
+    # A capture is a function-local lexical binding under its stable capture ID.
+    # Its storage slot is the index in the manifest capture descriptor array.
+    binding_ids = {b["id"] for b in meta_env["bindings"]} | {c["id"] for c in meta_env["captures"]}
     scope_ids: set[str] = set()
     scopes = source_map["lexical_scopes"]
     if not isinstance(scopes, list) or len(scopes) > 65_536:
@@ -601,6 +603,10 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
         location["binding"]: location
         for location in meta_env["locations"]
     }
+    meta_locations.update({
+        capture["id"]: {"kind": "capture", "index": index}
+        for index, capture in enumerate(meta_env["captures"])
+    })
     seen_variables: set[tuple[str, int, int]] = set()
     for index, variable in enumerate(variable_locations):
         path = f"$.source_map.variable_locations[{index}]"
@@ -622,8 +628,10 @@ def validate_source_map(source_map: Any, metadata: dict[str, Any], code_size: in
         if not isinstance(kind, str) or kind not in LOCATION_KINDS or not is_uint(slot):
             err("source_map.variable_storage", path, "variable storage kind/index must use a supported kind and uint32 index")
         expected = meta_locations.get(binding) if isinstance(binding, str) else None
-        if expected and (kind, slot) != (expected["kind"], expected["index"]):
-            err("source_map.variable_storage", path, "debug variable location differs from canonical frame/environment binding location")
+        if expected is None:
+            err("source_map.variable_storage", path, "debug variable location has no canonical frame/environment/capture storage location")
+        elif (kind, slot) != (expected["kind"], expected["index"]):
+            err("source_map.variable_storage", path, "debug variable location differs from canonical frame/environment/capture storage location")
         if not is_uint(start_offset) or not is_uint(end_offset) or not (start_offset < end_offset <= code_size):
             err("source_map.variable_range", path, "variable location range must be a non-empty code byte range")
 
