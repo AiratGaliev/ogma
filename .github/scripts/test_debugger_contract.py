@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -166,6 +167,15 @@ def paused_at_call():
 
 
 class DebuggerApiTests(unittest.TestCase):
+    def test_fixture_source_digests_match_exact_file_bytes(self):
+        expected = {
+            "interpreter.js": SOURCE_SHA,
+            "throw.js": THROW_SOURCE_SHA,
+        }
+        for filename, digest in expected.items():
+            source = (ROOT / "tests" / "debugger" / "fixtures" / filename).read_bytes()
+            self.assertEqual(hashlib.sha256(source).hexdigest(), digest, filename)
+
     def test_debugger_implements_backend_neutral_port(self):
         debugger = Debugger(make_image())
         self.assertIsInstance(debugger, DebuggerPort)
