@@ -658,10 +658,10 @@ class Interpreter:
                 self._execute(frame, instruction)
             except _Thrown as thrown:
                 event = self.debugger.emit_exception(thrown.value)
-                return ExecutionResult("exception", event=event)
+                return InterpreterResult("exception", event=event)
         if self.frames:
             raise DebuggerError("proof interpreter instruction limit exceeded")
-        return ExecutionResult("completed", self.result)
+        return InterpreterResult("completed", self.result)
 
     def _execute(self, frame: Frame, instruction: Mapping[str, Any]) -> None:
         operation = instruction["op"]
