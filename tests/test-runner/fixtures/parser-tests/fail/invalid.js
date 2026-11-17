@@ -1,0 +1,2 @@
+// parser: rejected:parse
+function (

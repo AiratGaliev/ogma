@@ -45,10 +45,10 @@ The architecture's `implemented` state is published as **supported** in this pro
 | Normative specification | [ECMA-262 2026](https://tc39.es/ecma262/2026/) |
 | Publication record | [Ecma International — ECMA-262, 17th edition](https://ecma-international.org/publications-and-standards/standards/ecma-262/) |
 | Test262 repository | [tc39/test262](https://github.com/tc39/test262) |
-| Test262 commit | 2e58f87d8350ad51224617a041c6e041d52f8444 |
-| Supplementary parser corpus | [tc39/test262-parser-tests](https://github.com/tc39/test262-parser-tests), commit 0e808c74fbec780646434cad17bb22dc52461003 |
+| Test262 commit | [conformance/baseline.json](../conformance/baseline.json) — `repositories.test262.revision` |
+| Supplementary parser corpus | [tc39/test262-parser-tests](https://github.com/tc39/test262-parser-tests) — `repositories.test262-parser-tests.revision` in [conformance/baseline.json](../conformance/baseline.json) |
 
-The Test262 commit is a fixed snapshot selected from the repository's main ref when this profile was captured. CI and local tooling must fetch that exact commit, never a moving branch. Updating the snapshot requires a profile revision, upstream diff review and compatibility-result comparison.
+The immutable Test262 and parser-corpus revisions are maintained in [conformance/baseline.json](../conformance/baseline.json), which is the runner's machine-readable pin source. CI and local tooling must fetch those exact commits, never a moving branch. Updating a snapshot requires a reviewed profile/baseline change, upstream diff review and compatibility-result comparison. See [Test runner and corpus architecture](test-runner-and-corpus.md) for manifest generation, metadata handling and adapter requirements.
 
 The parser-only corpus is an older supplementary fixture set (2021); it is not sufficient by itself for ECMAScript 2026 grammar acceptance. Test262 parser tests and Ogma-owned grammar/early-error fixtures remain authoritative for the selected 2026 profile.
 
@@ -103,7 +103,7 @@ Use the architecture's result categories:
 
 Every exclusion must identify the test or deterministic selector, reason, affected feature and owner/revisit condition. Do not blanket-exclude a feature family to hide implementation failures. Preserve raw JSON/JUnit reports and the exact Test262 commit.
 
-CI lane policy remains unchanged: focused tests and small bounded regressions belong on topic PRs; the full pinned Test262/differential corpus belongs to the dev → test promotion gate after OGM-35 implements its runner and deterministic shard aggregator. Do not run or claim full Test262 on this documentation PR.
+CI lane policy remains unchanged: focused tests and runner self-tests belong on topic PRs; the full pinned Test262/differential corpus belongs to the dev → test promotion gate. OGM-34 provides the adapter-driven runner, pinned revisions and deterministic shard manifest/aggregator; OGM-35 integrates the actual engine adapter and promotion workflow. The active profile remains `not_implemented` until an Ogma parser/runtime adapter exists. Do not claim runtime conformance from runner self-tests.
 
 ## 3. TypeScript frontend and compile-time contract
 

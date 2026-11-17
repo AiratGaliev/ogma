@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "ogma-m0-conformance-2026-11-16",
+  "capturedOn": "2026-11-16",
+  "ecma262": {
+    "edition": 17,
+    "year": 2026,
+    "label": "ECMA-262, 17th edition (June 2026)",
+    "intlStatus": "deferred"
+  },
+  "repositories": {
+    "test262": {
+      "url": "https://github.com/tc39/test262",
+      "revision": "2e58f87d8350ad51224617a041c6e041d52f8444",
+      "path": "test",
+      "harnessPath": "harness",
+      "purpose": "ECMA-262 conformance corpus"
+    },
+    "test262-parser-tests": {
+      "url": "https://github.com/tc39/test262-parser-tests",
+      "revision": "0e808c74fbec780646434cad17bb22dc52461003",
+      "purpose": "supplementary parser grammar and early-error corpus"
+    },
+    "quickjs-ng": {
+      "url": "https://github.com/quickjs-ng/quickjs",
+      "version": "v0.18.0",
+      "revision": "d7215b0ad3fc2c562e8317fd9bca058fd4863804",
+      "purpose": "development/test-only differential reference oracle; never a production runtime dependency"
+    }
+  },
+  "updatePolicy": {
+    "requiresSeparateReviewedChange": true,
+    "mustRecordOldAndNewRevisions": true,
+    "mustCompareCompatibilityResults": true,
+    "mustNotUpdateOnMovingBranch": true
+  }
+}
