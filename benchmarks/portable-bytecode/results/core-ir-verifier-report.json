@@ -1,0 +1,77 @@
+{
+  "contract": "ogma.core-ir",
+  "contract_version": "1.0.0",
+  "fixtures": [
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/dynamic-add/fn_dynamic_add.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/control-flow/fn_branch.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/mutable-loop-locals/fn_countdown.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/function-calls/fn_call_sum.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/function-calls/fn_sum.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/host-calls/fn_host_trace.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/property-access/fn_property_access.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/exceptions/fn_throw_through_call.json",
+      "passed": true
+    },
+    {
+      "actual": "accepted",
+      "diagnostics": [],
+      "expected": "accepted",
+      "fixture": "benchmarks/portable-bytecode/fixtures/exceptions/fn_throw.json",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "accepted": 9,
+    "failed": 0,
+    "passed": 9,
+    "rejected": 0,
+    "total": 9
+  },
+  "verifier_version": "1.0.0"
+}
