@@ -5,7 +5,7 @@ import unittest
 from model import (
     CacheState, InlineCache, JSObject, JSProxy, JSRuntimeError, ShapeRegistry,
     UNDEFINED, define_accessor_property, define_data_property, delete_property,
-    get_property, same_value, set_property,
+    get_property, same_value, set_property, set_prototype_of,
 )
 
 
@@ -211,7 +211,7 @@ class InlineCacheTests(unittest.TestCase):
         before = cache.counters.fallback_calls
         self.assertEqual(cache.get(objects[-1]), 4)
         self.assertEqual(cache.counters.fallback_calls, before + 1)
-        self.assertEqual(cache.counters.megamorphic_fallbacks, 2)
+        self.assertEqual(cache.counters.megamorphic_fallbacks, 3)
 
 
 class ProxyFallbackTests(unittest.TestCase):
@@ -269,6 +269,45 @@ class ProxyFallbackTests(unittest.TestCase):
         proxy = JSProxy(target, delete_trap=lambda target, key: True)
         with self.assertRaisesRegex(JSRuntimeError, "non-configurable"):
             delete_property(proxy, "x")
+
+
+
+    def test_prototype_mutation_invalidates_guarded_chain(self):
+        first_proto = self.make(11)
+        second_proto = self.make(22)
+        receiver = JSObject(self.registry, first_proto)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(receiver), 11)
+        self.assertTrue(set_prototype_of(receiver, second_proto))
+        self.assertEqual(cache.get(receiver), 22)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_prototype_cycle_is_rejected(self):
+        parent = JSObject(self.registry)
+        child = JSObject(self.registry, parent)
+        self.assertFalse(set_prototype_of(parent, child))
+        with self.assertRaisesRegex(JSRuntimeError, "cyclic"):
+            set_prototype_of(parent, child, strict=True)
+
+    def test_non_extensible_object_cannot_change_prototype(self):
+        first = JSObject(self.registry)
+        second = JSObject(self.registry)
+        target = JSObject(self.registry, first)
+        target.extensible = False
+        self.assertFalse(set_prototype_of(target, second))
+        with self.assertRaisesRegex(JSRuntimeError, "non-extensible"):
+            set_prototype_of(target, second, strict=True)
+
+    def test_accessor_redefinition_uses_generic_path_and_new_getter(self):
+        target = JSObject(self.registry)
+        define_accessor_property(target, "x", getter=lambda this: 1)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(target), 1)
+        shape = target.shape
+        define_accessor_property(target, "x", getter=lambda this: 2)
+        self.assertIs(target.shape, shape)
+        self.assertEqual(cache.get(target), 2)
+        self.assertEqual(cache.counters.ic_hits, 0)
 
     def test_same_value_distinguishes_signed_zero_and_accepts_nan(self):
         self.assertFalse(same_value(0.0, -0.0))
