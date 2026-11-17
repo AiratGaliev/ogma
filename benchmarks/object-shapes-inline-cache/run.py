@@ -80,7 +80,7 @@ def build_scenario(kind: str, count: int = 8):
     return registry, objects
 
 
-def correctness(scenarios: dict) -> list[dict]:
+def correctness(scenarios: dict, max_cases: int) -> list[dict]:
     results = []
     for name, (_, objects) in scenarios.items():
         cache = InlineCache("value", max_cases=args.max_cases)
@@ -151,13 +151,13 @@ def main() -> int:
         name: build_scenario(name)
         for name in ("monomorphic", "polymorphic", "megamorphic")
     }
-    correctness_results = correctness(scenarios)
+    correctness_results = correctness(scenarios, args.max_cases)
     performance = {}
     counters = {}
     memory = {}
 
     for name, (registry, objects) in scenarios.items():
-        cache = InlineCache("value", max_cases=4)
+        cache = InlineCache("value", max_cases=max_cases)
         # Warm the IC outside timing so the samples measure the steady-state site.
         for obj in objects:
             cache.get(obj)
