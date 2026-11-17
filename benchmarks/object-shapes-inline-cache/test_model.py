@@ -126,6 +126,47 @@ class InlineCacheTests(unittest.TestCase):
         self.assertEqual(cache.state, CacheState.MONOMORPHIC)
         self.assertEqual(cache.counters.ic_hits, 1)
 
+
+
+    def test_inline_cache_does_not_alias_shape_ids_across_registries(self):
+        first_registry = ShapeRegistry()
+        first = JSObject(first_registry)
+        define_data_property(first, "x", 111)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(first), 111)
+
+        second_registry = ShapeRegistry()
+        second = JSObject(second_registry)
+        define_data_property(second, "y", 222)
+        self.assertIs(cache.get(second), UNDEFINED)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_explicit_null_receiver_is_not_replaced_with_target(self):
+        calls = []
+        prototype = JSObject(self.registry)
+        define_accessor_property(
+            prototype,
+            "value",
+            getter=lambda this: calls.append(("get", this)) or 1,
+            setter=lambda this, value: calls.append(("set", this, value)),
+        )
+        define_data_property(prototype, "writable", 2)
+        receiver = JSObject(self.registry, prototype)
+
+        self.assertEqual(get_property(receiver, "value", receiver=None), 1)
+        self.assertIsNone(calls[0][1])
+        self.assertTrue(set_property(receiver, "value", 3, receiver=None))
+        self.assertEqual(calls[1], ("set", None, 3))
+        self.assertFalse(set_property(receiver, "writable", 4, receiver=None))
+
+        proxy_calls = []
+        proxy = JSProxy(
+            JSObject(self.registry),
+            get_trap=lambda target, key, this: proxy_calls.append(this) or 5,
+        )
+        self.assertEqual(get_property(proxy, "anything", receiver=None), 5)
+        self.assertEqual(proxy_calls, [None])
+
     def test_cached_slot_loads_current_value_not_stale_value(self):
         obj = self.make(1)
         cache = InlineCache("x")
