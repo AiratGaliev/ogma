@@ -710,6 +710,10 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
     if "_FIXTURE" in PurePosixPath(test_id).name:
         raise RunnerError("Test262 module fixture files must not be run as standalone tests")
     test_root = suite_root / "test"
+    try:
+        test_root.resolve(strict=True).relative_to(suite_root.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise RunnerError("Test262 test root must remain inside the pinned corpus checkout") from exc
     path = test_root.joinpath(*_safe_relative_path(test_id).parts)
     source = _read_source_within(test_root, path, f"Test262 test {test_id}")
     metadata = parse_test262_metadata(source)
@@ -725,7 +729,12 @@ def _read_test262_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
             raise RunnerError("Test262 metadata negative must be an object")
         phase = negative.get("phase")
         error_type = negative.get("type")
-        if phase not in NEGATIVE_PHASES or not isinstance(error_type, str) or not error_type:
+        if (
+            not isinstance(phase, str)
+            or phase not in NEGATIVE_PHASES
+            or not isinstance(error_type, str)
+            or not error_type
+        ):
             raise RunnerError("negative tests require a supported phase and error type")
         negative = {"phase": phase, "type": error_type}
     raw = "raw" in flags
