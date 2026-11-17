@@ -197,6 +197,23 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(descriptor["modes"], ["sloppy"])
         self.assertIn("Example algorithm", descriptor["metadata"]["info"])
 
+    def test_complete_metadata_is_forwarded_to_the_engine_adapter(self) -> None:
+        descriptor = test_runner._read_test262_descriptor(
+            TEST262_ROOT, "runner/locale-metadata.js"
+        )
+        self.assertEqual(descriptor["metadata"]["locale"], ["en", "fr"])
+        self.assertEqual(descriptor["featureRequirements"], ["Array"])
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/locale-metadata.js",
+            ready_profile(),
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(result["status"], "PASS")
+
     def test_metadata_includes_features_flags_and_both_default_modes(self) -> None:
         test_id = "runner/strict-default.js"
         descriptor = test_runner._read_test262_descriptor(TEST262_ROOT, test_id)
@@ -352,6 +369,22 @@ class Test262MetadataTests(unittest.TestCase):
             1000,
         )
         self.assertEqual(supported["status"], "PASS")
+
+        staging = test_runner._read_test262_descriptor(
+            TEST262_ROOT, "staging/intl402/Array/no-feature-tag.js"
+        )
+        self.assertEqual(staging["featureRequirements"], ["Intl"])
+        profile["featureStatus"]["Intl"] = "deferred"
+        staging_result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "staging/intl402/Array/no-feature-tag.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(staging_result["status"], "UNSUPPORTED")
 
     def test_unsupported_feature_is_not_counted_as_pass(self) -> None:
         profile = ready_profile()
@@ -607,6 +640,27 @@ class ParserAndShardingTests(unittest.TestCase):
             1000,
         )
         self.assertEqual(result["status"], "PASS")
+
+    def test_test_and_harness_symlinks_cannot_escape_their_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_root = root / "test"
+            harness_root = root / "harness"
+            test_root.mkdir()
+            harness_root.mkdir()
+            outside = root / "outside.js"
+            outside.write_text("// outside\n", encoding="utf-8")
+            test_link = test_root / "escape.js"
+            harness_link = harness_root / "escape.js"
+            try:
+                test_link.symlink_to(outside)
+                harness_link.symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlink creation is unavailable: {exc}")
+            with self.assertRaisesRegex(test_runner.RunnerError, "safely read Test262 test"):
+                test_runner._read_test262_descriptor(root, "escape.js")
+            with self.assertRaisesRegex(test_runner.RunnerError, "safely read Test262 harness include"):
+                test_runner._load_harness_includes(harness_root, ["escape.js"], False, False)
 
     def test_parser_corpus_pass_fail_and_early_error_phases(self) -> None:
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, ready_profile())
