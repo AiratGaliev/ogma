@@ -1415,6 +1415,7 @@ def aggregate_reports(
     reports: list[dict[str, Any]],
     baseline: dict[str, Any],
     profile: dict[str, Any],
+    suite_root: Path,
 ) -> dict[str, Any]:
     validate_manifest(manifest)
     expected_source = _pinned_source(baseline, manifest["suite"])
@@ -1422,6 +1423,13 @@ def aggregate_reports(
         raise RunnerError("shard manifest source revision does not match the pinned baseline")
     if manifest["profile"] != _manifest_profile(profile):
         raise RunnerError("shard manifest feature profile does not match the active profile")
+    actual_ids = discover_test_ids(suite_root, manifest["suite"])
+    manifest_ids = sorted(entry["id"] for entry in manifest["tests"])
+    if actual_ids != manifest_ids:
+        raise RunnerError(
+            "shard manifest does not cover the complete pinned corpus; "
+            "test IDs differ from the checked-out source"
+        )
     count = manifest["shardCount"]
     assigned = {
         index: set(shard["testIds"]) for index, shard in
@@ -1602,6 +1610,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     aggregate = subparsers.add_parser("aggregate", help="validate and aggregate every shard result")
     aggregate.add_argument("--manifest", type=Path, required=True)
+    aggregate.add_argument("--suite-root", type=Path, required=True)
     aggregate.add_argument("--reports", type=Path, nargs="*", default=[])
     aggregate.add_argument("--report", type=Path, required=True)
     aggregate.add_argument("--junit", type=Path)
@@ -1660,8 +1669,16 @@ def main(argv: list[str] | None = None) -> int:
         baseline = load_baseline(args.baseline)
         profile = load_profile(args.profile)
         manifest = read_json(args.manifest)
+        pinned = _pinned_source(baseline, manifest["suite"])
+        _load_and_check_revision(args.suite_root, pinned["revision"])
         reports = [read_json(path) for path in args.reports]
-        report = aggregate_reports(manifest, reports, baseline, profile)
+        report = aggregate_reports(
+            manifest,
+            reports,
+            baseline,
+            profile,
+            args.suite_root,
+        )
         write_json(args.report, report)
         if args.junit:
             write_junit(
