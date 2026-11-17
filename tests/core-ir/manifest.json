@@ -165,6 +165,14 @@
       "diagnostics": [
         "closure.capture_identifier_collision"
       ]
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-call-boundary.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-loop-carried-values.json",
+      "expect": "accepted"
     }
   ]
 }

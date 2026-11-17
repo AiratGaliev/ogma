@@ -177,6 +177,41 @@ jobs:
           retention-days: 30
 
 
+  value-representation-benchmark:
+    name: OGM-17 Value and SSA representation proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-17-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify canonical Core IR benchmark corpus
+        run: python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json --report "$RUNNER_TEMP/ogm-17-core-ir-verifier-report.json"
+
+      - name: Run Value semantic fixtures and Core IR-driven SSA proof
+        run: |
+          python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
+          python benchmarks/value-representations/run.py --output "$RUNNER_TEMP/ogm-17-value-ssa-report.json"
+
+      - name: Upload OGM-17 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-17-value-representation-evidence
+          path: |
+            ${{ runner.temp }}/ogm-17-core-ir-verifier-report.json
+            ${{ runner.temp }}/ogm-17-value-ssa-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+
   portable-bytecode-benchmark:
     name: OGM-16 portable bytecode benchmark
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-16-')

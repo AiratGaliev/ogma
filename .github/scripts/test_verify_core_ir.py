@@ -24,11 +24,16 @@ def codes(doc):
 class CoreIRVerifierTests(unittest.TestCase):
     def test_positive_and_negative_fixture_corpus(self):
         report = run_corpus(ROOT, MANIFEST, ROOT / "contracts/core-ir/v1/schema.json")
-        self.assertEqual(report["summary"], {"total": 25, "passed": 25, "failed": 0, "accepted": 4, "rejected": 21})
+        self.assertEqual(report["summary"], {"total": 27, "passed": 27, "failed": 0, "accepted": 6, "rejected": 21})
 
     def test_all_positive_fixtures_are_accepted(self):
-        for name in ("positive-ssa-branch.json", "positive-dynamic-exception.json", "positive-closure-source.json", "positive-async-suspension.json"):
-            with self.subTest(name=name): self.assertEqual(codes(fixture(name)), set())
+        manifest = load(MANIFEST)
+        for item in manifest["fixtures"]:
+            if item["expect"] != "accepted":
+                continue
+            name = Path(item["path"]).name
+            with self.subTest(name=name):
+                self.assertEqual(codes(fixture(name)), set())
 
     def test_all_negative_fixtures_are_rejected_with_declared_codes(self):
         manifest = load(MANIFEST)
@@ -152,7 +157,7 @@ class CoreIRVerifierTests(unittest.TestCase):
         self.assertEqual(json.dumps(a,sort_keys=True),json.dumps(b,sort_keys=True))
 
     def test_manifest_has_expected_coverage(self):
-        m=load(MANIFEST); self.assertEqual(sum(x["expect"]=="accepted" for x in m["fixtures"]),4)
+        m=load(MANIFEST); self.assertEqual(sum(x["expect"]=="accepted" for x in m["fixtures"]),6)
         self.assertEqual(sum(x["expect"]=="rejected" for x in m["fixtures"]),21)
 
     def test_environment_store_requires_matching_value_type(self):
