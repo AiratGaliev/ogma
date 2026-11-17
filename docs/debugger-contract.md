@@ -61,7 +61,7 @@ The stable facade is DebuggerPort. Public results are immutable snapshots:
 | StoppedEvent, ExceptionEvent | Pause reason and structured exception data. |
 | InspectedObject, InspectedProperty | Bounded descriptor-level object view. |
 
-Operations include launch/attach lifecycle, source breakpoints, pause/resume, step into/over/out, call stack, scopes, variables, explicit identifier evaluation, object inspection and detach. Each backend reports real capabilities; a DAP adapter must not advertise operations unsupported by the active backend/profile.
+The host/transport integration owns launch and attach orchestration and supplies an already-created execution session to the backend-neutral DebuggerPort. The port then exposes source breakpoints, pause/resume, step into/over/out, call stack, scopes, variables, explicit identifier evaluation, object inspection and detach. The M0 DAP translator does not launch processes or attach to remote targets. Each backend reports real capabilities; an adapter must not advertise operations unsupported by the active backend/profile.
 
 A value optimized away or unavailable in the selected frame is returned as optimized_out or unavailable. The debugger must not synthesize a value from a type annotation or infer it from unrelated state.
 
