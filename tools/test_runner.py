@@ -441,6 +441,44 @@ def _pinned_source(baseline: dict[str, Any], suite: str) -> dict[str, Any]:
     }
 
 
+def _parser_equivalence_key(test_id: str) -> str | None:
+    relative = _safe_relative_path(test_id)
+    if relative.parts[0] not in {"pass", "pass-explicit"}:
+        return None
+    return PurePosixPath(*relative.parts[1:]).as_posix()
+
+
+def _validate_parser_equivalence_pairs(test_ids: list[str]) -> None:
+    passed = {
+        key
+        for test_id in test_ids
+        if test_id.startswith("pass/")
+        and (key := _parser_equivalence_key(test_id)) is not None
+    }
+    explicit = {
+        key
+        for test_id in test_ids
+        if test_id.startswith("pass-explicit/")
+        and (key := _parser_equivalence_key(test_id)) is not None
+    }
+    if passed != explicit:
+        missing_explicit = sorted(passed - explicit)
+        missing_original = sorted(explicit - passed)
+        raise RunnerError(
+            "parser pass/pass-explicit corpus pairs do not match; "
+            f"missing pass-explicit={missing_explicit[:10]}, "
+            f"missing pass={missing_original[:10]}"
+        )
+
+
+def _shard_assignment_key(suite: str, test_id: str) -> str:
+    if suite == "test262-parser-tests":
+        equivalence_key = _parser_equivalence_key(test_id)
+        if equivalence_key is not None:
+            return f"parser-pass-equivalence:{equivalence_key}"
+    return test_id
+
+
 def discover_test_ids(suite_root: Path, suite: str) -> list[str]:
     if suite == "test262":
         test_root = suite_root / "test"
@@ -462,7 +500,9 @@ def discover_test_ids(suite_root: Path, suite: str) -> list[str]:
                 for path in category_root.rglob("*.js")
                 if path.is_file()
             )
-        return sorted(ids)
+        normalized_ids = sorted(ids)
+        _validate_parser_equivalence_pairs(normalized_ids)
+        return normalized_ids
     raise RunnerError(f"unsupported suite: {suite}")
 
 
@@ -499,11 +539,14 @@ def build_manifest(
     normalized_ids = sorted(test_ids)
     if len(normalized_ids) != len(set(normalized_ids)):
         raise RunnerError("test corpus contains duplicate test IDs")
+    if suite == "test262-parser-tests":
+        _validate_parser_equivalence_pairs(normalized_ids)
     source = _pinned_source(baseline, suite)
     assignments: dict[int, list[str]] = {index: [] for index in range(shard_count)}
     tests: list[dict[str, Any]] = []
     for test_id in normalized_ids:
-        shard = int(hashlib.sha256(test_id.encode("utf-8")).hexdigest()[:16], 16) % shard_count
+        assignment_key = _shard_assignment_key(suite, test_id)
+        shard = int(hashlib.sha256(assignment_key.encode("utf-8")).hexdigest()[:16], 16) % shard_count
         assignments[shard].append(test_id)
         tests.append({"id": test_id, "shardIndex": shard})
     manifest: dict[str, Any] = {
@@ -571,7 +614,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         ids.add(test_id)
         if not isinstance(shard, int) or not 0 <= shard < count:
             raise RunnerError(f"invalid shard assignment for {test_id}")
-        deterministic = int(hashlib.sha256(test_id.encode("utf-8")).hexdigest()[:16], 16) % count
+        if manifest["suite"] == "test262-parser-tests":
+            _validate_parser_equivalence_pairs(sorted(ids))
+        assignment_key = _shard_assignment_key(manifest["suite"], test_id)
+        deterministic = int(hashlib.sha256(assignment_key.encode("utf-8")).hexdigest()[:16], 16) % count
         if deterministic != shard:
             raise RunnerError(f"non-deterministic shard assignment for {test_id}")
         expected[shard].append(test_id)
@@ -664,6 +710,12 @@ def _read_parser_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
             "outcome": "parsed" if category in {"pass", "pass-explicit"} else "rejected",
             "phase": "early" if category == "early" else "parse",
         },
+        "equivalenceGroup": (
+            _parser_equivalence_key(test_id)
+            if category in {"pass", "pass-explicit"}
+            else None
+        ),
+        "equivalenceRole": category if category in {"pass", "pass-explicit"} else None,
     }
 
 
@@ -948,7 +1000,23 @@ def _evaluate_parser_response(
     if outcome == expected["outcome"] and (
         outcome == "parsed" or response.get("phase") == expected["phase"]
     ):
-        return {"status": "PASS"}
+        result = {"status": "PASS"}
+        if descriptor.get("equivalenceGroup") is not None:
+            fingerprint = response.get("normalizedAstSha256")
+            if (
+                not isinstance(fingerprint, str)
+                or len(fingerprint) != 64
+                or any(char not in "0123456789abcdef" for char in fingerprint)
+            ):
+                return {
+                    "status": "HARNESS ERROR",
+                    "reason": (
+                        "parser adapter must return normalizedAstSha256 for "
+                        "pass/pass-explicit equivalence fixtures"
+                    ),
+                }
+            result["normalizedAstSha256"] = fingerprint
+        return result
     return {
         "status": "FAIL",
         "reason": (
@@ -988,6 +1056,8 @@ def _run_variant(
             "includes": descriptor["includes"],
             "negative": descriptor["negative"],
             "parseExpectation": descriptor.get("parseExpectation"),
+            "equivalenceGroup": descriptor.get("equivalenceGroup"),
+            "equivalenceRole": descriptor.get("equivalenceRole"),
             "corpusRoot": str(suite_root),
             "testPath": test_path.as_posix(),
             "testDirectory": str(test_directory),
@@ -1148,6 +1218,11 @@ def run_one_test(
         "flags": descriptor["flags"],
         "modes": descriptor["modes"],
         "variants": variants,
+    }
+    if descriptor.get("equivalenceGroup") is not None:
+        result["equivalenceGroup"] = descriptor["equivalenceGroup"]
+        result["equivalenceRole"] = descriptor["equivalenceRole"]
+    failure_kind = next(
     }
     failure_kind = next(
         (variant.get("failureKind") for variant in variants if variant.get("failureKind")),
