@@ -162,7 +162,7 @@ def benchmark_candidate(
         "local_slots": sum(item.local_count for item in compiled),
         "virtual_registers": sum(item.register_count for item in compiled),
         "compile_cost_median_ns": median_or_zero(compile_samples),
-        "compile_pipeline_wall_median_ns": median_or_zero(compile_wall_samples),
+        "compile_plus_validation_pipeline_wall_median_ns": median_or_zero(compile_wall_samples),
         "verifier_complexity": complexity,
         "interpreter": {
             "iterations_per_case": iterations,
@@ -179,7 +179,7 @@ def benchmark_candidate(
         },
         "raw_samples": {
             "compile_codegen_ns": compile_samples,
-            "compile_pipeline_wall_ns": compile_wall_samples,
+            "compile_plus_validation_pipeline_wall_ns": compile_wall_samples,
             "verifier_ns": verifier_samples,
             "memory_peak_bytes": memory_samples,
             "interpreter_elapsed_ns": execution_elapsed_samples,
@@ -258,7 +258,7 @@ def main() -> int:
             "container_bytes": sum(item["container_bytes"] for item in metrics),
             "debug_map_estimate_bytes": sum(item["debug_map_estimate_bytes"] for item in metrics),
             "compile_codegen_median_ns_sum": sum(item["compile_cost_median_ns"] for item in metrics),
-            "compile_pipeline_median_ns_sum": sum(item["compile_pipeline_wall_median_ns"] for item in metrics),
+            "compile_plus_validation_pipeline_median_ns_sum": sum(item["compile_plus_validation_pipeline_wall_median_ns"] for item in metrics),
             "verifier_median_ns_sum": sum(
                 item["verifier_complexity"]["verifier_median_ns"] for item in metrics
             ),

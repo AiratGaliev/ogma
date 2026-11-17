@@ -48,7 +48,7 @@ The benchmark writes results/benchmark-results.json. It records the environment,
 
 - Instruction and dispatch counts are deterministic for a given workload and encoding.
 - Code bytes measure the encoded .ogmb code section. Container bytes include the .ogmb header, directory and metadata/constant sections.
-- Compile cost measures Core IR lowering, layout and bytecode/container generation. Container/program verifier time is reported separately.
+- `compile_cost_median_ns` measures Core IR lowering, layout, bytecode decoding and container generation up to (but not including) the first verification pass. `compile_plus_validation_pipeline_wall_median_ns` additionally includes the immediate container/program verification performed by `compile_function`; the repeated standalone verifier timing is measured separately.
 - Throughput is reported for the Python proof interpreters. It is a comparative prototype measurement, not a prediction of Rust-native production throughput.
 - Memory uses Python tracemalloc peak allocations during one invocation, not process RSS or native VM heap usage.
 - Verifier complexity reports measured time and deterministic structural proxies (instructions, CFG edges, operands, stack-effect checks, and register dataflow reads/writes). These proxies expose the different state-analysis work required by each candidate; they are not asymptotic proofs.
@@ -81,7 +81,7 @@ Register lowering reduced instruction count by 53.0%, code bytes by 37.8% and di
 - These throughput figures compare two Python proof interpreters, not Rust-native VM performance. Register dispatches/s itself is not the decision metric; the register candidate executes substantially fewer dispatches and therefore completes more whole workload cases per second in this prototype.
 - Python tracemalloc peak is an allocation proxy, not native process RSS, Rust heap size or production VM memory.
 - The corpus is a bounded M0 decision workload, not Test262, fuzzing, broad JS compatibility or a production backend proof. It tests explicit exception propagation but does not yet compare local catch/finally handler lowering or suspension.
-- The debug map is retained and measured as an in-memory sidecar estimate. It is not serialized into the optional .ogmb source_map section in this prototype. The call workload carries an explicit thisArg but does not assert observable this binding semantics.
+- The debug map is retained and measured as an in-memory sidecar estimate. The workload source records are generated provenance only (no user file/line spans or lexical scopes), and the map is not serialized into the optional .ogmb source_map section in this prototype. The call workload carries an explicit thisArg but does not assert observable this binding semantics.
 - Summed per-workload medians are useful comparative aggregates, not a single uninterrupted whole-suite benchmark run. Raw per-workload samples and environment metadata remain in the JSON evidence.
 
 ## Committed evidence
