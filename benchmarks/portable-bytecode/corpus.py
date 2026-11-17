@@ -521,6 +521,7 @@ def write_corpus() -> dict[str, Any]:
     workloads = build_workloads()
     fixture_entries: list[dict[str, str]] = []
     public_workloads: list[dict[str, Any]] = []
+    runtime_workloads: list[dict[str, Any]] = []
 
     for workload in workloads:
         workload_dir = FIXTURE_ROOT / workload["id"]
@@ -545,6 +546,13 @@ def write_corpus() -> dict[str, Any]:
             "cases": workload["cases"],
             "description": workload["description"],
         })
+        runtime_workloads.append({
+            "id": workload["id"],
+            "entry": workload["entry"],
+            "functions": workload["functions"],
+            "cases": workload["cases"],
+            "description": workload["description"],
+        })
 
     manifest = {
         "contract": "ogma.core-ir",
@@ -566,7 +574,7 @@ def write_corpus() -> dict[str, Any]:
         encoding="utf-8",
         newline="\n",
     )
-    return workloads_doc
+    return {"schema": workloads_doc["schema"], "version": workloads_doc["version"], "workloads": runtime_workloads}
 
 
 if __name__ == "__main__":

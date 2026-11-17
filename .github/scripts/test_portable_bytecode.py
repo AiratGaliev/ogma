@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import struct
 import sys
 import unittest
 from pathlib import Path
@@ -96,7 +97,8 @@ class PortableBytecodeProofTests(unittest.TestCase):
     def test_container_digest_rejects_tampered_code(self) -> None:
         compiled = self.compiled["dynamic-add"]["stack"][0]
         tampered = bytearray(compiled.container)
-        tampered[48 + 4 * 32 + 8] ^= 0x01
+        code_section_offset = struct.unpack_from("<Q", tampered, 48 + 1 * 32 + 8)[0]
+        tampered[code_section_offset] ^= 0x01
         reader = ContainerReader()
         self.assertIsNone(reader.read(bytes(tampered)))
         self.assertTrue(reader.errors)

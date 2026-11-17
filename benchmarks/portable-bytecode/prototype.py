@@ -835,6 +835,7 @@ def compile_function(function_doc: dict[str, Any], model: str) -> CompiledFuncti
         "metadata": metadata,
     }
     container = build_ogmb(encoded, constants, manifest)
+    code_generation_ns = time.perf_counter_ns() - started
     reader = ContainerReader()
     artifact = reader.read(container)
     if artifact is None:
@@ -859,7 +860,7 @@ def compile_function(function_doc: dict[str, Any], model: str) -> CompiledFuncti
         register_count=register_count,
         parameter_count=len(fn["parameters"]),
         debug_map=debug_map,
-        code_generation_ns=time.perf_counter_ns() - started,
+        code_generation_ns=code_generation_ns,
     )
 
 
