@@ -96,7 +96,7 @@ def load_profile(path: Path) -> dict[str, Any]:
         "ready",
     }:
         raise RunnerError(f"{path}: execution.state must be not_implemented or ready")
-    parser_status = profile.get("parserStatus", "ready")
+    parser_status = profile.get("parserStatus", "not_implemented")
     if parser_status not in {"not_implemented", "ready"}:
         raise RunnerError(f"{path}: parserStatus must be not_implemented or ready")
     default_status = profile.get("defaultFeatureStatus")
@@ -441,7 +441,7 @@ def _manifest_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "ready",
     }:
         raise RunnerError("invalid execution state in active feature profile")
-    parser_status = profile.get("parserStatus", "ready")
+    parser_status = profile.get("parserStatus", "not_implemented")
     if parser_status not in {"not_implemented", "ready"}:
         raise RunnerError("invalid parserStatus in active feature profile")
     return {
@@ -639,7 +639,7 @@ def _exclusion_for(profile: dict[str, Any], suite: str, test_id: str) -> dict[st
 
 def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> str | None:
     if descriptor["suite"] == "test262-parser-tests":
-        if profile.get("parserStatus", "ready") != "ready":
+        if profile.get("parserStatus", "not_implemented") != "ready":
             return profile.get("parserReason", "the parser is not available in the active build")
     else:
         execution = profile["execution"]
@@ -867,7 +867,7 @@ def run_one_test(
         }
     if (
         suite == "test262-parser-tests"
-        and profile.get("parserStatus", "ready") != "ready"
+        and profile.get("parserStatus", "not_implemented") != "ready"
         and not probe_unsupported
     ):
         return {
