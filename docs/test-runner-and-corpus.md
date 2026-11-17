@@ -99,9 +99,9 @@ Do not count a Core IR verifier fixture, bytecode-container fixture, parser-only
 The runner is invoked as `python tools/test_runner.py`. It supports two suites:
 
 - `test262`: discovers `*.js` under the pinned checkout's `test/` directory and loads harness files from `harness/`;
-- `test262-parser-tests`: discovers `pass/`, `early/` and `fail/` parser-only cases.
+- `test262-parser-tests`: discovers `pass/`, `pass-explicit/`, `early/` and `fail/` parser-only cases.
 
-The source checkout must be at the exact SHA in `conformance/baseline.json`. Planning and execution fail closed if the checkout revision differs. The runner never downloads or updates an upstream corpus implicitly.
+The source checkout must be at the exact SHA in `conformance/baseline.json` and have a clean Git working tree. Planning and execution fail closed if the commit differs or tracked/untracked changes could alter test or harness input. The runner never downloads or updates an upstream corpus implicitly.
 
 ### 4.1 Test262 metadata
 
@@ -121,22 +121,24 @@ The parser intentionally supports the constrained YAML structures used by Test26
 - `noStrict` runs exactly one sloppy script variant.
 - A module test runs exactly once as a module. Module code has strict semantics; it is not duplicated into script variants.
 - A regular non-module test without either flag runs in both sloppy and strict modes.
-- `raw` tests receive no harness scripts and must not declare `includes`.
-- Non-raw tests receive `sta.js`, `assert.js` and the metadata `includes` in deterministic order, with duplicate include names removed.
+- `raw` tests receive no harness scripts, execute exactly once in non-strict script mode and must not declare `includes`. They cannot be combined with `onlyStrict`, `module` or `async`.
+- Non-raw tests receive the pinned `assert.js`, then `sta.js`, then `doneprintHandle.js` for async tests, followed by metadata `includes` in source order. Duplicate include names are removed without changing first occurrence order.
 - Harness include paths must remain inside the pinned harness directory. Path traversal is a harness error.
 - The adapter receives the original source plus `sourceType`, mode, flags, feature requirements and loaded include source. The adapter owns correct compilation/execution preparation; the generic runner does not rewrite source text and must not change JavaScript semantics.
 
 A negative test passes only when the adapter reports a thrown completion with the exact expected phase and error name. Supported phases are `parse`, `resolution` and `runtime`. Completing normally, throwing in the wrong phase or producing a different error type is `FAIL`.
 
-An async test passes only when the adapter reports successful completion through the Test262 `$DONE` protocol. A missing completion is `FAIL`. The runner applies a bounded per-test timeout, using the async timeout for async tests. Timeouts are reported as `FAIL` with `failureKind: TIMEOUT`; an adapter crash or malformed response is `HARNESS ERROR`.
+For an async test, the runner supplies `harness/doneprintHandle.js`. The adapter must implement the Test262 `print` host function and report the exact `Test262:AsyncTestComplete` signal as `asyncSignal`. A signal prefixed with `Test262:AsyncTestFailure:` is `FAIL`; missing completion before the async timeout is also `FAIL`. This is the pinned Test262 print-based protocol, not the separate `$DONE` convention used by other test harnesses. The runner applies a bounded per-test timeout; timeouts are reported as `FAIL` with `failureKind: TIMEOUT`, while adapter crashes or malformed responses are `HARNESS ERROR`.
 
 ### 4.3 Parser-only corpus
 
 The parser suite does not execute test bodies:
 
-- `pass/` expects parsing to succeed;
-- `fail/` expects syntax rejection in the parse phase;
-- `early/` expects rejection during early-error validation.
+- `pass/` and `pass-explicit/` expect parsing to succeed. The latter contains equivalent explicit-parentheses variants and is part of the pinned corpus.
+- `fail/` expects grammar rejection;
+- `early/` expects acceptance by the grammar parser when early-error checks are disabled, then rejection when early-error validation is enabled.
+
+The adapter receives the expected parse outcome/phase and is responsible for running the `early/` cases with the correct early-error mode. A parser that does not expose a separate early-error mode may reject these cases in the early phase, but must not conflate them with grammar-invalid `fail/` cases.
 
 The adapter must distinguish `parsed` and `rejected`, and report `parse` versus `early` phase. A parser corpus result is not a runtime result.
 
@@ -215,7 +217,7 @@ The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsu
 
 Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`.
 
-The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics, Test262 harness preparation, `$DONE`, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
+The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics (including insertion of the strict directive before metadata-driven source transformations), Test262 harness preparation, the `print`-based async protocol, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. Test module requests resolve relative `./` specifiers from the directory containing the test; files whose names contain `_FIXTURE` are dependencies, never standalone tests. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
 
 ## 7. Deterministic manifests, reports and aggregation
 
@@ -265,6 +267,8 @@ Exit codes:
 
     python tools/test_runner.py aggregate \
       --manifest .artifacts/test262-manifest.json \
+      --baseline conformance/baseline.json \
+      --profile conformance/profile.json \
       --reports .artifacts/results/test262-shard-0.json \
                 .artifacts/results/test262-shard-1.json \
       --report .artifacts/test262-aggregate.json \
@@ -273,6 +277,7 @@ Exit codes:
 The aggregate command fails closed unless:
 
 - every expected shard index has exactly one result file;
+- the manifest's repository URL/revision matches the active pinned baseline and its profile ID/version/content digest/readiness matches the active compatibility profile;
 - all shard reports reference the same manifest digest, suite and shard count;
 - each shard reports exactly its assigned test IDs;
 - there are no missing, duplicated, unexpected or cross-shard test IDs;
