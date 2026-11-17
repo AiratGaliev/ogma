@@ -12,14 +12,17 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 DEBUGGER_DIR = ROOT / "benchmarks" / "debugger"
 SCRIPTS_DIR = ROOT / ".github" / "scripts"
+OGMB_TESTS_DIR = ROOT / "tests" / "ogmb"
 sys.path.insert(0, str(DEBUGGER_DIR))
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(OGMB_TESTS_DIR))
 
 from debugger_api import CodeGeneration, DebuggerError, DebuggerPort
 from dap_adapter import DapAdapter
 from metadata import lower_core_ir_debug_metadata, strip_debug_metadata
 from prototype import Debugger, Heap, Interpreter, PropertyDescriptor, debug_value
-from verify_ogmb import validate_source_map
+from build_fixtures import build_container
+from verify_ogmb import ContainerReader, ProgramVerifier, load_json, validate_source_map
 
 
 SOURCE_SHA = "5926f6245aa063f8fa73f39b0f0a9aa3769500c919cb7212e588f28959cf0b49"
@@ -420,6 +423,67 @@ class SourceMetadataTests(unittest.TestCase):
             "suspension_points": [],
         }
         self.assertEqual(validate_source_map(source_map, portable_metadata, 4), [])
+
+    def test_source_map_is_serialized_and_verified_inside_real_ogmb_container(self):
+        result = self.lower()
+        source_map = result["source_map"]
+        portable_environment = {
+            "id": self.function["environment"]["id"],
+            "parent": self.function["environment"]["parent"],
+            "bindings": self.function["environment"]["bindings"],
+            "captures": self.function["captures"],
+            "locations": [
+                {"binding": "bind_param", "kind": "local", "index": 0},
+            ],
+        }
+        encoded_source_map = json.dumps(
+            source_map, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        artifact_path = build_container(
+            "ogm33-captured-source-map.ogmb",
+            b"\\x01\\x02\\x03\\x04",
+            ["left", "right"],
+            execution_model="stack",
+            local_count=1,
+            max_stack_depth=2,
+            extra_sections=[(5, 1, encoded_source_map)],
+            environment_metadata=portable_environment,
+        )
+        reader = ContainerReader()
+        artifact = reader.read(artifact_path.read_bytes())
+        self.assertEqual(reader.errors, [])
+        self.assertIsNotNone(artifact)
+        program = load_json(
+            ROOT / "tests" / "ogmb" / ".generated" / "fixtures" / "positive-stack.json"
+        )
+        self.assertEqual(ProgramVerifier().verify(artifact, program), [])
+        self.assertEqual(
+            artifact["source_map"]["variable_locations"][1]["kind"],
+            "capture",
+        )
+
+        invalid_map = copy.deepcopy(source_map)
+        capture_location = next(
+            item for item in invalid_map["variable_locations"]
+            if item["binding"] == "capture_total"
+        )
+        capture_location["index"] = 1
+        bad_path = build_container(
+            "ogm33-invalid-capture-location.ogmb",
+            b"\\x01\\x02\\x03\\x04",
+            ["left", "right"],
+            execution_model="stack",
+            local_count=1,
+            max_stack_depth=2,
+            extra_sections=[(5, 1, json.dumps(invalid_map).encode("utf-8"))],
+            environment_metadata=portable_environment,
+        )
+        bad_reader = ContainerReader()
+        rejected = bad_reader.read(bad_path.read_bytes())
+        self.assertIsNone(rejected)
+        self.assertIn("source_map.variable_storage", {
+            item["code"] for item in bad_reader.errors
+        })
 
     def test_capture_slot_must_match_manifest_capture_descriptor_index(self):
         invalid = copy.deepcopy(self.variables)
