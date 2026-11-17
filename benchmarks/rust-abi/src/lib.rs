@@ -1801,9 +1801,7 @@ mod tests {
             (&mut reserved_field as *mut CompletionSpec).cast(),
         );
         assert_eq!(
-            unsafe {
-                ogma_context_call(r, c, reserved_function, ptr::null(), 0, &mut completion)
-            },
+            unsafe { ogma_context_call(r, c, reserved_function, ptr::null(), 0, &mut completion) },
             OgmaStatus::INVALID_COMPLETION
         );
         assert!(completion_is_empty(completion));
