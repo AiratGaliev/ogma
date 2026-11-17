@@ -130,7 +130,7 @@
     "scopeSnapshot": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "parentId", "variables"],
+      "required": ["id", "name", "variables"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "name": { "type": "string", "minLength": 1, "maxLength": 128 },
