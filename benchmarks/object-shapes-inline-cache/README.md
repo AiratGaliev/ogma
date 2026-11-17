@@ -4,7 +4,7 @@ This M0 spike demonstrates the correctness boundary and an initial cost model fo
 
 ## Shape contract
 
-An ordinary object's immutable shape is interned by the ordered sequence of own-property layout records and the identity of its prototype. Shape IDs are unique across registries in the process, so guards from separate runtime/heap registries cannot alias. Each layout record contains the property key, data/accessor kind, and descriptor attributes. The per-object slot vector carries values or accessor pairs; a property value update does not change shape identity when the descriptor layout is unchanged.
+An ordinary object's immutable shape is interned by the ordered sequence of own-property layout records and the identity of its prototype. Shape IDs are unique across registries in the process, so guards from separate runtime/heap registries cannot alias. Each layout record contains the property key, data/accessor kind, and descriptor attributes. Every immutable shape also owns a read-only key-to-slot index, so generic lookup resolves the slot from shared metadata rather than rescanning the ordered property list. The per-object slot vector carries values or accessor pairs; a property value update does not change shape identity when the descriptor layout is unchanged.
 
 Adding/removing a property, changing descriptor kind/attributes, or replacing the prototype transitions the object to an interned shape. Objects with the same ordered layout and the same prototype share a shape. Deletion compacts slots and creates/reuses the resulting canonical shape. Shape descriptors are immutable; an old shape remains safe to reuse by other objects.
 
