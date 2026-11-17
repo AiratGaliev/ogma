@@ -332,7 +332,7 @@ jobs:
           cargo run --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --bin ogma-abi-bench -- \
             --iterations 10000 \
             --warmups 3 \
-            --samples 9 \
+            --samples 101 \
             --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/ogm-19-rust-abi-report.json"
