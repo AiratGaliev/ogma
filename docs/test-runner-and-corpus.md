@@ -105,7 +105,7 @@ The source checkout must be at the exact SHA in `conformance/baseline.json` and 
 
 ### 4.1 Test262 metadata
 
-The runner reads the optional YAML frontmatter in the Test262 test prologue. License/copyright or generated-source comments may precede the frontmatter; tests with no frontmatter use the default empty metadata map. It handles the metadata needed for the runner contract:
+The runner reads the optional YAML frontmatter in the Test262 test prologue. License/copyright or generated-source comments may precede the frontmatter; tests with no frontmatter use the default empty metadata map. The full parsed metadata object is forwarded to the adapter, including fields such as `locale` that influence host environment setup. Tests under both `test/intl402/` and `test/staging/intl402/` are treated as requiring the `Intl` feature even when the feature is not repeated in their metadata. It handles the metadata needed for the runner contract:
 
 - `features`;
 - `flags`, including `onlyStrict`, `noStrict`, `module`, `raw` and `async`;
@@ -123,8 +123,8 @@ The parser intentionally supports the constrained YAML structures used by Test26
 - A regular non-module test without either flag runs in both sloppy and strict modes.
 - `raw` tests receive no harness scripts, execute exactly once in non-strict script mode and must not declare `includes`. They cannot be combined with `onlyStrict`, `module` or `async`.
 - Non-raw tests receive the pinned `assert.js`, then `sta.js`, then `doneprintHandle.js` for async tests, followed by metadata `includes` in source order. Duplicate include names are removed without changing first occurrence order.
-- Harness include paths must remain inside the pinned harness directory. Path traversal is a harness error.
-- The adapter receives the original source plus `sourceType`, mode, flags, feature requirements and loaded include source. The adapter owns correct compilation/execution preparation; the generic runner does not rewrite source text and must not change JavaScript semantics.
+- Test, parser and harness source files must resolve to regular files inside their respective pinned corpus directories. Symlink escapes, path traversal and external files are harness errors.
+- The adapter receives the original source plus the complete YAML `metadata`, `sourceType`, mode, raw feature tags, inferred `featureRequirements`, flags and loaded include source. The adapter owns correct compilation/execution preparation; the generic runner does not rewrite source text and must not change JavaScript semantics.
 
 A negative test passes only when the adapter reports a thrown completion with the exact expected phase and error name. Supported phases are `parse`, `resolution` and `runtime`. Completing normally, throwing in the wrong phase or producing a different error type is `FAIL`.
 
@@ -299,7 +299,7 @@ The aggregate command fails closed unless:
 - all result classifications are valid;
 - every parser `pass/` and `pass-explicit/` pair has both results and matching normalized AST fingerprints.
 
-A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile, or when no test in the complete aggregate has a `PASS` result; a complete set of `UNSUPPORTED`/`EXCLUDED` reports cannot make an unimplemented or unproven runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists, provided at least one parser fixture passed.
+A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. Any `FAIL`, `HARNESS ERROR` or `UNEXPECTED PASS` result also makes `aggregation.complete` false; the aggregate JSON cannot represent a blocking suite as complete. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile, or when no test in the complete aggregate has a `PASS` result; a complete set of `UNSUPPORTED`/`EXCLUDED` reports cannot make an unimplemented or unproven runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists, provided at least one parser fixture passed.
 
 ## 8. Differential and engine-level comparison contracts
 
