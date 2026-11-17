@@ -409,6 +409,7 @@ def _safe_relative_path(value: str) -> PurePosixPath:
         or "\\" in value
         or "\x00" in value
         or ":" in value
+        or any(character in value for character in "*?[]")
     ):
         raise RunnerError(f"unsafe relative path: {value!r}")
     path = PurePosixPath(value)
