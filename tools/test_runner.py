@@ -787,7 +787,7 @@ class AdapterSession:
     """One persistent line-delimited adapter worker for a whole shard."""
 
     MAX_REQUEST_BYTES = 16 * 1024 * 1024
-    MAX_RESPONSE_CHARS = 8 * 1024 * 1024
+    MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
     def __init__(self, command: list[str]) -> None:
         self.command = command
@@ -821,7 +821,6 @@ class AdapterSession:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0,
             )
         except OSError as exc:
             self.start_error = f"cannot start engine adapter: {exc}"
@@ -836,10 +835,10 @@ class AdapterSession:
             try:
                 assert process.stdout is not None
                 while True:
-                    line = process.stdout.readline(self.MAX_RESPONSE_CHARS + 1)
+                    line = process.stdout.readline(self.MAX_RESPONSE_BYTES + 1)
                     if not line:
                         break
-                    if len(line) > self.MAX_RESPONSE_CHARS:
+                    if len(line) > self.MAX_RESPONSE_BYTES:
                         responses.put(
                             RunnerError(
                                 "engine adapter response exceeds the 8 MiB protocol limit"
