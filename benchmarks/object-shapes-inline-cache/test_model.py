@@ -280,6 +280,21 @@ class ProxyFallbackTests(unittest.TestCase):
         with self.assertRaisesRegex(JSRuntimeError, "setter-less"):
             set_property(proxy, "x", 2)
 
+
+
+    def test_proxy_in_prototype_chain_receives_set_trap(self):
+        target = JSObject(self.registry)
+        calls = []
+        proxy = JSProxy(
+            target,
+            set_trap=lambda target, key, value, receiver: calls.append((key, value, receiver)) or True,
+        )
+        middle = JSObject(self.registry, proxy)
+        receiver = JSObject(self.registry, middle)
+        self.assertTrue(set_property(receiver, "x", 5))
+        self.assertEqual(calls, [("x", 5, receiver)])
+        self.assertIsNone(receiver.own_descriptor("x"))
+
     def test_proxy_delete_trap_must_not_hide_non_configurable_property(self):
         target = JSObject(self.registry)
         define_data_property(target, "x", 1, configurable=False)
