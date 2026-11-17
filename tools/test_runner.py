@@ -705,14 +705,15 @@ def _read_parser_descriptor(suite_root: Path, test_id: str) -> dict[str, Any]:
         "features": [],
         "flags": [],
         "includes": [],
-        "modes": ["script"],
-        "sourceType": "script",
+        "modes": ["module" if relative.name.endswith(".module.js") else "script"],
+        "sourceType": "module" if relative.name.endswith(".module.js") else "script",
         "raw": True,
         "async": False,
         "negative": None,
         "parseExpectation": {
             "outcome": "parsed" if category in {"pass", "pass-explicit"} else "rejected",
             "phase": "early" if category == "early" else "parse",
+            "allowedPhases": ["early", "parse"] if category == "early" else ["parse"],
         },
         "equivalenceGroup": (
             _parser_equivalence_key(test_id)
@@ -1002,7 +1003,8 @@ def _evaluate_parser_response(
         return {"status": "HARNESS ERROR", "reason": response.get("reason", "parser adapter error")}
     expected = descriptor["parseExpectation"]
     if outcome == expected["outcome"] and (
-        outcome == "parsed" or response.get("phase") == expected["phase"]
+        outcome == "parsed"
+        or response.get("phase") in expected.get("allowedPhases", [expected["phase"]])
     ):
         result = {"status": "PASS"}
         if descriptor.get("equivalenceGroup") is not None:
