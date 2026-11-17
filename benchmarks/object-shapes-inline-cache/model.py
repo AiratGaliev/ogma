@@ -320,6 +320,8 @@ def delete_property(target: ObjectLike, key: str, *, strict: bool = False) -> bo
         fixed = target.target.own_descriptor(key)
         if fixed and not fixed.configurable:
             raise JSRuntimeError("TypeError: Proxy delete trap cannot hide non-configurable property")
+        if fixed and not target.target.extensible:
+            raise JSRuntimeError("TypeError: Proxy delete trap cannot hide a property of a non-extensible target")
         return True
     index = target.shape.slot_for(key)
     if index is None:
