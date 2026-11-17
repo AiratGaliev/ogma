@@ -526,8 +526,16 @@ class SourceMetadataTests(unittest.TestCase):
     def test_core_ir_source_metadata_round_trips_to_ogmb_v1(self):
         result = self.lower()
         source_map = result["source_map"]
+        self.assertEqual(result["code_generation"], GENERATION)
         self.assertEqual(result["ir_to_bytecode"], self.offsets)
         self.assertEqual([item["offset"] for item in source_map["locations"]], [0, 1, 2, 3])
+        expected_sources = [
+            instruction["source"]
+            for block in self.function["blocks"]
+            for instruction in block["instructions"]
+        ] + [block["terminator"]["source"] for block in self.function["blocks"]]
+        self.assertEqual([item["source"] for item in source_map["locations"]], expected_sources)
+        self.assertEqual(source_map["files"], self.function["source_files"])
         self.assertEqual(source_map["lexical_scopes"][0]["bindings"], ["bind_param", "capture_total"])
 
         portable_metadata = {
