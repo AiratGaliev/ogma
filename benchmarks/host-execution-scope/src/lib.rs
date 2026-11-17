@@ -7,9 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{
-    self, Receiver, RecvError, Sender, SyncSender, TrySendError,
-};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::{self, JoinHandle, ThreadId};
 
@@ -274,12 +272,12 @@ impl HostExecutionScope<'_> {
         &self,
         callback: impl FnOnce(&mut HostState) -> R,
     ) -> Result<R, HostError> {
-        let _runtime_guard = self.context.runtime_sync.as_ref().map(|lock| lock.lock());
         let mut state = self
             .context
             .state
             .try_borrow_mut()
             .map_err(|_| HostError::BorrowConflict)?;
+        let _runtime_guard = self.context.runtime_sync.as_ref().map(|lock| lock.lock());
         self.context
             .state_borrows
             .set(self.context.state_borrows.get().saturating_add(1));
@@ -354,6 +352,7 @@ impl CancellationToken {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Lifecycle {
     Open,
     Closing,
@@ -585,7 +584,8 @@ mod tests {
             assert_eq!(shared_snapshot.typed_calls, owner_snapshot.typed_calls);
 
             let shared_locks = shared.application_lock_metrics();
-            assert_eq!(shared_locks.acquisitions, 5);
+            // The explicit snapshot below is also a host-state access.
+            assert_eq!(shared_locks.acquisitions, 6);
             assert_eq!(shared_locks.contentions, 0);
             let owner_metrics = owner.metrics();
             assert_eq!(owner_metrics.active_scopes, 0);
@@ -603,7 +603,7 @@ mod tests {
         let result = scope.with_callback_state(|_| {
             let nested = scope.nested_scope().unwrap();
             nested.with_callback_state(|state| state.value += 1.0)
-        });
+        }).unwrap();
         assert_eq!(result, Err(HostError::BorrowConflict));
         drop(scope);
         assert_eq!(context.metrics().active_scopes, 0);
@@ -685,22 +685,21 @@ mod tests {
     #[test]
     fn concurrent_shared_lock_contention_is_counted() {
         let host = Arc::new(SharedLockHost::new(LibrarySyncMode::None));
-        let workers = 4;
-        let barrier = Arc::new(Barrier::new(workers));
-        let mut threads = Vec::new();
-        for _ in 0..workers {
-            let host = Arc::clone(&host);
-            let barrier = Arc::clone(&barrier);
-            threads.push(thread::spawn(move || {
-                barrier.wait();
-                for _ in 0..2_000 {
-                    let _ = host.typed_add(1.0);
-                }
-            }));
-        }
-        for worker in threads {
-            worker.join().unwrap();
-        }
-        assert_eq!(host.application_lock_metrics().acquisitions, 8_000);
+        let barrier = Arc::new(Barrier::new(2));
+        let holder = Arc::clone(&host);
+        let holder_barrier = Arc::clone(&barrier);
+        let thread = thread::spawn(move || {
+            holder.with_callback(|_| {
+                holder_barrier.wait();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            });
+        });
+        barrier.wait();
+        let _ = host.typed_add(1.0);
+        thread.join().unwrap();
+        let metrics = host.application_lock_metrics();
+        assert_eq!(metrics.acquisitions, 2);
+        assert!(metrics.contentions >= 1);
+        assert!(metrics.wait_ns > 0);
     }
 }
