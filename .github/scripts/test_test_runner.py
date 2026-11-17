@@ -139,6 +139,46 @@ class AdapterWorkerTests(unittest.TestCase):
         self.assertNotEqual(first_worker_pid, restarted_worker_pid)
 
 
+class ConfigurationValidationTests(unittest.TestCase):
+    def test_profile_rejects_unhashable_or_invalid_state_values(self) -> None:
+        cases = [
+            ({"execution": {"state": []}}, "execution.state"),
+            ({"parserStatus": []}, "parserStatus"),
+            ({"defaultFeatureStatus": []}, "defaultFeatureStatus"),
+            ({"featureStatus": {"Array": []}}, "status for feature"),
+            ({"exclusions": [{"suite": [], "testId": "x.js", "reason": "r", "feature": "f", "owner": "OGM", "revisitCondition": "c"}]}, "exclusion suite"),
+        ]
+        for patch, message in cases:
+            with self.subTest(patch=patch), tempfile.TemporaryDirectory() as directory:
+                profile = ready_profile()
+                for key, value in patch.items():
+                    if key == "execution":
+                        profile[key] = value
+                    else:
+                        profile[key] = value
+                path = Path(directory) / "profile.json"
+                test_runner.write_json(path, profile)
+                with self.assertRaisesRegex(test_runner.RunnerError, message):
+                    test_runner.load_profile(path)
+
+    def test_baseline_requires_string_repository_url_and_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = {
+                **BASELINE,
+                "repositories": {
+                    **BASELINE["repositories"],
+                    "test262": {
+                        **BASELINE["repositories"]["test262"],
+                        "url": [],
+                    },
+                },
+            }
+            path = Path(directory) / "baseline.json"
+            test_runner.write_json(path, baseline)
+            with self.assertRaisesRegex(test_runner.RunnerError, "repository URL"):
+                test_runner.load_baseline(path)
+
+
 class Test262MetadataTests(unittest.TestCase):
     def test_missing_frontmatter_uses_default_test262_metadata(self) -> None:
         descriptor = test_runner._read_test262_descriptor(
@@ -766,6 +806,35 @@ class ParserAndShardingTests(unittest.TestCase):
                 profile,
                 TEST262_ROOT,
             )
+
+    def test_aggregate_complete_is_false_for_every_blocking_result_class(self) -> None:
+        manifest = manifest_for("test262", TEST262_ROOT, ready_profile())
+        for status in ("FAIL", "HARNESS ERROR", "UNEXPECTED PASS"):
+            with self.subTest(status=status):
+                reports = [report_for_shard(manifest, 0)]
+                reports[0]["results"][0]["status"] = status
+                aggregate = test_runner.aggregate_reports(
+                    manifest, reports, BASELINE, ready_profile(), TEST262_ROOT
+                )
+                self.assertFalse(aggregate["aggregation"]["complete"])
+                self.assertTrue(
+                    any(
+                        f"blocking aggregate status {status}" in error
+                        for error in aggregate["aggregation"]["errors"]
+                    )
+                )
+
+    def test_aggregate_handles_malformed_status_without_type_error(self) -> None:
+        manifest = manifest_for("test262", TEST262_ROOT, ready_profile())
+        report = report_for_shard(manifest, 0)
+        report["results"][0]["status"] = []
+        aggregate = test_runner.aggregate_reports(
+            manifest, [report], BASELINE, ready_profile(), TEST262_ROOT
+        )
+        self.assertFalse(aggregate["aggregation"]["complete"])
+        self.assertTrue(
+            any("invalid result classification" in error for error in aggregate["aggregation"]["errors"])
+        )
 
     def test_aggregate_detects_duplicate_shards_and_duplicate_test_results(self) -> None:
         manifest = manifest_for("test262", TEST262_ROOT, ready_profile())
