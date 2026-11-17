@@ -463,6 +463,8 @@ def build_manifest(
             "id": profile["profileId"],
             "version": profile["version"],
             "sha256": sha256_json(profile),
+            "executionState": profile["execution"]["state"],
+            "parserStatus": profile.get("parserStatus", "ready"),
         },
         "shardCount": shard_count,
         "tests": tests,
@@ -483,6 +485,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     count = manifest.get("shardCount")
     if not isinstance(count, int) or count < 1:
         raise RunnerError("invalid shardCount in shard manifest")
+    profile = manifest.get("profile")
+    if (
+        not isinstance(profile, dict)
+        or not isinstance(profile.get("id"), str)
+        or not isinstance(profile.get("version"), str)
+        or not isinstance(profile.get("sha256"), str)
+        or profile.get("executionState") not in {"not_implemented", "ready"}
+        or profile.get("parserStatus") not in {"not_implemented", "ready"}
+    ):
+        raise RunnerError("shard manifest has an invalid feature profile descriptor")
     tests = manifest.get("tests")
     shards = manifest.get("shards")
     if not isinstance(tests, list) or not isinstance(shards, list) or len(shards) != count:
@@ -1009,6 +1021,13 @@ def aggregate_reports(
     shard_duplicates: list[int] = []
     result_occurrences: dict[str, list[dict[str, Any]]] = {}
     errors: list[str] = []
+    if manifest["suite"] == "test262" and manifest["profile"]["executionState"] != "ready":
+        errors.append("Test262 aggregation requires an implemented execution adapter")
+    if (
+        manifest["suite"] == "test262-parser-tests"
+        and manifest["profile"]["parserStatus"] != "ready"
+    ):
+        errors.append("parser-corpus aggregation requires an implemented parser adapter")
 
     for report in reports:
         if report.get("schemaVersion") != SCHEMA_VERSION:
