@@ -88,6 +88,23 @@ class AdapterWorkerTests(unittest.TestCase):
 
 
 class Test262MetadataTests(unittest.TestCase):
+    def test_missing_frontmatter_uses_default_test262_metadata(self) -> None:
+        descriptor = test_runner._read_test262_descriptor(
+            TEST262_ROOT, "runner/no-metadata.js"
+        )
+        self.assertEqual(descriptor["metadata"], {})
+        self.assertEqual(descriptor["modes"], ["sloppy", "strict"])
+        self.assertEqual(descriptor["includes"][0]["name"], "assert.js")
+
+    def test_frontmatter_after_license_comments_and_block_yaml_is_parsed(self) -> None:
+        descriptor = test_runner._read_test262_descriptor(
+            TEST262_ROOT, "runner/license-before-metadata.js"
+        )
+        self.assertEqual(descriptor["features"], ["Array"])
+        self.assertEqual(descriptor["flags"], ["noStrict"])
+        self.assertEqual(descriptor["modes"], ["sloppy"])
+        self.assertIn("Example algorithm", descriptor["metadata"]["info"])
+
     def test_metadata_includes_features_flags_and_both_default_modes(self) -> None:
         test_id = "runner/strict-default.js"
         descriptor = test_runner._read_test262_descriptor(TEST262_ROOT, test_id)
