@@ -1569,15 +1569,11 @@ mod tests {
 
         let mut output = 0.0;
         assert_eq!(
-            unsafe {
-                ogma_context_get_number(runtime, second_context, first_value, &mut output)
-            },
+            unsafe { ogma_context_get_number(runtime, second_context, first_value, &mut output) },
             OgmaStatus::STALE_HANDLE
         );
         assert_eq!(
-            unsafe {
-                ogma_context_get_number(runtime, first_context, second_value, &mut output)
-            },
+            unsafe { ogma_context_get_number(runtime, first_context, second_value, &mut output) },
             OgmaStatus::STALE_HANDLE
         );
         assert_eq!(read_number(runtime, first_context, first_value), 7.0);
