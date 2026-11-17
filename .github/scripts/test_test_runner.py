@@ -657,7 +657,9 @@ class ParserAndShardingTests(unittest.TestCase):
             )
             (root / "early" / "early.js").write_text("let value = 1;\n", encoding="utf-8")
             (root / "fail" / "invalid.js").write_text("let = ;\n", encoding="utf-8")
-            (root / ".gitignore").write_text("pass/ignored.js\n", encoding="utf-8")
+            (root / ".gitignore").write_text(
+                "pass/ignored.js\npass-explicit/ignored.js\n", encoding="utf-8"
+            )
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(
                 ["git", "-C", str(root), "config", "user.name", "Ogma Tests"],
@@ -680,6 +682,9 @@ class ParserAndShardingTests(unittest.TestCase):
             ).stdout.strip()
             (root / "pass" / "ignored.js").write_text(
                 "let injected = true;\n", encoding="utf-8"
+            )
+            (root / "pass-explicit" / "ignored.js").write_text(
+                "let injected = (true);\n", encoding="utf-8"
             )
             status = subprocess.run(
                 ["git", "-C", str(root), "status", "--porcelain"],
