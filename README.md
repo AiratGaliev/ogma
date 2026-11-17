@@ -58,16 +58,16 @@ The permanent branch flow is:
 - Long-running fuzzing, stress, GC/lifecycle, resource-limit and broad platform matrices belong in scheduled/manual lanes unless a specific change requires a focused check.
 - M0 benchmark spikes are task-scoped experiments, not an unconditional benchmark job for every PR. Every result must identify its commit, toolchain, workload, configuration, repetitions, metrics and limitations.
 - The implemented bootstrap `CI Fast` workflow validates PR routing, Markdown encoding/structure/local links, repository validator tests, the Core IR v1 schema/verifier and the .ogmb v1 container/decoder-verifier contract corpus, publishing a separate machine-readable JSON report artifact for each verifier. It also compiles Python helper syntax and the deterministic .ogmb fixture generator, then runs the pinned Node.js 26.13.0 package-resolution and scheduling reference corpora. Rust formatting, Clippy and workspace tests are added conditionally when a root `Cargo.toml` exists; the current repository has no Rust workspace, so these steps are not reported as passing.
-- `Conformance Promotion` runs only for PRs targeting test or main. It validates the promotion route and deliberately fails closed until OGM-35 supplies the pinned Test262/differential runner and deterministic shard aggregator. Promotion is therefore intentionally blocked rather than silently accepted without conformance evidence.
-- Full Test262, full differential, interpreter/AOT equivalence and integrated runtime checks do not run on topic PRs. Keep those checks on the dev -> test and test -> main promotion path after the runner is implemented.
+- `Conformance Promotion` runs only for PRs targeting test or main. It validates the promotion route and deliberately remains fail-closed: OGM-34 provides the adapter-driven Test262/parser runner, immutable source pins, feature-profile filtering and deterministic shard manifest/aggregator; OGM-35 must wire real engine-adapter shards into this workflow and verify success, failed-shard and missing-shard cases. Promotion is intentionally blocked until that integration is complete.
+- Full Test262, full differential, interpreter/AOT equivalence and integrated runtime checks do not run on topic PRs. Keep those checks on the dev -> test and test -> main promotion path after OGM-35 integrates the real engine adapter and promotion gate.
 - Do not invent Cargo commands or claim runtime/conformance checks passed when the corresponding workspace or runner does not exist. M0 task [OGM-35](https://linear.app/ogma-engine/issue/OGM-35/create-minimal-fast-ci-and-test262-promotion-gate-proof) owns completion of the conformance gate.
 
 ### Current repository bootstrap status
 
-The repository remains in M0 bootstrap: there is no root Cargo.toml, Rust workspace, pinned Test262/differential runner or deterministic shard aggregator. GitHub Actions and branch protections are now configured:
+The repository remains in M0 bootstrap: there is no root Cargo.toml, Rust workspace, executable Ogma parser/runtime or engine adapter. OGM-34 now provides an adapter-driven Test262/parser runner, immutable baseline pins, an active feature profile, deterministic shard manifests/aggregation and self-tests. GitHub Actions and branch protections are configured; the real engine adapter and promotion-workflow integration remain OGM-35 scope:
 
 - CI Fast runs on PRs to dev/test/main and pushes to those permanent branches. Its fast-checks job passed on PR #1; Rust fmt/Clippy/tests remain conditional on a future Cargo workspace.
-- Conformance Promotion runs automatically on PRs to test/main; manual dispatch is diagnostic only. Both paths intentionally fail closed until OGM-35 implements the real conformance runner and deterministic shard aggregation. No promotion PR has exercised this gate yet, so it is configured but not reported as a passed check.
+- Conformance Promotion runs automatically on PRs to test/main; manual dispatch is diagnostic only. The workflow intentionally fails closed until OGM-35 connects the engine adapter to the runner, executes deterministic shards and verifies aggregate success/failure/missing-result behaviour. No promotion PR has exercised this final gate yet, so it is configured but not reported as a passed check.
 - Active GitHub rulesets protect dev, test and main. All three require PRs, block deletion and non-fast-forward updates, and have no bypass actors. dev requires fast-checks; test and main require fast-checks plus conformance-promotion.
 - The active rulesets are [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038).
 
@@ -79,6 +79,7 @@ These protections enforce repository workflow, but they do not imply that Ogma r
 - [Ogma project in Linear](https://linear.app/ogma-engine/project/ogma-rust-native-jstypescript-execution-engine-1f94795b107b) — issues, M0 milestone, dependencies and delivery evidence.
 - [Development Workflow](docs/development-workflow.md) — branches, PR rules, CI/testing, Linear statuses and definitions of done.
 - [Compatibility Profile](docs/compatibility-profile.md) — versioned ECMAScript, TypeScript, Node.js API, module-resolution and consumer compatibility contract.
+- [Test runner and corpus architecture](docs/test-runner-and-corpus.md) — pinned conformance sources, adapter protocol, feature profile, result classes and deterministic shard aggregation.
 - [AGENTS.md](AGENTS.md) — repository-wide instructions for coding agents.
 - [LICENSE](LICENSE) — project license.
 
