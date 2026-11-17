@@ -1,6 +1,5 @@
 use ogma_host_execution_scope_proof::{
-    HostExecutionContext, HostSnapshot, LibrarySyncMode, LockSnapshot, ScopeMetrics,
-    SharedLockHost,
+    HostExecutionContext, HostSnapshot, LibrarySyncMode, LockSnapshot, ScopeMetrics, SharedLockHost,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::env;
@@ -76,9 +75,7 @@ impl AllocationSnapshot {
             alloc_calls: self.alloc_calls.saturating_sub(before.alloc_calls),
             realloc_calls: self.realloc_calls.saturating_sub(before.realloc_calls),
             dealloc_calls: self.dealloc_calls.saturating_sub(before.dealloc_calls),
-            allocated_bytes: self
-                .allocated_bytes
-                .saturating_sub(before.allocated_bytes),
+            allocated_bytes: self.allocated_bytes.saturating_sub(before.allocated_bytes),
             freed_bytes: self.freed_bytes.saturating_sub(before.freed_bytes),
         }
     }
@@ -116,14 +113,10 @@ fn parse_config() -> Result<Config, String> {
                     .map_err(|_| "invalid --iterations".to_string())?;
             }
             "--warmups" => {
-                config.warmups = value
-                    .parse()
-                    .map_err(|_| "invalid --warmups".to_string())?;
+                config.warmups = value.parse().map_err(|_| "invalid --warmups".to_string())?;
             }
             "--samples" => {
-                config.samples = value
-                    .parse()
-                    .map_err(|_| "invalid --samples".to_string())?;
+                config.samples = value.parse().map_err(|_| "invalid --samples".to_string())?;
             }
             "--revision" => config.revision = value,
             "--tested-revision" => config.tested_revision = value,
@@ -374,7 +367,10 @@ fn run() -> Result<(), String> {
 
     for (mode, mode_name) in [
         (LibrarySyncMode::None, "none"),
-        (LibrarySyncMode::SyntheticControl, "synthetic-runtime-mutex-control"),
+        (
+            LibrarySyncMode::SyntheticControl,
+            "synthetic-runtime-mutex-control",
+        ),
     ] {
         for workload in Workload::ALL {
             let shared = SharedLockHost::new(mode);
@@ -408,7 +404,9 @@ fn run() -> Result<(), String> {
                 ));
             }
             if owner_measurement.metrics.application_lock.acquisitions != 0 {
-                return Err("owner-thread strategy unexpectedly acquired an application mutex".into());
+                return Err(
+                    "owner-thread strategy unexpectedly acquired an application mutex".into(),
+                );
             }
 
             measurements.push(shared_measurement);
@@ -459,11 +457,18 @@ fn build_report(
     contention: &ContentionProbe,
 ) -> String {
     let rustc = env::var("RUSTC_VERSION").unwrap_or_else(|_| "not supplied".into());
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     let mut output = String::new();
     let _ = writeln!(output, "{{");
     let _ = writeln!(output, "  \"schema_version\": 1,");
-    let _ = writeln!(output, "  \"benchmark\": \"ogm-20-host-execution-scope-m0\",");
+    let _ = writeln!(
+        output,
+        "  \"benchmark\": \"ogm-20-host-execution-scope-m0\","
+    );
     let _ = writeln!(
         output,
         "  \"source_revision\": \"{}\",",
@@ -478,9 +483,17 @@ fn build_report(
     let _ = writeln!(output, "    \"rustc\": \"{}\",", json_escape(&rustc));
     let _ = writeln!(output, "    \"os\": \"{}\",", env::consts::OS);
     let _ = writeln!(output, "    \"arch\": \"{}\",", env::consts::ARCH);
-    let _ = writeln!(output, "    \"cpu_model\": \"{}\",", json_escape(&config.cpu));
+    let _ = writeln!(
+        output,
+        "    \"cpu_model\": \"{}\",",
+        json_escape(&config.cpu)
+    );
     let _ = writeln!(output, "    \"profile\": \"{}\",", profile);
-    let _ = writeln!(output, "    \"iterations_per_sample\": {},", config.iterations);
+    let _ = writeln!(
+        output,
+        "    \"iterations_per_sample\": {},",
+        config.iterations
+    );
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
     let _ = writeln!(output, "    \"measurement_samples\": {}", config.samples);
     let _ = writeln!(output, "  }},");
@@ -490,7 +503,11 @@ fn build_report(
     );
     let _ = writeln!(output, "  \"measurements\": [");
     for (index, measurement) in measurements.iter().enumerate() {
-        let comma = if index + 1 == measurements.len() { "" } else { "," };
+        let comma = if index + 1 == measurements.len() {
+            ""
+        } else {
+            ","
+        };
         let _ = write!(
             output,
             "    {{\"strategy\":\"{}\",\"workload\":\"{}\",\"runtime_sync_mode\":\"{}\",\"callbacks_per_iteration\":{},\"unit\":\"ns/workload_iteration\",\"p50\":{:.3},\"p95\":{:.3},\"p99\":{:.3},\"min\":{:.3},\"max\":{:.3},\"workload_iterations_per_second_at_p50\":{:.3},\"host_callbacks_per_second_at_p50\":{:.3},",
@@ -544,11 +561,17 @@ fn build_report(
     write_lock_metrics(&mut output, contention.application_lock);
     let _ = writeln!(output, "}},");
     let _ = writeln!(output, "  \"limitations\": [");
-    let _ = writeln!(output, "    \"mock host dispatch only; no ECMAScript parser, interpreter or production Runtime\",");
+    let _ = writeln!(
+        output,
+        "    \"mock host dispatch only; no ECMAScript parser, interpreter or production Runtime\","
+    );
     let _ = writeln!(output, "    \"no third-party binding library is linked; synthetic synchronization is not a measurement of rquickjs or another library\",");
     let _ = writeln!(output, "    \"the single-owner benchmark is serialized by design; cross-thread contention is reported separately for the shared-lock baseline\",");
     let _ = writeln!(output, "    \"allocator counters are process-global instrumentation and include benchmark harness allocations within each measured interval\",");
-    let _ = writeln!(output, "    \"timings have no machine-independent pass/fail threshold\"");
+    let _ = writeln!(
+        output,
+        "    \"timings have no machine-independent pass/fail threshold\""
+    );
     let _ = writeln!(output, "  ]");
     let _ = writeln!(output, "}}");
     output
