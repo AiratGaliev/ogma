@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from model import (  # noqa: E402
     InlineCache, JSObject, ShapeRegistry, define_data_property, get_property,
-    shape_memory_summary,
+    set_property, shape_memory_summary,
 )
 
 
@@ -83,7 +83,7 @@ def build_scenario(kind: str, count: int = 8):
 def correctness(scenarios: dict) -> list[dict]:
     results = []
     for name, (_, objects) in scenarios.items():
-        cache = InlineCache("value", max_cases=4)
+        cache = InlineCache("value", max_cases=args.max_cases)
         generic = [get_property(obj, "value") for obj in objects]
         cached = [cache.get(obj) for obj in objects]
         if cached != generic:
@@ -138,10 +138,14 @@ def main() -> int:
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--rounds", type=int, default=7)
     parser.add_argument("--revision", default=os.environ.get("GITHUB_SHA", "local-uncommitted"))
-    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--max-cases", type=int, default=4)
+    parser.add_argument(
+        "--output", type=Path,
+        default=Path(__file__).resolve().parent / "results" / "object-shapes-ic-report.json",
+    )
     args = parser.parse_args()
-    if args.iterations < 1 or args.warmups < 0 or args.rounds < 1:
-        parser.error("iterations/rounds must be positive and warmups non-negative")
+    if args.iterations < 1 or args.warmups < 0 or args.rounds < 1 or args.max_cases < 1:
+        parser.error("iterations/rounds/max-cases must be positive and warmups non-negative")
 
     scenarios = {
         name: build_scenario(name)
@@ -185,13 +189,47 @@ def main() -> int:
             "unique_shapes": len({obj.shape.identity for obj in objects}),
         }
         counters[name] = vars(cache.counters)
+        plans = [cache, cache._entries, *cache._entries]
+        plans.extend(plan.guards for plan in cache._entries)
         memory[name] = {
             "objects": len(objects),
             "unique_shapes": registry.shape_count,
             "shape_property_layouts": sum(len(shape.properties) for shape in registry._shapes.values()),
             "object_slots": sum(len(obj.slots) for obj in objects),
             "ic_cases": cache.case_count,
+            "warmed_ic_metadata_shallow_bytes": sum(sys.getsizeof(item) for item in plans),
         }
+
+    # Compare the write IC against the same generic [[Set]] helper on an identical monomorphic workload.
+    write_objects = scenarios["monomorphic"][1]
+    write_cache = InlineCache("value", operation="set", max_cases=args.max_cases)
+    write_cache.set(write_objects[0], get_property(write_objects[0], "value"))
+    write_cursor = [0]
+
+    def generic_write_batch(iterations: int) -> None:
+        for index in range(iterations):
+            obj = write_objects[write_cursor[0] % len(write_objects)]
+            write_cursor[0] += 1
+            set_property(obj, "value", index)
+
+    def cached_write_batch(iterations: int) -> None:
+        for index in range(iterations):
+            obj = write_objects[write_cursor[0] % len(write_objects)]
+            write_cursor[0] += 1
+            write_cache.set(obj, index)
+
+    generic_write = measure(generic_write_batch, iterations=args.iterations,
+                            warmups=args.warmups, rounds=args.rounds)
+    cached_write = measure(cached_write_batch, iterations=args.iterations,
+                           warmups=args.warmups, rounds=args.rounds)
+    set_performance = {
+        "generic": generic_write,
+        "inline_cache": cached_write,
+        "speedup_ratio": (
+            cached_write["median_operations_per_second"] / generic_write["median_operations_per_second"]
+            if generic_write["median_operations_per_second"] else None
+        ),
+    }
 
     payload = {
         "schema": "ogm-18-object-shapes-ic-proof-v1",
@@ -209,10 +247,12 @@ def main() -> int:
             "iterations": args.iterations,
             "warmup_rounds": args.warmups,
             "measurement_rounds": args.rounds,
-            "max_polymorphic_cases": 4,
+            "max_polymorphic_cases": args.max_cases,
         },
         "correctness": correctness_results,
         "performance": performance,
+        "set_performance": set_performance,
+        "set_ic_counters": vars(write_cache.counters),
         "ic_counters": counters,
         "logical_memory": memory,
         "memory_profile": profile_memory(),
