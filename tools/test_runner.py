@@ -10,10 +10,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import queue
 import shlex
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -678,56 +681,189 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
     return None
 
 
-def _adapter_response(
-    command: list[str], request: dict[str, Any], timeout_ms: int
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    if not command:
-        return None, {
-            "status": "HARNESS ERROR",
-            "reason": "no engine adapter command was supplied",
-        }
-    try:
-        process = subprocess.run(
-            command,
-            input=json.dumps(request, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            timeout=timeout_ms / 1000,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return None, {
-            "status": "FAIL",
-            "failureKind": "TIMEOUT",
-            "reason": f"adapter exceeded the {timeout_ms} ms test timeout",
-        }
-    except OSError as exc:
-        return None, {
-            "status": "HARNESS ERROR",
-            "reason": f"cannot start engine adapter: {exc}",
-        }
-    if process.returncode != 0:
-        return None, {
-            "status": "HARNESS ERROR",
-            "reason": f"engine adapter exited with code {process.returncode}",
-            "stderr": process.stderr[-4000:],
-        }
-    try:
-        response = json.loads(process.stdout)
-    except json.JSONDecodeError as exc:
-        return None, {
-            "status": "HARNESS ERROR",
-            "reason": f"engine adapter did not emit a single JSON response: {exc}",
-            "stderr": process.stderr[-4000:],
-            "stdout": process.stdout[-4000:],
-        }
-    if not isinstance(response, dict) or response.get("protocol") != "ogma-test-runner-adapter" or response.get("version") != 1:
-        return None, {
-            "status": "HARNESS ERROR",
-            "reason": "engine adapter response has an invalid protocol envelope",
-        }
-    return response, None
+class AdapterSession:
+    """One persistent line-delimited adapter worker for a whole shard."""
 
+    def __init__(self, command: list[str]) -> None:
+        self.command = command
+        self.process: subprocess.Popen[str] | None = None
+        self.responses: queue.Queue[str | BaseException | None] | None = None
+        self.stderr_lines: deque[str] = deque(maxlen=16)
+        self.request_id = 0
+        self.start_error: str | None = None
+
+    def __enter__(self) -> AdapterSession:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.close()
+
+    def _stderr_text(self) -> str:
+        return "".join(self.stderr_lines)[-4000:]
+
+    def _start(self) -> bool:
+        if self.start_error is not None:
+            return False
+        if not self.command:
+            self.start_error = "no engine adapter command was supplied"
+            return False
+        try:
+            process = subprocess.Popen(
+                self.command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except OSError as exc:
+            self.start_error = f"cannot start engine adapter: {exc}"
+            return False
+
+        responses: queue.Queue[str | BaseException | None] = queue.Queue()
+        self.process = process
+        self.responses = responses
+
+        def read_stdout() -> None:
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    responses.put(line)
+            except BaseException as exc:
+                responses.put(exc)
+            finally:
+                responses.put(None)
+
+        def read_stderr() -> None:
+            try:
+                assert process.stderr is not None
+                for line in process.stderr:
+                    self.stderr_lines.append(line[-512:])
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=read_stdout, daemon=True, name="ogma-adapter-stdout").start()
+        threading.Thread(target=read_stderr, daemon=True, name="ogma-adapter-stderr").start()
+        return True
+
+    def _stop(self) -> None:
+        process = self.process
+        self.process = None
+        self.responses = None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+        except (OSError, ValueError):
+            pass
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+
+    def close(self) -> None:
+        self._stop()
+
+    def run(
+        self, request: dict[str, Any], timeout_ms: int
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if self.process is None and not self._start():
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": self.start_error or "cannot start engine adapter",
+            }
+        process = self.process
+        responses = self.responses
+        if process is None or responses is None:
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": "engine adapter worker is unavailable",
+            }
+        if process.poll() is not None:
+            stderr = self._stderr_text()
+            self._stop()
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": f"engine adapter worker exited before the shard completed (code {process.returncode})",
+                "stderr": stderr,
+            }
+
+        self.request_id += 1
+        request_id = self.request_id
+        request["requestId"] = request_id
+        try:
+            assert process.stdin is not None
+            process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            stderr = self._stderr_text()
+            self._stop()
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": f"cannot send request to engine adapter: {exc}",
+                "stderr": stderr,
+            }
+
+        try:
+            line = responses.get(timeout=timeout_ms / 1000)
+        except queue.Empty:
+            self._stop()
+            return None, {
+                "status": "FAIL",
+                "failureKind": "TIMEOUT",
+                "reason": f"adapter exceeded the {timeout_ms} ms test timeout",
+            }
+
+        if line is None or isinstance(line, BaseException):
+            stderr = self._stderr_text()
+            self._stop()
+            reason = (
+                f"engine adapter stdout reader failed: {line}"
+                if isinstance(line, BaseException)
+                else "engine adapter exited without a response"
+            )
+            return None, {"status": "HARNESS ERROR", "reason": reason, "stderr": stderr}
+
+        try:
+            response = json.loads(line)
+        except json.JSONDecodeError as exc:
+            stderr = self._stderr_text()
+            self._stop()
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": f"engine adapter emitted invalid JSON: {exc}",
+                "stderr": stderr,
+                "stdout": line[-4000:],
+            }
+        if (
+            not isinstance(response, dict)
+            or response.get("protocol") != "ogma-test-runner-adapter"
+            or type(response.get("version")) is not int
+            or response.get("version") != 1
+            or response.get("requestId") != request_id
+        ):
+            stderr = self._stderr_text()
+            self._stop()
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": "engine adapter response has an invalid protocol envelope or requestId",
+                "stderr": stderr,
+            }
+        return response, None
 
 def _evaluate_test262_response(
     descriptor: dict[str, Any], response: dict[str, Any]
