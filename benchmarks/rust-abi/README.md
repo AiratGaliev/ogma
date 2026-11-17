@@ -26,9 +26,9 @@ The crate uses only the Rust standard library. The C header is benchmarks/rust-a
 
 ## Reproduce the measurements
 
-    cargo run --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --bin ogma-abi-bench -- --iterations 10000 --warmups 3 --samples 9 --revision <source-sha> --tested-revision <tested-sha> --output ogma-abi-report.json
+    cargo run --manifest-path benchmarks/rust-abi/Cargo.toml --locked --release --bin ogma-abi-bench -- --iterations 10000 --warmups 3 --samples 101 --revision <source-sha> --tested-revision <tested-sha> --output ogma-abi-report.json
 
-The JSON report records source and tested revisions separately, rustc/OS/architecture/profile, iteration/warmup/sample configuration, the negotiated ABI and min/median/p95/p99/max nanoseconds per call. Workloads cover primitive f64 dispatch, checked handle conversion, a 64-handle bulk read and a host-call/callback roundtrip.
+The JSON report records source and tested revisions separately, rustc/OS/architecture/profile, iteration/warmup/sample configuration, the negotiated ABI and min/median/p95/p99/max nanoseconds per call. It uses nearest-rank percentiles over per-sample mean latency and requires at least 101 measurement samples. Workloads cover primitive f64 dispatch, checked handle conversion, a 64-handle bulk read and a host-call/callback roundtrip.
 
 The benchmark has no timing pass/fail threshold. Numbers are host- and toolchain-specific measurements of this mock proof, not production engine performance. Compare only reports with equivalent workloads and configurations.
 
