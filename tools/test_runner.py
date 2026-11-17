@@ -738,6 +738,7 @@ class AdapterSession:
         responses: queue.Queue[str | BaseException | None] = queue.Queue()
         self.process = process
         self.responses = responses
+        self.stderr_lines.clear()
 
         def read_stdout() -> None:
             try:
@@ -867,6 +868,7 @@ class AdapterSession:
             or response.get("protocol") != "ogma-test-runner-adapter"
             or type(response.get("version")) is not int
             or response.get("version") != 1
+            or type(response.get("requestId")) is not int
             or response.get("requestId") != request_id
         ):
             stderr = self._stderr_text()
