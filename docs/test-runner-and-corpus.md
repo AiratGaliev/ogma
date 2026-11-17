@@ -154,7 +154,7 @@ The adapter must distinguish `parsed` and `rejected`, and report `parse` versus 
 
 Feature statuses use the compatibility profile vocabulary: `supported`, `partial`, `unsupported` and `deferred`. The default status is `deferred`, so an unlisted Test262 feature is not optimistically assumed supported.
 
-A test requiring a feature with status `unsupported` or `deferred` is reported as `UNSUPPORTED`. If the execution/parser adapter is not implemented, all cases in that suite are `UNSUPPORTED`, including tests with no explicit `features` metadata. They are not passed through a fake empty implementation.
+A test requiring a feature with status `unsupported` or `deferred` is reported as `UNSUPPORTED`. The runner also infers the `Intl` requirement for every Test262 test under `intl402/`, because that suite does not consistently declare `features: [Intl]`; the active profile explicitly keeps `Intl` deferred. If the execution/parser adapter is not implemented, all cases in that suite are `UNSUPPORTED`, including tests with no explicit `features` metadata. They are not passed through a fake empty implementation.
 
 Exclusions are exact test IDs, scoped by suite, and require all of:
 
