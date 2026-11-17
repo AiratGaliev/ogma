@@ -4,9 +4,7 @@ This directory contains an M0 proof, not a production compiler or VM. It lowers 
 
 ## Workload corpus
 
-<|-- benchmark-corpus-start --|>
-
-\`\`\`text
+```text
 dynamic-add          JS + coercion (string + number)
 control-flow         two-way CFG branch, value block arguments and both paths
 mutable-loop-locals  back-edge, lexical load/store, loop-carried state
@@ -14,7 +12,7 @@ function-calls       closure creation, receiver and nested call
 host-calls           capability call with observable side-effect trace
 property-access      dynamic named-property reads/writes on a host-provided object
 exceptions           typed thrown values propagated across a nested JS call
-\`\`\`
+```
 
 The corpus is generated deterministically by corpus.py into fixtures/. Every generated function is a standalone ogma.core-ir v1 document. The fixture manifest is consumed by the existing Core IR verifier; no parallel IR schema or semantic dialect is introduced. The property workload covers plain own data properties only; it does not claim accessor, proxy or prototype-chain semantics.
 
@@ -96,15 +94,7 @@ Register lowering reduced instruction count by 52.7%, code bytes by 32.4%, dispa
 
 The raw benchmark report (including all per-round samples) and Core IR verifier report from the same successful CI run are committed under results/:
 
-- \`results/benchmark-results.json.gz\` — lossless gzip of the complete machine-readable benchmark report. Decompress with \`gzip -dc benchmarks/portable-bytecode/results/benchmark-results.json.gz\`.
-- \`results/core-ir-verifier-report.json\` — all nine generated Core IR v1 function fixtures accepted, zero failures.
-
-The SHA-256 of the decompressed benchmark JSON is \`8870419ef4d0be36733330324a54b11baddc3697801ae4d4700c9799222efff1\`. It was produced by CI run [44051174210](https://github.com/AiratGaliev/ogma/actions/runs/44051174210) for topic HEAD \`dd55955b512a0196f837ee5480ba302717a157ab\`; the report's \`source_revision\` records the PR merge-checkout commit \`4ae87a7d894937d4a0edf15bb85929547f98e77c\`. Environment: CPython 3.12.16, Linux x86_64, AMD EPYC 9V74 80-Core Processor.
-## Committed evidence
-
-The raw benchmark report (including all per-round samples) and the Core IR verifier report from the successful CI run are committed under `results/`:
-
 - `results/benchmark-results.json.gz` — lossless gzip of the complete machine-readable benchmark report. Decompress with `gzip -dc benchmarks/portable-bytecode/results/benchmark-results.json.gz`.
-- `results/core-ir-verifier-report.json` — all seven generated Core IR v1 fixtures accepted, zero failures.
+- `results/core-ir-verifier-report.json` — all nine generated Core IR v1 function fixtures accepted, zero failures.
 
-The SHA-256 of the decompressed benchmark JSON is `7ee997591cbe9d8d34dc0af9ddbe69f5c4094e831d44f0706b1d62f8ddeec880`. It was produced by CI run [44046656128](https://github.com/AiratGaliev/ogma/actions/runs/44046656128), which passed both `fast-checks` and the task benchmark job for topic HEAD `4935da693d3c7ccaa6806a0611eef225000cc036`. The report's `source_revision` records GitHub's PR merge-checkout commit `e63778e6d7e01a2608f32bd9fc81a8e94e648128`. Environment: CPython 3.12.16, Linux x86_64, Intel Xeon 6975P-C.
+The SHA-256 of the decompressed benchmark JSON is `8870419ef4d0be36733330324a54b11baddc3697801ae4d4700c9799222efff1`. It was produced by CI run [44051174210](https://github.com/AiratGaliev/ogma/actions/runs/44051174210) for topic HEAD `dd55955b512a0196f837ee5480ba302717a157ab`; the report's `source_revision` records the PR merge-checkout commit `4ae87a7d894937d4a0edf15bb85929547f98e77c`. Environment: CPython 3.12.16, Linux x86_64, AMD EPYC 9V74 80-Core Processor.
