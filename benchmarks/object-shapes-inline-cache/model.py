@@ -9,7 +9,9 @@ import math
 from typing import Any, Callable, Iterable
 
 UNDEFINED = object()
+_RECEIVER_UNSET = object()
 _IDS = count(1)
+_SHAPE_IDS = count(1)
 
 
 class JSRuntimeError(Exception):
@@ -41,7 +43,6 @@ class Shape:
 class ShapeRegistry:
     def __init__(self) -> None:
         self._shapes: dict[tuple[tuple[PropertyLayout, ...], int | None], Shape] = {}
-        self._next = 1
         self.transitions: Counter[tuple[int, int, str]] = Counter()
 
     def intern(self, properties: Iterable[PropertyLayout], prototype: JSObject | JSProxy | None) -> Shape:
@@ -50,8 +51,7 @@ class ShapeRegistry:
         key = (ordered, proto_id)
         shape = self._shapes.get(key)
         if shape is None:
-            shape = Shape(self._next, proto_id, ordered)
-            self._next += 1
+            shape = Shape(next(_SHAPE_IDS), proto_id, ordered)
             self._shapes[key] = shape
         return shape
 
@@ -214,9 +214,9 @@ def _get_own(target: ObjectLike, key: str) -> PropertyDescriptor | None:
     return target.target.own_descriptor(key) if isinstance(target, JSProxy) else target.own_descriptor(key)
 
 
-def get_property(target: ObjectLike, key: str, *, receiver: Any = None) -> Any:
+def get_property(target: ObjectLike, key: str, *, receiver: Any = _RECEIVER_UNSET) -> Any:
     _key(key)
-    if receiver is None:
+    if receiver is _RECEIVER_UNSET:
         receiver = target
     if isinstance(target, JSProxy):
         if target.get_trap is None:
@@ -256,9 +256,9 @@ def _define_on_receiver(receiver: Any, key: str, value: Any, strict: bool) -> bo
 
 
 def set_property(target: ObjectLike, key: str, value: Any, *,
-                 receiver: Any = None, strict: bool = False) -> bool:
+                 receiver: Any = _RECEIVER_UNSET, strict: bool = False) -> bool:
     _key(key)
-    if receiver is None:
+    if receiver is _RECEIVER_UNSET:
         receiver = target
     if isinstance(target, JSProxy):
         if target.set_trap is None:
