@@ -372,7 +372,7 @@ jobs:
           if [[ -z "$cpu_model" ]]; then
             cpu_model="$(uname -m)"
           fi
-          echo "rustc_version=@${ steps.benchmark_environment.outputs.rustc_version }" >> "$GITHUB_OUTPUT"
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
           echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
 
       - name: Check formatting
@@ -386,8 +386,8 @@ jobs:
 
       - name: Run reproducible HostExecutionScope comparison
         env:
-          RUSTC_VERSION: @${ steps.benchmark_environment.outputs.rustc_version }
-          OGM20_CPU_MODEL: @${ steps.benchmark_environment.outputs.cpu_model }
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM20_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
         shell: bash
         run: |
           set -euo pipefail
@@ -395,7 +395,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "@${ github.event.pull_request.head.sha }" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM20_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-20-host-execution-scope-report.json"
@@ -405,6 +405,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ogm-20-host-execution-scope-evidence
-          path: @${ runner.temp }/ogm-20-host-execution-scope-report.json
+          path: ${{ runner.temp }}/ogm-20-host-execution-scope-report.json
           if-no-files-found: error
           retention-days: 30
