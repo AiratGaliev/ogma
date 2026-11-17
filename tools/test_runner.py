@@ -833,7 +833,6 @@ class AdapterSession:
         responses: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
         self.process = process
         self.responses = responses
-        self.request_id = 0
         self.stderr_lines.clear()
 
         def read_stdout() -> None:
