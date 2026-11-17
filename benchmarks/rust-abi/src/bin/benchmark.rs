@@ -58,7 +58,9 @@ fn parse_config() -> Result<Config, String> {
         }
     }
     if cfg.iterations == 0 || cfg.samples < 101 || cfg.warmups == 0 {
-        return Err("iterations and warmups must be > 0; samples must be >= 101 for p95/p99".into());
+        return Err(
+            "iterations and warmups must be > 0; samples must be >= 101 for p95/p99".into(),
+        );
     }
     Ok(cfg)
 }
