@@ -254,8 +254,13 @@ def _define_on_receiver(receiver: Any, key: str, value: Any, strict: bool) -> bo
     if not isinstance(receiver, JSObject):
         return _reject("receiver is not an object", strict)
     own = receiver.own_descriptor(key)
-    if own and (own.kind != "data" or not own.writable):
-        return _reject("receiver property is not writable data", strict)
+    if own:
+        if own.kind != "data" or not own.writable:
+            return _reject("receiver property is not writable data", strict)
+        return define_data_property(
+            receiver, key, value, writable=own.writable,
+            enumerable=own.enumerable, configurable=own.configurable, strict=strict,
+        )
     return define_data_property(receiver, key, value, strict=strict)
 
 
