@@ -518,9 +518,12 @@ class Debugger:
         bindings = frame.function.get("environment", {}).get("bindings", [])
         for binding in bindings:
             ident = binding["id"]
-            availability = "available" if ident in frame.locals else "optimized_out"
+            # The fixture interpreter has no optimizing compiler. A missing local
+            # may be not-yet-initialized or otherwise unavailable; it is never
+            # evidence that the optimizer removed the value.
+            availability = "available" if ident in frame.locals else "unavailable"
             value = debug_value(frame.read(ident), self._heap) if availability == "available" else DebugValue(
-                "unavailable", "<optimized out>", availability="optimized_out"
+                "unavailable", "<unavailable>", availability="unavailable"
             )
             variables.append(VariableSnapshot(
                 ident, binding["name"], binding.get("mutable", False), availability, value
