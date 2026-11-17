@@ -96,6 +96,9 @@ def load_profile(path: Path) -> dict[str, Any]:
         "ready",
     }:
         raise RunnerError(f"{path}: execution.state must be not_implemented or ready")
+    parser_status = profile.get("parserStatus", "ready")
+    if parser_status not in {"not_implemented", "ready"}:
+        raise RunnerError(f"{path}: parserStatus must be not_implemented or ready")
     default_status = profile.get("defaultFeatureStatus")
     if default_status not in FEATURE_STATUSES:
         raise RunnerError(f"{path}: invalid defaultFeatureStatus")
@@ -113,6 +116,8 @@ def load_profile(path: Path) -> dict[str, Any]:
         if not isinstance(entry, dict):
             raise RunnerError(f"{path}: each exclusion must be an object")
         suite = entry.get("suite", "*")
+        if suite not in {"*", "test262", "test262-parser-tests"}:
+            raise RunnerError(f"{path}: invalid exclusion suite {suite!r}")
         test_id = entry.get("testId")
         required_fields = ("reason", "feature", "owner", "revisitCondition")
         if not isinstance(test_id, str) or not test_id:
@@ -421,6 +426,8 @@ def build_manifest(
     profile: dict[str, Any],
     shard_count: int,
 ) -> dict[str, Any]:
+    if suite not in {"test262", "test262-parser-tests"}:
+        raise RunnerError(f"unsupported suite: {suite}")
     if shard_count < 1:
         raise RunnerError("shard-count must be >= 1")
     normalized_ids = sorted(test_ids)
@@ -826,21 +833,36 @@ def run_one_test(
         status = "UNEXPECTED PASS"
     if unsupported_reason and probe_unsupported and status == "PASS":
         status = "UNEXPECTED PASS"
-    return {
+    reason = (
+        "previously excluded test now passes and requires profile review"
+        if exclusion and status == "UNEXPECTED PASS"
+        else "previously unsupported test now passes and requires profile review"
+        if unsupported_reason and status == "UNEXPECTED PASS"
+        else next(
+            (
+                variant.get("reason")
+                for variant in variants
+                if variant["status"] in FAILURE_STATUSES and variant.get("reason")
+            ),
+            None,
+        )
+    )
+    result = {
         "id": test_id,
         "status": status,
-        "reason": (
-            "previously excluded test now passes and requires profile review"
-            if exclusion and status == "UNEXPECTED PASS"
-            else "previously unsupported test now passes and requires profile review"
-            if unsupported_reason and status == "UNEXPECTED PASS"
-            else None
-        ),
+        "reason": reason,
         "features": descriptor["features"],
         "flags": descriptor["flags"],
         "modes": descriptor["modes"],
         "variants": variants,
     }
+    failure_kind = next(
+        (variant.get("failureKind") for variant in variants if variant.get("failureKind")),
+        None,
+    )
+    if failure_kind:
+        result["failureKind"] = failure_kind
+    return result
 
 
 def summarize(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -954,11 +976,19 @@ def aggregate_reports(
     errors: list[str] = []
 
     for report in reports:
+        if report.get("schemaVersion") != SCHEMA_VERSION:
+            errors.append("shard report has an unsupported schemaVersion")
+            continue
         if report.get("manifestSha256") != manifest["manifestSha256"]:
             errors.append("shard report references a different manifest")
             continue
-        if report.get("suite") != manifest["suite"] or report.get("shardCount") != count:
-            errors.append("shard report suite or shardCount does not match the manifest")
+        if (
+            report.get("suite") != manifest["suite"]
+            or report.get("shardCount") != count
+            or report.get("source") != manifest["source"]
+            or report.get("profile") != manifest["profile"]
+        ):
+            errors.append("shard report suite, source, profile or shardCount does not match the manifest")
             continue
         index = report.get("shardIndex")
         if not isinstance(index, int) or not 0 <= index < count:
@@ -969,12 +999,21 @@ def aggregate_reports(
             errors.append(f"duplicate shard result for index {index}")
             continue
         shard_seen.add(index)
+        shard_results = report.get("results")
+        if not isinstance(shard_results, list):
+            errors.append(f"shard {index} results must be an array")
+            continue
         shard_ids: set[str] = set()
-        for result in report.get("results", []):
+        for result in shard_results:
+            if not isinstance(result, dict):
+                errors.append(f"shard {index} contains a non-object test result")
+                continue
             test_id = result.get("id")
             if not isinstance(test_id, str):
                 errors.append(f"shard {index} contains a result without a test ID")
                 continue
+            if result.get("status") not in RESULT_STATUSES:
+                errors.append(f"test {test_id} has an invalid result classification")
             if test_id in shard_ids:
                 errors.append(f"duplicate test result within shard {index}: {test_id}")
             shard_ids.add(test_id)
@@ -985,7 +1024,7 @@ def aggregate_reports(
             result_occurrences.setdefault(test_id, []).append(result)
         missing_in_shard = assigned[index] - shard_ids
         if missing_in_shard:
-            errors.append(f"shard {index} is missing tests: {', '.join(sorted(missing_in_shard))}")
+            errors.append(f"shard {index} is missing tests: {', '.join(sorted(missing_in_shard)})")
 
     missing_shards = sorted(set(range(count)) - shard_seen)
     if missing_shards:
