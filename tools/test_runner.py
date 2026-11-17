@@ -1674,8 +1674,8 @@ def aggregate_reports(
         if index in shard_seen:
             shard_duplicates.append(index)
             errors.append(f"duplicate shard result for index {index}")
-            continue
-        shard_seen.add(index)
+        else:
+            shard_seen.add(index)
         shard_results = report.get("results")
         if not isinstance(shard_results, list):
             errors.append(f"shard {index} results must be an array")
