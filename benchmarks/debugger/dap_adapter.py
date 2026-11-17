@@ -12,10 +12,15 @@ from typing import Any, Mapping
 from debugger_api import DebuggerError, DebuggerPort
 
 
+def _camel_case(name: str) -> str:
+    parts = name.split("_")
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
 def _wire(value: Any) -> Any:
     if is_dataclass(value):
         return {
-            item.name: _wire(getattr(value, item.name))
+            _camel_case(item.name): _wire(getattr(value, item.name))
             for item in fields(value)
             if getattr(value, item.name) is not None
         }
@@ -38,6 +43,7 @@ class DapAdapter:
         self._scope_refs: dict[int, tuple[str, str]] = {}
         self._next_frame_id = count(1)
         self._next_scope_ref = count(1)
+        self._next_breakpoint_id = count(1)
 
     def _frame_id(self, dap_frame_id: Any) -> str:
         if not isinstance(dap_frame_id, int) or isinstance(dap_frame_id, bool):
@@ -84,7 +90,7 @@ class DapAdapter:
                     raise DebuggerError("breakpoints must be an array")
                 if digest is not None and not isinstance(digest, str):
                     raise DebuggerError("sha256 must be a string")
-                entries = []
+                parsed = []
                 for item in requested:
                     if not isinstance(item, Mapping):
                         raise DebuggerError("each breakpoint must be an object")
@@ -95,11 +101,39 @@ class DapAdapter:
                         not isinstance(column, int) or isinstance(column, bool) or column < 0
                     ):
                         raise DebuggerError("breakpoint column must be a non-negative integer")
-                    bp = self._debugger.set_breakpoint(
-                        source_id, line, column, sha256=digest
-                    )
+                    parsed.append((line, column))
+
+                # DAP setBreakpoints replaces the complete source-specific set.
+                # Validate the whole request before mutating the active set, then
+                # stage replacements so a failed backend command can be rolled back.
+                previous = tuple(
+                    item for item in self._debugger.list_breakpoints()
+                    if item.source_id == source_id
+                )
+                created = []
+                try:
+                    for line, column in parsed:
+                        created.append(self._debugger.set_breakpoint(
+                            source_id, line, column, sha256=digest
+                        ))
+                except Exception:
+                    for item in created:
+                        self._debugger.remove_breakpoint(item.id)
+                    raise
+
+                try:
+                    for item in previous:
+                        if not self._debugger.remove_breakpoint(item.id):
+                            raise DebuggerError("could not replace an existing source breakpoint")
+                except Exception:
+                    for item in created:
+                        self._debugger.remove_breakpoint(item.id)
+                    raise
+
+                entries = []
+                for bp in created:
                     entries.append({
-                        "id": int(bp.id.rsplit("-", 1)[1]),
+                        "id": next(self._next_breakpoint_id),
                         "verified": bp.verified,
                         "line": bp.line,
                         **({"message": bp.message} if bp.message else {}),
