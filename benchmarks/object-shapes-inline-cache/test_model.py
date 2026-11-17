@@ -289,6 +289,16 @@ class ProxyFallbackTests(unittest.TestCase):
         with self.assertRaisesRegex(JSRuntimeError, "getter-less"):
             get_property(proxy, "x")
 
+
+
+    def test_proxy_delete_trap_cannot_hide_property_of_non_extensible_target(self):
+        target = JSObject(self.registry)
+        define_data_property(target, "x", 1, configurable=True)
+        target.extensible = False
+        proxy = JSProxy(target, delete_trap=lambda target, key: True)
+        with self.assertRaisesRegex(JSRuntimeError, "non-extensible"):
+            delete_property(proxy, "x")
+
     def test_proxy_set_trap_false_obeys_strictness(self):
         target = JSObject(self.registry)
         proxy = JSProxy(target, set_trap=lambda target, key, value, receiver: False)
