@@ -256,7 +256,8 @@ def debug_value(value: Any, heap: Heap | None = None) -> DebugValue:
     object_id = value.object_id if isinstance(value, ObjectRef) else None
     if object_id is not None and heap is not None and object_id not in heap.objects:
         return DebugValue(kind, "<collected>", object_id, "unavailable")
-    return DebugValue(kind, preview, object_id, "available", truncated)
+    availability = "unavailable" if kind == "unavailable" else "available"
+    return DebugValue(kind, preview, object_id, availability, truncated)
 
 
 def _source_key(function_id: str, location: SourceLocation | None) -> tuple[Any, ...] | None:
@@ -283,6 +284,7 @@ class Debugger:
         self._frames: list[Frame] = []
         self._heap: Heap | None = None
         self._step: tuple[str, int, tuple[Any, ...] | None] | None = None
+        self._skip_breakpoint_at: tuple[str, int] | None = None
         self._capabilities = {
             "pause": backend_name == "interpreter",
             "breakpoints": backend_name == "interpreter",
@@ -426,7 +428,10 @@ class Debugger:
         self._apply_commands()
         if self._state != "running":
             return False
-        if self._matches_breakpoint(location):
+        current_instruction = (frame.id, frame.pc)
+        if self._skip_breakpoint_at == current_instruction:
+            self._skip_breakpoint_at = None
+        elif self._matches_breakpoint(location):
             self._stop("breakpoint")
             return False
         if self._step is not None:
@@ -454,6 +459,8 @@ class Debugger:
         self._require_paused()
         self._event = None
         self._step = None
+        frame = self._frames[-1] if self._frames else None
+        self._skip_breakpoint_at = (frame.id, frame.pc) if frame else None
         self._state = "running"
 
     def _begin_step(self, mode: str) -> None:
@@ -462,6 +469,7 @@ class Debugger:
         base_key = _source_key(frame.function["id"], frame.location) if frame else None
         self._step = (mode, len(self._frames), base_key)
         self._event = None
+        self._skip_breakpoint_at = (frame.id, frame.pc) if frame else None
         self._state = "running"
 
     def step_into(self) -> None:
@@ -550,6 +558,7 @@ class Debugger:
         self._require_owner()
         self._breakpoints.clear()
         self._step = None
+        self._skip_breakpoint_at = None
         self._event = None
         self._frames.clear()
         while not self._commands.empty():
