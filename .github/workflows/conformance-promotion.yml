@@ -239,7 +239,7 @@ jobs:
           if [[ -n "$ADAPTER_COMMAND" ]]; then
             args+=(--adapter "$ADAPTER_COMMAND")
           fi
-          "\${args[@]}"
+          "${args[@]}"
 
       - name: Upload shard reports
         if: always()
@@ -361,7 +361,7 @@ jobs:
             python tools/test_runner.py aggregate \
               --manifest "$manifest" \
               --suite-root "$suite_root" \
-              --reports "\${reports[@]}" \
+              --reports "${reports[@]}" \
               --report ".artifacts/results/$suite-aggregate.json" \
               --junit ".artifacts/results/$suite-aggregate.xml"
           }
