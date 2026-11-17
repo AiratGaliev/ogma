@@ -1757,10 +1757,21 @@ def _parse_adapter_command(value: str | None) -> list[str]:
     return command
 
 
-def _load_and_check_revision(suite_root: Path, expected: str) -> None:
+def _load_and_check_revision(
+    suite_root: Path,
+    expected: str,
+    suite: str | None = None,
+) -> None:
     try:
         process = subprocess.run(
             ["git", "-C", str(suite_root), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+        top_level = subprocess.run(
+            ["git", "-C", str(suite_root), "rev-parse", "--show-toplevel"],
             text=True,
             capture_output=True,
             check=True,
@@ -1780,11 +1791,66 @@ def _load_and_check_revision(suite_root: Path, expected: str) -> None:
         raise RunnerError(
             f"source corpus revision mismatch: expected {expected}, checked out {actual}"
         )
+    if Path(top_level.stdout.strip()).resolve() != suite_root.resolve():
+        raise RunnerError("suite-root must be the root of the pinned Git checkout")
     if status.stdout.strip():
         raise RunnerError(
             "source corpus working tree is not clean; modified or untracked files "
             "would invalidate the pinned test/harness snapshot"
         )
+
+    if suite is None:
+        return
+    if suite == "test262":
+        pathspecs = ["test", "harness"]
+    elif suite == "test262-parser-tests":
+        pathspecs = ["pass", "pass-explicit", "early", "fail"]
+    else:
+        raise RunnerError(f"unsupported suite for pinned source validation: {suite}")
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(suite_root), "ls-files", "--full-name", "-z", "--", *pathspecs],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RunnerError(f"cannot enumerate tracked corpus files: {exc}") from exc
+    tracked_paths = {
+        item for item in tracked.stdout.split("\x00") if item.endswith(".js")
+    }
+    if suite == "test262":
+        tracked_tests = sorted(
+            item[len("test/") :]
+            for item in tracked_paths
+            if item.startswith("test/")
+            and "_FIXTURE" not in PurePosixPath(item).name
+        )
+        tracked_harness = {
+            item[len("harness/") :]
+            for item in tracked_paths
+            if item.startswith("harness/")
+        }
+        actual_tests = discover_test_ids(suite_root, suite)
+        actual_harness = {
+            path.relative_to(suite_root / "harness").as_posix()
+            for path in (suite_root / "harness").rglob("*.js")
+            if path.is_file()
+        }
+        if actual_tests != tracked_tests or actual_harness != tracked_harness:
+            raise RunnerError(
+                "pinned Test262 test/harness files differ from the Git-tracked source; "
+                "ignored or untracked JavaScript files are not permitted"
+            )
+    else:
+        tracked_tests = sorted(tracked_paths)
+        actual_tests = discover_test_ids(suite_root, suite)
+        if actual_tests != tracked_tests:
+            raise RunnerError(
+                "pinned parser corpus files differ from the Git-tracked source; "
+                "ignored or untracked JavaScript files are not permitted"
+            )
 
 
 def _add_baseline_profile_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1834,7 +1900,7 @@ def main(argv: list[str] | None = None) -> int:
             baseline = load_baseline(args.baseline)
             profile = load_profile(args.profile)
             source = _pinned_source(baseline, args.suite)
-            _load_and_check_revision(args.suite_root, source["revision"])
+            _load_and_check_revision(args.suite_root, source["revision"], args.suite)
             manifest = build_manifest(
                 args.suite,
                 discover_test_ids(args.suite_root, args.suite),
@@ -1856,7 +1922,7 @@ def main(argv: list[str] | None = None) -> int:
             pinned = _pinned_source(baseline, manifest["suite"])
             if manifest["source"] != pinned:
                 raise RunnerError("shard manifest source revision does not match the pinned baseline")
-            _load_and_check_revision(args.suite_root, pinned["revision"])
+            _load_and_check_revision(args.suite_root, pinned["revision"], manifest["suite"])
             report = run_manifest(
                 manifest,
                 args.suite_root,
@@ -1886,7 +1952,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = read_json(args.manifest)
         validate_manifest(manifest)
         pinned = _pinned_source(baseline, manifest["suite"])
-        _load_and_check_revision(args.suite_root, pinned["revision"])
+        _load_and_check_revision(args.suite_root, pinned["revision"], manifest["suite"])
         reports = [read_json(path) for path in args.reports]
         report = aggregate_reports(
             manifest,
