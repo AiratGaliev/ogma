@@ -4,4 +4,5 @@ features: [Array]
 flags: [module]
 ---*/
 // result: pass
-export {};
+import { fixtureValue } from './import_FIXTURE.js';
+if (fixtureValue !== 42) throw new Error('fixture resolution failed');
