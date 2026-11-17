@@ -143,6 +143,7 @@ class CompiledFunction:
     parameter_count: int
     debug_map: list[dict[str, Any]]
     code_generation_ns: int
+    decode_ns: int
 
 
 class JSException(Exception):
@@ -163,6 +164,8 @@ class RuntimeState:
     dispatches: int = 0
     calls: int = 0
     call_depth: int = 0
+    runtime_allocations: int = 0
+    host_allocations: int = 0
 
 
 UNINITIALIZED = object()
@@ -444,6 +447,52 @@ def core_ir_plan(
                         source_id, src, may_throw,
                     )
 
+            elif op in {"js.get_property", "js.set_property"}:
+                intrinsic_name = "__intrinsic__:get_property" if op == "js.get_property" else "__intrinsic__:set_property"
+                intrinsic_constant = const_id(intrinsic_name)
+                key_constant = const_id(ir_instruction["attributes"]["key"])
+                argument_locations = [values[item] for item in operands]
+                if model == "stack":
+                    emit(block_id, "CONST", {"constant_index": intrinsic_constant}, source_id, src)
+                    emit(block_id, "LOAD_LOCAL", {"local": argument_locations[0]}, source_id, src)
+                    emit(block_id, "CONST", {"constant_index": key_constant}, source_id, src)
+                    if op == "js.set_property":
+                        emit(block_id, "LOAD_LOCAL", {"local": argument_locations[1]}, source_id, src)
+                    emit(
+                        block_id, "CALL",
+                        {"argument_count": 2 if op == "js.get_property" else 3},
+                        source_id, src, may_throw,
+                    )
+                    emit(block_id, "STORE_LOCAL", {"local": result_loc}, source_id, src)
+                else:
+                    intrinsic_location = next_location
+                    next_location += 1
+                    key_location = next_location
+                    next_location += 1
+                    emit(
+                        block_id, "CONST",
+                        {"dest": intrinsic_location, "constant_index": intrinsic_constant},
+                        source_id, src,
+                    )
+                    emit(
+                        block_id, "CONST",
+                        {"dest": key_location, "constant_index": key_constant},
+                        source_id, src,
+                    )
+                    sources = [intrinsic_location, argument_locations[0], key_location]
+                    if op == "js.set_property":
+                        sources.append(argument_locations[1])
+                    sources = distinct_register_sources(block_id, sources, source_id, src)
+                    emit(
+                        block_id, "CALL",
+                        {
+                            "dest": result_loc,
+                            "sources": sources,
+                            "argument_count": len(sources) - 1,
+                        },
+                        source_id, src, may_throw,
+                    )
+
             elif op == "js.throw":
                 source_loc = values[operands[0]]
                 if model == "stack":
@@ -589,16 +638,30 @@ def decode_code(code: bytes, model: str) -> list[DecodedInstruction]:
     cursor = 0
     reverse = {value: key for key, value in (STACK_OPCODES if model == "stack" else REGISTER_OPCODES).items()}
 
+    if model not in {"stack", "register"}:
+        raise ValueError(f"unsupported bytecode model {model!r}")
+
+    def ensure_available(position: int, width: int) -> None:
+        if position < 0 or width < 0 or position + width > len(code):
+            raise ValueError(f"truncated instruction operand at byte offset {position}")
+
+    def read_u8(position: int) -> int:
+        ensure_available(position, 1)
+        return code[position]
+
     def read_u16(position: int) -> int:
+        ensure_available(position, 2)
         return struct.unpack_from("<H", code, position)[0]
 
     def read_u32(position: int) -> int:
+        ensure_available(position, 4)
         return struct.unpack_from("<I", code, position)[0]
 
     while cursor < len(code):
         start = cursor
-        opcode = code[cursor]
-        flags = code[cursor + 1]
+        ensure_available(cursor, 2)
+        opcode = read_u8(cursor)
+        flags = read_u8(cursor + 1)
         cursor += 2
         if flags & ~0x03:
             raise ValueError(f"unknown instruction flags at byte offset {start}")
@@ -621,12 +684,12 @@ def decode_code(code: bytes, model: str) -> list[DecodedInstruction]:
                 operation = "load_local" if kind == "LOAD_LOCAL" else "store_local"
                 operands = [local]; details["local"] = local
             elif kind == "UNARY":
-                subop = code[cursor]; cursor += 1
+                subop = read_u8(cursor); cursor += 1
                 if subop not in UNARY_NAMES:
                     raise ValueError(f"unknown unary sub-operation {subop}")
                 operation = "unary"; details["subop"] = UNARY_NAMES[subop]
             elif kind == "BINARY":
-                subop = code[cursor]; cursor += 1
+                subop = read_u8(cursor); cursor += 1
                 if subop not in BINARY_NAMES:
                     raise ValueError(f"unknown binary sub-operation {subop}")
                 operation = "binary"; details["subop"] = BINARY_NAMES[subop]
@@ -668,13 +731,13 @@ def decode_code(code: bytes, model: str) -> list[DecodedInstruction]:
                 details.update({"dest": dest, "constant_index": constant_index})
                 register_effects = {"reads": [], "writes": [dest]}
             elif kind == "UNARY":
-                dest = read_u16(cursor); source = read_u16(cursor + 2); subop = code[cursor + 4]; cursor += 5
+                dest = read_u16(cursor); source = read_u16(cursor + 2); subop = read_u8(cursor + 4); cursor += 5
                 if subop not in UNARY_NAMES:
                     raise ValueError(f"unknown unary sub-operation {subop}")
                 operation = "unary"; details.update({"dest": dest, "source": source, "subop": UNARY_NAMES[subop]})
                 register_effects = {"reads": [source], "writes": [dest]}
             elif kind == "BINARY":
-                dest = read_u16(cursor); left = read_u16(cursor + 2); right = read_u16(cursor + 4); subop = code[cursor + 6]; cursor += 7
+                dest = read_u16(cursor); left = read_u16(cursor + 2); right = read_u16(cursor + 4); subop = read_u8(cursor + 6); cursor += 7
                 if subop not in BINARY_NAMES:
                     raise ValueError(f"unknown binary sub-operation {subop}")
                 operation = "binary"; details.update({"dest": dest, "left": left, "right": right, "subop": BINARY_NAMES[subop]})
@@ -890,7 +953,9 @@ def compile_function(function_doc: dict[str, Any], model: str) -> CompiledFuncti
         encode_instruction(item, offsets[id(item)], model, offsets, block_offsets)
         for item in plans
     )
+    decode_started = time.perf_counter_ns()
     decoded = decode_code(encoded, model)
+    decode_ns = time.perf_counter_ns() - decode_started
     if not decoded or decoded[0].offset != 0 or decoded[-1].offset + decoded[-1].size != len(encoded):
         raise ValueError(f"{fn['id']}: decoded bytecode does not cover the encoded code section")
 
@@ -956,7 +1021,13 @@ def compile_function(function_doc: dict[str, Any], model: str) -> CompiledFuncti
         parameter_count=len(fn["parameters"]),
         debug_map=debug_map,
         code_generation_ns=code_generation_ns,
+        decode_ns=decode_ns,
     )
+
+
+@dataclass
+class JSObject:
+    properties: dict[str, Any] = field(default_factory=dict)
 
 
 def js_truthy(value: Any) -> bool:
@@ -1031,12 +1102,36 @@ def invoke_call(values: list[Any], state: RuntimeState) -> Any:
         raise JSException("TypeError: missing callee")
     callee, arguments = values[0], values[1:]
     state.calls += 1
+    if isinstance(callee, str) and callee.startswith("__intrinsic__:"):
+        intrinsic = callee.removeprefix("__intrinsic__:")
+        if intrinsic == "get_property":
+            if len(arguments) != 2:
+                raise JSException("TypeError: get_property arity mismatch")
+            obj, key = arguments
+            if not isinstance(obj, JSObject) or not isinstance(key, str):
+                raise JSException("TypeError: invalid property access")
+            return obj.properties.get(key)
+        if intrinsic == "set_property":
+            if len(arguments) != 3:
+                raise JSException("TypeError: set_property arity mismatch")
+            obj, key, value = arguments
+            if not isinstance(obj, JSObject) or not isinstance(key, str):
+                raise JSException("TypeError: invalid property assignment")
+            obj.properties[key] = value
+            return value
+        raise JSException(f"TypeError: unknown runtime intrinsic {intrinsic}")
     if isinstance(callee, Closure):
         if not arguments:
             raise JSException("TypeError: missing thisArg")
         return execute_function(callee.function_id, arguments[1:], state)
     if isinstance(callee, str) and callee.startswith("__host__:"):
         symbol = callee.removeprefix("__host__:")
+        if symbol == "record.create":
+            if len(arguments) != 1:
+                raise JSException("TypeError: record.create expects one argument")
+            state.host_trace.append({"symbol": symbol, "args": arguments})
+            state.host_allocations += 1
+            return JSObject({"seed": arguments[0]})
         if symbol != "trace":
             raise JSException(f"TypeError: unknown host capability {symbol}")
         state.host_trace.append({"symbol": symbol, "args": arguments})
@@ -1091,6 +1186,7 @@ def execute_function(function_id: str, arguments: list[Any], state: RuntimeState
                         result = operand
                     elif details["subop"] == "make_closure":
                         result = Closure(str(operand))
+                        state.runtime_allocations += 1
                     else:
                         raise JSException("InternalError: unsupported unary operation")
                     operand_stack.append(result)
@@ -1132,6 +1228,7 @@ def execute_function(function_id: str, arguments: list[Any], state: RuntimeState
                         result = operand
                     elif details["subop"] == "make_closure":
                         result = Closure(str(operand))
+                        state.runtime_allocations += 1
                     else:
                         raise JSException("InternalError: unsupported unary operation")
                     registers[details["dest"]] = result
@@ -1185,7 +1282,10 @@ def execute_case(workload: dict[str, Any], compiled: list[CompiledFunction],
         outcome = {"return": result, "host_trace": state.host_trace}
     except JSException as exc:
         outcome = {"throw": exc.value, "host_trace": state.host_trace}
-    return outcome, state.dispatches
+    return outcome, state.dispatches, {
+        "runtime_allocations": state.runtime_allocations,
+        "host_allocations": state.host_allocations,
+    }
 
 
 def normalized_size(compiled: CompiledFunction) -> int:
@@ -1237,8 +1337,8 @@ def run_workload_correctness(workload: dict[str, Any], stack_code: list[Compiled
                              register_code: list[CompiledFunction]) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for case_index, case in enumerate(workload["cases"]):
-        stack_outcome, stack_dispatches = execute_case(workload, stack_code, case["args"])
-        register_outcome, register_dispatches = execute_case(workload, register_code, case["args"])
+        stack_outcome, stack_dispatches, stack_allocations = execute_case(workload, stack_code, case["args"])
+        register_outcome, register_dispatches, register_allocations = execute_case(workload, register_code, case["args"])
         expected = case["expected"]
         if stack_outcome != expected:
             raise AssertionError(
@@ -1257,6 +1357,8 @@ def run_workload_correctness(workload: dict[str, Any], stack_code: list[Compiled
             "register": register_outcome,
             "stack_dispatches": stack_dispatches,
             "register_dispatches": register_dispatches,
+            "stack_allocations": stack_allocations,
+            "register_allocations": register_allocations,
         })
     return observations
 

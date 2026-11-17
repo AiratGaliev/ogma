@@ -487,22 +487,122 @@ def build_workloads() -> list[dict[str, Any]]:
         "description": "Capability-mediated host call with observable side-effect trace",
     })
 
-    # Exceptions are observable completion records and are not Rust panics.
-    thrower = function(
-        "fn_throw",
-        "throws_value",
+    # Property access runs through the same dynamic object boundary in both VMs.
+    # The host capability supplies the object; Core IR owns subsequent get/set semantics.
+    property_access = function(
+        "fn_property_access",
+        "property_access",
         [],
-        None,
+        {"semantic_type": "dynamic", "representation": "boxed"},
         [],
         [
             basic_block(
                 "entry",
                 [
-                    const("error_value", "string", "expected-error", "string", "string_ref"),
+                    const("record_seed", "string", "seed", "string", "string_ref"),
+                    instruction(
+                        "create_record",
+                        "host.call",
+                        ["record_seed_value"],
+                        value("record_value", "dynamic", "boxed"),
+                        attributes={"symbol": "record.create"},
+                        effect_in="e_property",
+                        effect_out="e_after_create",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                    const("initial_score", "number", 7, "number", "f64"),
+                    instruction(
+                        "set_initial_score",
+                        "js.set_property",
+                        ["record_value", "initial_score_value"],
+                        value("stored_initial_score", "number", "f64"),
+                        attributes={"key": "score"},
+                        effect_in="e_after_create",
+                        effect_out="e_after_initial_set",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                    instruction(
+                        "get_initial_score",
+                        "js.get_property",
+                        ["record_value"],
+                        value("loaded_score", "dynamic", "boxed"),
+                        attributes={"key": "score"},
+                        effect_in="e_after_initial_set",
+                        effect_out="e_after_initial_get",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                    const("score_increment", "number", 5, "number", "f64"),
+                    instruction(
+                        "calculate_score",
+                        "js.add",
+                        ["loaded_score", "score_increment_value"],
+                        value("updated_score", "dynamic", "boxed"),
+                        effect_in="e_after_initial_get",
+                        effect_out="e_after_add",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                    instruction(
+                        "set_updated_score",
+                        "js.set_property",
+                        ["record_value", "updated_score"],
+                        value("stored_updated_score", "dynamic", "boxed"),
+                        attributes={"key": "score"},
+                        effect_in="e_after_add",
+                        effect_out="e_after_updated_set",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                    instruction(
+                        "get_updated_score",
+                        "js.get_property",
+                        ["record_value"],
+                        value("final_score", "dynamic", "boxed"),
+                        attributes={"key": "score"},
+                        effect_in="e_after_updated_set",
+                        effect_out="e_after_updated_get",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                ],
+                {"kind": "return", "value": "final_score"},
+                "e_property",
+            )
+        ],
+        effect_entry="e_property",
+    )
+    workloads.append({
+        "id": "property-access",
+        "entry": "fn_property_access",
+        "functions": [property_access],
+        "cases": [{
+            "args": [],
+            "expected": {
+                "return": 12,
+                "host_trace": [{"symbol": "record.create", "args": ["seed"]}],
+            },
+        }],
+        "description": "Host-provided object allocation followed by dynamic property set/get and arithmetic",
+    })
+
+    # Exceptions are observable completion records and are not Rust panics.
+    thrower = function(
+        "fn_throw",
+        "throws_value",
+        [parameter("exception_value", "bind_exception", "exception", "dynamic", "boxed")],
+        None,
+        [binding("bind_exception", "exception", "parameter", "dynamic", "boxed")],
+        [
+            basic_block(
+                "entry",
+                [
                     instruction(
                         "throw_error",
                         "js.throw",
-                        ["error_value_value"],
+                        ["exception_value"],
                         effect_in="e_throw",
                         effect_out="e_throw_next",
                         effect_flags=effects(may_throw=True),
@@ -515,12 +615,53 @@ def build_workloads() -> list[dict[str, Any]]:
         ],
         effect_entry="e_throw",
     )
+    throw_caller = function(
+        "fn_throw_through_call",
+        "throw_through_call",
+        [parameter("payload", "bind_payload", "payload", "dynamic", "boxed")],
+        {"semantic_type": "dynamic", "representation": "boxed"},
+        [binding("bind_payload", "payload", "parameter", "dynamic", "boxed")],
+        [
+            basic_block(
+                "entry",
+                [
+                    instruction(
+                        "make_thrower_closure",
+                        "closure.create",
+                        [],
+                        value("thrower_closure", "function", "function_ref"),
+                        attributes={"function": "fn_throw", "captures": []},
+                        effect_in="e_caller",
+                        effect_out="e_after_closure",
+                        effect_flags=effects(may_allocate=True, may_gc=True),
+                    ),
+                    const("throw_receiver", "null", None, "null", "boxed"),
+                    instruction(
+                        "invoke_thrower",
+                        "js.call",
+                        ["thrower_closure", "throw_receiver_value", "payload"],
+                        value("unreachable_result", "dynamic", "boxed"),
+                        effect_in="e_after_closure",
+                        effect_out="e_after_call",
+                        effect_flags=dict(FULL_DYNAMIC_EFFECTS),
+                        exception={"kind": "propagate"},
+                    ),
+                ],
+                {"kind": "return", "value": "unreachable_result"},
+                "e_caller",
+            )
+        ],
+        effect_entry="e_caller",
+    )
     workloads.append({
         "id": "exceptions",
-        "entry": "fn_throw",
-        "functions": [thrower],
-        "cases": [{"args": [], "expected": {"throw": "expected-error", "host_trace": []}}],
-        "description": "Explicit JS throw and exceptional completion propagation",
+        "entry": "fn_throw_through_call",
+        "functions": [throw_caller, thrower],
+        "cases": [
+            {"args": ["expected-error"], "expected": {"throw": "expected-error", "host_trace": []}},
+            {"args": [17], "expected": {"throw": 17, "host_trace": []}},
+        ],
+        "description": "Typed throw payloads propagated across a nested JS function call",
     })
 
     return workloads

@@ -33,6 +33,7 @@ class PortableBytecodeProofTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.workload_document = write_corpus()
         cls.workloads = cls.workload_document["workloads"]
+        cls.workloads_by_id = {workload["id"]: workload for workload in cls.workloads}
         cls.compiled = {
             workload["id"]: {
                 model: compile_workload(workload, model)
@@ -49,6 +50,7 @@ class PortableBytecodeProofTests(unittest.TestCase):
                 "mutable-loop-locals",
                 "function-calls",
                 "host-calls",
+                "property-access",
                 "exceptions",
             },
             {workload["id"] for workload in self.workloads},
@@ -85,6 +87,36 @@ class PortableBytecodeProofTests(unittest.TestCase):
                 self.assertIn("edge:entry->when_true:then:commit:0", debug_operations)
                 self.assertIn("edge:entry->when_false:else:stage:0", debug_operations)
                 self.assertIn("edge:entry->when_false:else:commit:0", debug_operations)
+
+
+    def test_decoder_rejects_truncated_instructions_with_value_error(self) -> None:
+        malformed = [
+            (bytes((_prototype.STACK_OPCODES["CONST"], 0)), "stack"),
+            (bytes((_prototype.REGISTER_OPCODES["CALL"], 0, 0, 0, 1, 0)), "register"),
+        ]
+        for encoded, model in malformed:
+            with self.subTest(model=model, size=len(encoded)):
+                with self.assertRaisesRegex(ValueError, "truncated"):
+                    _prototype.decode_code(encoded, model)
+
+    def test_runtime_and_host_allocations_are_counted_separately(self) -> None:
+        caller = self.workloads_by_id["function-calls"]
+        for model in ("stack", "register"):
+            with self.subTest(model=model):
+                _outcome, _dispatches, allocations = _prototype.execute_case(
+                    caller, self.compiled["function-calls"][model], caller["cases"][0]["args"]
+                )
+                self.assertEqual(1, allocations["runtime_allocations"])
+                self.assertEqual(0, allocations["host_allocations"])
+
+        property_workload = self.workloads_by_id["property-access"]
+        for model in ("stack", "register"):
+            with self.subTest(model=model):
+                _outcome, _dispatches, allocations = _prototype.execute_case(
+                    property_workload, self.compiled["property-access"][model], property_workload["cases"][0]["args"]
+                )
+                self.assertEqual(0, allocations["runtime_allocations"])
+                self.assertEqual(1, allocations["host_allocations"])
 
     def test_register_encoding_reduces_dispatches_for_the_same_core_ir(self) -> None:
         stack_total = 0

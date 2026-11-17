@@ -67,6 +67,7 @@ def benchmark_candidate(
     measurement_rounds: int,
 ) -> tuple[dict[str, Any], list[Any]]:
     compile_samples: list[int] = []
+    decode_samples: list[int] = []
     compile_wall_samples: list[int] = []
     compiled = None
 
@@ -75,6 +76,7 @@ def benchmark_candidate(
         candidate = compile_workload(workload, model)
         compile_wall_samples.append(time.perf_counter_ns() - started)
         compile_samples.append(sum(item.code_generation_ns for item in candidate))
+        decode_samples.append(sum(item.decode_ns for item in candidate))
         compiled = candidate
 
     assert compiled is not None
@@ -88,9 +90,13 @@ def benchmark_candidate(
 
     # One untimed execution establishes deterministic dispatch counts for each test case.
     case_dispatches: list[int] = []
+    case_runtime_allocations: list[int] = []
+    case_host_allocations: list[int] = []
     for case in workload["cases"]:
-        _, count = execute_case(workload, compiled, case["args"])
+        _, count, allocations = execute_case(workload, compiled, case["args"])
         case_dispatches.append(count)
+        case_runtime_allocations.append(allocations["runtime_allocations"])
+        case_host_allocations.append(allocations["host_allocations"])
 
     for _ in range(warmups):
         for case in workload["cases"]:
@@ -100,24 +106,38 @@ def benchmark_candidate(
     execution_rate_samples: list[float] = []
     dispatch_rate_samples: list[float] = []
     dispatch_samples: list[int] = []
+    runtime_allocation_samples: list[int] = []
+    host_allocation_samples: list[int] = []
     execution_count = len(workload["cases"]) * iterations
     expected_dispatches = iterations * sum(case_dispatches)
+    expected_runtime_allocations = iterations * sum(case_runtime_allocations)
+    expected_host_allocations = iterations * sum(case_host_allocations)
     for _ in range(measurement_rounds):
         execution_started = time.perf_counter_ns()
         measured_dispatches = 0
+        measured_runtime_allocations = 0
+        measured_host_allocations = 0
         measured_executions = 0
         for case in workload["cases"]:
             for _ in range(iterations):
-                _, count = execute_case(workload, compiled, case["args"])
+                _, count, allocations = execute_case(workload, compiled, case["args"])
                 measured_dispatches += count
+                measured_runtime_allocations += allocations["runtime_allocations"]
+                measured_host_allocations += allocations["host_allocations"]
                 measured_executions += 1
         execution_elapsed = time.perf_counter_ns() - execution_started
         if measured_executions != execution_count:
             raise AssertionError("benchmark round executed an unexpected number of cases")
         if measured_dispatches != expected_dispatches:
             raise AssertionError("interpreter dispatch count changed between measurement rounds")
+        if measured_runtime_allocations != expected_runtime_allocations:
+            raise AssertionError("runtime allocation count changed between measurement rounds")
+        if measured_host_allocations != expected_host_allocations:
+            raise AssertionError("host allocation count changed between measurement rounds")
         execution_elapsed_samples.append(execution_elapsed)
         dispatch_samples.append(measured_dispatches)
+        runtime_allocation_samples.append(measured_runtime_allocations)
+        host_allocation_samples.append(measured_host_allocations)
         execution_rate_samples.append(execution_count * 1_000_000_000 / max(1, execution_elapsed))
         dispatch_rate_samples.append(measured_dispatches * 1_000_000_000 / max(1, execution_elapsed))
     execution_elapsed = median_or_zero(execution_elapsed_samples)
@@ -162,7 +182,20 @@ def benchmark_candidate(
         "local_slots": sum(item.local_count for item in compiled),
         "virtual_registers": sum(item.register_count for item in compiled),
         "compile_cost_median_ns": median_or_zero(compile_samples),
+        "decode_cost_median_ns": median_or_zero(decode_samples),
         "compile_plus_validation_pipeline_wall_median_ns": median_or_zero(compile_wall_samples),
+        "allocations": {
+            "runtime_allocation_events_per_execution": (
+                sum(case_runtime_allocations) / len(case_runtime_allocations)
+                if case_runtime_allocations else 0
+            ),
+            "host_allocation_events_per_execution": (
+                sum(case_host_allocations) / len(case_host_allocations)
+                if case_host_allocations else 0
+            ),
+            "runtime_allocation_events_per_round": measured_runtime_allocations,
+            "host_allocation_events_per_round": measured_host_allocations,
+        },
         "verifier_complexity": complexity,
         "interpreter": {
             "iterations_per_case": iterations,
@@ -179,7 +212,10 @@ def benchmark_candidate(
         },
         "raw_samples": {
             "compile_codegen_ns": compile_samples,
+            "decode_ns": decode_samples,
             "compile_plus_validation_pipeline_wall_ns": compile_wall_samples,
+            "runtime_allocation_events_per_round": runtime_allocation_samples,
+            "host_allocation_events_per_round": host_allocation_samples,
             "verifier_ns": verifier_samples,
             "memory_peak_bytes": memory_samples,
             "interpreter_elapsed_ns": execution_elapsed_samples,
@@ -258,7 +294,10 @@ def main() -> int:
             "container_bytes": sum(item["container_bytes"] for item in metrics),
             "debug_map_estimate_bytes": sum(item["debug_map_estimate_bytes"] for item in metrics),
             "compile_codegen_median_ns_sum": sum(item["compile_cost_median_ns"] for item in metrics),
+            "decode_cost_median_ns_sum": sum(item["decode_cost_median_ns"] for item in metrics),
             "compile_plus_validation_pipeline_median_ns_sum": sum(item["compile_plus_validation_pipeline_wall_median_ns"] for item in metrics),
+            "runtime_allocation_events_per_round": sum(item["allocations"]["runtime_allocation_events_per_round"] for item in metrics),
+            "host_allocation_events_per_round": sum(item["allocations"]["host_allocation_events_per_round"] for item in metrics),
             "verifier_median_ns_sum": sum(
                 item["verifier_complexity"]["verifier_median_ns"] for item in metrics
             ),
@@ -287,6 +326,7 @@ def main() -> int:
             "measurement_rounds": args.measurement_rounds,
             "timing_clock": "time.perf_counter_ns",
             "memory_metric": "Python tracemalloc peak; interpreter/prototype allocation proxy, not native VM RSS",
+            "allocation_metric": "counted closure allocations and host-factory object allocations; no Ogma GC exists in this M0 repository yet",
             "correctness": "both decoded bytecode interpreters must match the expected observation and each other",
         },
         "core_ir_verification": core_ir_report,
