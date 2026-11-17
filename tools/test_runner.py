@@ -786,6 +786,9 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
 class AdapterSession:
     """One persistent line-delimited adapter worker for a whole shard."""
 
+    MAX_REQUEST_BYTES = 16 * 1024 * 1024
+    MAX_RESPONSE_CHARS = 8 * 1024 * 1024
+
     def __init__(self, command: list[str]) -> None:
         self.command = command
         self.process: subprocess.Popen[str] | None = None
@@ -798,7 +801,10 @@ class AdapterSession:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
-        self.close()
+        if exc_type is None:
+            self.close()
+        else:
+            self._stop(force=True)
 
     def _stderr_text(self) -> str:
         return "".join(self.stderr_lines)[-4000:]
@@ -824,62 +830,99 @@ class AdapterSession:
             self.start_error = f"cannot start engine adapter: {exc}"
             return False
 
-        responses: queue.Queue[str | BaseException | None] = queue.Queue()
+        responses: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
         self.process = process
         self.responses = responses
+        self.request_id = 0
         self.stderr_lines.clear()
 
         def read_stdout() -> None:
             try:
                 assert process.stdout is not None
-                for line in process.stdout:
+                while True:
+                    line = process.stdout.readline(self.MAX_RESPONSE_CHARS + 1)
+                    if not line:
+                        break
+                    if len(line) > self.MAX_RESPONSE_CHARS:
+                        responses.put(
+                            RunnerError(
+                                "engine adapter response exceeds the 8 MiB protocol limit"
+                            )
+                        )
+                        break
                     responses.put(line)
             except BaseException as exc:
-                responses.put(exc)
+                try:
+                    responses.put(exc)
+                except (OSError, ValueError):
+                    pass
             finally:
-                responses.put(None)
+                try:
+                    responses.put(None)
+                except (OSError, ValueError):
+                    pass
 
         def read_stderr() -> None:
             try:
                 assert process.stderr is not None
-                for line in process.stderr:
+                while True:
+                    line = process.stderr.readline(4096)
+                    if not line:
+                        break
                     self.stderr_lines.append(line[-512:])
             except (OSError, ValueError):
                 pass
 
-        threading.Thread(target=read_stdout, daemon=True, name="ogma-adapter-stdout").start()
-        threading.Thread(target=read_stderr, daemon=True, name="ogma-adapter-stderr").start()
+        threading.Thread(
+            target=read_stdout, daemon=True, name="ogma-adapter-stdout"
+        ).start()
+        threading.Thread(
+            target=read_stderr, daemon=True, name="ogma-adapter-stderr"
+        ).start()
         return True
 
-    def _stop(self) -> None:
+    def _stop(self, force: bool = False) -> subprocess.Popen[str] | None:
         process = self.process
         self.process = None
         self.responses = None
         if process is None:
-            return
-        try:
-            if process.stdin is not None:
-                process.stdin.close()
-        except (OSError, ValueError):
-            pass
-        try:
-            process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
+            return None
+
+        if force and process.poll() is None:
             process.terminate()
+        if not force:
+            try:
+                if process.stdin is not None:
+                    process.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+        try:
+            process.wait(timeout=0.5 if force else 2.0)
+        except subprocess.TimeoutExpired:
+            if process.poll() is None:
+                process.terminate()
             try:
                 process.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        for stream in (process.stdout, process.stderr):
+
+        for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 try:
                     stream.close()
-                except (OSError, ValueError):
+                except (BrokenPipeError, OSError, ValueError):
                     pass
+        return process
 
     def close(self) -> None:
-        self._stop()
+        process = self._stop()
+        if process is not None and process.returncode != 0:
+            raise RunnerError(
+                "engine adapter worker exited unsuccessfully after the shard "
+                f"(code {process.returncode}); stderr: {self._stderr_text()}"
+            )
 
     def run(
         self, request: dict[str, Any], timeout_ms: int
@@ -898,10 +941,13 @@ class AdapterSession:
             }
         if process.poll() is not None:
             stderr = self._stderr_text()
-            self._stop()
+            self._stop(force=True)
             return None, {
                 "status": "HARNESS ERROR",
-                "reason": f"engine adapter worker exited before the shard completed (code {process.returncode})",
+                "reason": (
+                    "engine adapter worker exited before the shard completed "
+                    f"(code {process.returncode})"
+                ),
                 "stderr": stderr,
             }
 
@@ -909,31 +955,73 @@ class AdapterSession:
         request_id = self.request_id
         request["requestId"] = request_id
         try:
-            assert process.stdin is not None
-            process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-            process.stdin.flush()
-        except (BrokenPipeError, OSError, ValueError) as exc:
-            stderr = self._stderr_text()
-            self._stop()
+            payload = json.dumps(request, ensure_ascii=False) + "\n"
+            if len(payload.encode("utf-8")) > self.MAX_REQUEST_BYTES:
+                return None, {
+                    "status": "HARNESS ERROR",
+                    "reason": "engine adapter request exceeds the 16 MiB protocol limit",
+                }
+        except (TypeError, ValueError, UnicodeError) as exc:
             return None, {
                 "status": "HARNESS ERROR",
-                "reason": f"cannot send request to engine adapter: {exc}",
+                "reason": f"cannot serialize engine adapter request: {exc}",
+            }
+
+        deadline = time.monotonic() + timeout_ms / 1000
+        write_result: queue.Queue[BaseException | None] = queue.Queue(maxsize=1)
+
+        def write_request() -> None:
+            try:
+                assert process.stdin is not None
+                process.stdin.write(payload)
+                process.stdin.flush()
+                write_result.put(None)
+            except BaseException as exc:
+                try:
+                    write_result.put(exc)
+                except queue.Full:
+                    pass
+
+        threading.Thread(
+            target=write_request, daemon=True, name="ogma-adapter-stdin"
+        ).start()
+        try:
+            write_error = write_result.get(timeout=max(0, deadline - time.monotonic()))
+        except queue.Empty:
+            stderr = self._stderr_text()
+            self._stop(force=True)
+            return None, {
+                "status": "FAIL",
+                "failureKind": "TIMEOUT",
+                "reason": (
+                    f"adapter did not accept the request within the {timeout_ms} ms test timeout"
+                ),
+                "stderr": stderr,
+            }
+        if write_error is not None:
+            stderr = self._stderr_text()
+            self._stop(force=True)
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": f"cannot send request to engine adapter: {write_error}",
                 "stderr": stderr,
             }
 
         try:
-            line = responses.get(timeout=timeout_ms / 1000)
+            line = responses.get(timeout=max(0, deadline - time.monotonic()))
         except queue.Empty:
-            self._stop()
+            stderr = self._stderr_text()
+            self._stop(force=True)
             return None, {
                 "status": "FAIL",
                 "failureKind": "TIMEOUT",
                 "reason": f"adapter exceeded the {timeout_ms} ms test timeout",
+                "stderr": stderr,
             }
 
         if line is None or isinstance(line, BaseException):
             stderr = self._stderr_text()
-            self._stop()
+            self._stop(force=True)
             reason = (
                 f"engine adapter stdout reader failed: {line}"
                 if isinstance(line, BaseException)
@@ -941,11 +1029,21 @@ class AdapterSession:
             )
             return None, {"status": "HARNESS ERROR", "reason": reason, "stderr": stderr}
 
+        if not line.endswith("\n"):
+            stderr = self._stderr_text()
+            self._stop(force=True)
+            return None, {
+                "status": "HARNESS ERROR",
+                "reason": "engine adapter response is not newline-terminated",
+                "stderr": stderr,
+                "stdout": line[-4000:],
+            }
+
         try:
             response = json.loads(line)
         except json.JSONDecodeError as exc:
             stderr = self._stderr_text()
-            self._stop()
+            self._stop(force=True)
             return None, {
                 "status": "HARNESS ERROR",
                 "reason": f"engine adapter emitted invalid JSON: {exc}",
@@ -961,14 +1059,13 @@ class AdapterSession:
             or response.get("requestId") != request_id
         ):
             stderr = self._stderr_text()
-            self._stop()
+            self._stop(force=True)
             return None, {
                 "status": "HARNESS ERROR",
                 "reason": "engine adapter response has an invalid protocol envelope or requestId",
                 "stderr": stderr,
             }
         return response, None
-
 def _evaluate_test262_response(
     descriptor: dict[str, Any], response: dict[str, Any]
 ) -> dict[str, Any]:
