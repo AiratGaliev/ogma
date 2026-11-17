@@ -495,3 +495,30 @@ def shape_memory_summary(registry: ShapeRegistry, objects: list[JSObject]) -> di
         "object_slot_count": sum(len(obj.slots) for obj in objects),
         "shared_shape_reference_count": len(objects),
     }
+
+
+def set_prototype_of(target: JSObject, prototype: JSObject | JSProxy | None, *,
+                     strict: bool = False) -> bool:
+    cursor = prototype
+    visited: set[int] = set()
+    while cursor is not None:
+        if cursor is target:
+            return _reject("cyclic prototype value", strict)
+        if cursor.identity in visited:
+            raise JSRuntimeError("TypeError: existing cyclic prototype chain")
+        visited.add(cursor.identity)
+        cursor = cursor.target.prototype if isinstance(cursor, JSProxy) else cursor.prototype
+    if not target.extensible and target.prototype is not prototype:
+        return _reject("cannot change prototype of a non-extensible object", strict)
+    if target.prototype is prototype:
+        return True
+    old_shape = target.shape
+    target.prototype = prototype
+    target.shape = target.registry.transition(
+        old_shape, old_shape.properties, prototype, "set-prototype"
+    )
+    return True
+
+
+def prevent_extensions(target: JSObject) -> None:
+    target.extensible = False
