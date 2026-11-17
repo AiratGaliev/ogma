@@ -37,14 +37,20 @@ else:
             "errorName": negative["type"],
         })
     elif "// result: missing-async-done" in source:
-        response.update({"outcome": "completed", "asyncDone": False})
+        response.update({"outcome": "completed"})
+    elif "// result: async-failure" in source:
+        response.update({
+            "outcome": "completed",
+            "asyncSignal": "Test262:AsyncTestFailure: fixture failure",
+        })
     elif "// result: pass" in source:
         response.update({
             "outcome": "completed",
-            "asyncDone": True,
             "modeEcho": test["mode"],
             "includeNames": [item["name"] for item in test["includes"]],
         })
+        if test["async"]:
+            response["asyncSignal"] = "Test262:AsyncTestComplete"
     else:
         response.update({
             "outcome": "threw",
