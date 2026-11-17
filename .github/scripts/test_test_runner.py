@@ -259,6 +259,51 @@ class ParserAndShardingTests(unittest.TestCase):
             verify_corpus=True,
         )
         self.assertEqual(report["summary"]["PASS"], 3)
+        shard = manifest["shards"][0]
+        aggregate = test_runner.aggregate_reports(
+            manifest,
+            [{
+                "schemaVersion": 1,
+                "suite": "test262-parser-tests",
+                "source": manifest["source"],
+                "profile": manifest["profile"],
+                "manifestSha256": manifest["manifestSha256"],
+                "shardIndex": shard["index"],
+                "shardCount": manifest["shardCount"],
+                "results": report["results"],
+            }],
+        )
+        self.assertTrue(aggregate["aggregation"]["complete"])
+
+    def test_aggregate_fails_closed_until_test262_execution_is_ready(self) -> None:
+        profile = ready_profile()
+        profile["execution"] = {"state": "not_implemented"}
+        manifest = test_runner.build_manifest(
+            "test262", ["language/example.js"], BASELINE, profile, 1
+        )
+        shard = manifest["shards"][0]
+        aggregate = test_runner.aggregate_reports(
+            manifest,
+            [{
+                "schemaVersion": 1,
+                "suite": "test262",
+                "source": manifest["source"],
+                "profile": manifest["profile"],
+                "manifestSha256": manifest["manifestSha256"],
+                "shardIndex": shard["index"],
+                "shardCount": 1,
+                "results": [{
+                    "id": "language/example.js",
+                    "status": "UNSUPPORTED",
+                    "reason": "runtime adapter unavailable",
+                }],
+            }],
+        )
+        self.assertFalse(aggregate["aggregation"]["complete"])
+        self.assertIn(
+            "Test262 aggregation requires an implemented execution adapter",
+            aggregate["aggregation"]["errors"],
+        )
 
     def test_parser_corpus_pass_fail_and_early_error_phases(self) -> None:
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, ready_profile())
