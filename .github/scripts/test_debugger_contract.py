@@ -203,6 +203,36 @@ class DebuggerApiTests(unittest.TestCase):
         self.assertFalse(wrong_generation.verified)
         self.assertTrue(debugger.remove_breakpoint(breakpoint.id))
 
+    def test_resume_after_breakpoint_skips_current_location_once_and_completes(self):
+        _, debugger, interpreter, _ = paused_at_call()
+        debugger.resume()
+        result = interpreter.run()
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.value, 15)
+        self.assertIsNone(debugger.event_message())
+
+    def test_source_location_inline_chain_is_deeply_immutable(self):
+        image = make_image()
+        source = image["functions"][0]["debug_metadata"]["source_map"]["locations"][0]["source"]
+        source["inline_chain"] = [{
+            "function": "fn_inline",
+            "file": "src_main",
+            "start": {"line": 1, "column": 0},
+            "end": {"line": 1, "column": 4},
+        }]
+        debugger = Debugger(image)
+        interpreter = Interpreter(image, debugger)
+        debugger.set_breakpoint("src_main", 1)
+        self.assertEqual(interpreter.run().status, "paused")
+        location = debugger.get_stack()[0].location
+        inline = location.inline_chain[0]
+        with self.assertRaises(TypeError):
+            inline["function"] = "mutated"
+        with self.assertRaises(TypeError):
+            inline["start"]["line"] = 99
+        self.assertEqual(source["inline_chain"][0]["function"], "fn_inline")
+        self.assertEqual(location.inline_chain[0]["start"]["line"], 1)
+
     def test_step_into_exposes_child_and_preserves_caller_call_site(self):
         _, debugger, interpreter, _ = paused_at_call()
         debugger.step_into()
@@ -221,7 +251,8 @@ class DebuggerApiTests(unittest.TestCase):
         self.assertEqual(capture.value.preview, "10")
         self.assertEqual(capture.availability, "available")
         optimized = next(item for item in scope.variables if item.binding_id == "next")
-        self.assertEqual(optimized.availability, "optimized_out")
+        self.assertEqual(optimized.availability, "unavailable")
+        self.assertEqual(optimized.value.availability, "unavailable")
 
     def test_step_over_runs_callee_and_stops_at_next_caller_statement(self):
         _, debugger, interpreter, _ = paused_at_call()
@@ -279,6 +310,20 @@ class DebuggerApiTests(unittest.TestCase):
         accessor = next(item for item in inspected.properties if item.name == "accessor")
         self.assertTrue(accessor.is_accessor)
         self.assertEqual(accessor.value.availability, "not_evaluated")
+        self.assertEqual(interpreter.heap._temporary_roots, {})
+        interpreter.heap.before_inspection = None
+        self.assertEqual(interpreter.heap.collect(), (object_id,))
+
+    def test_inspector_releases_temporary_root_when_collection_callback_fails(self):
+        _, debugger, interpreter, _ = paused_at_call()
+        object_id = debugger.evaluate_identifier(debugger.get_stack()[0].id, "obj").object_id
+
+        def fail_during_inspection():
+            raise RuntimeError("simulated inspector failure")
+
+        interpreter.heap.before_inspection = fail_during_inspection
+        with self.assertRaisesRegex(RuntimeError, "simulated inspector failure"):
+            debugger.inspect_object(object_id)
         self.assertEqual(interpreter.heap._temporary_roots, {})
         interpreter.heap.before_inspection = None
         self.assertEqual(interpreter.heap.collect(), (object_id,))
@@ -359,12 +404,51 @@ class DebuggerApiTests(unittest.TestCase):
         })
         self.assertTrue(evaluated["success"])
         self.assertEqual(evaluated["body"]["result"]["preview"], "10")
+        inspected_value = adapter.dispatch({
+            "command": "evaluate",
+            "arguments": {"frameId": main_frame_id, "expression": "obj"},
+        })
+        self.assertTrue(inspected_value["success"])
+        self.assertIn("objectId", inspected_value["body"]["result"])
+        self.assertNotIn("object_id", inspected_value["body"]["result"])
 
         invalid = adapter.dispatch({
             "command": "setBreakpoints",
             "arguments": {"sourceId": "src_main", "breakpoints": [{"line": True}]},
         })
         self.assertFalse(invalid["success"])
+
+    def test_dap_set_breakpoints_replaces_source_set_and_validates_atomically(self):
+        _, debugger, _, _ = paused_at_call()
+        adapter = DapAdapter(debugger)
+
+        first = adapter.dispatch({
+            "command": "setBreakpoints",
+            "arguments": {"sourceId": "src_main", "breakpoints": [{"line": 1}]},
+        })
+        self.assertTrue(first["success"])
+        self.assertEqual(
+            [(item.line, item.verified) for item in debugger.list_breakpoints()],
+            [(1, True)],
+        )
+
+        invalid = adapter.dispatch({
+            "command": "setBreakpoints",
+            "arguments": {
+                "sourceId": "src_main",
+                "breakpoints": [{"line": 2}, {"line": True}],
+            },
+        })
+        self.assertFalse(invalid["success"])
+        self.assertEqual([item.line for item in debugger.list_breakpoints()], [1])
+
+        replacement = adapter.dispatch({
+            "command": "setBreakpoints",
+            "arguments": {"sourceId": "src_main", "breakpoints": [{"line": 13}]},
+        })
+        self.assertTrue(replacement["success"])
+        self.assertEqual([item.line for item in debugger.list_breakpoints()], [13])
+        self.assertNotEqual(first["body"]["breakpoints"][0]["id"], replacement["body"]["breakpoints"][0]["id"])
 
     def test_uncaught_exception_is_reported_as_structured_event(self):
         image = make_image()
@@ -557,6 +641,14 @@ class SourceMetadataTests(unittest.TestCase):
             self.assertEqual(after["instructions"], before["instructions"])
             self.assertEqual(after["environment"], before["environment"])
             self.assertEqual(after["captures"], before["captures"])
+
+        def execute(program):
+            debugger = Debugger(program)
+            interpreter = Interpreter(program, debugger)
+            result = interpreter.run()
+            return result.status, result.value
+
+        self.assertEqual(execute(image), execute(stripped))
 
 
 if __name__ == "__main__":
