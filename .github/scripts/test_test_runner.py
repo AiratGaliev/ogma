@@ -57,9 +57,38 @@ class Test262MetadataTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["name"] for item in descriptor["includes"]],
-            ["sta.js", "assert.js", "helper.js"],
+            ["assert.js", "sta.js", "doneprintHandle.js", "helper.js"],
         )
         self.assertTrue(descriptor["async"])
+
+    def test_async_completion_signal_is_required_and_failure_signal_fails(self) -> None:
+        complete = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            ready_profile(),
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(complete["status"], "PASS")
+
+        failure = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/async-failure.js",
+            ready_profile(),
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(failure["status"], "FAIL")
+        self.assertEqual(failure["variants"][0]["failureKind"], "ASYNC_FAILURE")
+
+    def test_module_fixture_is_not_discovered_as_a_standalone_test(self) -> None:
+        test_ids = test_runner.discover_test_ids(TEST262_ROOT, "test262")
+        self.assertIn("runner/module.js", test_ids)
+        self.assertNotIn("runner/import_FIXTURE.js", test_ids)
 
     def test_raw_tests_do_not_receive_harness_includes(self) -> None:
         descriptor = test_runner._read_test262_descriptor(TEST262_ROOT, "runner/raw.js")
@@ -388,7 +417,7 @@ class ParserAndShardingTests(unittest.TestCase):
             async_timeout_ms=1000,
             verify_corpus=True,
         )
-        self.assertEqual(report["summary"]["PASS"], 3)
+        self.assertEqual(report["summary"]["PASS"], 4)
         self.assertEqual(report["summary"]["FAIL"], 0)
 
     def test_aggregate_rejects_manifest_from_different_pinned_baseline(self) -> None:
