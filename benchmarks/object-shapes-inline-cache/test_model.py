@@ -1,0 +1,469 @@
+from __future__ import annotations
+
+import unittest
+
+from model import (
+    CacheState, InlineCache, JSObject, JSProxy, JSRuntimeError, ShapeRegistry,
+    UNDEFINED, define_accessor_property, define_data_property, delete_property,
+    get_property, same_value, set_property, set_prototype_of,
+)
+
+
+class ShapeIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = ShapeRegistry()
+
+    def make(self, **values):
+        obj = JSObject(self.registry)
+        for key, value in values.items():
+            define_data_property(obj, key, value)
+        return obj
+
+    def test_equal_ordered_layouts_share_shape(self):
+        a = self.make(x=1, y=2)
+        b = self.make(x=10, y=20)
+        self.assertIs(a.shape, b.shape)
+        self.assertEqual(a.slots, [1, 2])
+        self.assertEqual(b.slots, [10, 20])
+
+
+
+    def test_shape_exposes_immutable_key_to_slot_index(self):
+        obj = self.make(first=1, second=2)
+        self.assertEqual(obj.shape.slot_for("first"), 0)
+        self.assertEqual(obj.shape.slot_for("second"), 1)
+        self.assertIsNone(obj.shape.slot_for("missing"))
+        with self.assertRaises(TypeError):
+            obj.shape._slot_indices["third"] = 2
+
+    def test_property_order_is_part_of_shape_identity(self):
+        a = self.make(x=1, y=2)
+        b = self.make(y=2, x=1)
+        self.assertNotEqual(a.shape.identity, b.shape.identity)
+
+    def test_value_update_does_not_change_shape(self):
+        obj = self.make(x=1)
+        shape = obj.shape
+        self.assertTrue(set_property(obj, "x", 2))
+        self.assertIs(obj.shape, shape)
+        self.assertEqual(get_property(obj, "x"), 2)
+
+    def test_add_delete_are_explicit_transitions(self):
+        obj = self.make(x=1)
+        initial = obj.shape.identity
+        define_data_property(obj, "y", 2)
+        added = obj.shape.identity
+        self.assertNotEqual(initial, added)
+        self.assertTrue(delete_property(obj, "x"))
+        self.assertNotEqual(added, obj.shape.identity)
+        reasons = {entry[2] for entry in self.registry.transitions}
+        self.assertIn("add-data", reasons)
+        self.assertIn("delete", reasons)
+
+    def test_prototype_identity_participates_in_shape(self):
+        proto_a = self.make(p=1)
+        proto_b = self.make(p=1)
+        a = JSObject(self.registry, proto_a)
+        b = JSObject(self.registry, proto_b)
+        self.assertNotEqual(a.shape.identity, b.shape.identity)
+
+    def test_descriptor_reconfiguration_changes_shape(self):
+        obj = self.make(x=1)
+        old = obj.shape
+        self.assertTrue(define_data_property(obj, "x", 1, writable=False))
+        self.assertNotEqual(old.identity, obj.shape.identity)
+
+    def test_non_configurable_property_cannot_be_redefined(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1, configurable=False)
+        self.assertFalse(define_data_property(obj, "x", 2, configurable=True))
+        self.assertEqual(get_property(obj, "x"), 1)
+        with self.assertRaisesRegex(JSRuntimeError, "non-configurable"):
+            define_data_property(obj, "x", 2, configurable=True, strict=True)
+
+
+
+    def test_data_to_accessor_transition_invalidates_read_ic(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(obj), 1)
+        old_shape = obj.shape
+        define_accessor_property(obj, "x", getter=lambda this: 42)
+        self.assertNotEqual(obj.shape.identity, old_shape.identity)
+        self.assertEqual(cache.get(obj), 42)
+        self.assertEqual(cache.counters.guard_failures, 1)
+        self.assertEqual(cache.counters.ic_hits, 0)
+
+    def test_non_writable_own_data_property_rejects_assignment(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1, writable=False)
+        self.assertFalse(set_property(obj, "x", 2))
+        self.assertEqual(get_property(obj, "x"), 1)
+        with self.assertRaisesRegex(JSRuntimeError, "not writable"):
+            set_property(obj, "x", 2, strict=True)
+
+    def test_non_configurable_own_property_rejects_delete(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1, configurable=False)
+        self.assertFalse(delete_property(obj, "x"))
+        self.assertEqual(get_property(obj, "x"), 1)
+        with self.assertRaisesRegex(JSRuntimeError, "not configurable"):
+            delete_property(obj, "x", strict=True)
+
+    def test_non_extensible_object_cannot_gain_new_property(self):
+        obj = JSObject(self.registry)
+        obj.extensible = False
+        self.assertFalse(define_data_property(obj, "x", 1))
+        with self.assertRaises(JSRuntimeError):
+            define_data_property(obj, "x", 1, strict=True)
+
+
+class InlineCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = ShapeRegistry()
+
+    def make(self, value):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", value)
+        return obj
+
+    def test_monomorphic_cache_hits_across_shared_shape_instances(self):
+        first, second = self.make(1), self.make(2)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(first), 1)   # generic warm-up
+        self.assertEqual(cache.get(second), 2)  # same shape guard
+        self.assertEqual(cache.state, CacheState.MONOMORPHIC)
+        self.assertEqual(cache.counters.ic_hits, 1)
+
+
+
+    def test_inline_cache_does_not_alias_shape_ids_across_registries(self):
+        first_registry = ShapeRegistry()
+        first = JSObject(first_registry)
+        define_data_property(first, "x", 111)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(first), 111)
+
+        second_registry = ShapeRegistry()
+        second = JSObject(second_registry)
+        define_data_property(second, "y", 222)
+        self.assertIs(cache.get(second), UNDEFINED)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_explicit_null_receiver_is_not_replaced_with_target(self):
+        calls = []
+        prototype = JSObject(self.registry)
+        define_accessor_property(
+            prototype,
+            "value",
+            getter=lambda this: calls.append(("get", this)) or 1,
+            setter=lambda this, value: calls.append(("set", this, value)),
+        )
+        define_data_property(prototype, "writable", 2)
+        receiver = JSObject(self.registry, prototype)
+
+        self.assertEqual(get_property(receiver, "value", receiver=None), 1)
+        self.assertIsNone(calls[0][1])
+        self.assertTrue(set_property(receiver, "value", 3, receiver=None))
+        self.assertEqual(calls[1], ("set", None, 3))
+        self.assertFalse(set_property(receiver, "writable", 4, receiver=None))
+
+        proxy_calls = []
+        proxy = JSProxy(
+            JSObject(self.registry),
+            get_trap=lambda target, key, this: proxy_calls.append(this) or 5,
+        )
+        self.assertEqual(get_property(proxy, "anything", receiver=None), 5)
+        self.assertEqual(proxy_calls, [None])
+
+    def test_cached_slot_loads_current_value_not_stale_value(self):
+        obj = self.make(1)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(obj), 1)
+        set_property(obj, "x", 99)
+        self.assertEqual(cache.get(obj), 99)
+
+    def test_polymorphic_cache_accepts_distinct_shapes(self):
+        a = self.make(1)
+        b = JSObject(self.registry)
+        define_data_property(b, "other", 0)
+        define_data_property(b, "x", 2)
+        cache = InlineCache("x", max_cases=2)
+        self.assertEqual(cache.get(a), 1)
+        self.assertEqual(cache.get(b), 2)
+        self.assertEqual(cache.state, CacheState.POLYMORPHIC)
+        self.assertEqual(cache.get(a), 1)
+        self.assertEqual(cache.counters.ic_hits, 1)
+
+    def test_negative_lookup_is_invalidated_by_property_addition(self):
+        obj = JSObject(self.registry)
+        cache = InlineCache("x")
+        self.assertIs(cache.get(obj), UNDEFINED)
+        self.assertTrue(cache.get(obj) is UNDEFINED)
+        self.assertEqual(cache.counters.ic_hits, 1)
+        define_data_property(obj, "x", 7)
+        self.assertEqual(cache.get(obj), 7)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_delete_invalidates_cached_property_slot(self):
+        obj = self.make(3)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(obj), 3)
+        delete_property(obj, "x")
+        self.assertIs(cache.get(obj), UNDEFINED)
+        self.assertGreaterEqual(cache.counters.guard_failures, 1)
+
+    def test_prototype_shape_guard_participates_in_lookup(self):
+        proto = self.make(12)
+        child = JSObject(self.registry, proto)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(child), 12)
+        define_data_property(proto, "x", 13)
+        self.assertEqual(cache.get(child), 13)
+        self.assertEqual(cache.counters.ic_hits, 1)
+        self.assertEqual(cache.counters.guard_failures, 0)
+
+
+
+    def test_prototype_shape_change_invalidates_guarded_chain(self):
+        proto = self.make(12)
+        child = JSObject(self.registry, proto)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(child), 12)
+        define_data_property(proto, "extra", 1)
+        self.assertEqual(cache.get(child), 12)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_getter_is_never_cached_and_receives_receiver(self):
+        receiver = self.make(0)
+        calls = []
+        define_accessor_property(receiver, "value", getter=lambda this: calls.append(this) or 5)
+        cache = InlineCache("value")
+        self.assertEqual(cache.get(receiver), 5)
+        self.assertEqual(cache.get(receiver), 5)
+        self.assertEqual(calls, [receiver, receiver])
+        self.assertEqual(cache.counters.ic_hits, 0)
+
+    def test_inherited_getter_receives_original_receiver(self):
+        calls = []
+        proto = JSObject(self.registry)
+        define_accessor_property(proto, "value", getter=lambda this: calls.append(this) or 8)
+        receiver = JSObject(self.registry, proto)
+        self.assertEqual(get_property(receiver, "value"), 8)
+        self.assertEqual(calls, [receiver])
+
+    def test_inherited_setter_receives_original_receiver(self):
+        calls = []
+        proto = JSObject(self.registry)
+        define_accessor_property(proto, "value", setter=lambda this, value: calls.append((this, value)))
+        receiver = JSObject(self.registry, proto)
+        self.assertTrue(set_property(receiver, "value", 17))
+        self.assertEqual(calls, [(receiver, 17)])
+        self.assertIs(receiver.own_descriptor("value"), None)
+
+    def test_inherited_writable_data_creates_receiver_own_property(self):
+        proto = self.make(4)
+        child = JSObject(self.registry, proto)
+        self.assertTrue(set_property(child, "x", 9))
+        self.assertEqual(get_property(child, "x"), 9)
+        self.assertEqual(get_property(proto, "x"), 4)
+
+    def test_inherited_non_writable_data_rejects_assignment(self):
+        proto = JSObject(self.registry)
+        define_data_property(proto, "x", 4, writable=False)
+        child = JSObject(self.registry, proto)
+        self.assertFalse(set_property(child, "x", 9))
+        with self.assertRaises(JSRuntimeError):
+            set_property(child, "x", 9, strict=True)
+
+
+
+    def test_inherited_assignment_preserves_receiver_descriptor_attributes(self):
+        proto = self.make(1)
+        receiver = JSObject(self.registry)
+        define_data_property(receiver, "x", 2, writable=True, enumerable=False, configurable=False)
+        self.assertTrue(set_property(proto, "x", 7, receiver=receiver))
+        descriptor = receiver.own_descriptor("x")
+        self.assertEqual(descriptor.value, 7)
+        self.assertTrue(descriptor.writable)
+        self.assertFalse(descriptor.enumerable)
+        self.assertFalse(descriptor.configurable)
+        self.assertEqual(get_property(proto, "x"), 1)
+
+    def test_missing_accessor_setter_rejects_assignment(self):
+        obj = JSObject(self.registry)
+        define_accessor_property(obj, "x", getter=lambda this: 1)
+        self.assertFalse(set_property(obj, "x", 2))
+        with self.assertRaises(JSRuntimeError):
+            set_property(obj, "x", 2, strict=True)
+
+    def test_set_cache_uses_guarded_slot_and_current_value(self):
+        obj = self.make(1)
+        cache = InlineCache("x", operation="set")
+        self.assertTrue(cache.set(obj, 2))
+        self.assertTrue(cache.set(obj, 3))
+        self.assertEqual(get_property(obj, "x"), 3)
+        self.assertEqual(cache.counters.ic_hits, 1)
+
+    def test_megamorphic_site_falls_back_permanently(self):
+        cache = InlineCache("x", max_cases=2)
+        objects = []
+        for index in range(5):
+            obj = JSObject(self.registry)
+            for slot in range(index + 1):
+                define_data_property(obj, f"p{slot}", slot)
+            define_data_property(obj, "x", index)
+            objects.append(obj)
+            self.assertEqual(cache.get(obj), index)
+        self.assertEqual(cache.state, CacheState.MEGAMORPHIC)
+        before = cache.counters.fallback_calls
+        self.assertEqual(cache.get(objects[-1]), 4)
+        self.assertEqual(cache.counters.fallback_calls, before + 1)
+        self.assertEqual(cache.counters.megamorphic_fallbacks, 4)
+
+
+class ProxyFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = ShapeRegistry()
+
+    def test_proxy_get_trap_runs_and_is_never_cached(self):
+        target = JSObject(self.registry)
+        calls = []
+        proxy = JSProxy(target, get_trap=lambda target, key, receiver: calls.append(key) or 42)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(proxy), 42)
+        self.assertEqual(cache.get(proxy), 42)
+        self.assertEqual(calls, ["x", "x"])
+        self.assertEqual(cache.counters.proxy_fallbacks, 2)
+
+    def test_proxy_get_trap_must_preserve_frozen_data_invariant(self):
+        target = JSObject(self.registry)
+        define_data_property(target, "x", 1, writable=False, configurable=False)
+        proxy = JSProxy(target, get_trap=lambda target, key, receiver: 2)
+        with self.assertRaisesRegex(JSRuntimeError, "frozen data"):
+            get_property(proxy, "x")
+
+    def test_proxy_get_trap_cannot_hide_getterless_accessor(self):
+        target = JSObject(self.registry)
+        define_accessor_property(target, "x", configurable=False)
+        proxy = JSProxy(target, get_trap=lambda target, key, receiver: 1)
+        with self.assertRaisesRegex(JSRuntimeError, "getter-less"):
+            get_property(proxy, "x")
+
+
+
+    def test_proxy_delete_trap_cannot_hide_property_of_non_extensible_target(self):
+        target = JSObject(self.registry)
+        define_data_property(target, "x", 1, configurable=True)
+        target.extensible = False
+        proxy = JSProxy(target, delete_trap=lambda target, key: True)
+        with self.assertRaisesRegex(JSRuntimeError, "non-extensible"):
+            delete_property(proxy, "x")
+
+    def test_proxy_set_trap_false_obeys_strictness(self):
+        target = JSObject(self.registry)
+        proxy = JSProxy(target, set_trap=lambda target, key, value, receiver: False)
+        self.assertFalse(set_property(proxy, "x", 1))
+        with self.assertRaisesRegex(JSRuntimeError, "returned false"):
+            set_property(proxy, "x", 1, strict=True)
+
+    def test_proxy_set_trap_must_preserve_frozen_data_invariant(self):
+        target = JSObject(self.registry)
+        define_data_property(target, "x", 1, writable=False, configurable=False)
+        proxy = JSProxy(target, set_trap=lambda target, key, value, receiver: True)
+        with self.assertRaisesRegex(JSRuntimeError, "frozen data"):
+            set_property(proxy, "x", 2)
+
+    def test_proxy_set_trap_must_preserve_setterless_accessor_invariant(self):
+        target = JSObject(self.registry)
+        define_accessor_property(target, "x", configurable=False)
+        proxy = JSProxy(target, set_trap=lambda target, key, value, receiver: True)
+        with self.assertRaisesRegex(JSRuntimeError, "setter-less"):
+            set_property(proxy, "x", 2)
+
+
+
+
+
+    def test_proxy_receiver_uses_define_forwarding_not_set_trap(self):
+        proto = JSObject(self.registry)
+        define_data_property(proto, "x", 1)
+        receiver_target = JSObject(self.registry)
+        set_calls = []
+        receiver = JSProxy(
+            receiver_target,
+            set_trap=lambda target, key, value, this: set_calls.append(key) or True,
+        )
+        self.assertTrue(set_property(proto, "x", 9, receiver=receiver))
+        self.assertEqual(get_property(receiver, "x"), 9)
+        self.assertEqual(set_calls, [])
+
+    def test_proxy_in_prototype_chain_receives_set_trap(self):
+        target = JSObject(self.registry)
+        calls = []
+        proxy = JSProxy(
+            target,
+            set_trap=lambda target, key, value, receiver: calls.append((key, value, receiver)) or True,
+        )
+        middle = JSObject(self.registry, proxy)
+        receiver = JSObject(self.registry, middle)
+        self.assertTrue(set_property(receiver, "x", 5))
+        self.assertEqual(calls, [("x", 5, receiver)])
+        self.assertIsNone(receiver.own_descriptor("x"))
+
+    def test_proxy_delete_trap_must_not_hide_non_configurable_property(self):
+        target = JSObject(self.registry)
+        define_data_property(target, "x", 1, configurable=False)
+        proxy = JSProxy(target, delete_trap=lambda target, key: True)
+        with self.assertRaisesRegex(JSRuntimeError, "non-configurable"):
+            delete_property(proxy, "x")
+
+
+
+    def test_prototype_mutation_invalidates_guarded_chain(self):
+        first_proto = JSObject(self.registry)
+        second_proto = JSObject(self.registry)
+        define_data_property(first_proto, "x", 11)
+        define_data_property(second_proto, "x", 22)
+        receiver = JSObject(self.registry, first_proto)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(receiver), 11)
+        self.assertTrue(set_prototype_of(receiver, second_proto))
+        self.assertEqual(cache.get(receiver), 22)
+        self.assertEqual(cache.counters.guard_failures, 1)
+
+    def test_prototype_cycle_is_rejected(self):
+        parent = JSObject(self.registry)
+        child = JSObject(self.registry, parent)
+        self.assertFalse(set_prototype_of(parent, child))
+        with self.assertRaisesRegex(JSRuntimeError, "cyclic"):
+            set_prototype_of(parent, child, strict=True)
+
+    def test_non_extensible_object_cannot_change_prototype(self):
+        first = JSObject(self.registry)
+        second = JSObject(self.registry)
+        target = JSObject(self.registry, first)
+        target.extensible = False
+        self.assertFalse(set_prototype_of(target, second))
+        with self.assertRaisesRegex(JSRuntimeError, "non-extensible"):
+            set_prototype_of(target, second, strict=True)
+
+    def test_accessor_redefinition_uses_generic_path_and_new_getter(self):
+        target = JSObject(self.registry)
+        define_accessor_property(target, "x", getter=lambda this: 1)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(target), 1)
+        shape = target.shape
+        define_accessor_property(target, "x", getter=lambda this: 2)
+        self.assertIs(target.shape, shape)
+        self.assertEqual(cache.get(target), 2)
+        self.assertEqual(cache.counters.ic_hits, 0)
+
+    def test_same_value_distinguishes_signed_zero_and_accepts_nan(self):
+        self.assertFalse(same_value(0.0, -0.0))
+        self.assertTrue(same_value(float("nan"), float("nan")))
+
+
+if __name__ == "__main__":
+    unittest.main()
