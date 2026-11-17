@@ -14,6 +14,8 @@
   "parserStatus": "not_implemented",
   "parserReason": "No Ogma parser executable is available in the current M0 bootstrap repository.",
   "defaultFeatureStatus": "deferred",
-  "featureStatus": {},
+  "featureStatus": {
+    "Intl": "deferred"
+  },
   "exclusions": []
 }
