@@ -123,6 +123,8 @@ def load_profile(path: Path) -> dict[str, Any]:
             raise RunnerError(
                 f"{path}: supportedTests entries are allowed only for partial features"
             )
+        if any(not isinstance(test_id, str) for test_id in test_ids):
+            raise RunnerError(f"{path}: supportedTests for {feature} must contain string test IDs")
         if len(test_ids) != len(set(test_ids)):
             raise RunnerError(f"{path}: supportedTests for {feature} contains duplicates")
         for test_id in test_ids:
