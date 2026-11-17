@@ -1432,6 +1432,8 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, int]:
         status = result.get("status")
         if isinstance(status, str) and status in summary:
             summary[status] += 1
+        else:
+            summary["HARNESS ERROR"] += 1
     summary["total"] = len(results)
     return summary
 
