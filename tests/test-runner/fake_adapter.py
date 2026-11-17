@@ -48,7 +48,10 @@ for raw_request in sys.stdin:
                 "normalizedAstSha256": fingerprint,
             })
         elif "// parser: rejected:early" in source:
-            response.update({"outcome": "rejected", "phase": "early"})
+            response.update({
+                "outcome": "rejected",
+                "phase": "parse" if "--no-early-phase" in sys.argv else "early",
+            })
         elif "// parser: rejected:parse" in source:
             response.update({"outcome": "rejected", "phase": "parse"})
         else:
