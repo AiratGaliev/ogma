@@ -946,10 +946,17 @@ def _evaluate_parser_response(
 def _run_variant(
     descriptor: dict[str, Any],
     mode: str,
-    command: list[str],
+    adapter_session: AdapterSession,
+    suite_root: Path,
     timeout_ms: int,
     async_timeout_ms: int,
 ) -> dict[str, Any]:
+    suite_root = suite_root.resolve()
+    if descriptor["suite"] == "test262":
+        test_path = PurePosixPath("test", descriptor["id"])
+    else:
+        test_path = PurePosixPath(descriptor["id"])
+    test_directory = suite_root.joinpath(*test_path.parts[:-1]).resolve()
     request = {
         "protocol": "ogma-test-runner-adapter",
         "version": 1,
@@ -966,11 +973,14 @@ def _run_variant(
             "includes": descriptor["includes"],
             "negative": descriptor["negative"],
             "parseExpectation": descriptor.get("parseExpectation"),
+            "corpusRoot": str(suite_root),
+            "testPath": test_path.as_posix(),
+            "testDirectory": str(test_directory),
         },
         "timeoutMs": async_timeout_ms if descriptor["async"] else timeout_ms,
     }
     effective_timeout = async_timeout_ms if descriptor["async"] else timeout_ms
-    response, error = _adapter_response(command, request, effective_timeout)
+    response, error = adapter_session.run(request, effective_timeout)
     if error:
         return {"mode": mode, **error}
     assert response is not None
@@ -1013,6 +1023,7 @@ def run_one_test(
     async_timeout_ms: int,
     probe_unsupported: bool = False,
     probe_excluded: bool = False,
+    adapter_session: AdapterSession | None = None,
 ) -> dict[str, Any]:
     exclusion = _exclusion_for(profile, suite, test_id)
     if exclusion and not probe_excluded:
@@ -1070,10 +1081,31 @@ def run_one_test(
             "variants": [],
         }
 
-    variants = [
-        _run_variant(descriptor, mode, adapter_command, timeout_ms, async_timeout_ms)
-        for mode in descriptor["modes"]
-    ]
+    if adapter_session is None:
+        with AdapterSession(adapter_command) as local_session:
+            variants = [
+                _run_variant(
+                    descriptor,
+                    mode,
+                    local_session,
+                    suite_root,
+                    timeout_ms,
+                    async_timeout_ms,
+                )
+                for mode in descriptor["modes"]
+            ]
+    else:
+        variants = [
+            _run_variant(
+                descriptor,
+                mode,
+                adapter_session,
+                suite_root,
+                timeout_ms,
+                async_timeout_ms,
+            )
+            for mode in descriptor["modes"]
+        ]
     status = _combined_status(variants)
     if exclusion and probe_excluded and status == "PASS":
         status = "UNEXPECTED PASS"
@@ -1194,20 +1226,23 @@ def run_manifest(
 
     shard = next(item for item in manifest["shards"] if item["index"] == shard_index)
     started = time.monotonic()
-    results = [
-        run_one_test(
-            suite_root,
-            manifest["suite"],
-            test_id,
-            profile,
-            adapter_command,
-            timeout_ms,
-            async_timeout_ms,
-            probe_unsupported,
-            probe_excluded,
-        )
-        for test_id in shard["testIds"]
-    ]
+    results: list[dict[str, Any]] = []
+    with AdapterSession(adapter_command) as adapter_session:
+        for test_id in shard["testIds"]:
+            results.append(
+                run_one_test(
+                    suite_root,
+                    manifest["suite"],
+                    test_id,
+                    profile,
+                    adapter_command,
+                    timeout_ms,
+                    async_timeout_ms,
+                    probe_unsupported,
+                    probe_excluded,
+                    adapter_session,
+                )
+            )
     return {
         "schemaVersion": SCHEMA_VERSION,
         "suite": manifest["suite"],
