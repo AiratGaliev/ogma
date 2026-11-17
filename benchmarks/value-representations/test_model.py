@@ -175,6 +175,17 @@ class CoreIRDrivenComparisonTests(unittest.TestCase):
         self.assertEqual(breakdown["lexical_environment_locals"]["box"], 0)
         self.assertEqual(breakdown["lexical_environment_locals"]["unbox"], 0)
 
+        closure = next(
+            fixture for fixture in aware["per_fixture"]
+            if fixture["fixture"] == "tests/core-ir/fixtures/positive-closure-source.json"
+        )
+        closure_breakdown = closure["conversion_breakdown"]["lexical_environment_locals"]
+        self.assertGreater(closure_breakdown["slot_count"], 0)
+        self.assertIn("env.load", closure["operation_counts"])
+        self.assertIn("env.store", closure["operation_counts"])
+        self.assertEqual(closure_breakdown["box"], 0)
+        self.assertEqual(closure_breakdown["unbox"], 0)
+
     def test_liveness_is_nonzero_and_reported_as_abstract_payload(self):
         for candidate in self.report["candidate_matrix"]:
             self.assertGreater(candidate["aggregate"]["peak_live_ssa_values"], 0)
