@@ -646,6 +646,53 @@ class ParserAndShardingTests(unittest.TestCase):
             with self.assertRaisesRegex(test_runner.RunnerError, "working tree is not clean"):
                 test_runner._load_and_check_revision(root, revision)
 
+    def test_ignored_untracked_javascript_cannot_extend_pinned_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for category in ("pass", "pass-explicit", "early", "fail"):
+                (root / category).mkdir()
+            (root / "pass" / "valid.js").write_text("let value = 1;\n", encoding="utf-8")
+            (root / "pass-explicit" / "valid.js").write_text(
+                "let value = (1);\n", encoding="utf-8"
+            )
+            (root / "early" / "early.js").write_text("let value = 1;\n", encoding="utf-8")
+            (root / "fail" / "invalid.js").write_text("let = ;\n", encoding="utf-8")
+            (root / ".gitignore").write_text("pass/ignored.js\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Ogma Tests"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "ogma-tests@example.invalid"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-q", "-m", "pinned fixture"],
+                check=True,
+            )
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (root / "pass" / "ignored.js").write_text(
+                "let injected = true;\n", encoding="utf-8"
+            )
+            status = subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(status, "")
+            with self.assertRaisesRegex(test_runner.RunnerError, "Git-tracked source"):
+                test_runner._load_and_check_revision(
+                    root, revision, "test262-parser-tests"
+                )
+
     def test_shard_manifest_is_deterministic_and_disjoint(self) -> None:
         profile = ready_profile()
         test_ids = test_runner.discover_test_ids(TEST262_ROOT, "test262")
