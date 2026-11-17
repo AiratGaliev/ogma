@@ -168,7 +168,7 @@ A documentation-only PR should run documentation checks and should not be forced
 
 ### Promotion CI — dev → test
 
-The [Conformance Promotion](../.github/workflows/conformance-promotion.yml) workflow exposes the stable required context **conformance-promotion** for PRs targeting test or main. It validates the permitted source/target route and currently fails closed because the pinned Test262/differential runner and deterministic shard aggregator do not exist yet. This is intentional: a route check is not conformance evidence, and a promotion must not pass until OGM-35 supplies the real runner.
+The [Conformance Promotion](../.github/workflows/conformance-promotion.yml) workflow exposes the stable required context **conformance-promotion** for PRs targeting test or main. It validates the permitted source/target route and remains fail-closed. OGM-34 provides the adapter-driven Test262/parser runner, immutable upstream pins, feature-profile filtering, deterministic shard manifests/aggregation and runner self-tests. No executable Ogma engine adapter exists yet; OGM-35 owns actual shard execution, Fast/promotion workflow integration and the CI proof for successful, failed and missing shard results. A route check or fake adapter test is not conformance evidence.
 
 The promotion PR is the first mandatory full integration gate. As the relevant systems become available, require:
 
