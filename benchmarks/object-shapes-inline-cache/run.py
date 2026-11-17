@@ -83,7 +83,7 @@ def build_scenario(kind: str, count: int = 8):
 def correctness(scenarios: dict, max_cases: int) -> list[dict]:
     results = []
     for name, (_, objects) in scenarios.items():
-        cache = InlineCache("value", max_cases=args.max_cases)
+        cache = InlineCache("value", max_cases=max_cases)
         generic = [get_property(obj, "value") for obj in objects]
         cached = [cache.get(obj) for obj in objects]
         if cached != generic:
