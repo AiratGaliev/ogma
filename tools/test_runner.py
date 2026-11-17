@@ -322,13 +322,26 @@ def _parse_yaml_block(
 
 def parse_test262_metadata(source: str) -> dict[str, Any]:
     lines = source.splitlines()
-    if not lines or lines[0].strip() != "/*---":
-        raise RunnerError("Test262 file has no YAML frontmatter")
-    end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---*/"), None)
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "/*---"),
+        None,
+    )
+    if start is None:
+        # Test262 metadata is optional. Unannotated tests use the default
+        # non-raw, script, sloppy+strict execution contract.
+        return {}
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].strip() == "---*/"
+        ),
+        None,
+    )
     if end is None:
         raise RunnerError("unterminated Test262 YAML frontmatter")
-    metadata, consumed = _parse_yaml_block(lines[1:end], 0, 0)
-    if consumed < len(lines[1:end]):
+    metadata, consumed = _parse_yaml_block(lines[start + 1 : end], 0, 0)
+    if consumed < len(lines[start + 1 : end]):
         raise RunnerError("unparsed content in Test262 YAML frontmatter")
     if not isinstance(metadata, dict):
         raise RunnerError("Test262 frontmatter must be a YAML mapping")
