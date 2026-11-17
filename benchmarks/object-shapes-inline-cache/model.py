@@ -297,15 +297,7 @@ def set_property(target: ObjectLike, key: str, value: Any, *,
             return True
         return _define_on_receiver(receiver, key, value, strict)
     if target.prototype is not None:
-        inherited = _find_descriptor(target.prototype, key)
-        if inherited:
-            if inherited.kind == "accessor":
-                if inherited.setter is None:
-                    return _reject("inherited property has no setter", strict)
-                inherited.setter(receiver, value)
-                return True
-            if not inherited.writable:
-                return _reject("inherited property is not writable", strict)
+        return set_property(target.prototype, key, value, receiver=receiver, strict=strict)
     return _define_on_receiver(receiver, key, value, strict)
 
 
