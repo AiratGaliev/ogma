@@ -262,7 +262,7 @@ jobs:
         run: python -m unittest discover -s benchmarks/object-shapes-inline-cache -p "test_*.py" -v
 
       - name: Run OGM-18 throughput and memory proof
-        run: python benchmarks/object-shapes-inline-cache/run.py --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
+        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
 
       - name: Upload OGM-18 proof report
         if: always()
