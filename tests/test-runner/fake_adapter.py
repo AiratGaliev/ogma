@@ -22,10 +22,14 @@ for raw_request in sys.stdin:
 
     if test.get("sourceType") == "module" and "import_FIXTURE.js" in source:
         fixture = os.path.join(test["testDirectory"], "import_FIXTURE.js")
-        if not os.path.isfile(fixture):
+        if (
+            not test.get("corpusRoot")
+            or not test.get("testPath", "").startswith("test/")
+            or not os.path.isfile(fixture)
+        ):
             response.update({
                 "outcome": "harness_error",
-                "reason": f"module fixture was not resolvable from test directory: {fixture}",
+                "reason": f"module fixture context was invalid: {fixture}",
             })
         else:
             response.update({"outcome": "completed"})
