@@ -1024,7 +1024,7 @@ def aggregate_reports(
             result_occurrences.setdefault(test_id, []).append(result)
         missing_in_shard = assigned[index] - shard_ids
         if missing_in_shard:
-            errors.append(f"shard {index} is missing tests: {', '.join(sorted(missing_in_shard)})")
+            errors.append(f"shard {index} is missing tests: {', '.join(sorted(missing_in_shard))}")
 
     missing_shards = sorted(set(range(count)) - shard_seen)
     if missing_shards:
