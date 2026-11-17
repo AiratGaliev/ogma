@@ -23,6 +23,7 @@ from verify_ogmb import validate_source_map
 
 
 SOURCE_SHA = "5926f6245aa063f8fa73f39b0f0a9aa3769500c919cb7212e588f28959cf0b49"
+THROW_SOURCE_SHA = "ad01f91006c0a79aa3605913377f1295ebbe262148209b70ca39c7e89ccb37de"
 GENERATION = {"id": "fixture_codegen", "version": "1"}
 GENERATION_OBJECT = CodeGeneration(**GENERATION)
 
@@ -340,10 +341,37 @@ class DebuggerApiTests(unittest.TestCase):
         main["environment"]["bindings"].append(
             {"id": "error", "name": "error", "mutable": False}
         )
-        main["debug_metadata"] = function_debug_map([
-            user_source(1, bindings=("error",)),
-            user_source(2, bindings=("error",)),
-        ])
+        image["source_files"].append({
+            "id": "src_throw",
+            "path": "tests/debugger/fixtures/throw.js",
+            "language": "javascript",
+            "sha256": THROW_SOURCE_SHA,
+        })
+        main["debug_metadata"] = {
+            "source_map": {
+                "version": "1.0.0",
+                "files": [{
+                    "id": "src_throw",
+                    "path": "tests/debugger/fixtures/throw.js",
+                    "language": "javascript",
+                    "sha256": THROW_SOURCE_SHA,
+                }],
+                "locations": [
+                    {"offset": 0, "source": {
+                        "origin": "user", "file": "src_throw",
+                        "start": {"line": 1, "column": 0}, "end": {"line": 1, "column": 19},
+                        "scope": "env_main", "bindings": ["error"], "suspension": None, "inline_chain": [],
+                    }},
+                    {"offset": 1, "source": {
+                        "origin": "user", "file": "src_throw",
+                        "start": {"line": 2, "column": 0}, "end": {"line": 2, "column": 11},
+                        "scope": "env_main", "bindings": ["error"], "suspension": None, "inline_chain": [],
+                    }},
+                ],
+                "lexical_scopes": [],
+                "variable_locations": [],
+            }
+        }
         debugger = Debugger(image)
         interpreter = Interpreter(image, debugger)
         result = interpreter.run()
