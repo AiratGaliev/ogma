@@ -409,9 +409,12 @@ def core_ir_plan(
                     temporary = next_location
                     next_location += 1
                     emit(block_id, "CONST", {"dest": temporary, "constant_index": host_constant}, source_id, src)
+                    call_sources = distinct_register_sources(
+                        block_id, [temporary, *argument_sources], source_id, src,
+                    )
                     emit(
                         block_id, "CALL",
-                        {"dest": result_loc, "sources": [temporary, *argument_sources], "argument_count": argument_count},
+                        {"dest": result_loc, "sources": call_sources, "argument_count": argument_count},
                         source_id, src, may_throw,
                     )
 
