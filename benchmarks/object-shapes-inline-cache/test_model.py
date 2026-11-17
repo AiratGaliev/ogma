@@ -71,6 +71,36 @@ class ShapeIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(JSRuntimeError, "non-configurable"):
             define_data_property(obj, "x", 2, configurable=True, strict=True)
 
+
+
+    def test_data_to_accessor_transition_invalidates_read_ic(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1)
+        cache = InlineCache("x")
+        self.assertEqual(cache.get(obj), 1)
+        old_shape = obj.shape
+        define_accessor_property(obj, "x", getter=lambda this: 42)
+        self.assertNotEqual(obj.shape.identity, old_shape.identity)
+        self.assertEqual(cache.get(obj), 42)
+        self.assertEqual(cache.counters.guard_failures, 1)
+        self.assertEqual(cache.counters.ic_hits, 0)
+
+    def test_non_writable_own_data_property_rejects_assignment(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1, writable=False)
+        self.assertFalse(set_property(obj, "x", 2))
+        self.assertEqual(get_property(obj, "x"), 1)
+        with self.assertRaisesRegex(JSRuntimeError, "not writable"):
+            set_property(obj, "x", 2, strict=True)
+
+    def test_non_configurable_own_property_rejects_delete(self):
+        obj = JSObject(self.registry)
+        define_data_property(obj, "x", 1, configurable=False)
+        self.assertFalse(delete_property(obj, "x"))
+        self.assertEqual(get_property(obj, "x"), 1)
+        with self.assertRaisesRegex(JSRuntimeError, "not configurable"):
+            delete_property(obj, "x", strict=True)
+
     def test_non_extensible_object_cannot_gain_new_property(self):
         obj = JSObject(self.registry)
         obj.extensible = False
