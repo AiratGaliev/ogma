@@ -134,7 +134,7 @@ For an async test, the runner supplies `harness/doneprintHandle.js`. The adapter
 
 The parser suite does not execute test bodies:
 
-- `pass/` and `pass-explicit/` expect parsing to succeed. The latter contains equivalent explicit-parentheses variants and is part of the pinned corpus.
+- `pass/` and `pass-explicit/` expect parsing to succeed. Every `pass/<relative-path>` case has a corresponding `pass-explicit/<relative-path>` case with explicit grouping parentheses. The pair is assigned to the same deterministic shard; the adapter must return a SHA-256 fingerprint of its normalized AST for each, with insignificant grouping parentheses, whitespace, comments and semicolons normalized away. The runner fails the pair if the fingerprints differ, and the aggregator independently rechecks the fingerprints from shard reports.
 - `fail/` expects grammar rejection;
 - `early/` expects acceptance by the grammar parser when early-error checks are disabled, then rejection when early-error validation is enabled.
 
@@ -224,7 +224,7 @@ The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsu
 
 For async Test262 tests the runner adds `doneprintHandle.js` to the harness. The adapter's host `print` function must capture the official `Test262:AsyncTestComplete` or `Test262:AsyncTestFailure:…` signal and return it as `asyncSignal`. The worker must not return before that signal or the configured async timeout. This protocol deliberately follows the pinned Test262 harness, not `$DONE`.
 
-Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`.
+Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`. For `pass/` and `pass-explicit/` positive cases, responses must also contain `normalizedAstSha256`, a lowercase SHA-256 of the canonical AST after removing irrelevant grouping-parentheses, whitespace, comments and semicolon differences.
 
 The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics (including insertion of the strict directive before metadata-driven source transformations), fresh-realm isolation for every test/variant, Test262 harness preparation, the `print`-based async protocol, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The request's `corpusRoot`, `testPath` and `testDirectory` identify the pinned source file so module requests can resolve relative `./` specifiers from the test directory. Files whose names contain `_FIXTURE` are dependencies, never standalone tests. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
 
@@ -276,6 +276,7 @@ Exit codes:
 
     python tools/test_runner.py aggregate \
       --manifest .artifacts/test262-manifest.json \
+      --suite-root .artifacts/upstream/test262 \
       --baseline conformance/baseline.json \
       --profile conformance/profile.json \
       --reports .artifacts/results/test262-shard-0.json \
@@ -285,12 +286,15 @@ Exit codes:
 
 The aggregate command fails closed unless:
 
+- the supplied source checkout is at the exact pinned revision and has a clean Git working tree;
+- the manifest contains exactly the complete test-ID set discovered from that checkout (not merely a complete subset of its own declarations);
 - every expected shard index has exactly one result file;
 - the manifest's repository URL/revision matches the active pinned baseline and its profile ID/version/content digest/readiness matches the active compatibility profile;
 - all shard reports reference the same manifest digest, suite and shard count;
 - each shard reports exactly its assigned test IDs;
 - there are no missing, duplicated, unexpected or cross-shard test IDs;
-- all result classifications are valid.
+- all result classifications are valid;
+- every parser `pass/` and `pass-explicit/` pair has both results and matching normalized AST fingerprints.
 
 A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile, or when no test in the complete aggregate has a `PASS` result; a complete set of `UNSUPPORTED`/`EXCLUDED` reports cannot make an unimplemented or unproven runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists, provided at least one parser fixture passed.
 
