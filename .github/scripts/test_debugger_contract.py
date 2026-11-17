@@ -22,7 +22,7 @@ from prototype import Debugger, Heap, Interpreter, PropertyDescriptor, debug_val
 from verify_ogmb import validate_source_map
 
 
-SOURCE_SHA = "a" * 64
+SOURCE_SHA = "5926f6245aa063f8fa73f39b0f0a9aa3769500c919cb7212e588f28959cf0b49"
 GENERATION = {"id": "fixture_codegen", "version": "1"}
 GENERATION_OBJECT = CodeGeneration(**GENERATION)
 
@@ -96,9 +96,9 @@ def make_image():
         "debug_metadata": function_debug_map([
             user_source(1, 0, ("total",)),
             user_source(2, 0, ("obj",)),
-            user_source(3, 0, ("updater", "total")),
-            user_source(4, 2, ("updater",)),
-            user_source(8, 0, ("result",)),
+            user_source(6, 0, ("updater", "total")),
+            user_source(12, 15, ("updater",)),
+            user_source(13, 0, ("result",)),
         ]),
     }
     update = {
@@ -128,11 +128,11 @@ def make_image():
             {"op": "return", "value": "next"},
         ],
         "debug_metadata": function_debug_map([
-            user_source(4, 8, ("increment",), "env_update"),
-            user_source(4, 8, ("capture_total", "old_total"), "env_update"),
-            user_source(5, 4, ("old_total", "increment", "next"), "env_update"),
-            user_source(6, 4, ("capture_total", "next"), "env_update"),
-            user_source(7, 4, ("next",), "env_update"),
+            user_source(7, 2, ("increment",), "env_update"),
+            user_source(8, 15, ("capture_total", "old_total"), "env_update"),
+            user_source(8, 2, ("old_total", "increment", "next"), "env_update"),
+            user_source(9, 2, ("capture_total", "next"), "env_update"),
+            user_source(10, 2, ("next",), "env_update"),
         ]),
     }
     return {
@@ -153,7 +153,7 @@ def paused_at_call():
     debugger = Debugger(image)
     interpreter = Interpreter(image, debugger)
     breakpoint = debugger.set_breakpoint(
-        "src_main", 4, 2, sha256=SOURCE_SHA, code_generation=GENERATION_OBJECT
+        "src_main", 12, 15, sha256=SOURCE_SHA, code_generation=GENERATION_OBJECT
     )
     result = interpreter.run()
     if result.status != "paused":
@@ -173,15 +173,15 @@ class DebuggerApiTests(unittest.TestCase):
         image, debugger, interpreter, breakpoint = paused_at_call()
         self.assertTrue(breakpoint.verified)
         self.assertEqual(debugger.event_message().reason, "breakpoint")
-        self.assertEqual(debugger.get_stack()[0].location.line, 4)
-        self.assertEqual(debugger.get_stack()[0].location.column, 2)
+        self.assertEqual(debugger.get_stack()[0].location.line, 12)
+        self.assertEqual(debugger.get_stack()[0].location.column, 15)
 
         stale = debugger.set_breakpoint(
-            "src_main", 4, 2, sha256="b" * 64, code_generation=GENERATION_OBJECT
+            "src_main", 12, 15, sha256="b" * 64, code_generation=GENERATION_OBJECT
         )
         synthetic = debugger.set_breakpoint("src_main", 99)
         wrong_generation = debugger.set_breakpoint(
-            "src_main", 4, 2, sha256=SOURCE_SHA,
+            "src_main", 12, 15, sha256=SOURCE_SHA,
             code_generation=CodeGeneration("old-generation", "1"),
         )
         self.assertFalse(stale.verified)
@@ -196,11 +196,11 @@ class DebuggerApiTests(unittest.TestCase):
         self.assertEqual(result.status, "paused")
         stack = debugger.get_stack()
         self.assertEqual([frame.function_name for frame in stack], ["update", "main"])
-        self.assertEqual(stack[0].location.line, 4)
-        self.assertEqual(stack[0].location.column, 8)
+        self.assertEqual(stack[0].location.line, 7)
+        self.assertEqual(stack[0].location.column, 2)
         # The suspended caller stays at the actual call expression.
-        self.assertEqual(stack[1].location.line, 4)
-        self.assertEqual(stack[1].location.column, 2)
+        self.assertEqual(stack[1].location.line, 12)
+        self.assertEqual(stack[1].location.column, 15)
 
         scope = debugger.get_scopes(stack[0].id)[0]
         capture = next(item for item in scope.variables if item.binding_id == "capture_total")
@@ -217,7 +217,7 @@ class DebuggerApiTests(unittest.TestCase):
         stack = debugger.get_stack()
         self.assertEqual(len(stack), 1)
         self.assertEqual(stack[0].function_name, "main")
-        self.assertEqual(stack[0].location.line, 8)
+        self.assertEqual(stack[0].location.line, 13)
         self.assertEqual(interpreter.result, None)
 
     def test_step_out_returns_to_the_calling_frame(self):
@@ -230,7 +230,7 @@ class DebuggerApiTests(unittest.TestCase):
         stack = debugger.get_stack()
         self.assertEqual(len(stack), 1)
         self.assertEqual(stack[0].function_name, "main")
-        self.assertEqual(stack[0].location.line, 8)
+        self.assertEqual(stack[0].location.line, 13)
 
     def test_pause_request_from_control_thread_is_applied_at_owner_safepoint(self):
         image = make_image()
@@ -289,7 +289,7 @@ class DebuggerApiTests(unittest.TestCase):
                 raise AssertionError("user str must not be called")
 
         value = debug_value(HostObject())
-        self.assertEqual(value.availability, "available")
+        self.assertEqual(value.availability, "unavailable")
         self.assertEqual(value.preview, "<not inspectable>")
 
     def test_owner_thread_restriction_and_detach_lifecycle(self):
