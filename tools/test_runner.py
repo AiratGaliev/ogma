@@ -944,8 +944,28 @@ class AdapterSession:
         return process
 
     def close(self) -> None:
+        responses = self.responses
         process = self._stop()
-        if process is not None and process.returncode != 0:
+        if process is None:
+            return
+        if responses is not None:
+            try:
+                trailing = responses.get(timeout=0.5)
+            except queue.Empty as exc:
+                raise RunnerError(
+                    "cannot confirm that the engine adapter stdout stream closed cleanly"
+                ) from exc
+            if trailing is not None:
+                detail = (
+                    str(trailing)
+                    if isinstance(trailing, BaseException)
+                    else repr(trailing[-4000:])
+                )
+                raise RunnerError(
+                    "engine adapter emitted unsolicited stdout after its final response: "
+                    + detail
+                )
+        if process.returncode != 0:
             raise RunnerError(
                 "engine adapter worker exited unsuccessfully after the shard "
                 f"(code {process.returncode}); stderr: {self._stderr_text()}"
