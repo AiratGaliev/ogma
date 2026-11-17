@@ -949,7 +949,7 @@ class ParserAndShardingTests(unittest.TestCase):
                 aggregate["aggregation"]["errors"],
             )
             root = ET.parse(report_path).getroot()
-            self.assertGreater(int(root.attrib["errors"]), 0)
+            self.assertEqual(int(root.attrib["errors"]), 2)
             self.assertTrue(
                 any(
                     node.attrib.get("type") == "HARNESS ERROR"
