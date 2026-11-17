@@ -1,0 +1,294 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn_call_boundary",
+    "name": "string_object_call_boundary",
+    "parameters": [
+      {
+        "id": "callee",
+        "kind": "value",
+        "semantic_type": "function",
+        "representation": "function_ref",
+        "name": "callee",
+        "binding": "bind_callee"
+      },
+      {
+        "id": "receiver",
+        "kind": "value",
+        "semantic_type": "dynamic",
+        "representation": "boxed",
+        "name": "receiver",
+        "binding": "bind_receiver"
+      },
+      {
+        "id": "text",
+        "kind": "value",
+        "semantic_type": "string",
+        "representation": "string_ref",
+        "name": "text",
+        "binding": "bind_text"
+      },
+      {
+        "id": "object_left",
+        "kind": "value",
+        "semantic_type": "object",
+        "representation": "object_ref",
+        "name": "objectLeft",
+        "binding": "bind_object_left"
+      },
+      {
+        "id": "object_right",
+        "kind": "value",
+        "semantic_type": "object",
+        "representation": "object_ref",
+        "name": "objectRight",
+        "binding": "bind_object_right"
+      },
+      {
+        "id": "numeric",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "numeric",
+        "binding": "bind_numeric"
+      }
+    ],
+    "return": {
+      "semantic_type": "dynamic",
+      "representation": "boxed"
+    },
+    "source_files": [
+      {
+        "id": "src0",
+        "path": "fixtures/call-boundary.js",
+        "language": "javascript"
+      }
+    ],
+    "environment": {
+      "id": "env_call",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "bind_callee",
+          "name": "callee",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "function",
+          "representation": "function_ref"
+        },
+        {
+          "id": "bind_receiver",
+          "name": "receiver",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "dynamic",
+          "representation": "boxed"
+        },
+        {
+          "id": "bind_text",
+          "name": "text",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "string",
+          "representation": "string_ref"
+        },
+        {
+          "id": "bind_object_left",
+          "name": "objectLeft",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "object",
+          "representation": "object_ref"
+        },
+        {
+          "id": "bind_object_right",
+          "name": "objectRight",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "object",
+          "representation": "object_ref"
+        },
+        {
+          "id": "bind_numeric",
+          "name": "numeric",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": "e0",
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [
+          {
+            "id": "e0",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "object_identity",
+            "op": "js.strict_equal",
+            "operands": [
+              "object_left",
+              "object_right"
+            ],
+            "result": {
+              "id": "same_object",
+              "kind": "value",
+              "semantic_type": "boolean",
+              "representation": "i1"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": false,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": null,
+            "effect_out": null,
+            "exception": null
+          },
+          {
+            "id": "add_string_dynamic",
+            "op": "js.add",
+            "operands": [
+              "text",
+              "numeric"
+            ],
+            "result": {
+              "id": "mixed_sum",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e0",
+            "effect_out": "e1",
+            "exception": {
+              "kind": "propagate"
+            }
+          },
+          {
+            "id": "invoke_dynamic",
+            "op": "js.call",
+            "operands": [
+              "callee",
+              "receiver",
+              "mixed_sum"
+            ],
+            "result": {
+              "id": "call_result",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e1",
+            "effect_out": "e2",
+            "exception": {
+              "kind": "propagate"
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "return",
+          "value": "call_result",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 20
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}

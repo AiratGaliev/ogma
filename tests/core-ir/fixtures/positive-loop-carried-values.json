@@ -1,0 +1,393 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn_loop_carried",
+    "name": "loop_carried_number",
+    "parameters": [
+      {
+        "id": "start",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "start",
+        "binding": "bind_start"
+      },
+      {
+        "id": "limit",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "limit",
+        "binding": "bind_limit"
+      },
+      {
+        "id": "step",
+        "kind": "value",
+        "semantic_type": "number",
+        "representation": "f64",
+        "name": "step",
+        "binding": "bind_step"
+      }
+    ],
+    "return": {
+      "semantic_type": "number",
+      "representation": "f64"
+    },
+    "source_files": [
+      {
+        "id": "src0",
+        "path": "fixtures/loop-carried.js",
+        "language": "javascript"
+      }
+    ],
+    "environment": {
+      "id": "env_loop",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "bind_start",
+          "name": "start",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        },
+        {
+          "id": "bind_limit",
+          "name": "limit",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        },
+        {
+          "id": "bind_step",
+          "name": "step",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "number",
+          "representation": "f64"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": "e0",
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [
+          {
+            "id": "e0",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [],
+        "terminator": {
+          "kind": "jump",
+          "target": "loop",
+          "arguments": [
+            "start",
+            "limit",
+            "e0"
+          ],
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 20
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      },
+      {
+        "id": "loop",
+        "parameters": [
+          {
+            "id": "current",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          },
+          {
+            "id": "loop_limit",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          },
+          {
+            "id": "e_loop",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "at_limit",
+            "op": "js.strict_equal",
+            "operands": [
+              "current",
+              "loop_limit"
+            ],
+            "result": {
+              "id": "done",
+              "kind": "value",
+              "semantic_type": "boolean",
+              "representation": "i1"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": false,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": null,
+            "effect_out": null,
+            "exception": null
+          }
+        ],
+        "terminator": {
+          "kind": "branch",
+          "condition": "done",
+          "then": {
+            "target": "exit",
+            "arguments": [
+              "current",
+              "e_loop"
+            ]
+          },
+          "else": {
+            "target": "body",
+            "arguments": [
+              "current",
+              "loop_limit",
+              "e_loop"
+            ]
+          },
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 20
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      },
+      {
+        "id": "body",
+        "parameters": [
+          {
+            "id": "body_current",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          },
+          {
+            "id": "body_limit",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          },
+          {
+            "id": "e_body",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "increment",
+            "op": "js.add",
+            "operands": [
+              "body_current",
+              "step"
+            ],
+            "result": {
+              "id": "incremented",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e_body",
+            "effect_out": "e_add",
+            "exception": {
+              "kind": "propagate"
+            }
+          },
+          {
+            "id": "convert_increment",
+            "op": "js.to_number",
+            "operands": [
+              "incremented"
+            ],
+            "result": {
+              "id": "next_current",
+              "kind": "value",
+              "semantic_type": "number",
+              "representation": "f64"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 20
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e_add",
+            "effect_out": "e_number",
+            "exception": {
+              "kind": "propagate"
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "jump",
+          "target": "loop",
+          "arguments": [
+            "next_current",
+            "body_limit",
+            "e_number"
+          ],
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 20
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      },
+      {
+        "id": "exit",
+        "parameters": [
+          {
+            "id": "final_value",
+            "kind": "value",
+            "semantic_type": "number",
+            "representation": "f64"
+          },
+          {
+            "id": "e_exit",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [],
+        "terminator": {
+          "kind": "return",
+          "value": "final_value",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 20
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}
