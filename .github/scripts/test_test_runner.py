@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -272,6 +274,8 @@ class ParserAndShardingTests(unittest.TestCase):
                 "shardCount": manifest["shardCount"],
                 "results": report["results"],
             }],
+            BASELINE,
+            profile,
         )
         self.assertTrue(aggregate["aggregation"]["complete"])
 
@@ -298,6 +302,8 @@ class ParserAndShardingTests(unittest.TestCase):
                     "reason": "runtime adapter unavailable",
                 }],
             }],
+            BASELINE,
+            profile,
         )
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertIn(
@@ -328,6 +334,8 @@ class ParserAndShardingTests(unittest.TestCase):
                     "reason": "Array is deferred",
                 }],
             }],
+            BASELINE,
+            profile,
         )
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertIn(
@@ -380,7 +388,7 @@ class ParserAndShardingTests(unittest.TestCase):
                     for test_id in shard["testIds"]
                 ],
             })
-        aggregate = test_runner.aggregate_reports(manifest, reports)
+        aggregate = test_runner.aggregate_reports(manifest, reports, BASELINE, ready_profile())
         self.assertTrue(aggregate["aggregation"]["complete"])
         self.assertEqual(aggregate["summary"]["PASS"], 4)
 
@@ -399,7 +407,7 @@ class ParserAndShardingTests(unittest.TestCase):
             "shardCount": 2,
             "results": [],
         }
-        aggregate = test_runner.aggregate_reports(manifest, [report])
+        aggregate = test_runner.aggregate_reports(manifest, [report], BASELINE, ready_profile())
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(len(aggregate["aggregation"]["missingShards"]), 1)
         self.assertGreaterEqual(len(aggregate["aggregation"]["missingTests"]), 1)
@@ -440,7 +448,7 @@ class ParserAndShardingTests(unittest.TestCase):
                 {"id": test_id, "status": "BOGUS"},
             ],
         }
-        aggregate = test_runner.aggregate_reports(manifest, [report, report])
+        aggregate = test_runner.aggregate_reports(manifest, [report, report], BASELINE, ready_profile())
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(aggregate["aggregation"]["duplicateShards"], [0])
         self.assertTrue(any("duplicate test result" in error for error in aggregate["aggregation"]["errors"]))
