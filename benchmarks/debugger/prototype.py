@@ -14,7 +14,6 @@ from debugger_api import (
     DebugValue,
     DebuggerError,
     ExceptionEvent,
-    ExecutionResult,
     InspectedObject,
     InspectedProperty,
     ScopeSnapshot,
@@ -226,6 +225,15 @@ class Frame:
         cell = Cell(value)
         target[binding_id] = cell
         return cell
+
+
+@dataclass(frozen=True)
+class InterpreterResult:
+    """Execution outcome of the M0 fixture interpreter, not a debugger DTO."""
+
+    status: str
+    value: Any = None
+    event: StoppedEvent | ExceptionEvent | None = None
 
 
 @dataclass
@@ -624,7 +632,7 @@ class Interpreter:
             inline_chain=tuple(source.get("inline_chain", [])),
         )
 
-    def run(self, max_steps: int = 10000) -> ExecutionResult:
+    def run(self, max_steps: int = 10000) -> InterpreterResult:
         if self.debugger.state == "detached":
             raise DebuggerError("debugger session is detached")
         if self.debugger.state == "paused":
@@ -643,7 +651,7 @@ class Interpreter:
             instruction = instructions[frame.pc]
             location = self._source_location(frame.function, frame.pc)
             if not self.debugger.before_instruction(frame, location):
-                return ExecutionResult("paused", event=self.debugger.event_message())
+                return InterpreterResult("paused", event=self.debugger.event_message())
             frame.pc += 1
             self.executed_instructions += 1
             try:
