@@ -22,7 +22,7 @@ From the repository root, using Rust 1.100.0 (the version pinned in the M0 CI pr
     cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
     cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
 
-The crate uses only the Rust standard library. The generated C header is benchmarks/rust-abi/include/ogma_abi.h.
+The crate uses only the Rust standard library. The C header is benchmarks/rust-abi/include/ogma_abi.h; `tests/c_abi_smoke.c` is a real C11 consumer that checks the fixed layouts, ABI negotiation, Runtime/Context lifecycle, roots, callback dispatch and stale-handle behaviour. The Fast CI job builds the shared library, compiles this consumer with warnings-as-errors and executes it.
 
 ## Reproduce the measurements
 
