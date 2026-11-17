@@ -588,8 +588,10 @@ class ParserAndShardingTests(unittest.TestCase):
     def test_aggregate_rejects_manifest_that_omits_pinned_corpus_tests(self) -> None:
         profile = ready_profile()
         all_ids = test_runner.discover_test_ids(TEST262_ROOT, "test262")
+        omitted = next(test_id for test_id in all_ids if test_id.startswith("runner/timeout"))
         incomplete = test_runner.build_manifest(
-            "test262", all_ids[:-1], BASELINE, profile, 1
+            "test262", [test_id for test_id in all_ids if test_id != omitted],
+            BASELINE, profile, 1
         )
         with self.assertRaisesRegex(test_runner.RunnerError, "complete pinned corpus"):
             test_runner.aggregate_reports(
