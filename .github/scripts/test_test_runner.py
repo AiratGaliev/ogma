@@ -85,6 +85,39 @@ class AdapterWorkerTests(unittest.TestCase):
         self.assertEqual(second["requestId"], 2)
         self.assertEqual(first["workerPid"], second["workerPid"])
 
+    def test_blocked_stdin_write_is_bounded_by_test_timeout(self) -> None:
+        command = [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(5)",
+        ]
+        request = self.request("// parser: parsed", timeout_ms=50)
+        request["test"]["source"] = "x" * (2 * 1024 * 1024)
+        started = __import__("time").monotonic()
+        with test_runner.AdapterSession(command) as session:
+            response, error = session.run(request, 50)
+        elapsed = __import__("time").monotonic() - started
+        self.assertIsNone(response)
+        self.assertEqual(error["status"], "FAIL")
+        self.assertEqual(error["failureKind"], "TIMEOUT")
+        self.assertLess(elapsed, 2.0)
+
+    def test_nonzero_worker_exit_after_last_response_is_not_ignored(self) -> None:
+        response_code = (
+            "import json,sys; request=json.loads(sys.stdin.readline()); "
+            "print(json.dumps({'protocol':'ogma-test-runner-adapter',"
+            "'version':1,'requestId':request['requestId'],'outcome':'parsed',"
+            "'phase':'parse'}), flush=True); sys.exit(9)"
+        )
+        command = [sys.executable, "-c", response_code]
+        with self.assertRaisesRegex(test_runner.RunnerError, "exited unsuccessfully"):
+            with test_runner.AdapterSession(command) as session:
+                response, error = session.run(
+                    self.request("// parser: parsed"), 1000
+                )
+                self.assertIsNone(error)
+                self.assertEqual(response["outcome"], "parsed")
+
     def test_timed_out_worker_is_killed_and_restarted_for_next_test(self) -> None:
         with test_runner.AdapterSession(FAKE_ADAPTER) as session:
             self.assertTrue(session._start())
