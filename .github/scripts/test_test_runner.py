@@ -65,6 +65,12 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(descriptor["includes"], [])
         self.assertEqual(descriptor["modes"], ["sloppy"])
 
+    def test_windows_path_separators_and_drive_paths_are_rejected(self) -> None:
+        for value in (r"..\\outside.js", r"C:\\outside.js", "/outside.js"):
+            with self.subTest(value=value):
+                with self.assertRaises(test_runner.RunnerError):
+                    test_runner._safe_relative_path(value)
+
     def test_conflicting_strictness_flags_are_a_harness_error(self) -> None:
         result = test_runner.run_one_test(
             TEST262_ROOT,
@@ -186,6 +192,22 @@ class Test262MetadataTests(unittest.TestCase):
 
 
 class ParserAndShardingTests(unittest.TestCase):
+    def test_parser_can_run_before_runtime_execution_adapter_exists(self) -> None:
+        profile = ready_profile()
+        profile["execution"] = {"state": "not_implemented"}
+        manifest = manifest_for("test262-parser-tests", PARSER_ROOT, profile)
+        report = test_runner.run_manifest(
+            manifest,
+            PARSER_ROOT,
+            profile,
+            FAKE_ADAPTER,
+            0,
+            timeout_ms=1000,
+            async_timeout_ms=1000,
+            verify_corpus=True,
+        )
+        self.assertEqual(report["summary"]["PASS"], 3)
+
     def test_parser_corpus_pass_fail_and_early_error_phases(self) -> None:
         manifest = manifest_for("test262-parser-tests", PARSER_ROOT, ready_profile())
         report = test_runner.run_manifest(
