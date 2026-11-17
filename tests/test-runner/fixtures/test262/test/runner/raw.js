@@ -1,5 +1,5 @@
 /*---
 description: Raw tests do not receive harness includes.
-flags: [raw, noStrict]
+flags: [raw]
 ---*/
 // result: pass
