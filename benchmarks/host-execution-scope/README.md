@@ -29,7 +29,7 @@ Each measurement records nearest-rank p50/p95/p99 and min/max latency, workload 
 
 A separate four-thread shared-lock probe reports contention and per-operation tail latency. The owner-thread context is not accessed concurrently: cross-thread use is represented by owned commands and tested through the bounded dispatcher.
 
-The counting global allocator is enabled only in this standalone proof executable. Its process-wide counters include harness allocations occurring inside the measured interval. Instrumented mutexes use try_lock to distinguish uncontended and contended acquisitions, so the instrumentation itself adds a small and symmetric probe cost to mutex paths.
+The counting global allocator is enabled only in this standalone proof executable. Sample storage is preallocated before the measured interval, so allocation deltas cover allocations performed by the measured workload rather than the benchmark's sample buffer. Counters are process-wide and include any process activity that occurs during the measured interval. Instrumented mutexes use try_lock to distinguish uncontended and contended acquisitions, so the instrumentation itself adds a small probe cost to mutex paths.
 
 ## Reproduction
 
