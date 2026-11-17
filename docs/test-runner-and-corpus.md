@@ -182,7 +182,7 @@ Every result has exactly one primary classification:
 
 ## 6. Engine adapter protocol
 
-The engine adapter is an executable development/test tool, not a runtime dependency. The runner invokes one long-lived adapter worker per shard, without a shell. It sends newline-delimited JSON requests on stdin and expects exactly one newline-delimited JSON response per request on stdout; stdout is reserved for protocol messages and diagnostics belong on stderr. Every request carries a monotonically increasing `requestId`, which the response must echo. The worker stays alive across tests and both strict/sloppy variants; it must create a fresh ECMAScript Realm for each Test262 test/variant and must not leak globals, jobs or harness state from one request to another. On a request timeout the runner terminates that worker and starts a fresh process for the next request. A worker startup/crash, malformed JSON, missing/mismatched `requestId` or wrong protocol version is `HARNESS ERROR`; a test execution timeout is `FAIL`.
+The engine adapter is an executable development/test tool, not a runtime dependency. The runner invokes one long-lived adapter worker per shard, without a shell. It sends newline-delimited JSON requests on stdin and expects exactly one newline-delimited JSON response per request on stdout; stdout is reserved for protocol messages and diagnostics belong on stderr. Every request carries a monotonically increasing `requestId`, which the response must echo, including after a worker restart. The worker stays alive across tests and both strict/sloppy variants; it must create a fresh ECMAScript Realm for each Test262 test/variant and must not leak globals, jobs or harness state from one request to another. The per-request timeout bounds both stdin delivery and response wait; requests larger than 16 MiB and responses larger than 8 MiB are rejected. On a request timeout the runner terminates that worker and starts a fresh process for the next request. After the last request, the worker must exit successfully when stdin is closed. A non-zero shutdown is recorded as `workerError` in the shard report and blocks aggregation. A worker startup/crash, malformed JSON, missing/mismatched `requestId`, oversized or unsolicited output, or wrong protocol version is `HARNESS ERROR`; a test execution or request-delivery timeout is `FAIL`.
 
 Request envelope:
 
@@ -200,6 +200,9 @@ Request envelope:
         "async": false,
         "flags": [],
         "features": [],
+        "featureRequirements": [],
+        "equivalenceGroup": null,
+        "equivalenceRole": null,
         "includes": [
           {"name": "assert.js", "source": "..."},
           {"name": "sta.js", "source": "..."}
@@ -240,7 +243,7 @@ The `plan` command discovers the checked-out suite and writes a deterministic sh
       --shard-count 8 \
       --output .artifacts/test262-manifest.json
 
-Each test ID is assigned using the first 64 bits of `SHA-256(test_id)` modulo the shard count. IDs are sorted before the manifest digest is calculated. The manifest records:
+Each ordinary test ID is assigned using the first 64 bits of `SHA-256(test_id)` modulo the shard count. For `test262-parser-tests`, matching `pass/<relative-path>` and `pass-explicit/<relative-path>` entries use the shared key `parser-pass-equivalence:<relative-path>`, keeping the AST-equivalence pair in one shard. IDs are sorted before the manifest digest is calculated. The manifest records:
 
 - suite and exact source repository/revision;
 - compatibility profile ID, version and content SHA-256, plus separate parser/runtime readiness states;
@@ -269,7 +272,7 @@ The command emits one result per test ID assigned to that shard. The result incl
 Exit codes:
 
 - `0`: no blocking result; unsupported/excluded cases remain explicit in the report;
-- `1`: at least one `FAIL`, `HARNESS ERROR` or `UNEXPECTED PASS`;
+- `1`: at least one `FAIL`, `HARNESS ERROR`, `UNEXPECTED PASS` or adapter worker shutdown error;
 - `2`: invalid input, source revision, manifest, profile or runner invocation.
 
 ### 7.3 Aggregation
@@ -291,7 +294,7 @@ The aggregate command fails closed unless:
 - every expected shard index has exactly one result file;
 - the manifest's repository URL/revision matches the active pinned baseline and its profile ID/version/content digest/readiness matches the active compatibility profile;
 - all shard reports reference the same manifest digest, suite and shard count;
-- each shard reports exactly its assigned test IDs;
+- each shard reports exactly its assigned test IDs and has no adapter `workerError`;
 - there are no missing, duplicated, unexpected or cross-shard test IDs;
 - all result classifications are valid;
 - every parser `pass/` and `pass-explicit/` pair has both results and matching normalized AST fingerprints.
