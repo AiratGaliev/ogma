@@ -13,12 +13,13 @@ The proof advertises ABI version **1.0.0** and a feature bitset. Consumers negot
 - Major mismatch is incompatible.
 - A consumer requiring a minor newer than the implementation is incompatible.
 - Unknown required feature bits are rejected.
-- A compatible minor revision may add optional fields/functions/features without changing existing meanings or layouts.
+- Within ABI major 1, a compatible minor revision may add optional exported functions or feature bits while preserving every existing struct layout, token representation, function signature/calling convention, status/completion value and ownership/lifetime rule. It must not append fields to an existing C struct.
+- `OgmaAbiVersion` is a fixed 24-byte ABI-v1 record. Its `struct_size` field is a layout sanity marker, not an output-buffer capacity; it does not authorize a newer library to write a larger record into storage allocated by an older consumer. Additional manifest metadata requires a separate size-negotiated query/descriptor (or a new major-version API with distinct symbols).
 - A change to an existing field's meaning, token contract, completion convention, calling convention or ownership/lifetime semantics is incompatible and requires a major revision.
 - Patch revisions are restricted to fixes that do not change the binary contract.
 - Reserved fields are zero in v1.0.0.
 
-The returned version descriptor contains struct_size, allowing future extensions to be detected. All exposed integer fields have explicit widths. size_t is used only for pointer-length pairs and therefore follows the target pointer width. This prototype does not yet implement a complete target-triple/endianness/native-entry manifest because it has no bytecode or AOT artifact contract.
+The returned v1 descriptor reports its exact fixed size so consumers can verify that the expected record was returned. Future metadata must use a separately size-negotiated descriptor/query rather than extending this record in place. All exposed integer fields have explicit widths. `size_t` is used only for pointer-length pairs and therefore follows the target pointer width. This prototype does not yet implement a complete target-triple/endianness/native-entry manifest because it has no bytecode or AOT artifact contract.
 
 Feature bits are: opaque handles, root scopes, persistent handles, callbacks, explicit completions and MOCK_PROOF. The last bit is deliberately present so a caller cannot mistake the proof harness for an executable JS Runtime.
 
@@ -93,7 +94,7 @@ The standalone runner compares four paths:
 3. bulk read and conversion of 64 handles in one call;
 4. host call through a mock callable and registered callback roundtrip.
 
-For each path it performs configured warmups and repeated samples, then reports min/median/p95/p99/max nanoseconds per call and calls/second at the median. The report also records source revision, exact tested revision, rustc version, OS, architecture, build profile, sample count and workload size. The CI job writes and uploads the JSON report.
+For each path it performs configured warmups and repeated samples, then reports min/median/p95/p99/max nanoseconds per call and calls/second at the median. Percentiles use the nearest-rank method over per-sample mean latency; the runner requires at least 101 measurement samples so p95 and p99 are not both collapsed to the maximum in the default proof. The report also records source revision, exact tested revision, rustc version, OS, architecture, build profile, sample count and workload size. The CI job writes and uploads the JSON report.
 
 These paths are not interchangeable workloads: scalar and bulk results must be interpreted with items_per_call, and the roundtrip is a callback bridge proof rather than JS execution. There is no machine-independent performance threshold. Measurements do not establish production interpreter throughput, Rust allocator/GC cost, physical register pressure, or AOT/native-call performance.
 
