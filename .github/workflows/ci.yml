@@ -195,7 +195,7 @@ jobs:
       - name: Run Core IR / stack-register equivalence proof and benchmark
         run: |
           python -m unittest discover -s .github/scripts -p "test_portable_bytecode.py" -v
-          python benchmarks/portable-bytecode/run.py --iterations 1000 --warmups 3 --compile-rounds 15 --verifier-rounds 15
+          python benchmarks/portable-bytecode/run.py --iterations 1000 --warmups 3 --compile-rounds 15 --verifier-rounds 15 --measurement-rounds 9
 
       - name: Upload OGM-16 raw measurements and verifier evidence
         if: always()

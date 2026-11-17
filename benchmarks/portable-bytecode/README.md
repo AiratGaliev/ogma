@@ -38,10 +38,11 @@ python benchmarks/portable-bytecode/run.py \
   --iterations 1000 \
   --warmups 3 \
   --compile-rounds 15 \
-  --verifier-rounds 15
+  --verifier-rounds 15 \
+  --measurement-rounds 9
 ```
 
-The benchmark writes results/benchmark-results.json. It records the environment, command parameters, raw timing samples, instruction and dispatch counts, code/container/constant/debug-map sizes, verifier input size and structural work proxies, verifier timings, and Python tracemalloc peak memory. The task-scoped GitHub Actions job uploads both JSON reports as an artifact.
+The benchmark writes results/benchmark-results.json. It records the environment, command parameters, raw timing samples, instruction and dispatch counts, code/container/constant/debug-map sizes, verifier input size and structural work proxies, verifier timings, and Python tracemalloc peak memory. Interpreter throughput is measured over nine independent timed rounds after warm-up; the report retains each round and uses median rates. Compile and verifier costs likewise retain fifteen samples each. The task-scoped GitHub Actions job uploads both JSON reports as an artifact.
 
 ## Measurement interpretation
 
@@ -50,7 +51,7 @@ The benchmark writes results/benchmark-results.json. It records the environment,
 - Compile cost measures Core IR lowering, layout and bytecode/container generation. Container/program verifier time is reported separately.
 - Throughput is reported for the Python proof interpreters. It is a comparative prototype measurement, not a prediction of Rust-native production throughput.
 - Memory uses Python tracemalloc peak allocations during one invocation, not process RSS or native VM heap usage.
-- Verifier complexity reports measured time and deterministic structural proxies (instructions, CFG edges, operands and register dataflow reads/writes). These proxies expose the additional state analysis required by register code; they are not asymptotic proofs.
+- Verifier complexity reports measured time and deterministic structural proxies (instructions, CFG edges, operands, stack-effect checks, and register dataflow reads/writes). These proxies expose the different state-analysis work required by each candidate; they are not asymptotic proofs.
 - The supported semantic subset is intentionally limited to the operations used by this corpus. It is not an ECMAScript conformance claim, a general Core IR backend, or a production interpreter.
 
 Any optimization or encoding change must keep both candidates on the same input corpus and preserve the expected observable results, exceptions and host traces.

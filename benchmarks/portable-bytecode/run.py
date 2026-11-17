@@ -64,6 +64,7 @@ def benchmark_candidate(
     warmups: int,
     compile_rounds: int,
     verifier_rounds: int,
+    measurement_rounds: int,
 ) -> tuple[dict[str, Any], list[Any]]:
     compile_samples: list[int] = []
     compile_wall_samples: list[int] = []
@@ -95,15 +96,34 @@ def benchmark_candidate(
         for case in workload["cases"]:
             execute_case(workload, compiled, case["args"])
 
-    execution_started = time.perf_counter_ns()
-    measured_dispatches = 0
-    execution_count = 0
-    for case in workload["cases"]:
-        for _ in range(iterations):
-            _, count = execute_case(workload, compiled, case["args"])
-            measured_dispatches += count
-            execution_count += 1
-    execution_elapsed = time.perf_counter_ns() - execution_started
+    execution_elapsed_samples: list[int] = []
+    execution_rate_samples: list[float] = []
+    dispatch_rate_samples: list[float] = []
+    dispatch_samples: list[int] = []
+    execution_count = len(workload["cases"]) * iterations
+    expected_dispatches = iterations * sum(case_dispatches)
+    for _ in range(measurement_rounds):
+        execution_started = time.perf_counter_ns()
+        measured_dispatches = 0
+        measured_executions = 0
+        for case in workload["cases"]:
+            for _ in range(iterations):
+                _, count = execute_case(workload, compiled, case["args"])
+                measured_dispatches += count
+                measured_executions += 1
+        execution_elapsed = time.perf_counter_ns() - execution_started
+        if measured_executions != execution_count:
+            raise AssertionError("benchmark round executed an unexpected number of cases")
+        if measured_dispatches != expected_dispatches:
+            raise AssertionError("interpreter dispatch count changed between measurement rounds")
+        execution_elapsed_samples.append(execution_elapsed)
+        dispatch_samples.append(measured_dispatches)
+        execution_rate_samples.append(execution_count * 1_000_000_000 / max(1, execution_elapsed))
+        dispatch_rate_samples.append(measured_dispatches * 1_000_000_000 / max(1, execution_elapsed))
+    execution_elapsed = median_or_zero(execution_elapsed_samples)
+    measured_dispatches = median_or_zero(dispatch_samples)
+    executions_per_second = statistics.median(execution_rate_samples)
+    dispatches_per_second = statistics.median(dispatch_rate_samples)
 
     memory_samples: list[int] = []
     for case in workload["cases"]:
@@ -120,8 +140,8 @@ def benchmark_candidate(
         key: sum(int(item[key] or 0) for item in complexity_items)
         for key in (
             "instructions", "control_flow_edges", "immediate_and_constant_operands",
-            "register_reads", "register_writes", "structural_work_units",
-            "verification_input_bytes",
+            "stack_effect_checks", "register_reads", "register_writes",
+            "state_analysis_operations", "structural_work_units", "verification_input_bytes",
         )
     }
     complexity["verifier_median_ns"] = median_or_zero(verifier_samples)
@@ -144,11 +164,12 @@ def benchmark_candidate(
         "verifier_complexity": complexity,
         "interpreter": {
             "iterations_per_case": iterations,
-            "executions": execution_count,
-            "elapsed_ns": execution_elapsed,
-            "executions_per_second": execution_count * 1_000_000_000 / max(1, execution_elapsed),
-            "measured_dispatches": measured_dispatches,
-            "dispatches_per_second": measured_dispatches * 1_000_000_000 / max(1, execution_elapsed),
+            "measurement_rounds": measurement_rounds,
+            "executions_per_round": execution_count,
+            "elapsed_ns_median": execution_elapsed,
+            "executions_per_second_median": executions_per_second,
+            "measured_dispatches_per_round": measured_dispatches,
+            "dispatches_per_second_median": dispatches_per_second,
         },
         "memory": {
             "tracemalloc_peak_bytes_per_case": memory_samples,
@@ -159,6 +180,10 @@ def benchmark_candidate(
             "compile_pipeline_wall_ns": compile_wall_samples,
             "verifier_ns": verifier_samples,
             "memory_peak_bytes": memory_samples,
+            "interpreter_elapsed_ns": execution_elapsed_samples,
+            "interpreter_executions_per_second": execution_rate_samples,
+            "interpreter_dispatches_per_round": dispatch_samples,
+            "interpreter_dispatches_per_second": dispatch_rate_samples,
         },
     }
     return metrics, compiled
@@ -170,6 +195,7 @@ def main() -> int:
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--compile-rounds", type=int, default=15)
     parser.add_argument("--verifier-rounds", type=int, default=15)
+    parser.add_argument("--measurement-rounds", type=int, default=9)
     parser.add_argument("--output", type=Path, default=RESULTS_DIR / "benchmark-results.json")
     args = parser.parse_args()
     for name, value in (
@@ -177,6 +203,7 @@ def main() -> int:
         ("warmups", args.warmups),
         ("compile-rounds", args.compile_rounds),
         ("verifier-rounds", args.verifier_rounds),
+        ("measurement-rounds", args.measurement_rounds),
     ):
         if value < (0 if name == "warmups" else 1):
             parser.error(f"{name} is outside the allowed range")
@@ -189,11 +216,11 @@ def main() -> int:
     for workload in workload_document["workloads"]:
         stack_metrics, stack_compiled = benchmark_candidate(
             workload, "stack", args.iterations, args.warmups,
-            args.compile_rounds, args.verifier_rounds,
+            args.compile_rounds, args.verifier_rounds, args.measurement_rounds,
         )
         register_metrics, register_compiled = benchmark_candidate(
             workload, "register", args.iterations, args.warmups,
-            args.compile_rounds, args.verifier_rounds,
+            args.compile_rounds, args.verifier_rounds, args.measurement_rounds,
         )
         observations = run_workload_correctness(workload, stack_compiled, register_compiled)
         all_results.append({
@@ -223,6 +250,7 @@ def main() -> int:
             "warmup_iterations_per_case": args.warmups,
             "compile_rounds": args.compile_rounds,
             "verifier_rounds": args.verifier_rounds,
+            "measurement_rounds": args.measurement_rounds,
             "timing_clock": "time.perf_counter_ns",
             "memory_metric": "Python tracemalloc peak; interpreter/prototype allocation proxy, not native VM RSS",
             "correctness": "both decoded bytecode interpreters must match the expected observation and each other",

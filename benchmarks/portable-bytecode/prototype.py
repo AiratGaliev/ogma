@@ -1198,17 +1198,22 @@ def verifier_complexity(compiled: CompiledFunction) -> dict[str, int | None]:
     operands = sum(len(item["operands"]) + len(item["constant_refs"]) for item in instructions)
     reads = 0
     writes = 0
+    stack_effects = 0
     if compiled.model == "register":
         for item in instructions:
             reads += len(item["register_effects"]["reads"])
             writes += len(item["register_effects"]["writes"])
+    else:
+        stack_effects = len(instructions)
     return {
         "instructions": len(instructions),
         "control_flow_edges": edges,
         "immediate_and_constant_operands": operands,
+        "stack_effect_checks": stack_effects,
         "register_reads": reads,
         "register_writes": writes,
-        "structural_work_units": len(instructions) + edges + operands + reads + writes,
+        "state_analysis_operations": stack_effects + reads + writes,
+        "structural_work_units": len(instructions) + edges + operands + stack_effects + reads + writes,
         "verification_input_bytes": normalized_size(compiled),
     }
 
