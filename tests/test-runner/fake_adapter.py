@@ -57,7 +57,20 @@ for raw_request in sys.stdin:
         else:
             response.update({"outcome": "harness_error", "reason": "unknown parser fixture"})
     else:
-        if "// result: timeout" in source:
+        if "// result: metadata" in source:
+            metadata = test.get("metadata", {})
+            if (
+                metadata.get("locale") == ["en", "fr"]
+                and metadata.get("description")
+                == "Runner forwards the complete Test262 metadata document."
+            ):
+                response.update({"outcome": "completed"})
+            else:
+                response.update({
+                    "outcome": "harness_error",
+                    "reason": "the runner did not forward complete Test262 metadata",
+                })
+        elif "// result: timeout" in source:
             time.sleep((request["timeoutMs"] / 1000) + 0.2)
             response.update({"outcome": "completed"})
         elif "// result: expected-negative" in source:
