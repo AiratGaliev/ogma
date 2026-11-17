@@ -212,9 +212,10 @@ The optional `source_map` section conforms to [`source-map.schema.json`](../cont
 - stable source-file identities, normalized repository-relative paths, language and optional source SHA-256;
 - per-instruction user or generated provenance, line/column spans, lexical scope/binding references, suspension-point references and an inline-frame chain; source paths are limited to 4096 characters and generated-source reasons to 512;
 - optional lexical scope ranges and binding membership; binding-reference arrays are unique and bounded to 65,536 entries;
-- optional variable-location ranges mapping a Core IR binding to the same canonical local/register/environment/capture storage location in the manifest metadata.
+- optional variable-location ranges mapping a function-local Core IR binding to its canonical manifest storage location; captured variables are referenced by the stable capture descriptor ID and use the capture descriptor array index as their canonical `capture` slot.
 
 Every byte offset/range must align to decoded instruction boundaries (an exclusive end may equal code_size). Source files, lexical scopes, bindings, captures, functions and suspension points are referenced by stable identifiers, not pointers or runtime addresses. Source-level information is optional for stripped artifacts; if present, malformed or dangling references are rejected.
+A source-map lexical-scope parent refers only to another scope in the same function artifact. An enclosing environment owned by another function is represented through that function’s capture descriptors, not as a dangling cross-artifact scope reference.
 
 ## 8. Stack and register state
 
