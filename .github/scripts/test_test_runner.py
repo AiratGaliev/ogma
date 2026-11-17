@@ -69,6 +69,8 @@ class AdapterWorkerTests(unittest.TestCase):
 
     def test_timed_out_worker_is_killed_and_restarted_for_next_test(self) -> None:
         with test_runner.AdapterSession(FAKE_ADAPTER) as session:
+            self.assertTrue(session._start())
+            first_worker_pid = session.process.pid
             timed_out, timeout_error = session.run(
                 self.request("// result: timeout", suite="test262", timeout_ms=50),
                 50,
@@ -76,12 +78,13 @@ class AdapterWorkerTests(unittest.TestCase):
             recovered, recovery_error = session.run(
                 self.request("// parser: parsed"), 1000
             )
+            restarted_worker_pid = session.process.pid
         self.assertIsNone(timed_out)
         self.assertEqual(timeout_error["status"], "FAIL")
         self.assertEqual(timeout_error["failureKind"], "TIMEOUT")
         self.assertIsNone(recovery_error)
         self.assertEqual(recovered["requestId"], 2)
-        self.assertNotEqual(timeout_error.get("workerPid"), recovered["workerPid"])
+        self.assertNotEqual(first_worker_pid, restarted_worker_pid)
 
 
 class Test262MetadataTests(unittest.TestCase):
