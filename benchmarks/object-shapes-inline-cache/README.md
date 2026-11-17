@@ -4,7 +4,7 @@ This M0 spike demonstrates the correctness boundary and an initial cost model fo
 
 ## Shape contract
 
-An ordinary object's immutable shape is interned by the ordered sequence of own-property layout records and the identity of its prototype. Each layout record contains the property key, data/accessor kind, and descriptor attributes. The per-object slot vector carries values or accessor pairs; a property value update does not change shape identity when the descriptor layout is unchanged.
+An ordinary object's immutable shape is interned by the ordered sequence of own-property layout records and the identity of its prototype. Shape IDs are unique across registries in the process, so guards from separate runtime/heap registries cannot alias. Each layout record contains the property key, data/accessor kind, and descriptor attributes. The per-object slot vector carries values or accessor pairs; a property value update does not change shape identity when the descriptor layout is unchanged.
 
 Adding/removing a property, changing descriptor kind/attributes, or replacing the prototype transitions the object to an interned shape. Objects with the same ordered layout and the same prototype share a shape. Deletion compacts slots and creates/reuses the resulting canonical shape. Shape descriptors are immutable; an old shape remains safe to reuse by other objects.
 
@@ -43,10 +43,10 @@ python benchmarks/object-shapes-inline-cache/run.py \
   --iterations 20000 --warmups 2 --rounds 7 --max-cases 4
 ```
 
-The runner writes `benchmarks/object-shapes-inline-cache/results/object-shapes-ic-report.json` by default. CI writes its report to the runner temp directory and uploads it as the OGM-18 evidence artifact.
+The runner writes `benchmarks/object-shapes-inline-cache/results/object-shapes-ic-report.json` by default. CI writes its report to the runner temp directory and uploads it as the OGM-18 evidence artifact. For pull requests, `source_revision` is the topic branch HEAD and `tested_revision` is the GitHub PR merge-checkout SHA.
 
 ## Measurements and interpretation
 
-The report includes generic-versus-IC median/p95/max latency and operations/second for mono-, poly- and megamorphic reads and monomorphic own-data writes; IC hits/misses, guard failures, helper/fallback calls and Proxy/megamorphic fallback counts; shape-sharing/layout/slot counts; a Python `tracemalloc` comparison against equivalent plain dictionaries; and shallow `sys.getsizeof` accounting for warmed IC metadata.
+The report includes the PR source revision and the exact checked-out revision separately; generic-versus-IC median/p95/max latency and operations/second for mono-, poly- and megamorphic reads and monomorphic own-data writes; IC hits/misses, guard failures, helper/fallback calls and Proxy/megamorphic fallback counts; shape-sharing/layout/slot counts; a Python `tracemalloc` comparison against equivalent plain dictionaries; and a recursive retained-metadata object-graph estimate using shallow `sys.getsizeof` per unique object.
 
 **The Python throughput and memory figures are measurements of this proof harness only.** They are not Ogma engine throughput, Rust heap bytes, allocator/GC costs, native code size, physical register pressure or process RSS. There is no Ogma runtime to benchmark yet. Benchmark comparisons use identical objects and operation counts within each generic/IC pair, warmup and repeated measurement rounds. Semantic equivalence is checked before timing; the timed loops then execute the same operation over the same object population. Results must be interpreted together with the environment and configuration recorded in JSON.
