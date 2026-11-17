@@ -154,6 +154,39 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(result["status"], "UNSUPPORTED")
         self.assertEqual(result["variants"], [])
 
+    def test_unimplemented_runtime_is_unsupported_without_reading_test_metadata(self) -> None:
+        profile = ready_profile()
+        profile["execution"] = {
+            "state": "not_implemented",
+            "reason": "Ogma Runtime is not implemented",
+        }
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "missing/metadata-is-not-read.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertIn("Runtime is not implemented", result["reason"])
+
+    def test_unsupported_probe_does_parse_metadata_and_reports_bad_test(self) -> None:
+        profile = ready_profile()
+        profile["execution"] = {"state": "not_implemented"}
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "missing/metadata-is-not-read.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+            probe_unsupported=True,
+        )
+        self.assertEqual(result["status"], "HARNESS ERROR")
+
     def test_probe_detects_unexpected_pass_for_unsupported_feature(self) -> None:
         profile = ready_profile()
         profile["featureStatus"]["Array"] = "deferred"
@@ -357,6 +390,91 @@ class ParserAndShardingTests(unittest.TestCase):
         )
         self.assertEqual(report["summary"]["PASS"], 3)
         self.assertEqual(report["summary"]["FAIL"], 0)
+
+    def test_aggregate_rejects_manifest_from_different_pinned_baseline(self) -> None:
+        profile = ready_profile()
+        manifest = test_runner.build_manifest(
+            "test262", ["a.js"], BASELINE, profile, 1
+        )
+        report = {
+            "schemaVersion": 1,
+            "suite": "test262",
+            "source": manifest["source"],
+            "profile": manifest["profile"],
+            "manifestSha256": manifest["manifestSha256"],
+            "shardIndex": 0,
+            "shardCount": 1,
+            "results": [{"id": "a.js", "status": "PASS"}],
+        }
+        other_baseline = {
+            **BASELINE,
+            "repositories": {
+                **BASELINE["repositories"],
+                "test262": {
+                    **BASELINE["repositories"]["test262"],
+                    "revision": "a" * 40,
+                },
+            },
+        }
+        with self.assertRaisesRegex(test_runner.RunnerError, "pinned baseline"):
+            test_runner.aggregate_reports(
+                manifest, [report], other_baseline, profile
+            )
+
+    def test_aggregate_rejects_manifest_from_different_active_profile(self) -> None:
+        profile = ready_profile()
+        manifest = test_runner.build_manifest(
+            "test262", ["a.js"], BASELINE, profile, 1
+        )
+        report = {
+            "schemaVersion": 1,
+            "suite": "test262",
+            "source": manifest["source"],
+            "profile": manifest["profile"],
+            "manifestSha256": manifest["manifestSha256"],
+            "shardIndex": 0,
+            "shardCount": 1,
+            "results": [{"id": "a.js", "status": "PASS"}],
+        }
+        stale_profile = ready_profile()
+        stale_profile["featureStatus"]["Array"] = "deferred"
+        with self.assertRaisesRegex(test_runner.RunnerError, "active profile"):
+            test_runner.aggregate_reports(
+                manifest, [report], BASELINE, stale_profile
+            )
+
+    def test_upstream_checkout_must_match_commit_and_be_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Ogma Tests"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "ogma-tests@example.invalid"], check=True)
+            test_file = root / "test.js"
+            test_file.write_text("let value = 1;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "test.js"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-q", "-m", "fixture"],
+                check=True,
+            )
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertIsNone(test_runner._load_and_check_revision(root, revision))
+
+            test_file.write_text("let value = 2;\n", encoding="utf-8")
+            with self.assertRaisesRegex(test_runner.RunnerError, "working tree is not clean"):
+                test_runner._load_and_check_revision(root, revision)
+
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", "--", "test.js"],
+                check=True,
+            )
+            (root / "untracked.js").write_text("let untracked = true;\n", encoding="utf-8")
+            with self.assertRaisesRegex(test_runner.RunnerError, "working tree is not clean"):
+                test_runner._load_and_check_revision(root, revision)
 
     def test_shard_manifest_is_deterministic_and_disjoint(self) -> None:
         profile = ready_profile()
