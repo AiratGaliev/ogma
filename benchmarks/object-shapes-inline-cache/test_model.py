@@ -182,6 +182,20 @@ class InlineCacheTests(unittest.TestCase):
         with self.assertRaises(JSRuntimeError):
             set_property(child, "x", 9, strict=True)
 
+
+
+    def test_inherited_assignment_preserves_receiver_descriptor_attributes(self):
+        proto = self.make(1)
+        receiver = JSObject(self.registry)
+        define_data_property(receiver, "x", 2, writable=True, enumerable=False, configurable=False)
+        self.assertTrue(set_property(proto, "x", 7, receiver=receiver))
+        descriptor = receiver.own_descriptor("x")
+        self.assertEqual(descriptor.value, 7)
+        self.assertTrue(descriptor.writable)
+        self.assertFalse(descriptor.enumerable)
+        self.assertFalse(descriptor.configurable)
+        self.assertEqual(get_property(proto, "x"), 1)
+
     def test_missing_accessor_setter_rejects_assignment(self):
         obj = JSObject(self.registry)
         define_accessor_property(obj, "x", getter=lambda this: 1)
