@@ -333,6 +333,21 @@ class ProxyFallbackTests(unittest.TestCase):
 
 
 
+
+
+    def test_proxy_receiver_uses_define_forwarding_not_set_trap(self):
+        proto = JSObject(self.registry)
+        define_data_property(proto, "x", 1)
+        receiver_target = JSObject(self.registry)
+        set_calls = []
+        receiver = JSProxy(
+            receiver_target,
+            set_trap=lambda target, key, value, this: set_calls.append(key) or True,
+        )
+        self.assertTrue(set_property(proto, "x", 9, receiver=receiver))
+        self.assertEqual(get_property(receiver, "x"), 9)
+        self.assertEqual(set_calls, [])
+
     def test_proxy_in_prototype_chain_receives_set_trap(self):
         target = JSObject(self.registry)
         calls = []
