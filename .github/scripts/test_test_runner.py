@@ -219,7 +219,10 @@ class ParserAndShardingTests(unittest.TestCase):
         reports = []
         for shard in manifest["shards"]:
             reports.append({
+                "schemaVersion": 1,
                 "suite": "test262",
+                "source": manifest["source"],
+                "profile": manifest["profile"],
                 "manifestSha256": manifest["manifestSha256"],
                 "shardIndex": shard["index"],
                 "shardCount": 2,
@@ -238,7 +241,10 @@ class ParserAndShardingTests(unittest.TestCase):
         )
         first = manifest["shards"][0]
         report = {
+            "schemaVersion": 1,
             "suite": "test262",
+            "source": manifest["source"],
+            "profile": manifest["profile"],
             "manifestSha256": manifest["manifestSha256"],
             "shardIndex": first["index"],
             "shardCount": 2,
@@ -255,19 +261,23 @@ class ParserAndShardingTests(unittest.TestCase):
         )
         test_id = manifest["tests"][0]["id"]
         report = {
+            "schemaVersion": 1,
             "suite": "test262",
+            "source": manifest["source"],
+            "profile": manifest["profile"],
             "manifestSha256": manifest["manifestSha256"],
             "shardIndex": 0,
             "shardCount": 1,
             "results": [
                 {"id": test_id, "status": "PASS"},
-                {"id": test_id, "status": "PASS"},
+                {"id": test_id, "status": "BOGUS"},
             ],
         }
         aggregate = test_runner.aggregate_reports(manifest, [report, report])
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(aggregate["aggregation"]["duplicateShards"], [0])
         self.assertTrue(any("duplicate test result" in error for error in aggregate["aggregation"]["errors"]))
+        self.assertTrue(any("invalid result classification" in error for error in aggregate["aggregation"]["errors"]))
 
 
 if __name__ == "__main__":
