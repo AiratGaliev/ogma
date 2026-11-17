@@ -1,0 +1,19 @@
+[package]
+name = "ogma-host-execution-scope-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 comparison of per-callback shared locking and owner-thread host execution scopes"
+
+[lib]
+name = "ogma_host_execution_scope_proof"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ogma-host-scope-bench"
+path = "src/bin/benchmark.rs"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
