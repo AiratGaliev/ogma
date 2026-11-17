@@ -86,9 +86,7 @@ struct HostState {
 fn runtime_sync(mode: LibrarySyncMode) -> Option<Arc<InstrumentedMutex<()>>> {
     match mode {
         LibrarySyncMode::None => None,
-        LibrarySyncMode::SyntheticControl => {
-            Some(Arc::new(InstrumentedMutex::new(())))
-        }
+        LibrarySyncMode::SyntheticControl => Some(Arc::new(InstrumentedMutex::new(()))),
     }
 }
 
@@ -212,10 +210,7 @@ impl HostExecutionContext {
         self.enter_scope_inner(false)
     }
 
-    fn enter_scope_inner(
-        &self,
-        nested: bool,
-    ) -> Result<HostExecutionScope<'_>, HostError> {
+    fn enter_scope_inner(&self, nested: bool) -> Result<HostExecutionScope<'_>, HostError> {
         if thread::current().id() != self.owner_thread {
             return Err(HostError::WrongThread);
         }
@@ -230,7 +225,8 @@ impl HostExecutionContext {
             return Err(HostError::ScopeDepthExceeded);
         }
         self.active_scopes.set(active + 1);
-        self.scope_enters.set(self.scope_enters.get().saturating_add(1));
+        self.scope_enters
+            .set(self.scope_enters.get().saturating_add(1));
         Ok(HostExecutionScope { context: self })
     }
 
@@ -252,7 +248,10 @@ impl HostExecutionContext {
         if thread::current().id() != self.owner_thread {
             return Err(HostError::WrongThread);
         }
-        let state = self.state.try_borrow().map_err(|_| HostError::BorrowConflict)?;
+        let state = self
+            .state
+            .try_borrow()
+            .map_err(|_| HostError::BorrowConflict)?;
         Ok(HostSnapshot {
             value: state.value,
             typed_calls: state.typed_calls,
@@ -315,8 +314,7 @@ impl HostExecutionScope<'_> {
         &self,
         callback: impl FnOnce(&HostExecutionScope<'_>) -> R,
     ) -> Result<R, HostError> {
-        catch_unwind(AssertUnwindSafe(|| callback(self)))
-            .map_err(|_| HostError::CallbackPanicked)
+        catch_unwind(AssertUnwindSafe(|| callback(self))).map_err(|_| HostError::CallbackPanicked)
     }
 }
 
@@ -394,7 +392,9 @@ impl DispatchTicket {
     }
 
     pub fn wait(self) -> Result<f64, DispatchError> {
-        self.receiver.recv().map_err(|_| DispatchError::WorkerTerminated)?
+        self.receiver
+            .recv()
+            .map_err(|_| DispatchError::WorkerTerminated)?
     }
 }
 
@@ -472,10 +472,7 @@ impl HostDispatcher {
         let lifecycle = Arc::new(InstrumentedMutex::new(Lifecycle::Open));
         let worker = thread::spawn(move || worker_loop(receiver));
         Self {
-            handle: DispatchHandle {
-                sender,
-                lifecycle,
-            },
+            handle: DispatchHandle { sender, lifecycle },
             worker: Some(worker),
         }
     }
@@ -592,7 +589,10 @@ mod tests {
             assert_eq!(owner_metrics.scope_enters, 2);
             assert_eq!(owner_metrics.state_borrows, 5);
             assert_eq!(owner_metrics.active_scopes, 0);
-            assert_eq!(owner.runtime_sync_metrics().acquisitions, shared.runtime_sync_metrics().acquisitions);
+            assert_eq!(
+                owner.runtime_sync_metrics().acquisitions,
+                shared.runtime_sync_metrics().acquisitions
+            );
         }
     }
 
@@ -600,10 +600,12 @@ mod tests {
     fn a_conflicting_reentrant_borrow_is_rejected_deterministically() {
         let context = HostExecutionContext::new(LibrarySyncMode::None);
         let scope = context.enter_scope().unwrap();
-        let result = scope.with_callback_state(|_| {
-            let nested = scope.nested_scope().unwrap();
-            nested.with_callback_state(|state| state.value += 1.0)
-        }).unwrap();
+        let result = scope
+            .with_callback_state(|_| {
+                let nested = scope.nested_scope().unwrap();
+                nested.with_callback_state(|state| state.value += 1.0)
+            })
+            .unwrap();
         assert_eq!(result, Err(HostError::BorrowConflict));
         drop(scope);
         assert_eq!(context.metrics().active_scopes, 0);
