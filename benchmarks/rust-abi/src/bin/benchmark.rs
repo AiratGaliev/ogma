@@ -112,7 +112,7 @@ unsafe extern "C-unwind" fn callback_identity(
     _user_data: *mut c_void,
 ) -> OgmaStatus {
     if args_len != 1 || args.is_null() || completion.is_null() {
-        return OgmaStatus::InvalidArgument;
+        return OgmaStatus::INVALID_ARGUMENT;
     }
     unsafe {
         completion.write(OgmaCompletion {
