@@ -26,6 +26,16 @@ class ShapeIdentityTests(unittest.TestCase):
         self.assertEqual(a.slots, [1, 2])
         self.assertEqual(b.slots, [10, 20])
 
+
+
+    def test_shape_exposes_immutable_key_to_slot_index(self):
+        obj = self.make(first=1, second=2)
+        self.assertEqual(obj.shape.slot_for("first"), 0)
+        self.assertEqual(obj.shape.slot_for("second"), 1)
+        self.assertIsNone(obj.shape.slot_for("missing"))
+        with self.assertRaises(TypeError):
+            obj.shape._slot_indices["third"] = 2
+
     def test_property_order_is_part_of_shape_identity(self):
         a = self.make(x=1, y=2)
         b = self.make(y=2, x=1)
