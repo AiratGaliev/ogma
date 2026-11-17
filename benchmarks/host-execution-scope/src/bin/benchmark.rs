@@ -318,8 +318,7 @@ fn owner_metrics(context: &HostExecutionContext) -> MetricSet {
 fn run_contention_probe(iterations_per_worker: usize) -> ContentionProbe {
     let workers = 4usize;
     let host = Arc::new(SharedLockHost::new(LibrarySyncMode::None));
-    let barrier = Arc::new(Barrier::new(workers));
-    let started = Instant::now();
+    let barrier = Arc::new(Barrier::new(workers + 1));
     let mut threads = Vec::with_capacity(workers);
 
     for _ in 0..workers {
@@ -337,6 +336,8 @@ fn run_contention_probe(iterations_per_worker: usize) -> ContentionProbe {
         }));
     }
 
+    let started = Instant::now();
+    barrier.wait();
     let mut latencies = Vec::with_capacity(workers * iterations_per_worker);
     for worker in threads {
         latencies.extend(worker.join().expect("contention worker"));
