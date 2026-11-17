@@ -29,7 +29,7 @@ The executable subset covers:
 - data assignment, including inherited writable data creating an own receiver property;
 - strict/non-strict failures for non-writable properties and non-configurable deletes;
 - property addition, descriptor reconfiguration, deletion and prototype replacement;
-- Proxy `get`, `set` and `deleteProperty` traps, including the tested frozen-data, setter-less-accessor and non-configurable-delete invariants.
+- Proxy `get`, `set` and `deleteProperty` traps, including the tested frozen-data, setter-less-accessor, non-configurable-delete and non-extensible-target invariants.
 
 This is not a full ECMAScript object model. String property keys are supported by the proof; Symbol keys, arrays/exotic objects, private fields, `getOwnPropertyDescriptor`/`defineProperty` Proxy traps, revoked proxies, primitive boxing and complete Proxy prototype invariants are outside this M0 scope. The Proxy default paths are intentionally limited to the tested forwarding cases. These exclusions must not be mistaken for Ogma runtime compatibility claims.
 
