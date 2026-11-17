@@ -190,7 +190,7 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(result["modes"], ["strict"])
         self.assertEqual(result["variants"][0]["status"], "PASS")
 
-    def test_module_tests_use_one_module_variant(self) -> None:
+    def test_module_tests_use_one_module_variant_and_resolve_fixture_context(self) -> None:
         result = test_runner.run_one_test(
             TEST262_ROOT,
             "test262",
