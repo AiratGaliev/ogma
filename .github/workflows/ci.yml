@@ -345,3 +345,66 @@ jobs:
           path: ${{ runner.temp }}/ogm-19-rust-abi-report.json
           if-no-files-found: error
           retention-days: 30
+
+  ogm20-host-execution-scope-proof:
+    name: OGM-20 HostExecutionScope benchmark and contract proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-20-owner-thread-host-execution-scope')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Capture toolchain and runner metadata
+        id: benchmark_environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          if [[ -z "$cpu_model" ]]; then
+            cpu_model="$(uname -m)"
+          fi
+          echo "rustc_version=@${ steps.benchmark_environment.outputs.rustc_version }" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/host-execution-scope/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run host execution scope contract tests
+        run: cargo test --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-features --locked
+
+      - name: Run reproducible HostExecutionScope comparison
+        env:
+          RUSTC_VERSION: @${ steps.benchmark_environment.outputs.rustc_version }
+          OGM20_CPU_MODEL: @${ steps.benchmark_environment.outputs.cpu_model }
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/host-execution-scope/Cargo.toml --locked --release --bin ogma-host-scope-bench -- \
+            --iterations 10000 \
+            --warmups 3 \
+            --samples 101 \
+            --revision "@${ github.event.pull_request.head.sha }" \
+            --tested-revision "$GITHUB_SHA" \
+            --cpu "$OGM20_CPU_MODEL" \
+            --output "$RUNNER_TEMP/ogm-20-host-execution-scope-report.json"
+
+      - name: Upload OGM-20 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-20-host-execution-scope-evidence
+          path: @${ runner.temp }/ogm-20-host-execution-scope-report.json
+          if-no-files-found: error
+          retention-days: 30
