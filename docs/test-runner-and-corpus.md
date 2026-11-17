@@ -215,7 +215,7 @@ The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsu
 
 Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`.
 
-The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics, Test262 harness preparation, `$DONE`, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities.
+The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics, Test262 harness preparation, `$DONE`, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
 
 ## 7. Deterministic manifests, reports and aggregation
 
@@ -232,7 +232,7 @@ The `plan` command discovers the checked-out suite and writes a deterministic sh
 Each test ID is assigned using the first 64 bits of `SHA-256(test_id)` modulo the shard count. IDs are sorted before the manifest digest is calculated. The manifest records:
 
 - suite and exact source repository/revision;
-- compatibility profile ID, version and content SHA-256;
+- compatibility profile ID, version and content SHA-256, plus separate parser/runtime readiness states;
 - sorted test IDs and their shard indices;
 - every shard index and its exact test-ID list;
 - a digest over the manifest contents.
@@ -278,7 +278,7 @@ The aggregate command fails closed unless:
 - there are no missing, duplicated, unexpected or cross-shard test IDs;
 - all result classifications are valid.
 
-A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed.
+A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile; a complete set of `UNSUPPORTED` reports cannot make an unimplemented runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists.
 
 ## 8. Differential and engine-level comparison contracts
 
