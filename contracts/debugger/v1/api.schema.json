@@ -23,7 +23,7 @@
       "required": ["command"],
       "properties": {
         "command": {
-          "enum": ["initialize", "attach", "launch", "disconnect", "setBreakpoint", "removeBreakpoint", "listBreakpoints", "pause", "resume", "stepInto", "stepOver", "stepOut", "getStack", "getScopes", "getVariables", "evaluate", "inspectObject"]
+          "enum": ["initialize", "disconnect", "setBreakpoint", "removeBreakpoint", "listBreakpoints", "pause", "resume", "stepInto", "stepOver", "stepOut", "getStack", "getScopes", "getVariables", "evaluate", "inspectObject"]
         },
         "arguments": { "type": "object" }
       }
