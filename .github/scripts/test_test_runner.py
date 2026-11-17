@@ -544,44 +544,24 @@ class ParserAndShardingTests(unittest.TestCase):
         test_runner.validate_manifest(first)
 
     def test_aggregate_success_requires_exactly_one_result_per_test(self) -> None:
-        manifest = test_runner.build_manifest(
-            "test262", ["a.js", "b.js", "c.js", "d.js"], BASELINE, ready_profile(), 2
+        manifest = manifest_for("test262", TEST262_ROOT, ready_profile(), 2)
+        reports = [
+            report_for_shard(manifest, shard["index"])
+            for shard in manifest["shards"]
+        ]
+        aggregate = test_runner.aggregate_reports(
+            manifest, reports, BASELINE, ready_profile(), TEST262_ROOT
         )
-        reports = []
-        for shard in manifest["shards"]:
-            reports.append({
-                "schemaVersion": 1,
-                "suite": "test262",
-                "source": manifest["source"],
-                "profile": manifest["profile"],
-                "manifestSha256": manifest["manifestSha256"],
-                "shardIndex": shard["index"],
-                "shardCount": 2,
-                "results": [
-                    {"id": test_id, "status": "PASS", "variants": []}
-                    for test_id in shard["testIds"]
-                ],
-            })
-        aggregate = test_runner.aggregate_reports(manifest, reports, BASELINE, ready_profile())
         self.assertTrue(aggregate["aggregation"]["complete"])
-        self.assertEqual(aggregate["summary"]["PASS"], 4)
+        self.assertEqual(aggregate["summary"]["PASS"], len(manifest["tests"]))
 
     def test_aggregate_detects_missing_shard_and_missing_tests(self) -> None:
-        manifest = test_runner.build_manifest(
-            "test262", ["a.js", "b.js", "c.js"], BASELINE, ready_profile(), 2
+        manifest = manifest_for("test262", TEST262_ROOT, ready_profile(), 2)
+        first_report = report_for_shard(manifest, 0)
+        first_report["results"] = []
+        aggregate = test_runner.aggregate_reports(
+            manifest, [first_report], BASELINE, ready_profile(), TEST262_ROOT
         )
-        first = manifest["shards"][0]
-        report = {
-            "schemaVersion": 1,
-            "suite": "test262",
-            "source": manifest["source"],
-            "profile": manifest["profile"],
-            "manifestSha256": manifest["manifestSha256"],
-            "shardIndex": first["index"],
-            "shardCount": 2,
-            "results": [],
-        }
-        aggregate = test_runner.aggregate_reports(manifest, [report], BASELINE, ready_profile())
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertEqual(len(aggregate["aggregation"]["missingShards"]), 1)
         self.assertGreaterEqual(len(aggregate["aggregation"]["missingTests"]), 1)
@@ -603,6 +583,21 @@ class ParserAndShardingTests(unittest.TestCase):
             )
         finally:
             report_path.unlink(missing_ok=True)
+
+    def test_aggregate_rejects_manifest_that_omits_pinned_corpus_tests(self) -> None:
+        profile = ready_profile()
+        all_ids = test_runner.discover_test_ids(TEST262_ROOT, "test262")
+        incomplete = test_runner.build_manifest(
+            "test262", all_ids[:-1], BASELINE, profile, 1
+        )
+        with self.assertRaisesRegex(test_runner.RunnerError, "complete pinned corpus"):
+            test_runner.aggregate_reports(
+                incomplete,
+                [],
+                BASELINE,
+                profile,
+                TEST262_ROOT,
+            )
 
     def test_aggregate_detects_duplicate_shards_and_duplicate_test_results(self) -> None:
         manifest = test_runner.build_manifest(
