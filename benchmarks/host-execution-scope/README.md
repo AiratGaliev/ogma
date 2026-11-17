@@ -61,3 +61,7 @@ Keep synchronization where the ownership model actually requires it. Calls arriv
 A scope must not retain an exclusive mutable borrow, raw reference or lock across arbitrary JavaScript execution, callback re-entry, await, yield or suspension. Nested execution receives an explicit nested scope; conflicting access fails deterministically. Any synchronization internal to a selected binding/runtime library remains a separate cost and must be measured for that concrete library/version.
 
 This is an architecture recommendation, not a production performance claim. The proof compares dispatch mechanics and host-state locking only. Actual binding-library synchronization and end-to-end Ogma performance remain unmeasured until a real Runtime/binding integration exists.
+
+## Normative references
+
+The architecture invariants follow the Ogma [architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.9.1, 8.9.7 and 8.9.8. The motivating per-callback mutex pattern was inspected in [CGE Experiments scripting.rs](https://github.com/AiratGaliev/cge-experiments/blob/c47ad08c3da9a3857f8429cebbed6ce88969715d/rust-brick-breaker/src/scripting.rs) at commit c47ad08c3da9a3857f8429cebbed6ce88969715d. OGM-20 does not modify or execute that consumer project.
