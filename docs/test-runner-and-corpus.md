@@ -278,7 +278,7 @@ The aggregate command fails closed unless:
 - there are no missing, duplicated, unexpected or cross-shard test IDs;
 - all result classifications are valid.
 
-A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile; a complete set of `UNSUPPORTED` reports cannot make an unimplemented runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists.
+A successful individual shard never implies an aggregate success. Missing shard artifacts, incomplete coverage or duplicate test execution are aggregate errors. The aggregate JSON records `missingShards`, `duplicateShards`, `missingTests`, `duplicateTests` and detailed errors. The aggregate command exits `1` for an incomplete aggregate even when every received test passed. It also fails closed when the Test262 execution adapter is not declared ready in the pinned profile, or when no test in the complete aggregate has a `PASS` result; a complete set of `UNSUPPORTED`/`EXCLUDED` reports cannot make an unimplemented or unproven runtime eligible for promotion. Parser-only aggregation checks `parserStatus` independently and can pass before runtime execution exists, provided at least one parser fixture passed.
 
 ## 8. Differential and engine-level comparison contracts
 
