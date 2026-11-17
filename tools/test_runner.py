@@ -1401,7 +1401,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, int]:
     summary = {status: 0 for status in RESULT_STATUSES}
     for result in results:
         status = result.get("status")
-        if status in summary:
+        if isinstance(status, str) and status in summary:
             summary[status] += 1
     summary["total"] = len(results)
     return summary
@@ -1427,14 +1427,27 @@ def write_junit(
     )
     for result in results:
         case = ET.SubElement(root, "testcase", {"name": result["id"], "classname": suite_name})
-        status = result["status"]
-        reason = result.get("reason") or status
+        status = result.get("status")
+        if not isinstance(status, str) or status not in RESULT_STATUSES:
+            node = ET.SubElement(
+                case,
+                "error",
+                {"message": "test result has an invalid classification", "type": "HARNESS ERROR"},
+            )
+            node.text = json.dumps(result, ensure_ascii=False, default=str)
+            continue
+        reason = result.get("reason")
+        if not isinstance(reason, str) or not reason:
+            reason = status
         if status in {"FAIL", "UNEXPECTED PASS"}:
-            node = ET.SubElement(case, "failure", {"message": reason, "type": result.get("failureKind", status)})
-            node.text = json.dumps(result.get("variants", []), ensure_ascii=False)
+            failure_kind = result.get("failureKind")
+            if not isinstance(failure_kind, str):
+                failure_kind = status
+            node = ET.SubElement(case, "failure", {"message": reason, "type": failure_kind})
+            node.text = json.dumps(result.get("variants", []), ensure_ascii=False, default=str)
         elif status == "HARNESS ERROR":
             node = ET.SubElement(case, "error", {"message": reason, "type": "HARNESS ERROR"})
-            node.text = json.dumps(result.get("variants", []), ensure_ascii=False)
+            node.text = json.dumps(result.get("variants", []), ensure_ascii=False, default=str)
         elif status in {"UNSUPPORTED", "EXCLUDED"}:
             ET.SubElement(case, "skipped", {"message": reason, "type": status})
     for index, error in enumerate(aggregation_errors, start=1):
