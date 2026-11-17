@@ -6,7 +6,7 @@ This directory contains an M0 proof, not a production compiler or VM. It lowers 
 
 ```text
 dynamic-add          JS + coercion (string + number)
-control-flow         two-way CFG branch, both paths
+control-flow         two-way CFG branch, value block arguments and both paths
 mutable-loop-locals  back-edge, lexical load/store, loop-carried state
 function-calls       closure creation, receiver and nested call
 host-calls           capability call with observable side-effect trace
@@ -62,17 +62,17 @@ The successful GitHub Actions run on the task branch measured the six workloads 
 
 | Metric (whole corpus) | Stack | Register |
 |---|---:|---:|
-| Decoded instructions | 73 | 33 |
-| Encoded code bytes | 395 | 243 |
-| Dispatches per measurement round | 161,000 | 70,000 |
-| Compile/codegen median samples summed by workload | 1,008,436 ns | 734,339 ns |
-| Verifier median samples summed by workload | 2,043,389 ns | 1,791,745 ns |
-| Python interpreter executions/s, derived from sum of workload medians | 106,616 | 164,825 |
-| Mean per-workload max Python tracemalloc peak | 1,069 bytes | 825 bytes |
-| Estimated debug sidecar JSON bytes | 17,674 | 7,927 |
-| .ogmb container bytes | 10,446 | 10,366 |
+| Decoded instructions | 83 | 39 |
+| Encoded code bytes | 455 | 283 |
+| Dispatches per measurement round | 175,000 | 78,000 |
+| Compile/codegen median samples summed by workload | 1,074,164 ns | 811,898 ns |
+| Verifier median samples summed by workload | 2,139,452 ns | 1,874,432 ns |
+| Python interpreter executions/s, derived from sum of workload medians | 99,897 | 154,162 |
+| Mean per-workload max Python tracemalloc peak | 1,137 bytes | 925 bytes |
+| Estimated debug sidecar JSON bytes | 20,463 | 9,570 |
+| .ogmb container bytes | 10,510 | 10,406 |
 
-Register lowering reduced instruction count by 54.8%, code bytes by 38.5% and dispatches per measurement round by 56.5%. Its summed compile/codegen medians were 27.2% lower and summed verifier medians 12.3% lower. The derived aggregate Python proof-interpreter throughput was 54.6% higher. The container itself was only 0.8% smaller because fixed metadata and JSON sections dominate this small code corpus.
+Register lowering reduced instruction count by 53.0%, code bytes by 37.8% and dispatches per measurement round by 55.4%. Its summed compile/codegen medians were 24.4% lower and summed verifier medians 12.4% lower. The derived aggregate Python proof-interpreter throughput was 54.3% higher. Mean per-workload maximum tracemalloc peak was 18.7% lower, but remains only a Python allocation proxy. The container itself was only 1.0% smaller because fixed metadata and JSON sections dominate this small code corpus.
 
 **Decision:** select the register-oriented execution model as Ogma's primary candidate for the next Rust-native interpreter proof. The proof consistently favours it across arithmetic/coercion, control flow, mutable locals/loops, calls, host calls and exceptions. Keep the stack candidate as comparative evidence, but do not freeze the prototype opcode numbers, operand widths or a final binary ISA. Keep the OGM-36 portable .ogmb v1 container and normalized verifier boundary unchanged; later Rust-native measurements and broader semantics must validate the model before production adoption.
 
@@ -91,4 +91,4 @@ The raw benchmark report (including all per-round samples) and the Core IR verif
 - `results/benchmark-results.json.gz` — lossless gzip of the complete machine-readable benchmark report. Decompress with `gzip -dc benchmarks/portable-bytecode/results/benchmark-results.json.gz`.
 - `results/core-ir-verifier-report.json` — all seven generated Core IR v1 fixtures accepted, zero failures.
 
-The SHA-256 of the decompressed benchmark JSON is `f6113456432778a7c92f78d511d7a0355c81a253afc9b867c9b62c00174269fe`. The report records its CI `source_revision`, runner environment and exact measurement protocol.
+The SHA-256 of the decompressed benchmark JSON is `e3f14e713ba3d6722c751fc71b8ef25c02498ab60a02716b1b3c5fc70618e91f`. It was produced by CI run [44045955802](https://github.com/AiratGaliev/ogma/actions/runs/44045955802) and records source revision `ea63d9512be445fcc2d62cbb8f2951de42ccad5e`, runner environment and the exact measurement protocol.
