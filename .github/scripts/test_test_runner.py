@@ -43,6 +43,23 @@ def manifest_for(suite: str, root: Path, profile: dict, shard_count: int = 1):
     )
 
 
+def report_for_shard(manifest: dict, shard_index: int, status: str = "PASS") -> dict:
+    shard = manifest["shards"][shard_index]
+    return {
+        "schemaVersion": 1,
+        "suite": manifest["suite"],
+        "source": manifest["source"],
+        "profile": manifest["profile"],
+        "manifestSha256": manifest["manifestSha256"],
+        "shardIndex": shard_index,
+        "shardCount": manifest["shardCount"],
+        "results": [
+            {"id": test_id, "status": status, "variants": []}
+            for test_id in shard["testIds"]
+        ],
+    }
+
+
 class AdapterWorkerTests(unittest.TestCase):
     @staticmethod
     def request(source: str, suite: str = "test262-parser-tests", timeout_ms: int = 1000):
@@ -383,7 +400,7 @@ class ParserAndShardingTests(unittest.TestCase):
             async_timeout_ms=1000,
             verify_corpus=True,
         )
-        self.assertEqual(report["summary"]["PASS"], 3)
+        self.assertEqual(report["summary"]["PASS"], 4)
         shard = manifest["shards"][0]
         aggregate = test_runner.aggregate_reports(
             manifest,
@@ -399,34 +416,20 @@ class ParserAndShardingTests(unittest.TestCase):
             }],
             BASELINE,
             profile,
+            PARSER_ROOT,
         )
         self.assertTrue(aggregate["aggregation"]["complete"])
 
     def test_aggregate_fails_closed_until_test262_execution_is_ready(self) -> None:
         profile = ready_profile()
         profile["execution"] = {"state": "not_implemented"}
-        manifest = test_runner.build_manifest(
-            "test262", ["language/example.js"], BASELINE, profile, 1
-        )
-        shard = manifest["shards"][0]
+        manifest = manifest_for("test262", TEST262_ROOT, profile)
+        reports = [
+            report_for_shard(manifest, shard["index"], "UNSUPPORTED")
+            for shard in manifest["shards"]
+        ]
         aggregate = test_runner.aggregate_reports(
-            manifest,
-            [{
-                "schemaVersion": 1,
-                "suite": "test262",
-                "source": manifest["source"],
-                "profile": manifest["profile"],
-                "manifestSha256": manifest["manifestSha256"],
-                "shardIndex": shard["index"],
-                "shardCount": 1,
-                "results": [{
-                    "id": "language/example.js",
-                    "status": "UNSUPPORTED",
-                    "reason": "runtime adapter unavailable",
-                }],
-            }],
-            BASELINE,
-            profile,
+            manifest, reports, BASELINE, profile, TEST262_ROOT
         )
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertIn(
@@ -437,28 +440,13 @@ class ParserAndShardingTests(unittest.TestCase):
     def test_aggregate_fails_when_every_test_is_unsupported(self) -> None:
         profile = ready_profile()
         profile["featureStatus"]["Array"] = "deferred"
-        manifest = test_runner.build_manifest(
-            "test262", ["runner/strict-default.js"], BASELINE, profile, 1
-        )
-        shard = manifest["shards"][0]
+        manifest = manifest_for("test262", TEST262_ROOT, profile)
+        reports = [
+            report_for_shard(manifest, shard["index"], "UNSUPPORTED")
+            for shard in manifest["shards"]
+        ]
         aggregate = test_runner.aggregate_reports(
-            manifest,
-            [{
-                "schemaVersion": 1,
-                "suite": "test262",
-                "source": manifest["source"],
-                "profile": manifest["profile"],
-                "manifestSha256": manifest["manifestSha256"],
-                "shardIndex": shard["index"],
-                "shardCount": 1,
-                "results": [{
-                    "id": "runner/strict-default.js",
-                    "status": "UNSUPPORTED",
-                    "reason": "Array is deferred",
-                }],
-            }],
-            BASELINE,
-            profile,
+            manifest, reports, BASELINE, profile, TEST262_ROOT
         )
         self.assertFalse(aggregate["aggregation"]["complete"])
         self.assertIn(
@@ -483,19 +471,8 @@ class ParserAndShardingTests(unittest.TestCase):
 
     def test_aggregate_rejects_manifest_from_different_pinned_baseline(self) -> None:
         profile = ready_profile()
-        manifest = test_runner.build_manifest(
-            "test262", ["a.js"], BASELINE, profile, 1
-        )
-        report = {
-            "schemaVersion": 1,
-            "suite": "test262",
-            "source": manifest["source"],
-            "profile": manifest["profile"],
-            "manifestSha256": manifest["manifestSha256"],
-            "shardIndex": 0,
-            "shardCount": 1,
-            "results": [{"id": "a.js", "status": "PASS"}],
-        }
+        manifest = manifest_for("test262", TEST262_ROOT, profile)
+        report = report_for_shard(manifest, 0)
         other_baseline = {
             **BASELINE,
             "repositories": {
@@ -508,29 +485,18 @@ class ParserAndShardingTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(test_runner.RunnerError, "pinned baseline"):
             test_runner.aggregate_reports(
-                manifest, [report], other_baseline, profile
+                manifest, [report], other_baseline, profile, TEST262_ROOT
             )
 
     def test_aggregate_rejects_manifest_from_different_active_profile(self) -> None:
         profile = ready_profile()
-        manifest = test_runner.build_manifest(
-            "test262", ["a.js"], BASELINE, profile, 1
-        )
-        report = {
-            "schemaVersion": 1,
-            "suite": "test262",
-            "source": manifest["source"],
-            "profile": manifest["profile"],
-            "manifestSha256": manifest["manifestSha256"],
-            "shardIndex": 0,
-            "shardCount": 1,
-            "results": [{"id": "a.js", "status": "PASS"}],
-        }
+        manifest = manifest_for("test262", TEST262_ROOT, profile)
+        report = report_for_shard(manifest, 0)
         stale_profile = ready_profile()
         stale_profile["featureStatus"]["Array"] = "deferred"
         with self.assertRaisesRegex(test_runner.RunnerError, "active profile"):
             test_runner.aggregate_reports(
-                manifest, [report], BASELINE, stale_profile
+                manifest, [report], BASELINE, stale_profile, TEST262_ROOT
             )
 
     def test_upstream_checkout_must_match_commit_and_be_clean(self) -> None:
