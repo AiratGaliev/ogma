@@ -1555,6 +1555,55 @@ mod tests {
     }
 
     #[test]
+    fn contexts_in_one_runtime_have_independent_heaps_and_generations() {
+        let (runtime, first_context) = setup();
+        let mut second_context = OgmaContextHandle::default();
+        assert_eq!(
+            unsafe { ogma_context_create(runtime, &mut second_context) },
+            OgmaStatus::OK
+        );
+
+        let first_value = number(runtime, first_context, 7.0);
+        let second_value = number(runtime, second_context, 7.0);
+        assert_ne!(first_value, second_value);
+
+        let mut output = 0.0;
+        assert_eq!(
+            unsafe {
+                ogma_context_get_number(runtime, second_context, first_value, &mut output)
+            },
+            OgmaStatus::STALE_HANDLE
+        );
+        assert_eq!(
+            unsafe {
+                ogma_context_get_number(runtime, first_context, second_value, &mut output)
+            },
+            OgmaStatus::STALE_HANDLE
+        );
+        assert_eq!(read_number(runtime, first_context, first_value), 7.0);
+        assert_eq!(read_number(runtime, second_context, second_value), 7.0);
+
+        assert_eq!(
+            unsafe { ogma_context_destroy(runtime, second_context) },
+            OgmaStatus::OK
+        );
+        let mut replacement_context = OgmaContextHandle::default();
+        assert_eq!(
+            unsafe { ogma_context_create(runtime, &mut replacement_context) },
+            OgmaStatus::OK
+        );
+        assert_ne!(second_context, replacement_context);
+        assert_eq!(
+            unsafe {
+                ogma_context_get_number(runtime, replacement_context, second_value, &mut output)
+            },
+            OgmaStatus::STALE_HANDLE
+        );
+        assert_eq!(read_number(runtime, first_context, first_value), 7.0);
+        cleanup(runtime);
+    }
+
+    #[test]
     fn conversions_are_checked_and_bulk_reads_preserve_type_errors() {
         let (r, c) = setup();
         let h1 = number(r, c, -17.0);
