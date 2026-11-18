@@ -1,0 +1,24 @@
+[package]
+name = "ogma-backend-codegen-benchmark"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "M0 comparison of Cranelift ObjectModule and LLVM over canonical Ogma Core IR fixtures"
+
+[dependencies]
+anyhow = "=1.0.104"
+cranelift-codegen = { version = "=0.137.2", features = ["all-native-arch"] }
+cranelift-frontend = "=0.137.2"
+cranelift-module = "=0.137.2"
+cranelift-native = "=0.137.2"
+cranelift-object = "=0.137.2"
+inkwell = { version = "=0.11.0", features = ["llvm18-1-prefer-dynamic"] }
+libloading = "=0.9.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+target-lexicon = "=0.13.6"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1

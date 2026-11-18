@@ -5,7 +5,7 @@ on:
     branches: [dev, test, main]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [dev, test, main]
+    branches: [dev, test, main, feat/ogm-30-benchmark-cranelift-llvm]
   workflow_dispatch:
 
 permissions:
@@ -262,7 +262,7 @@ jobs:
         run: python -m unittest discover -s benchmarks/object-shapes-inline-cache -p "test_*.py" -v
 
       - name: Run OGM-18 throughput and memory proof
-        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
+        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha || github.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
 
       - name: Upload OGM-18 proof report
         if: always()
@@ -333,7 +333,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/ogm-19-rust-abi-report.json"
 
@@ -998,3 +998,74 @@ jobs:
       - name: Run native Runtime boundary contract and adversarial tests
         run: cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
 
+  ogm30-native-backend-comparison:
+    name: OGM-30 Cranelift ObjectModule vs LLVM benchmark
+    if: (github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')) || (github.event_name == 'push' && github.ref == 'refs/heads/feat/ogm-30-benchmark-cranelift-llvm')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: target-ogm30
+
+    steps:
+      - name: Checkout tested PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install LLVM and native linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 build-essential
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Record toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          llvm-config-18 --version
+          clang-18 --version
+          cc --version
+
+      - name: Resolve and capture dependency lock
+        run: |
+          set -euo pipefail
+          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
+            cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
+          fi
+          cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm30-Cargo.lock"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run backend contract and manifest tests
+        run: cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+
+      - name: Run reproducible dual-backend benchmark
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release -- \
+            --iterations 50000 --warmups 3 --samples 101 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --output "$RUNNER_TEMP/ogm30-backend-report.json"
+
+      - name: Upload OGM-30 raw measurements and dependency lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm30-backend-comparison-evidence
+          path: |
+            ${{ runner.temp }}/ogm30-backend-report.json
+            ${{ runner.temp }}/ogm30-Cargo.lock
+          if-no-files-found: warn
+          retention-days: 90

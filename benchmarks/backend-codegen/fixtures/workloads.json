@@ -1,0 +1,58 @@
+{
+  "contract": "ogma.backend-codegen-workloads",
+  "version": "1.0.0",
+  "core_ir_contract": "ogma.core-ir/1.0.0",
+  "workloads": [
+    {
+      "id": "branch",
+      "fixture": "tests/core-ir/fixtures/positive-ssa-branch.json",
+      "operations": [
+        "js.strict_equal"
+      ],
+      "terminators": [
+        "branch",
+        "return"
+      ]
+    },
+    {
+      "id": "loop",
+      "fixture": "tests/core-ir/fixtures/positive-loop-carried-values.json",
+      "operations": [
+        "js.strict_equal",
+        "js.add",
+        "js.to_number"
+      ],
+      "terminators": [
+        "jump",
+        "branch",
+        "return"
+      ]
+    },
+    {
+      "id": "dynamic_exception",
+      "fixture": "tests/core-ir/fixtures/positive-dynamic-exception.json",
+      "operations": [
+        "js.add",
+        "js.throw"
+      ],
+      "exception_edge": true
+    },
+    {
+      "id": "call_boundary",
+      "fixture": "tests/core-ir/fixtures/positive-call-boundary.json",
+      "operations": [
+        "js.strict_equal",
+        "js.add",
+        "js.call"
+      ]
+    },
+    {
+      "id": "host_call",
+      "fixture": "tests/core-ir/fixtures/positive-host-call.json",
+      "operations": [
+        "host.call"
+      ],
+      "host_symbol": "benchmark.host.echo"
+    }
+  ]
+}
