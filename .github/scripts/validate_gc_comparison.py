@@ -29,6 +29,20 @@ def finite_non_negative(value: object, label: str) -> float:
     return number
 
 
+def nearest_rank(values: list[int], percentile: float) -> float:
+    ordered = sorted(values)
+    rank = max(1, math.ceil(len(ordered) * percentile))
+    return float(ordered[rank - 1])
+
+
+def require_rounded_match(actual: object, expected: float, label: str) -> None:
+    number = finite_non_negative(actual, label)
+    require(
+        abs(number - expected) <= 0.00051,
+        f"{label} does not match raw samples: {number} != {expected}",
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: validate_gc_comparison.py REPORT.json")
@@ -39,14 +53,25 @@ def main() -> int:
 
     require(report["schema_version"] == 1, "unsupported report schema")
     require(report["task"] == "OGM-26", "wrong Linear task identifier")
-    require(bool(report["source_revision"]), "source_revision is required")
-    require(bool(report["tested_revision"]), "tested_revision is required")
+    for field in ("source_revision", "tested_revision"):
+        revision = report[field]
+        require(
+            isinstance(revision, str)
+            and len(revision) == 40
+            and all(character in "0123456789abcdef" for character in revision.lower()),
+            f"{field} must be a full Git commit SHA",
+        )
 
     environment = report["environment"]
     for field in ("rustc", "os", "arch", "cpu"):
         require(bool(environment[field]), f"environment.{field} is required")
 
     configuration = report["configuration"]
+    for field in ("objects", "warmups", "samples"):
+        require(
+            isinstance(configuration[field], int) and configuration[field] >= 0,
+            f"configuration.{field} must be a non-negative integer",
+        )
     require(configuration["objects"] >= 64, "object workload is too small")
     require(configuration["objects"] % 4 == 0, "object count must be divisible by four")
     require(configuration["warmups"] >= 1, "warmups must be recorded")
@@ -79,7 +104,32 @@ def main() -> int:
         require(graph["objects"] == configuration["objects"], f"wrong object count: {key}")
         require(graph["edges"] >= graph["objects"], f"expected cyclic edge graph: {key}")
         require(len(graph["fingerprint"]) == 16, f"invalid graph fingerprint: {key}")
+        require(
+            isinstance(graph["objects"], int) and graph["objects"] >= 0,
+            f"invalid graph object count: {key}",
+        )
+        require(
+            isinstance(graph["edges"], int) and graph["edges"] >= 0,
+            f"invalid graph edge count: {key}",
+        )
+        require(
+            len(graph["fingerprint"]) == 16
+            and all(character in "0123456789abcdef" for character in graph["fingerprint"].lower()),
+            f"invalid graph fingerprint: {key}",
+        )
         roots = graph["root_counts"]
+        root_fields = (
+            "interpreter_frames",
+            "native_frame_prototype",
+            "persistent_host_handles",
+            "temporary_scopes",
+        )
+        for field in root_fields:
+            require(
+                isinstance(roots[field], int) and roots[field] >= 0,
+                f"invalid root count {field}: {key}",
+            )
+        expected_roots = sum(roots[field] for field in root_fields)
         if result["workload"] != "allocation-churn":
             for field in (
                 "interpreter_frames",
@@ -156,12 +206,92 @@ def main() -> int:
                 f"sample graph count mismatch: {key}",
             )
             require(
-                sample["graph"]["fingerprint"] == graph["fingerprint"],
-                f"sample graph fingerprint changed: {key}",
+                sample["graph"] == graph,
+                f"sample graph identity or root inventory changed: {key}/{index}",
+            )
+            require(
+                sample["roots_scanned"] == expected_roots,
+                f"sample root count differs from inventory: {key}/{index}",
             )
             require(
                 sample["objects_after"] + sample["reclaimed_total"] == sample["objects_before"],
                 f"object lifecycle does not balance: {key}/{index}",
+            )
+            require(
+                sample["reclaimed_during_collection"] <= sample["reclaimed_total"],
+                f"collection reclaimed more than cumulative lifecycle: {key}/{index}",
+            )
+
+        # The summary must be reproducible from its raw samples. In particular,
+        # do not let a valid raw report carry stale or hand-edited aggregates.
+        distributions = {
+            "collection_ns": [sample["collection_ns"] for sample in raw_samples],
+            "root_scan_ns": [sample["root_scan_ns"] for sample in raw_samples],
+            "build_ns": [sample["build_ns"] for sample in raw_samples],
+            "end_to_end_ns": [
+                sample["build_ns"] + sample["collection_ns"] for sample in raw_samples
+            ],
+        }
+        for field, values in distributions.items():
+            for percentile in PERCENTILES:
+                require_rounded_match(
+                    metrics[field][percentile],
+                    nearest_rank(values, {"p50": 0.50, "p95": 0.95, "p99": 0.99}[percentile]),
+                    f"{key}.{field}.{percentile}",
+                )
+
+        averages = {
+            "average_edges_examined": [sample["edges_examined"] for sample in raw_samples],
+            "average_roots_scanned": [sample["roots_scanned"] for sample in raw_samples],
+            "average_refcount_operations": [
+                sample["refcount_operations"] for sample in raw_samples
+            ],
+        }
+        for field, values in averages.items():
+            require_rounded_match(
+                metrics[field],
+                sum(values) / len(values),
+                f"{key}.{field}",
+            )
+
+        first = raw_samples[0]
+        require(
+            all(
+                sample["objects_after"] == first["objects_after"]
+                and sample["reclaimed_total"] == first["reclaimed_total"]
+                and sample["live_heap_bytes_after"] == first["live_heap_bytes_after"]
+                for sample in raw_samples
+            ),
+            f"candidate lifecycle varies between identical samples: {key}",
+        )
+        require(
+            metrics["live_objects_after"] == first["objects_after"]
+            and metrics["total_reclaimed_objects"] == first["reclaimed_total"]
+            and metrics["live_heap_bytes_after"] == first["live_heap_bytes_after"],
+            f"{key} summary liveness does not match raw samples",
+        )
+        require(
+            metrics["peak_heap_bytes"] == max(sample["peak_heap_bytes"] for sample in raw_samples),
+            f"{key} peak logical heap does not match raw samples",
+        )
+        expected_build_p50 = nearest_rank(distributions["build_ns"], 0.50)
+        expected_end_to_end_p50 = nearest_rank(distributions["end_to_end_ns"], 0.50)
+        require_rounded_match(
+            metrics["objects_per_second_at_median_build"],
+            first["objects_before"] * 1_000_000_000 / max(expected_build_p50, 1),
+            f"{key}.objects_per_second_at_median_build",
+        )
+        require_rounded_match(
+            metrics["operations_per_second_at_median_end_to_end"],
+            (graph["objects"] + graph["edges"])
+            * 1_000_000_000
+            / max(expected_end_to_end_p50, 1),
+            f"{key}.operations_per_second_at_median_end_to_end",
+        )
+        if result["collector"] == "non-moving-mark-sweep":
+            require(
+                metrics["average_refcount_operations"] == 0,
+                f"mark-sweep must not report RC operations: {key}",
             )
 
     require(
