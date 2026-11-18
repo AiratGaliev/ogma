@@ -4,7 +4,7 @@
 //! pinned CGE-style JavaScript consumer through rquickjs 0.14.0 and models the
 //! host snapshot / command / ECS boundaries independently.
 
-use rquickjs::{Context, Error as JsError, Function, Object, Persistent, Runtime, TypedArray};
+use rquickjs::{Array, Context, Error as JsError, Function, Object, Persistent, Runtime, TypedArray};
 use std::collections::{HashMap, HashSet};
 use std::mem::{align_of, size_of};
 use std::slice;
@@ -14,7 +14,8 @@ pub const CGE_REFERENCE_REVISION: &str = "c47ad08c3da9a3857f8429cebbed6ce8896971
 const KEY_A: u32 = 0;
 const KEY_D: u32 = 1;
 const KEY_ARROW_LEFT: u32 = 2;
-const KEY_SPACE: u32 = 3;
+const KEY_ARROW_RIGHT: u32 = 3;
+const KEY_SPACE: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CollisionPair {
@@ -27,6 +28,8 @@ pub struct InputSnapshot {
     pub keys_down: Arc<HashSet<String>>,
     pub key_down_bits: u64,
     pub key_pressed_bits: u64,
+    pub gamepad_connected: bool,
+    pub gamepad_left_stick_x: f32,
     pub gamepad_down_bits: u32,
     pub gamepad_pressed_bits: u32,
 }
@@ -48,6 +51,14 @@ impl InputSnapshot {
 
     pub fn was_key_pressed_id(&self, key_id: u32) -> bool {
         key_id < u64::BITS && (self.key_pressed_bits & (1_u64 << key_id)) != 0
+    }
+
+    pub fn gamepad_connected(&self) -> bool {
+        self.gamepad_connected
+    }
+
+    pub fn gamepad_left_stick_x(&self) -> f32 {
+        self.gamepad_left_stick_x
     }
 
     pub fn is_gamepad_down(&self, button: &str) -> bool {
@@ -79,6 +90,8 @@ impl InputSnapshot {
             ])),
             key_down_bits: (1_u64 << KEY_A) | (1_u64 << KEY_ARROW_LEFT) | (1_u64 << KEY_SPACE),
             key_pressed_bits: 1_u64 << KEY_SPACE,
+            gamepad_connected: true,
+            gamepad_left_stick_x: -0.625,
             gamepad_down_bits: 0b011,
             gamepad_pressed_bits: 0b001,
         }
@@ -99,6 +112,7 @@ fn key_name_id(key: &str) -> Option<u32> {
         "A" => Some(KEY_A),
         "D" => Some(KEY_D),
         "ArrowLeft" => Some(KEY_ARROW_LEFT),
+        "ArrowRight" => Some(KEY_ARROW_RIGHT),
         "Space" => Some(KEY_SPACE),
         _ => None,
     }
@@ -201,11 +215,12 @@ impl FrameSnapshot {
         &self.collisions
     }
 
+    pub fn position_if_present(&self, entity_id: u32) -> Option<[f32; 2]> {
+        self.positions.get(&entity_id).copied()
+    }
+
     pub fn position(&self, entity_id: u32) -> [f32; 2] {
-        self.positions
-            .get(&entity_id)
-            .copied()
-            .unwrap_or([0.0, 0.0])
+        self.position_if_present(entity_id).unwrap_or([0.0, 0.0])
     }
 
     pub fn collision(&self, index: u32) -> Option<CollisionPair> {
@@ -378,10 +393,31 @@ impl HostEcsSync {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostCommand {
-    pub entity_id: u32,
-    pub opcode: u32,
+#[derive(Clone, Debug, PartialEq)]
+pub enum HostCommand {
+    CreateRectangle {
+        entity_id: u32,
+        position: [f32; 2],
+        size: [f32; 2],
+        color: [f32; 4],
+    },
+    CreateText {
+        entity_id: u32,
+        value: String,
+        position: [f32; 2],
+        scale: f32,
+    },
+    SetText {
+        entity_id: u32,
+        value: String,
+    },
+    SetPosition {
+        entity_id: u32,
+        position: [f32; 2],
+    },
+    DestroyEntity {
+        entity_id: u32,
+    },
 }
 
 /// Reusable host command storage; draining clears the caller buffer and swaps
@@ -393,9 +429,29 @@ pub struct CommandBuffer {
 impl CommandBuffer {
     pub fn with_commands(command_count: usize, seed: u32) -> Self {
         let pending = (0..command_count)
-            .map(|index| HostCommand {
-                entity_id: index as u32 + 1,
-                opcode: seed.wrapping_add(index as u32),
+            .map(|index| {
+                let entity_id = index as u32 + 1;
+                let value = format!("label-{}-{}", seed, index);
+                match index % 5 {
+                    0 => HostCommand::CreateRectangle {
+                        entity_id,
+                        position: [index as f32 * 0.5, -(index as f32)],
+                        size: [1.0, 0.5],
+                        color: [0.2, 0.4, 0.6, 1.0],
+                    },
+                    1 => HostCommand::CreateText {
+                        entity_id,
+                        value,
+                        position: [index as f32, 2.0],
+                        scale: 0.016,
+                    },
+                    2 => HostCommand::SetText { entity_id, value },
+                    3 => HostCommand::SetPosition {
+                        entity_id,
+                        position: [index as f32 + seed as f32, 1.0],
+                    },
+                    _ => HostCommand::DestroyEntity { entity_id },
+                }
             })
             .collect();
         Self { pending }
@@ -413,6 +469,11 @@ pub enum UpdateMode {
     BatchSet,
     BatchBulk,
     PureJavaScript,
+    CgeScalar,
+    CgeReadPositions,
+    CgeNumericReadPositions,
+    CgeBulk,
+    CgePureJavaScript,
 }
 
 /// Runs the pinned reference consumer script on rquickjs 0.14.0. All registered
@@ -423,6 +484,11 @@ pub struct ScriptHarness {
     batch_set: Persistent<Function<'static>>,
     batch_bulk: Persistent<Function<'static>>,
     pure_javascript: Persistent<Function<'static>>,
+    cge_scalar: Persistent<Function<'static>>,
+    cge_read_positions: Persistent<Function<'static>>,
+    cge_numeric_read_positions: Persistent<Function<'static>>,
+    cge_bulk: Persistent<Function<'static>>,
+    cge_pure_javascript: Persistent<Function<'static>>,
     context: Context,
     _runtime: Runtime,
     state: Arc<Mutex<FrameSnapshot>>,
@@ -484,6 +550,24 @@ impl ScriptHarness {
                 {
                     let state = Arc::clone(&state);
                     gamepad.set(
+                        "connected",
+                        Function::new(ctx.clone(), move || {
+                            lock(&state).input().gamepad_connected()
+                        })?,
+                    )?;
+                }
+                {
+                    let state = Arc::clone(&state);
+                    gamepad.set(
+                        "leftStickX",
+                        Function::new(ctx.clone(), move || {
+                            lock(&state).input().gamepad_left_stick_x()
+                        })?,
+                    )?;
+                }
+                {
+                    let state = Arc::clone(&state);
+                    gamepad.set(
                         "isDown",
                         Function::new(ctx.clone(), move |button: String| {
                             lock(&state).input().is_gamepad_down(&button)
@@ -526,7 +610,9 @@ impl ScriptHarness {
                     entities.set(
                         "getPositionX",
                         Function::new(ctx.clone(), move |entity_id: u32| {
-                            lock(&state).position(entity_id)[0]
+                            lock(&state)
+                                .position_if_present(entity_id)
+                                .map(|position| position[0])
                         })?,
                     )?;
                 }
@@ -535,7 +621,9 @@ impl ScriptHarness {
                     entities.set(
                         "getPositionY",
                         Function::new(ctx.clone(), move |entity_id: u32| {
-                            lock(&state).position(entity_id)[1]
+                            lock(&state)
+                                .position_if_present(entity_id)
+                                .map(|position| position[1])
                         })?,
                     )?;
                 }
@@ -624,6 +712,35 @@ impl ScriptHarness {
                                     let position = snapshot.position(entity_id);
                                     output_slice[index * 2] = position[0];
                                     output_slice[index * 2 + 1] = position[1];
+                                }
+                                Ok(())
+                            },
+                        )?,
+                    )?;
+                }
+                {
+                    let state = Arc::clone(&state);
+                    entities.set(
+                        "readPositions",
+                        Function::new(
+                            ctx.clone(),
+                            move |ids: Array<'_>,
+                                  output: TypedArray<'_, f32>|
+                                  -> rquickjs::Result<()> {
+                                let required = ids.len().checked_mul(2).ok_or_else(|| {
+                                    JsError::new_from_js("Array", "position output length overflow")
+                                })?;
+                                if output.len() != required {
+                                    return Err(JsError::new_from_js(
+                                        "Float32Array",
+                                        "position output length mismatch",
+                                    ));
+                                }
+                                let snapshot = lock(&state);
+                                for (index, entity_id) in ids.iter::<u32>().enumerate() {
+                                    let position = snapshot.position(entity_id?);
+                                    output.set((index * 2) as u32, position[0])?;
+                                    output.set((index * 2 + 1) as u32, position[1])?;
                                 }
                                 Ok(())
                             },
@@ -781,7 +898,7 @@ impl ScriptHarness {
                 ctx.globals().set("collisionOutput", collisions_output)?;
 
                 let frame = lock(&state);
-                let key_down = (0..4)
+                let key_down = (0..5)
                     .map(|id| u8::from(frame.input().is_key_down_id(id)))
                     .collect::<Vec<_>>();
                 let gamepad_down = (0..3)
@@ -789,7 +906,7 @@ impl ScriptHarness {
                     .collect::<Vec<_>>();
                 let pure_keys = TypedArray::<u8>::new(ctx.clone(), key_down)?;
                 ctx.globals().set("pureKeyDown", pure_keys)?;
-                let key_pressed = (0..4)
+                let key_pressed = (0..5)
                     .map(|id| u8::from(frame.input().was_key_pressed_id(id)))
                     .collect::<Vec<_>>();
                 let pure_key_pressed = TypedArray::<u8>::new(ctx.clone(), key_pressed)?;
@@ -804,6 +921,12 @@ impl ScriptHarness {
                     .set("pureGamepadPressed", pure_gamepad_pressed)?;
                 ctx.globals()
                     .set("deltaSecondsValue", frame.delta_seconds())?;
+                ctx.globals()
+                    .set("pureGamepadConnectedValue", frame.input().gamepad_connected())?;
+                ctx.globals()
+                    .set("pureGamepadLeftStickXValue", frame.input().gamepad_left_stick_x())?;
+                ctx.globals()
+                    .set("pureCgeKeyDownValue", frame.input().is_key_down("A"))?;
                 drop(frame);
 
                 ctx.eval::<(), _>(include_str!("../fixtures/consumer-update.js"))?;
@@ -812,12 +935,23 @@ impl ScriptHarness {
                 let batch_set = globals.get::<_, Function>("runBatchSet")?;
                 let batch_bulk = globals.get::<_, Function>("runBatchBulk")?;
                 let pure_javascript = globals.get::<_, Function>("runPureJavaScript")?;
+                let cge_scalar = globals.get::<_, Function>("runCgeScalar")?;
+                let cge_read_positions = globals.get::<_, Function>("runCgeReadPositions")?;
+                let cge_numeric_read_positions =
+                    globals.get::<_, Function>("runCgeNumericReadPositions")?;
+                let cge_bulk = globals.get::<_, Function>("runCgeBulk")?;
+                let cge_pure_javascript = globals.get::<_, Function>("runCgePureJavaScript")?;
 
                 Ok((
                     Persistent::save(&ctx, scalar),
                     Persistent::save(&ctx, batch_set),
                     Persistent::save(&ctx, batch_bulk),
                     Persistent::save(&ctx, pure_javascript),
+                    Persistent::save(&ctx, cge_scalar),
+                    Persistent::save(&ctx, cge_read_positions),
+                    Persistent::save(&ctx, cge_numeric_read_positions),
+                    Persistent::save(&ctx, cge_bulk),
+                    Persistent::save(&ctx, cge_pure_javascript),
                 ))
             })
             .map_err(|error| error.to_string())?;
@@ -827,13 +961,19 @@ impl ScriptHarness {
             batch_set: hooks.1,
             batch_bulk: hooks.2,
             pure_javascript: hooks.3,
+            cge_scalar: hooks.4,
+            cge_read_positions: hooks.5,
+            cge_numeric_read_positions: hooks.6,
+            cge_bulk: hooks.7,
+            cge_pure_javascript: hooks.8,
             context,
             _runtime: runtime,
             state,
         };
-        // Seed the reusable output arrays so the JS-only update baseline has the
-        // same input data but performs no host callback during its timed loop.
+        // Seed both reusable output arrays so JavaScript-only baselines perform no
+        // host callbacks during their timed update loops.
         harness.run(UpdateMode::BatchBulk)?;
+        harness.run(UpdateMode::CgeBulk)?;
         Ok(harness)
     }
 
@@ -847,6 +987,11 @@ impl ScriptHarness {
             UpdateMode::BatchSet => self.batch_set.clone(),
             UpdateMode::BatchBulk => self.batch_bulk.clone(),
             UpdateMode::PureJavaScript => self.pure_javascript.clone(),
+            UpdateMode::CgeScalar => self.cge_scalar.clone(),
+            UpdateMode::CgeReadPositions => self.cge_read_positions.clone(),
+            UpdateMode::CgeNumericReadPositions => self.cge_numeric_read_positions.clone(),
+            UpdateMode::CgeBulk => self.cge_bulk.clone(),
+            UpdateMode::CgePureJavaScript => self.cge_pure_javascript.clone(),
         };
         self.context
             .with(|ctx| function.restore(&ctx)?.call::<_, f64>(()))
@@ -933,6 +1078,7 @@ mod tests {
             ("A", KEY_A),
             ("D", KEY_D),
             ("ArrowLeft", KEY_ARROW_LEFT),
+            ("ArrowRight", KEY_ARROW_RIGHT),
             ("Space", KEY_SPACE),
         ] {
             assert_eq!(
@@ -954,6 +1100,8 @@ mod tests {
                 snapshot.input().was_gamepad_pressed_id(id)
             );
         }
+        assert!(snapshot.input().gamepad_connected());
+        assert_eq!(snapshot.input().gamepad_left_stick_x(), -0.625);
     }
 
     #[test]
@@ -965,6 +1113,10 @@ mod tests {
         host.positions.insert(1, [99.0, 101.0]);
         host.collisions.clear();
         host.input.keys_down = Arc::new(HashSet::from([String::from("D")]));
+        host.input.key_down_bits = 1_u64 << KEY_D;
+        host.input.key_pressed_bits = 0;
+        host.input.gamepad_connected = false;
+        host.input.gamepad_left_stick_x = 0.25;
         assert_eq!(snapshot.frame_id(), 10);
         assert_eq!(snapshot.delta_seconds(), 1.0 / 60.0);
         assert_eq!(snapshot.position(1), [0.5, -0.25]);
@@ -979,6 +1131,9 @@ mod tests {
         assert!(reusable.collisions().is_empty());
         assert!(!reusable.input().is_key_down("A"));
         assert!(reusable.input().is_key_down("D"));
+        assert!(reusable.input().is_key_down_id(KEY_D));
+        assert!(!reusable.input().gamepad_connected());
+        assert_eq!(reusable.input().gamepad_left_stick_x(), 0.25);
     }
 
     #[test]
@@ -999,6 +1154,10 @@ mod tests {
         assert!(!snapshot.input().is_key_down_id(64));
         assert!(!snapshot.input().is_gamepad_down_id(32));
         assert!(!snapshot.input().is_gamepad_down("Unknown"));
+        assert!(!snapshot.input().was_key_pressed_id(64));
+        assert!(!snapshot.input().was_gamepad_pressed_id(32));
+        assert!(snapshot.position_if_present(1).is_some());
+        assert!(snapshot.position_if_present(99).is_none());
     }
 
     #[test]
@@ -1054,30 +1213,34 @@ mod tests {
 
     #[test]
     fn command_drain_swaps_reusable_storage_and_preserves_order() {
-        let mut pending = CommandBuffer::with_commands(3, 10);
+        let mut pending = CommandBuffer::with_commands(5, 10);
         let mut output = Vec::with_capacity(8);
-        output.push(HostCommand {
+        output.push(HostCommand::SetText {
             entity_id: 99,
-            opcode: 99,
+            value: String::from("stale output must be dropped"),
         });
         pending.drain_into(&mut output);
-        assert_eq!(
-            output,
-            vec![
-                HostCommand {
-                    entity_id: 1,
-                    opcode: 10
-                },
-                HostCommand {
-                    entity_id: 2,
-                    opcode: 11
-                },
-                HostCommand {
-                    entity_id: 3,
-                    opcode: 12
-                },
-            ]
-        );
+        assert!(matches!(
+            output.first(),
+            Some(HostCommand::CreateRectangle { entity_id: 1, .. })
+        ));
+        assert!(matches!(
+            output.get(1),
+            Some(HostCommand::CreateText { entity_id: 2, value, .. }) if value == "label-10-1"
+        ));
+        assert!(matches!(
+            output.get(2),
+            Some(HostCommand::SetText { entity_id: 3, value }) if value == "label-10-2"
+        ));
+        assert!(matches!(
+            output.get(3),
+            Some(HostCommand::SetPosition { entity_id: 4, .. })
+        ));
+        assert!(matches!(
+            output.get(4),
+            Some(HostCommand::DestroyEntity { entity_id: 5 })
+        ));
+        assert_eq!(output.len(), 5);
         assert!(pending.pending.is_empty());
         assert!(pending.pending.capacity() >= 8);
     }
@@ -1093,6 +1256,18 @@ mod tests {
         assert!((scalar - set).abs() < 0.000_001);
         assert!((scalar - bulk).abs() < 0.000_001);
         assert!((scalar - pure).abs() < 0.000_001);
+
+        let cge_scalar = harness.run(UpdateMode::CgeScalar).unwrap();
+        let cge_read_positions = harness.run(UpdateMode::CgeReadPositions).unwrap();
+        let cge_numeric_set = harness
+            .run(UpdateMode::CgeNumericReadPositions)
+            .unwrap();
+        let cge_bulk = harness.run(UpdateMode::CgeBulk).unwrap();
+        let cge_pure = harness.run(UpdateMode::CgePureJavaScript).unwrap();
+        assert!((cge_scalar - cge_read_positions).abs() < 0.000_001);
+        assert!((cge_scalar - cge_numeric_set).abs() < 0.000_001);
+        assert!((cge_scalar - cge_bulk).abs() < 0.000_001);
+        assert!((cge_scalar - cge_pure).abs() < 0.000_001);
     }
 
     #[test]
@@ -1108,6 +1283,63 @@ mod tests {
             "(() => { const buffer = new ArrayBuffer(16); const ids = new Uint32Array(buffer, 0, 2); ids[0] = 1; ids[1] = 2; const output = new Float32Array(buffer, 0, 4); engine.entities.readPositionsBulk(ids, output); })();",
         );
         assert!(alias_error.is_err());
+
+        assert!(harness
+            .eval(
+                "if (engine.entities.getPositionX(999) !== undefined || engine.entities.getPositionY(999) !== undefined) throw new Error('missing scalar position must be undefined');",
+            )
+            .is_ok());
+        assert!(harness
+            .eval(
+                "if (engine.input.gamepad.connected() !== true || Math.abs(engine.input.gamepad.leftStickX() - (-0.625)) > 0.000001) throw new Error('gamepad state mismatch');",
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn cge_array_read_positions_matches_scalar_and_zero_fills_missing_ids() {
+        let snapshot = fixture(4, 0);
+        let harness = ScriptHarness::new(snapshot, 4, 0).unwrap();
+        harness
+            .eval(
+                "const ids = [1, 999, 2]; const output = new Float32Array(6); engine.entities.readPositions(ids, output); if (output[0] !== 0.5 || output[1] !== -0.25 || output[2] !== 0 || output[3] !== 0 || output[4] !== 1 || output[5] !== -0.5) throw new Error('CGE readPositions contract mismatch');",
+            )
+            .unwrap();
+        assert!(harness
+            .eval("engine.entities.readPositions([1, 2], new Float32Array(3));")
+            .is_err());
+    }
+
+    #[test]
+    fn publishing_snapshot_changes_the_next_complete_js_frame() {
+        let initial = HostFrame::fixture(10, 4, 2);
+        let harness = ScriptHarness::new(
+            FrameSnapshot::from_host_frame(&initial),
+            4,
+            2,
+        )
+        .unwrap();
+        harness
+            .eval(
+                "if (engine.snapshot.frameId() !== 10 || engine.time.deltaSeconds() !== 1 / 60 || engine.entities.getPositionX(1) !== 0.5) throw new Error('initial frame snapshot mismatch');",
+            )
+            .unwrap();
+
+        let mut next = HostFrame::fixture(11, 4, 0);
+        next.delta_seconds = 0.5;
+        next.input.keys_down = Arc::new(HashSet::from([String::from("D")]));
+        next.input.key_down_bits = 1_u64 << KEY_D;
+        next.input.key_pressed_bits = 0;
+        next.input.gamepad_connected = false;
+        next.input.gamepad_left_stick_x = 0.25;
+        next.positions.insert(1, [10.0, 20.0]);
+        let next_snapshot = FrameSnapshot::from_host_frame(&next);
+        harness.publish_snapshot(&next_snapshot);
+        harness
+            .eval(
+                "if (engine.snapshot.frameId() !== 11 || engine.time.deltaSeconds() !== 0.5 || engine.entities.getPositionX(1) !== 10 || engine.entities.getPositionY(1) !== 20 || engine.input.isDown('D') !== true || engine.input.isDownId(1) !== true || engine.input.gamepad.connected() !== false || engine.input.gamepad.leftStickX() !== 0.25 || engine.physics.collisionCount() !== 0) throw new Error('published frame snapshot was not visible to the next execution');",
+            )
+            .unwrap();
     }
 
     #[test]

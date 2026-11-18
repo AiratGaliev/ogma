@@ -178,8 +178,8 @@ fn command_drain_records(
     warmups: usize,
     samples: usize,
 ) -> Result<(), String> {
-    // Each pre-filled command buffer is drained exactly once. The pool is prepared
-    // before timing; the measured operation is the clear + ownership swap only.
+    // Each pre-filled command buffer is drained exactly once. Command payloads
+    // include owned strings, matching the destruction cost of CGE RuntimeCommand.
     let iterations = base_iterations.max(10);
     for command_count in command_counts {
         let total_frames = iterations
@@ -271,6 +271,39 @@ fn main() -> Result<(), String> {
             metrics: reuse_metrics,
         });
 
+        // Snapshot handoff is measured separately from construction and JS execution.
+        // Both source snapshots are prepared before timing; the measured operation
+        // is one synchronous publish into the Runtime-owned frame snapshot.
+        let mut alternate_host_frame = host_frame.clone();
+        alternate_host_frame.frame_id = host_frame.frame_id.wrapping_add(1);
+        alternate_host_frame.delta_seconds = 1.0 / 30.0;
+        alternate_host_frame.positions.insert(1, [99.0, -99.0]);
+        let alternate_snapshot = FrameSnapshot::from_host_frame(&alternate_host_frame);
+        let handoff_harness =
+            ScriptHarness::new(initial_snapshot.clone(), entity_count, collision_count)?;
+        let mut handoff_alternate = false;
+        let handoff_metrics = measure(operation_iterations, warmups, samples, || {
+            let snapshot = if handoff_alternate {
+                &alternate_snapshot
+            } else {
+                &initial_snapshot
+            };
+            handoff_harness.publish_snapshot(snapshot);
+            handoff_alternate = !handoff_alternate;
+            Ok(black_box(snapshot.frame_id()))
+        })?;
+        records.push(Record {
+            phase: "frame_snapshot_handoff".to_owned(),
+            mode: "publish_snapshot_mutex_clone_from".to_owned(),
+            entity_count,
+            changed_entity_count: None,
+            item_count: entity_count + collision_count,
+            host_callbacks_per_update: 0,
+            iterations_per_sample: operation_iterations,
+            samples,
+            metrics: handoff_metrics,
+        });
+
         // Active-pose/deactivation cache is an explicitly synthetic host phase.
         for moving_count in [2_usize.min(entity_count), entity_count] {
             let mut cache = PhysicsPoseCache::new(entity_count);
@@ -295,12 +328,17 @@ fn main() -> Result<(), String> {
                 cache.apply_active_poses(&active_poses, &deactivated_poses);
                 Ok(black_box(cache.changes().len() as u64))
             })?;
+            let actual_change_count = if moving_count < entity_count {
+                moving_count + 1
+            } else {
+                moving_count
+            };
             records.push(Record {
                 phase: "host_physics_active_pose_cache_model".to_owned(),
                 mode: "active_poses_plus_final_deactivation".to_owned(),
                 entity_count,
-                changed_entity_count: Some(moving_count),
-                item_count: moving_count + 1,
+                changed_entity_count: Some(actual_change_count),
+                item_count: actual_change_count,
                 host_callbacks_per_update: 0,
                 iterations_per_sample: operation_iterations,
                 samples,
@@ -397,8 +435,9 @@ fn main() -> Result<(), String> {
             }
         }
 
-        let scalar_callbacks = 8 + 6 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
-        let batch_callbacks = 8 + 6 + 1 + 1 + 1 + 2;
+        let scalar_callbacks =
+            10 + 6 + 2 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
+        let batch_callbacks = 10 + 6 + 2 + 1 + 1 + 1 + 2;
         for (mode, update_mode, callback_count) in [
             (
                 "string_ids_scalar_callbacks",
@@ -443,7 +482,77 @@ fn main() -> Result<(), String> {
         }
     }
 
-    command_drain_records(&mut records, &[0, 8, 64, 256], 250, warmups, samples)?;
+    // Reproduce the pinned CGE Criterion host-API update at its original sizes
+    // (16/64/256). The additional modes isolate scalar transforms, string/bitset
+    // input, per-element TypedArray.set, and validated contiguous bulk transfer.
+    for entity_count in [16_usize, 64, 256] {
+        let collision_count = 0;
+        let operation_iterations = iterations_for(iterations, entity_count);
+        let host_frame = HostFrame::fixture(1, entity_count, collision_count);
+        let snapshot = FrameSnapshot::from_host_frame(&host_frame);
+        let harness = ScriptHarness::new(snapshot, entity_count, collision_count)?;
+
+        let scalar_result = harness.run(UpdateMode::CgeScalar)?;
+        let array_set_result = harness.run(UpdateMode::CgeReadPositions)?;
+        let numeric_set_result = harness.run(UpdateMode::CgeNumericReadPositions)?;
+        let bulk_result = harness.run(UpdateMode::CgeBulk)?;
+        let pure_result = harness.run(UpdateMode::CgePureJavaScript)?;
+        for (name, result) in [
+            ("CGE Array readPositions", array_set_result),
+            ("CGE numeric-input Array readPositions", numeric_set_result),
+            ("CGE typed-ID bulk read", bulk_result),
+            ("CGE JavaScript-only update", pure_result),
+        ] {
+            if (scalar_result - result).abs() > 0.000_001 {
+                return Err(format!(
+                    "CGE reference workload correctness mismatch for {name} at {entity_count} entities: scalar={scalar_result}, result={result}"
+                ));
+            }
+        }
+
+        let scalar_callbacks = entity_count * 2 + 8 + 1;
+        let array_set_callbacks = 1 + 8 + 1;
+        for (mode, update_mode, callback_count) in [
+            ("cge_scalar_callbacks", UpdateMode::CgeScalar, scalar_callbacks),
+            (
+                "cge_array_read_positions_set",
+                UpdateMode::CgeReadPositions,
+                array_set_callbacks,
+            ),
+            (
+                "cge_array_read_positions_numeric_set",
+                UpdateMode::CgeNumericReadPositions,
+                array_set_callbacks,
+            ),
+            ("cge_typed_id_bulk", UpdateMode::CgeBulk, array_set_callbacks),
+            (
+                "cge_javascript_only_preloaded_output",
+                UpdateMode::CgePureJavaScript,
+                0,
+            ),
+        ] {
+            let metrics = measure(operation_iterations, warmups, samples, || {
+                Ok(black_box(harness.run(update_mode)?.to_bits()))
+            })?;
+            records.push(Record {
+                phase: if callback_count == 0 {
+                    "cge_javascript_update_only".to_owned()
+                } else {
+                    "cge_reference_consumer_js_update_and_dispatch".to_owned()
+                },
+                mode: mode.to_owned(),
+                entity_count,
+                changed_entity_count: None,
+                item_count: entity_count,
+                host_callbacks_per_update: callback_count,
+                iterations_per_sample: operation_iterations,
+                samples,
+                metrics,
+            });
+        }
+    }
+
+    command_drain_records(&mut records, &[0, 8, 64, 256], 32, warmups, samples)?;
 
     let cases = records
         .iter()
@@ -451,7 +560,7 @@ fn main() -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(",");
     let report = format!(
-        "{{\"task\":\"OGM-23\",\"revision\":\"{}\",\"tested_revision\":\"{}\",\"rustc_version\":\"{}\",\"os\":\"{}\",\"arch\":\"{}\",\"cpu\":\"{}\",\"profile\":\"release\",\"warmups\":{},\"measurement_samples\":{},\"base_iterations\":{},\"cge_reference_revision\":\"{}\",\"reference_runtime\":\"rquickjs 0.14.0 (benchmark-only; not an Ogma Runtime)\",\"method\":\"nearest-rank p50/p95/p99 of per-sample mean latency; each mode validates an equivalent checksum before timing\",\"allocation_counter\":\"Rust global allocator alloc/alloc_zeroed/realloc calls only; QuickJS C allocator allocations are not included\",\"limitations\":{{\"ogma_runtime_dispatch\":\"not_measured: this repository revision has no executable Ogma Runtime or production JS host adapter\",\"host_physics\":\"synthetic active-pose/deactivation cache model; Jolt step and Jolt active_body_poses_into are excluded\",\"host_ecs\":\"synthetic sparse/dense transform synchronization model; Flecs query execution is excluded\",\"reference_dispatch\":\"measures the pinned CGE-style JavaScript workload through rquickjs 0.14.0; do not interpret as Ogma Runtime performance\"}},\"cases\":[{}]}}",
+        "{{\"task\":\"OGM-23\",\"revision\":\"{}\",\"tested_revision\":\"{}\",\"rustc_version\":\"{}\",\"os\":\"{}\",\"arch\":\"{}\",\"cpu\":\"{}\",\"profile\":\"release\",\"warmups\":{},\"measurement_samples\":{},\"base_iterations\":{},\"cge_reference_revision\":\"{}\",\"reference_runtime\":\"rquickjs 0.14.0 (benchmark-only; not an Ogma Runtime)\",\"cge_reference_workload\":\"quickjs_host_api/frame_submit_and_update from pinned CGE benches/runtime.rs; entity counts 16,64,256\",\"method\":\"nearest-rank p50/p95/p99 of per-sample mean latency; each mode validates an equivalent checksum before timing\",\"allocation_counter\":\"Rust global allocator alloc/alloc_zeroed/realloc calls only; QuickJS C allocator allocations are not included\",\"limitations\":{{\"ogma_runtime_dispatch\":\"not_measured: this repository revision has no executable Ogma Runtime or production JS host adapter\",\"host_physics\":\"synthetic active-pose/deactivation cache model; Jolt step and Jolt active_body_poses_into are excluded\",\"host_ecs\":\"synthetic sparse/dense transform synchronization model; Flecs query execution is excluded\",\"reference_dispatch\":\"measures the pinned CGE-style JavaScript workload through rquickjs 0.14.0; do not interpret as Ogma Runtime performance\"}},\"cases\":[{}]}}",
         escape_json(&revision),
         escape_json(&tested_revision),
         escape_json(&std::env::var("RUSTC_VERSION").unwrap_or_else(|_| "unknown".to_owned())),

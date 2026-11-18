@@ -618,12 +618,18 @@ jobs:
 
           assert report["task"] == "OGM-23"
           assert report["cge_reference_revision"] == "c47ad08c3da9a3857f8429cebbed6ce88969715d"
+          assert report["cge_reference_workload"].startswith("quickjs_host_api/frame_submit_and_update")
           assert report["limitations"]["ogma_runtime_dispatch"].startswith("not_measured:")
-          assert len(report["cases"]) == 46, f"expected 46 cases, got {len(report['cases'])}"
+          assert report["limitations"]["host_physics"].startswith("synthetic")
+          assert report["limitations"]["host_ecs"].startswith("synthetic")
+          assert len(report["cases"]) == 64, f"expected 64 cases, got {len(report['cases'])}"
 
           required_phases = {
               "frame_snapshot_construction",
+              "frame_snapshot_handoff",
               "reference_consumer_js_update_and_dispatch",
+              "cge_reference_consumer_js_update_and_dispatch",
+              "cge_javascript_update_only",
               "javascript_update_only",
               "host_physics_active_pose_cache_model",
               "host_ecs_sync_model",
@@ -639,13 +645,25 @@ jobs:
               "sparse_changed_entity_updates",
               "dense_full_transform_query",
               "consumer_50_percent_adaptive_selector",
+              "cge_scalar_callbacks",
+              "cge_array_read_positions_set",
+              "cge_array_read_positions_numeric_set",
+              "cge_typed_id_bulk",
+              "cge_javascript_only_preloaded_output",
           }
           assert required_modes.issubset({case["mode"] for case in report["cases"]})
+          assert {16, 64, 256}.issubset({
+              case["entity_count"]
+              for case in report["cases"]
+              if case["phase"] == "cge_reference_consumer_js_update_and_dispatch"
+          })
 
           for case in report["cases"]:
               for metric in ("p50_ns_per_op", "p95_ns_per_op", "p99_ns_per_op"):
                   value = case[metric]
                   assert math.isfinite(value) and value >= 0, (case["phase"], case["mode"], metric, value)
+              assert case["p50_ns_per_op"] <= case["p95_ns_per_op"] <= case["p99_ns_per_op"]
+              assert case["min_ns_per_op"] <= case["p50_ns_per_op"] <= case["max_ns_per_op"]
               assert case["rust_allocations_per_op"] >= 0
               assert case["rust_allocated_bytes_per_op"] >= 0
 
