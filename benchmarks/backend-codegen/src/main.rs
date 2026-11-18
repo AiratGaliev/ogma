@@ -23,7 +23,9 @@ use libloading::Library;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
-    env, ffi::CString, fs,
+    env,
+    ffi::CString,
+    fs,
     hint::black_box,
     path::{Path, PathBuf},
     process::Command,
