@@ -484,7 +484,7 @@ fn report(config: &Config, summaries: &[Summary]) -> String {
     let _ = writeln!(out, "  }},");
     let _ = writeln!(
         out,
-        "  \"configuration\": {{\"objects\":{},\"warmups\":{},\"samples\":{},\"percentile_method\":\"nearest-rank\"}},",
+        "  \"configuration\": {{\"objects\":{},\"warmups\":{},\"samples\":{},\"percentile_method\":\"nearest-rank\",\"candidate_order\":\"alternating-per-sample\"}},",
         config.objects, config.warmups, config.samples
     );
     let _ = writeln!(out, "  \"limitations\": [");
