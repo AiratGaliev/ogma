@@ -129,8 +129,9 @@ fn build_graph(
         }
     }
 
+    // Frames have strict LIFO semantics: populate the interpreter frame before
+    // opening the native prototype frame, then leave both alive for collection.
     let interpreter = heap.begin_frame(FrameKind::Interpreter).map_err(err)?;
-    let native = heap.begin_frame(FrameKind::NativePrototype).map_err(err)?;
     let scope = heap.open_scope().map_err(err)?;
     let components = object_count / 4;
 
@@ -141,7 +142,6 @@ fn build_graph(
                 0 => heap
                     .add_frame_root(interpreter, objects[base])
                     .map_err(err)?,
-                1 => heap.add_frame_root(native, objects[base]).map_err(err)?,
                 2 => {
                     heap.retain_host_handle(objects[base]).map_err(err)?;
                 }
@@ -155,7 +155,6 @@ fn build_graph(
                 1 => heap
                     .add_frame_root(interpreter, objects[base])
                     .map_err(err)?,
-                3 => heap.add_frame_root(native, objects[base]).map_err(err)?,
                 4 => heap.scope_add(scope, objects[base]).map_err(err)?,
                 _ => {}
             },
@@ -168,11 +167,25 @@ fn build_graph(
                     heap.add_frame_root(interpreter, objects[base + 2])
                         .map_err(err)?;
                 }
-                if component == 1 {
-                    heap.add_frame_root(native, objects[base + 3])
-                        .map_err(err)?;
-                }
             }
+        }
+    }
+
+    let native = heap.begin_frame(FrameKind::NativePrototype).map_err(err)?;
+    for component in 0..components {
+        let base = component * 4;
+        match workload {
+            Workload::BalancedRoots if component % 5 == 1 => {
+                heap.add_frame_root(native, objects[base]).map_err(err)?;
+            }
+            Workload::HostRetained if component % 6 == 3 => {
+                heap.add_frame_root(native, objects[base]).map_err(err)?;
+            }
+            Workload::AllocationChurn if component == 1 => {
+                heap.add_frame_root(native, objects[base + 3])
+                    .map_err(err)?;
+            }
+            _ => {}
         }
     }
 
