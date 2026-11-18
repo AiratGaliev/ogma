@@ -68,7 +68,7 @@ fn percentile(sorted: &[f64], quantile: f64) -> f64 {
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
-fn distribution(values: &mut Vec<f64>) -> (f64, f64, f64) {
+fn distribution(values: &mut [f64]) -> (f64, f64, f64) {
     values.sort_by(f64::total_cmp);
     (
         percentile(values, 0.50),
