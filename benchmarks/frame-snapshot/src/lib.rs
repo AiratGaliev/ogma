@@ -1334,11 +1334,44 @@ mod tests {
         next.positions.insert(1, [10.0, 20.0]);
         let next_snapshot = FrameSnapshot::from_host_frame(&next);
         harness.publish_snapshot(&next_snapshot);
-        harness
-            .eval(
-                "if (engine.snapshot.frameId() !== 11 || engine.time.deltaSeconds() !== 0.5 || engine.entities.getPositionX(1) !== 10 || engine.entities.getPositionY(1) !== 20 || engine.input.isDown('D') !== true || engine.input.isDownId(1) !== true || engine.input.gamepad.connected() !== false || engine.input.gamepad.leftStickX() !== 0.25 || engine.physics.collisionCount() !== 0) throw new Error('published frame snapshot was not visible to the next execution');",
-            )
-            .unwrap();
+        assert!(
+            harness
+                .eval(
+                    "if (engine.snapshot.frameId() !== 11 || engine.time.deltaSeconds() !== 0.5) throw new Error('published frame identity/delta mismatch');",
+                )
+                .is_ok(),
+            "published frame identity and delta must change together"
+        );
+        assert!(
+            harness
+                .eval(
+                    "if (engine.entities.getPositionX(1) !== 10 || engine.entities.getPositionY(1) !== 20) throw new Error('published transforms mismatch');",
+                )
+                .is_ok(),
+            "published transforms must replace the previous frame"
+        );
+        assert!(
+            harness
+                .eval(
+                    "if (engine.input.isDown('D') !== true || engine.input.isDownId(1) !== true) throw new Error('published keyboard input mismatch');",
+                )
+                .is_ok(),
+            "published string and numeric keyboard state must agree"
+        );
+        assert!(
+            harness
+                .eval(
+                    "if (engine.input.gamepad.connected() !== false || engine.input.gamepad.leftStickX() !== 0.25) throw new Error('published gamepad state mismatch');",
+                )
+                .is_ok(),
+            "published gamepad state must replace the previous frame"
+        );
+        assert!(
+            harness
+                .eval("if (engine.physics.collisionCount() !== 0) throw new Error('published collisions mismatch');")
+                .is_ok(),
+            "published collision buffer must be cleared for the next frame"
+        );
     }
 
     #[test]
