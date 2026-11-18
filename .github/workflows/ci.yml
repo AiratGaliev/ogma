@@ -904,3 +904,33 @@ jobs:
           path: ${{ runner.temp }}/ogm-26-gc-comparison-report.json
           if-no-files-found: error
           retention-days: 30
+
+  ogm27-native-runtime-boundary-proof:
+    name: OGM-27 native Runtime roots, safepoints and transitions proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-27-native-frames-safepoints')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Verify Rust toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run native Runtime boundary contract and adversarial tests
+        run: cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
+
