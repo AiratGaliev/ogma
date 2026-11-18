@@ -747,9 +747,8 @@ impl HostFunctionRegistry {
     ) -> Result<PersistentHandleRoot<'_>, DispatchError> {
         self.ensure_owner_thread()?;
         let mut token = OgmaPersistentHandle::default();
-        let status = unsafe {
-            ogma_persistent_create(self.runtime, self.context, handle, &mut token)
-        };
+        let status =
+            unsafe { ogma_persistent_create(self.runtime, self.context, handle, &mut token) };
         if status != OgmaStatus::OK {
             return Err(DispatchError::Abi(status));
         }
