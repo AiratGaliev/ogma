@@ -134,6 +134,7 @@
           "purpose",
           "buildMode",
           "executionBackend",
+          "rustBuild",
           "hostCompatibility",
           "includeRoots",
           "excludeComponents",
@@ -269,6 +270,69 @@
                   "embedded",
                   "external",
                   "omitted"
+                ]
+              }
+            }
+          },
+          "rustBuild": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "optLevel",
+              "debug",
+              "debugAssertions",
+              "overflowChecks",
+              "lto",
+              "codegenUnits",
+              "panic",
+              "strip"
+            ],
+            "properties": {
+              "optLevel": {
+                "enum": [
+                  "0",
+                  "1",
+                  "2",
+                  "3",
+                  "s",
+                  "z"
+                ]
+              },
+              "debug": {
+                "type": "boolean"
+              },
+              "debugAssertions": {
+                "type": "boolean"
+              },
+              "overflowChecks": {
+                "type": "boolean"
+              },
+              "lto": {
+                "enum": [
+                  "off",
+                  "thin",
+                  "fat"
+                ]
+              },
+              "codegenUnits": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  16,
+                  256
+                ]
+              },
+              "panic": {
+                "enum": [
+                  "unwind",
+                  "abort"
+                ]
+              },
+              "strip": {
+                "enum": [
+                  "none",
+                  "debuginfo",
+                  "symbols"
                 ]
               }
             }
