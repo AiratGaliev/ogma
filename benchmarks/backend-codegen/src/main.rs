@@ -155,6 +155,283 @@ fn parse_fixture(label: &'static str, raw: &str) -> Result<CoreFixture> {
         host_symbol,
     })
 }
+fn function_block<'a>(function: &'a JsonValue, id: &str) -> Result<&'a JsonValue> {
+    function["blocks"]
+        .as_array()
+        .context("Core IR blocks missing")?
+        .iter()
+        .find(|block| block["id"] == id)
+        .ok_or_else(|| anyhow!("Core IR block {id} missing"))
+}
+
+fn expect_block_order(function: &JsonValue, expected: &[&str]) -> Result<()> {
+    let actual: Vec<&str> = function["blocks"]
+        .as_array()
+        .context("Core IR blocks missing")?
+        .iter()
+        .map(|block| block["id"].as_str().unwrap_or(""))
+        .collect();
+    if actual != expected {
+        bail!("Core IR block layout differs from the OGM-30 lowering profile");
+    }
+    Ok(())
+}
+
+fn expect_instruction_count(function: &JsonValue, block_id: &str, expected: usize) -> Result<()> {
+    let actual = function_block(function, block_id)?["instructions"]
+        .as_array()
+        .context("Core IR instructions missing")?
+        .len();
+    if actual != expected {
+        bail!("{block_id}: expected {expected} instructions, got {actual}");
+    }
+    Ok(())
+}
+
+fn expect_instruction(
+    function: &JsonValue,
+    block_id: &str,
+    index: usize,
+    op: &str,
+    operands: &[&str],
+    result: Option<&str>,
+) -> Result<()> {
+    let instructions = function_block(function, block_id)?["instructions"]
+        .as_array()
+        .context("Core IR instructions missing")?;
+    let instruction = instructions
+        .get(index)
+        .with_context(|| format!("{block_id}: instruction {index} missing"))?;
+    if instruction["op"].as_str() != Some(op) {
+        bail!("{block_id}: instruction {index} is not {op}");
+    }
+    let actual_operands: Vec<&str> = instruction["operands"]
+        .as_array()
+        .context("Core IR operands missing")?
+        .iter()
+        .map(|operand| operand.as_str().unwrap_or(""))
+        .collect();
+    if actual_operands != operands {
+        bail!("{block_id}: {op} operands differ from the OGM-30 lowering profile");
+    }
+    match result {
+        Some(expected) if instruction["result"]["id"].as_str() == Some(expected) => {}
+        None if instruction["result"].is_null() => {}
+        _ => bail!("{block_id}: {op} result differs from the OGM-30 lowering profile"),
+    }
+    Ok(())
+}
+
+fn expect_terminator<'a>(
+    function: &'a JsonValue,
+    block_id: &str,
+    kind: &str,
+) -> Result<&'a JsonValue> {
+    let terminator = &function_block(function, block_id)?["terminator"];
+    if terminator["kind"].as_str() != Some(kind) {
+        bail!("{block_id}: expected {kind} terminator");
+    }
+    Ok(terminator)
+}
+
+fn expect_names(actual: &JsonValue, expected: &[&str], context: &str) -> Result<()> {
+    let actual: Vec<&str> = actual
+        .as_array()
+        .context("Core IR argument list missing")?
+        .iter()
+        .map(|value| value.as_str().unwrap_or(""))
+        .collect();
+    if actual != expected {
+        bail!("{context}: argument order differs from the OGM-30 lowering profile");
+    }
+    Ok(())
+}
+
+fn validate_lowering_profile(label: &str, document: &JsonValue) -> Result<()> {
+    let function = &document["function"];
+    match label {
+        "branch" => {
+            expect_block_order(function, &["entry", "left_block", "right_block"])?;
+            expect_instruction_count(function, "entry", 1)?;
+            expect_instruction(
+                function,
+                "entry",
+                0,
+                "js.strict_equal",
+                &["arg_left", "arg_right"],
+                Some("same"),
+            )?;
+            let branch = expect_terminator(function, "entry", "branch")?;
+            if branch["condition"] != "same"
+                || branch["then"]["target"] != "left_block"
+                || branch["else"]["target"] != "right_block"
+            {
+                bail!("branch fixture CFG differs from the OGM-30 lowering profile");
+            }
+            expect_names(&branch["then"]["arguments"], &["arg_left"], "branch then")?;
+            expect_names(&branch["else"]["arguments"], &["arg_right"], "branch else")?;
+            if expect_terminator(function, "left_block", "return")?["value"] != "left_value"
+                || expect_terminator(function, "right_block", "return")?["value"] != "right_value"
+            {
+                bail!("branch fixture return values differ from the OGM-30 lowering profile");
+            }
+        }
+        "loop" => {
+            expect_block_order(function, &["entry", "loop", "body", "exit"])?;
+            expect_instruction_count(function, "entry", 0)?;
+            let entry = expect_terminator(function, "entry", "jump")?;
+            if entry["target"] != "loop" {
+                bail!("loop entry does not jump to the loop header");
+            }
+            expect_names(
+                &entry["arguments"],
+                &["start", "limit", "e0"],
+                "loop entry",
+            )?;
+            expect_instruction_count(function, "loop", 1)?;
+            expect_instruction(
+                function,
+                "loop",
+                0,
+                "js.strict_equal",
+                &["current", "loop_limit"],
+                Some("done"),
+            )?;
+            let branch = expect_terminator(function, "loop", "branch")?;
+            if branch["condition"] != "done"
+                || branch["then"]["target"] != "exit"
+                || branch["else"]["target"] != "body"
+            {
+                bail!("loop header CFG differs from the OGM-30 lowering profile");
+            }
+            expect_names(
+                &branch["then"]["arguments"],
+                &["current", "e_loop"],
+                "loop exit",
+            )?;
+            expect_names(
+                &branch["else"]["arguments"],
+                &["current", "loop_limit", "e_loop"],
+                "loop body",
+            )?;
+            expect_instruction_count(function, "body", 2)?;
+            expect_instruction(
+                function,
+                "body",
+                0,
+                "js.add",
+                &["body_current", "step"],
+                Some("incremented"),
+            )?;
+            expect_instruction(
+                function,
+                "body",
+                1,
+                "js.to_number",
+                &["incremented"],
+                Some("next_current"),
+            )?;
+            let back_edge = expect_terminator(function, "body", "jump")?;
+            if back_edge["target"] != "loop" {
+                bail!("loop body does not carry values back to the loop header");
+            }
+            expect_names(
+                &back_edge["arguments"],
+                &["next_current", "body_limit", "e_number"],
+                "loop back edge",
+            )?;
+            if expect_terminator(function, "exit", "return")?["value"] != "final_value" {
+                bail!("loop exit return differs from the OGM-30 lowering profile");
+            }
+        }
+        "dynamic_exception" => {
+            expect_block_order(function, &["entry", "return_block", "handler"])?;
+            expect_instruction_count(function, "entry", 1)?;
+            expect_instruction(
+                function,
+                "entry",
+                0,
+                "js.add",
+                &["lhs", "rhs"],
+                Some("sum"),
+            )?;
+            let add = &function_block(function, "entry")?["instructions"][0];
+            if add["exception"]["kind"] != "edge"
+                || add["exception"]["target"] != "handler"
+            {
+                bail!("dynamic exception edge differs from the OGM-30 lowering profile");
+            }
+            expect_names(
+                &add["exception"]["arguments"],
+                &["e1"],
+                "dynamic add exception edge",
+            )?;
+            let normal = expect_terminator(function, "entry", "jump")?;
+            if normal["target"] != "return_block" {
+                bail!("normal add completion does not reach return_block");
+            }
+            expect_names(
+                &normal["arguments"],
+                &["sum", "e1"],
+                "normal add completion",
+            )?;
+            if expect_terminator(function, "return_block", "return")?["value"] != "return_value" {
+                bail!("normal completion return differs from the OGM-30 lowering profile");
+            }
+            expect_instruction_count(function, "handler", 1)?;
+            expect_instruction(function, "handler", 0, "js.throw", &["caught"], None)?;
+            if expect_terminator(function, "handler", "unreachable")?["reason"] != "after_throw" {
+                bail!("throw handler terminator differs from the OGM-30 lowering profile");
+            }
+        }
+        "call_boundary" => {
+            expect_block_order(function, &["entry"])?;
+            expect_instruction_count(function, "entry", 3)?;
+            expect_instruction(
+                function,
+                "entry",
+                0,
+                "js.strict_equal",
+                &["object_left", "object_right"],
+                Some("same_object"),
+            )?;
+            expect_instruction(
+                function,
+                "entry",
+                1,
+                "js.add",
+                &["text", "numeric"],
+                Some("mixed_sum"),
+            )?;
+            expect_instruction(
+                function,
+                "entry",
+                2,
+                "js.call",
+                &["callee", "receiver", "mixed_sum"],
+                Some("call_result"),
+            )?;
+            if expect_terminator(function, "entry", "return")?["value"] != "call_result" {
+                bail!("call boundary return differs from the OGM-30 lowering profile");
+            }
+        }
+        "host_call" => {
+            expect_block_order(function, &["entry"])?;
+            expect_instruction_count(function, "entry", 1)?;
+            let call = &function_block(function, "entry")?["instructions"][0];
+            expect_instruction(function, "entry", 0, "host.call", &["arg"], Some("result"))?;
+            if call["attributes"]["symbol"] != "benchmark.host.echo" {
+                bail!("host capability symbol differs from the OGM-30 lowering profile");
+            }
+            if expect_terminator(function, "entry", "return")?["value"] != "result" {
+                bail!("host capability return differs from the OGM-30 lowering profile");
+            }
+        }
+        _ => bail!("unknown OGM-30 lowering profile: {label}"),
+    }
+    Ok(())
+}
+
 fn load_corpus() -> Result<CoreCorpus> {
     let manifest: JsonValue = serde_json::from_str(include_str!("../fixtures/workloads.json"))?;
     if manifest["contract"] != "ogma.backend-codegen-workloads"
@@ -202,26 +479,33 @@ fn load_corpus() -> Result<CoreCorpus> {
         if entry["fixture"] != path {
             bail!("{label}: fixture path mismatch");
         }
+        let document: JsonValue = serde_json::from_str(raw)?;
+        validate_lowering_profile(label, &document)?;
         let f = parse_fixture(label, raw)?;
-        for op in entry["operations"]
+        let expected_operations: Vec<&str> = entry["operations"]
             .as_array()
             .context("expected operations missing")?
-        {
-            let op = op.as_str().context("invalid expected operation")?;
-            if !f.operations.iter().any(|actual| actual == op) {
-                bail!("{label}: missing Core IR op {op}");
-            }
+            .iter()
+            .map(|operation| operation.as_str().unwrap_or(""))
+            .collect();
+        let actual_operations: Vec<&str> = f.operations.iter().map(String::as_str).collect();
+        if actual_operations != expected_operations {
+            bail!("{label}: Core IR operations differ from the benchmark manifest");
         }
         if let Some(terms) = entry["terminators"].as_array() {
-            for term in terms {
-                let term = term.as_str().context("invalid expected terminator")?;
-                if !f.terminators.iter().any(|actual| actual == term) {
-                    bail!("{label}: missing terminator {term}");
-                }
+            let expected_terminators: Vec<&str> = terms
+                .iter()
+                .map(|terminator| terminator.as_str().unwrap_or(""))
+                .collect();
+            let actual_terminators: Vec<&str> =
+                f.terminators.iter().map(String::as_str).collect();
+            if actual_terminators != expected_terminators {
+                bail!("{label}: Core IR terminators differ from the benchmark manifest");
             }
         }
-        if entry["exception_edge"] == true && !f.exception_edge {
-            bail!("{label}: expected exception edge");
+        let expected_exception_edge = entry["exception_edge"].as_bool().unwrap_or(false);
+        if f.exception_edge != expected_exception_edge {
+            bail!("{label}: Core IR exception-edge metadata differs from the benchmark manifest");
         }
         if let Some(symbol) = entry["host_symbol"].as_str()
             && f.host_symbol.as_deref() != Some(symbol)
@@ -507,11 +791,19 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     Target::initialize_all(&InitializationConfig::default());
     let triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&triple).map_err(|e| anyhow!(e.to_string()))?;
+    let host_cpu = TargetMachine::get_host_cpu_name();
+    let host_features = TargetMachine::get_host_cpu_features();
+    let cpu_name = host_cpu
+        .to_str()
+        .context("LLVM host CPU name is not valid UTF-8")?;
+    let cpu_features = host_features
+        .to_str()
+        .context("LLVM host CPU features are not valid UTF-8")?;
     let tm = target
         .create_target_machine(
             &triple,
-            "generic",
-            "",
+            cpu_name,
+            cpu_features,
             OptimizationLevel::Default,
             RelocMode::PIC,
             CodeModel::Default,
@@ -855,6 +1147,8 @@ struct Report {
     tested_revision: String,
     rustc: String,
     llvm: String,
+    llvm_target_cpu: String,
+    llvm_target_features: String,
     clang: String,
     os: String,
     host_arch: &'static str,
@@ -873,6 +1167,28 @@ struct Report {
     cranelift: BackendReport,
     llvm_backend: BackendReport,
 }
+fn cpu_model() -> String {
+    fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                line.strip_prefix("model name")
+                    .and_then(|value| value.split_once(':').map(|(_, name)| name.trim().to_owned()))
+            })
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unavailable".into())
+}
+
+fn llvm_host_cpu_metadata() -> (String, String) {
+    let cpu = TargetMachine::get_host_cpu_name();
+    let features = TargetMachine::get_host_cpu_features();
+    (
+        cpu.to_str().unwrap_or("unavailable").to_owned(),
+        features.to_str().unwrap_or("unavailable").to_owned(),
+    )
+}
+
 fn command(p: &str, a: &[&str]) -> String {
     Command::new(p)
         .args(a)
@@ -939,7 +1255,7 @@ fn cargo_source_size(prefixes: &[&str]) -> u64 {
 fn cargo_artifact_size(prefix: &str) -> u64 {
     let root = env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target"));
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
     let Ok(e) = fs::read_dir(root.join("release").join("deps")) else {
         return 0;
     };
@@ -983,11 +1299,13 @@ fn main() -> Result<()> {
         tested_revision: o.revision.clone(),
         rustc: command("rustc", &["--version"]),
         llvm: command("llvm-config-18", &["--version"]),
+        llvm_target_cpu: llvm_host_cpu_metadata().0,
+        llvm_target_features: llvm_host_cpu_metadata().1,
         clang: command("clang-18", &["--version"]),
         os: command("uname", &["-sr"]),
         host_arch: env::consts::ARCH,
-        cpu_model: command("lscpu", &["--noheadings", "--parse=MODELNAME"]),
-        build_configuration: "release; Cranelift opt_level=speed; LLVM OptimizationLevel::Default; native target; PIC",
+        cpu_model: cpu_model(),
+        build_configuration: "release; Cranelift opt_level=speed; LLVM OptimizationLevel::Default; host CPU/features matched; PIC",
         iterations_per_sample: o.iterations,
         warmup_rounds: o.warmups,
         measurement_samples: o.samples,
@@ -997,7 +1315,7 @@ fn main() -> Result<()> {
         llvm_binding_source_bytes: cargo_source_size(&["inkwell-", "llvm-sys-181"]),
         cranelift_build_artifact_bytes: cargo_artifact_size("libcranelift_"),
         llvm_binding_build_artifact_bytes: cargo_artifact_size("libinkwell-")
-            + cargo_artifact_size("libllvm_sys_181-"),
+            + cargo_artifact_size("libllvm_sys-"),
         integration_notes: serde_json::json!({"core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixtures",
  "cranelift":"Rust crates and in-process ObjectModule; no external LLVM toolchain",
  "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
@@ -1017,6 +1335,17 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lowering_profile_rejects_core_ir_operand_drift() {
+        let mut document: JsonValue = serde_json::from_str(include_str!(
+            "../../../tests/core-ir/fixtures/positive-call-boundary.json"
+        ))
+        .unwrap();
+        document["function"]["blocks"][0]["instructions"][1]["operands"][0] =
+            JsonValue::String("wrong_value".into());
+        assert!(validate_lowering_profile("call_boundary", &document).is_err());
+    }
+
     #[test]
     fn benchmark_uses_canonical_core_ir_v1_fixtures() {
         let c = load_corpus().unwrap();
