@@ -84,7 +84,7 @@ def validate_schema_instance(value: Any, schema: dict[str, Any], location: str =
         allowed = expected if isinstance(expected, list) else [expected]
         if not any(_matches_type(value, item) for item in allowed):
             _fail(f"{location}: expected type {' or '.join(allowed)}")
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and json.dumps(value, sort_keys=True) != json.dumps(schema["const"], sort_keys=True):
         _fail(f"{location}: expected constant {schema['const']!r}")
     if "enum" in schema and value not in schema["enum"]:
         _fail(f"{location}: value {value!r} is outside enum")
@@ -95,7 +95,7 @@ def validate_schema_instance(value: Any, schema: dict[str, Any], location: str =
         if len(value) > schema.get("maxLength", float("inf")):
             _fail(f"{location}: string exceeds maxLength")
         pattern = schema.get("pattern")
-        if pattern and re.search(pattern, value) is None:
+        if pattern and re.fullmatch(pattern, value) is None:
             _fail(f"{location}: string does not match pattern {pattern!r}")
 
     if isinstance(value, list):
