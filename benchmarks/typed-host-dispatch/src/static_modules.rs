@@ -1714,7 +1714,11 @@ mod tests {
         assert_eq!(declaration_error.code, ModuleDiagnosticCode::StaleBuildPlan);
 
         let other_registry = HostModuleRegistry::new(&functions);
-        let foreign_plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
+        let mut replacement_profile = profile(&["ogma:math"]);
+        replacement_profile
+            .enabled_features
+            .insert("host-modules.v2".to_owned());
+        let foreign_plan = modules.build_profile(&replacement_profile).unwrap();
         let foreign_error = other_registry
             .resolve_import(
                 &foreign_plan,
