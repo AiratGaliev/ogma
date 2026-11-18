@@ -1309,7 +1309,10 @@ fn cargo_artifact_summary(target_directory: &Path, crate_names: &[&str]) -> Buil
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            if crate_names.iter().any(|crate_name| name.contains(crate_name)) {
+            if crate_names
+                .iter()
+                .any(|crate_name| name.contains(crate_name))
+            {
                 summary.files += 1;
                 summary.bytes += entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
                 summary.matching_files.push(
@@ -1376,7 +1379,8 @@ fn main() -> Result<()> {
         llvm_binding_build_artifact_files: llvm_artifacts.files,
         cranelift_build_artifact_search_directory: cranelift_artifacts.search_directory.clone(),
         llvm_binding_build_artifact_search_directory: llvm_artifacts.search_directory.clone(),
-        cranelift_build_artifact_search_directory_exists: cranelift_artifacts.search_directory_exists,
+        cranelift_build_artifact_search_directory_exists: cranelift_artifacts
+            .search_directory_exists,
         llvm_binding_build_artifact_search_directory_exists: llvm_artifacts.search_directory_exists,
         cranelift_build_artifact_matching_files: cranelift_artifacts.matching_files.clone(),
         llvm_binding_build_artifact_matching_files: llvm_artifacts.matching_files.clone(),
