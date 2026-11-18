@@ -1005,7 +1005,6 @@ jobs:
     timeout-minutes: 45
     env:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
-      LLVM_SYS_181_LINK_SHARED: "1"
 
     steps:
       - name: Checkout repository

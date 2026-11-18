@@ -1,8 +1,8 @@
 # OGM-30 — Cranelift ObjectModule vs LLVM
 
 This is an M0 backend-selection benchmark, not a production Ogma compiler or Runtime.
-Both lowerers consume the same versioned benchmark Core IR subset in
-`fixtures/workloads.json`. The subset is deliberately explicit: it covers integer
+Both lowerers read the same versioned benchmark Core IR subset manifest in
+`fixtures/workloads.json`. The manifest supplies the function names, parameter arity and semantic effect annotations to both lowerers; each backend maps the same workload kinds to its own IR instructions. The subset is deliberately explicit: it covers integer
 arithmetic, a real CFG branch, an internal function call, dynamic-operation helper
 dispatch, completion/exception helper dispatch, and a host-call boundary. Dynamic
 operations and completions are represented by explicit helpers; the proof does not
@@ -21,7 +21,7 @@ claim full ECMAScript value semantics.
 
 ## Reproduction
 
-The CI job pins Rust 1.100.0, Cranelift 0.137.1, Inkwell 0.11.0 and LLVM 18.1.
+The CI job pins Rust 1.100.0, Cranelift 0.137.1, Inkwell 0.11.0 and LLVM 18.1 (Inkwell dynamic LLVM linking).
 On Ubuntu 24.04 with `llvm-18-dev`, `clang-18` and `cc` installed:
 
 ```sh

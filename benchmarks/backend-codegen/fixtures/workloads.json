@@ -1,7 +1,7 @@
 {
   "contract": "ogma.backend-benchmark-core-ir",
   "version": "1.0.0",
-  "core_ir_contract": "ogma.core-ir/1.0.0",
+  "core_ir_reference": "ogma.core-ir/1.0.0",
   "semantic_subset": "i64-backed benchmark values; dynamic operations and completions cross explicit runtime-helper boundaries",
   "functions": [
     {"name":"ogma_arithmetic","kind":"arithmetic","params":1,"effects":[]},

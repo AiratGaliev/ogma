@@ -13,7 +13,7 @@ use inkwell::{
     IntPredicate, OptimizationLevel,
 };
 use libloading::Library;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{env, fs, hint::black_box, path::{Path, PathBuf}, process::Command, time::Instant};
 use target_lexicon::Triple;
 
@@ -42,6 +42,52 @@ fn options() -> Result<Options> {
     Ok(o)
 }
 
+#[derive(Deserialize)]
+struct Manifest {
+    contract: String,
+    version: String,
+    core_ir_reference: String,
+    functions: Vec<FunctionSpec>,
+}
+#[derive(Deserialize)]
+struct FunctionSpec {
+    name: String,
+    kind: String,
+    params: usize,
+    effects: Vec<String>,
+}
+fn load_manifest() -> Result<Manifest> {
+    let manifest: Manifest = serde_json::from_str(include_str!("../fixtures/workloads.json"))?;
+    if manifest.contract != "ogma.backend-benchmark-core-ir" || manifest.version != "1.0.0"
+        || manifest.core_ir_reference != "ogma.core-ir/1.0.0" {
+        bail!("unsupported benchmark Core IR manifest contract/version");
+    }
+    let required = ["arithmetic","control_flow","internal_callee","internal_call","dynamic_add","completion","host_call"];
+    for kind in required {
+        let matches: Vec<_> = manifest.functions.iter().filter(|f| f.kind == kind).collect();
+        if matches.len() != 1 { bail!("manifest must contain exactly one {kind} workload"); }
+        let expected_params = if kind == "dynamic_add" { 2 } else { 1 };
+        if matches[0].params != expected_params { bail!("invalid parameter count for {kind}"); }
+        let required_effects: &[&str] = match kind {
+            "dynamic_add" => &["may_call_host", "may_throw"],
+            "completion" => &["may_call_host", "may_throw"],
+            "host_call" => &["may_call_host", "may_reenter"],
+            "internal_call" => &["may_call_host"],
+            _ => &[],
+        };
+        for effect in required_effects {
+            if !matches[0].effects.iter().any(|actual| actual == effect) {
+                bail!("missing {effect} effect for {kind}");
+            }
+        }
+    }
+    Ok(manifest)
+}
+fn workload_name<'a>(manifest: &'a Manifest, kind: &str) -> Result<&'a str> {
+    manifest.functions.iter().find(|f| f.kind == kind).map(|f| f.name.as_str())
+        .ok_or_else(|| anyhow!("missing workload kind {kind}"))
+}
+
 fn define_clif<F>(m: &mut ObjectModule, id: FuncId, sig: Signature, build: F) -> Result<()>
 where F: FnOnce(&mut ObjectModule, &mut FunctionBuilder<'_>, &[Value]) -> Result<Vec<Value>> {
     let mut ctx = m.make_context();
@@ -64,7 +110,7 @@ where F: FnOnce(&mut ObjectModule, &mut FunctionBuilder<'_>, &[Value]) -> Result
     Ok(())
 }
 
-fn compile_cranelift(path: &Path) -> Result<u64> {
+fn compile_cranelift(path: &Path, manifest: &Manifest) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
     flags.set("opt_level", "speed")?;
@@ -75,13 +121,13 @@ fn compile_cranelift(path: &Path) -> Result<u64> {
     let mut b = m.make_signature();
     b.params.push(AbiParam::new(types::I64)); b.params.push(AbiParam::new(types::I64));
     b.returns.push(AbiParam::new(types::I64));
-    let arithmetic = m.declare_function("ogma_arithmetic", Linkage::Export, &u)?;
-    let branch = m.declare_function("ogma_branch", Linkage::Export, &u)?;
-    let internal = m.declare_function("ogma_internal", Linkage::Export, &u)?;
-    let internal_call = m.declare_function("ogma_internal_call", Linkage::Export, &u)?;
-    let dynamic = m.declare_function("ogma_dynamic_add", Linkage::Export, &b)?;
-    let completion = m.declare_function("ogma_completion", Linkage::Export, &u)?;
-    let host = m.declare_function("ogma_host_call", Linkage::Export, &u)?;
+    let arithmetic = m.declare_function(workload_name(manifest, "arithmetic")?, Linkage::Export, &u)?;
+    let branch = m.declare_function(workload_name(manifest, "control_flow")?, Linkage::Export, &u)?;
+    let internal = m.declare_function(workload_name(manifest, "internal_callee")?, Linkage::Export, &u)?;
+    let internal_call = m.declare_function(workload_name(manifest, "internal_call")?, Linkage::Export, &u)?;
+    let dynamic = m.declare_function(workload_name(manifest, "dynamic_add")?, Linkage::Export, &b)?;
+    let completion = m.declare_function(workload_name(manifest, "completion")?, Linkage::Export, &u)?;
+    let host = m.declare_function(workload_name(manifest, "host_call")?, Linkage::Export, &u)?;
     let dyn_helper = m.declare_function("ogma_dynamic_add_helper", Linkage::Import, &b)?;
     let completion_helper = m.declare_function("ogma_completion_helper", Linkage::Import, &u)?;
     let host_helper = m.declare_function("ogma_host_call_helper", Linkage::Import, &u)?;
@@ -142,7 +188,7 @@ fn llvm_call<'ctx>(b: &inkwell::builder::Builder<'ctx>, f: inkwell::values::Func
         .context("call did not return a value")?.into_int_value())
 }
 
-fn compile_llvm(path: &Path) -> Result<u64> {
+fn compile_llvm(path: &Path, manifest: &Manifest) -> Result<u64> {
     let start = Instant::now();
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| anyhow!("LLVM target init: {e}"))?;
@@ -159,14 +205,14 @@ fn compile_llvm(path: &Path) -> Result<u64> {
     let u = i64t.fn_type(&[i64t.into()], false);
     let pair = i64t.fn_type(&[i64t.into(), i64t.into()], false);
 
-    let f = module.add_function("ogma_arithmetic", u, None);
+    let f = module.add_function(workload_name(manifest, "arithmetic")?, u, None);
     b.position_at_end(cx.append_basic_block(f, "entry"));
     let x = f.get_nth_param(0).unwrap().into_int_value();
     let v = b.build_int_mul(x, i64t.const_int(3, false), "mul")?;
     let v = b.build_int_add(v, i64t.const_int(7, false), "add")?;
     b.build_return(Some(&v))?;
 
-    let f = module.add_function("ogma_branch", u, None);
+    let f = module.add_function(workload_name(manifest, "control_flow")?, u, None);
     let entry = cx.append_basic_block(f, "entry");
     let yes = cx.append_basic_block(f, "negative");
     let no = cx.append_basic_block(f, "non_negative");
@@ -188,33 +234,33 @@ fn compile_llvm(path: &Path) -> Result<u64> {
     phi.add_incoming(&[(&neg, yes_end), (&dbl, no_end)]);
     b.build_return(Some(&phi.as_basic_value().into_int_value()))?;
 
-    let internal = module.add_function("ogma_internal", u, None);
+    let internal = module.add_function(workload_name(manifest, "internal_callee")?, u, None);
     b.position_at_end(cx.append_basic_block(internal, "entry"));
     let x = internal.get_nth_param(0).unwrap().into_int_value();
     let v = b.build_int_mul(x, i64t.const_int(2, false), "mul")?;
     let v = b.build_int_add(v, i64t.const_int(1, false), "add")?;
     b.build_return(Some(&v))?;
-    let caller = module.add_function("ogma_internal_call", u, None);
+    let caller = module.add_function(workload_name(manifest, "internal_call")?, u, None);
     b.position_at_end(cx.append_basic_block(caller, "entry"));
     let x = caller.get_nth_param(0).unwrap().into_int_value();
     let v = llvm_call(&b, internal, &[x.into()], "call")?;
     b.build_return(Some(&v))?;
 
     let dh = module.add_function("ogma_dynamic_add_helper", pair, None);
-    let caller = module.add_function("ogma_dynamic_add", pair, None);
+    let caller = module.add_function(workload_name(manifest, "dynamic_add")?, pair, None);
     b.position_at_end(cx.append_basic_block(caller, "entry"));
     let a = caller.get_nth_param(0).unwrap().into_int_value();
     let c = caller.get_nth_param(1).unwrap().into_int_value();
     let v = llvm_call(&b, dh, &[a.into(), c.into()], "dynamic")?;
     b.build_return(Some(&v))?;
     let ch = module.add_function("ogma_completion_helper", u, None);
-    let caller = module.add_function("ogma_completion", u, None);
+    let caller = module.add_function(workload_name(manifest, "completion")?, u, None);
     b.position_at_end(cx.append_basic_block(caller, "entry"));
     let x = caller.get_nth_param(0).unwrap().into_int_value();
     let v = llvm_call(&b, ch, &[x.into()], "completion")?;
     b.build_return(Some(&v))?;
     let hh = module.add_function("ogma_host_call_helper", u, None);
-    let caller = module.add_function("ogma_host_call", u, None);
+    let caller = module.add_function(workload_name(manifest, "host_call")?, u, None);
     b.position_at_end(cx.append_basic_block(caller, "entry"));
     let x = caller.get_nth_param(0).unwrap().into_int_value();
     let v = llvm_call(&b, hh, &[x.into()], "host")?;
@@ -282,37 +328,37 @@ struct BackendReport {
     compile_time_ns: Distribution, link_time_ns: u64, object_bytes: u64, shared_library_bytes: u64,
     workloads: serde_json::Value,
 }
-fn compile_rounds(backend: &str, root: &Path) -> Result<(Vec<f64>, PathBuf)> {
+fn compile_rounds(backend: &str, root: &Path, manifest: &Manifest) -> Result<(Vec<f64>, PathBuf)> {
     let mut samples = Vec::new(); let mut last = PathBuf::new();
     for n in 0..5 {
         last = root.join(format!("{backend}-{n}.o"));
-        let elapsed = if backend == "cranelift" { compile_cranelift(&last)? } else { compile_llvm(&last)? };
+        let elapsed = if backend == "cranelift" { compile_cranelift(&last, manifest)? } else { compile_llvm(&last, manifest)? };
         samples.push(elapsed as f64);
     }
     Ok((samples, last))
 }
-fn run_backend(name: &str, o: &Options, root: &Path) -> Result<BackendReport> {
-    let (compile, object) = compile_rounds(name, root)?;
+fn run_backend(name: &str, o: &Options, root: &Path, manifest: &Manifest) -> Result<BackendReport> {
+    let (compile, object) = compile_rounds(name, root, manifest)?;
     let shared = root.join(format!("{name}.so"));
     let helper = root.join(format!("{name}-helpers.c"));
     let link_time_ns = link(&object, &shared, &helper)?;
     let lib = unsafe { Library::new(&shared)? };
     let workloads = serde_json::json!({
-        "arithmetic": bench_unary(&lib,b"ogma_arithmetic",13,o)?,
-        "control_flow": bench_unary(&lib,b"ogma_branch",-13,o)?,
-        "internal_call": bench_unary(&lib,b"ogma_internal_call",13,o)?,
-        "dynamic_operation_helper": bench_binary(&lib,b"ogma_dynamic_add",o)?,
+        "arithmetic": bench_unary(&lib,workload_name(manifest, "arithmetic")?.as_bytes(),13,o)?,
+        "control_flow": bench_unary(&lib,workload_name(manifest, "control_flow")?.as_bytes(),-13,o)?,
+        "internal_call": bench_unary(&lib,workload_name(manifest, "internal_call")?.as_bytes(),13,o)?,
+        "dynamic_operation_helper": bench_binary(&lib,workload_name(manifest, "dynamic_add")?.as_bytes(),o)?,
         "dynamic_helper_direct": bench_binary(&lib,b"ogma_dynamic_add_helper",o)?,
-        "exception_completion_helper": bench_unary(&lib,b"ogma_completion",-13,o)?,
-        "host_call_helper": bench_unary(&lib,b"ogma_host_call",13,o)?,
+        "exception_completion_helper": bench_unary(&lib,workload_name(manifest, "completion")?.as_bytes(),-13,o)?,
+        "host_call_helper": bench_unary(&lib,workload_name(manifest, "host_call")?.as_bytes(),13,o)?,
         "host_helper_direct": bench_unary(&lib,b"ogma_host_call_helper",13,o)?
     });
-    let arithmetic: Unary = unsafe { *lib.get(b"ogma_arithmetic")? };
-    let branch: Unary = unsafe { *lib.get(b"ogma_branch")? };
-    let internal: Unary = unsafe { *lib.get(b"ogma_internal_call")? };
-    let completion: Unary = unsafe { *lib.get(b"ogma_completion")? };
-    let host: Unary = unsafe { *lib.get(b"ogma_host_call")? };
-    let dynamic: Binary = unsafe { *lib.get(b"ogma_dynamic_add")? };
+    let arithmetic: Unary = unsafe { *lib.get(workload_name(manifest, "arithmetic")?.as_bytes())? };
+    let branch: Unary = unsafe { *lib.get(workload_name(manifest, "control_flow")?.as_bytes())? };
+    let internal: Unary = unsafe { *lib.get(workload_name(manifest, "internal_call")?.as_bytes())? };
+    let completion: Unary = unsafe { *lib.get(workload_name(manifest, "completion")?.as_bytes())? };
+    let host: Unary = unsafe { *lib.get(workload_name(manifest, "host_call")?.as_bytes())? };
+    let dynamic: Binary = unsafe { *lib.get(workload_name(manifest, "dynamic_add")?.as_bytes())? };
     for x in [-9_i64,-1,0,1,17,1024] {
         if unsafe { arithmetic(x) } != x.wrapping_mul(3).wrapping_add(7) { bail!("{name}: arithmetic mismatch"); }
         if unsafe { branch(x) } != if x < 0 { -x } else { x * 2 } { bail!("{name}: branch mismatch"); }
@@ -355,8 +401,9 @@ fn main() -> Result<()> {
     let o = options()?;
     let root = env::temp_dir().join(format!("ogm30-{}", std::process::id()));
     fs::create_dir_all(&root)?;
-    let cranelift = run_backend("cranelift",&o,&root)?;
-    let llvm_backend = run_backend("llvm",&o,&root)?;
+    let manifest = load_manifest()?;
+    let cranelift = run_backend("cranelift",&o,&root,&manifest)?;
+    let llvm_backend = run_backend("llvm",&o,&root,&manifest)?;
     let footprint = Command::new("dpkg-query")
         .args(["-W","-f=\${Installed-Size}\\n","llvm-18-dev","llvm-18","clang-18"])
         .output().ok().filter(|x|x.status.success())
@@ -387,13 +434,8 @@ fn main() -> Result<()> {
 mod tests {
     #[test]
     fn benchmark_manifest_is_versioned_and_covers_required_workloads() {
-        let m: serde_json::Value = serde_json::from_str(include_str!("../fixtures/workloads.json")).unwrap();
-        assert_eq!(m["contract"],"ogma.backend-benchmark-core-ir");
-        assert_eq!(m["version"],"1.0.0");
-        let kinds: Vec<&str> = m["functions"].as_array().unwrap().iter()
-            .map(|f|f["kind"].as_str().unwrap()).collect();
-        for required in ["arithmetic","control_flow","internal_callee","internal_call","dynamic_add","completion","host_call"] {
-            assert!(kinds.contains(&required),"missing workload {required}");
-        }
+        let manifest = load_manifest().unwrap();
+        assert_eq!(manifest.functions.len(), 7);
+        assert!(manifest.functions.iter().all(|f| !f.name.is_empty()));
     }
 }
