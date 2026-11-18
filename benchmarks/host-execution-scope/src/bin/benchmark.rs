@@ -270,7 +270,9 @@ where
         p95_ns: percentile(&latency_samples, 0.95),
         p99_ns: percentile(&latency_samples, 0.99),
         min_ns: latency_samples[0],
-        max_ns: *latency_samples.last().expect("latency samples are non-empty"),
+        max_ns: *latency_samples
+            .last()
+            .expect("latency samples are non-empty"),
         batch_p50_ns,
         batch_p95_ns: percentile(&batch_samples, 0.95),
         batch_p99_ns: percentile(&batch_samples, 0.99),
@@ -446,7 +448,6 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-
 struct TimerOverhead {
     p50_ns: f64,
     p95_ns: f64,
@@ -539,8 +540,16 @@ fn build_report(
         config.iterations
     );
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
-    let _ = writeln!(output, "    \"batch_measurement_samples\": {}", config.samples);
-    let _ = writeln!(output, "    \"single_iteration_latency_samples\": {}", config.iterations);
+    let _ = writeln!(
+        output,
+        "    \"batch_measurement_samples\": {}",
+        config.samples
+    );
+    let _ = writeln!(
+        output,
+        "    \"single_iteration_latency_samples\": {}",
+        config.iterations
+    );
     let _ = writeln!(output, "  }},");
     let _ = writeln!(
         output,
