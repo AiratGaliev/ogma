@@ -381,6 +381,14 @@ impl<'a> HostModuleRegistry<'a> {
                 )
             })?;
         for export in module.exports.values() {
+            if export.slot.slot_generation == u32::MAX {
+                return Err(ModuleDiagnostic::new(
+                    ModuleDiagnosticCode::FunctionRegistrationFailed,
+                    specifier,
+                    "",
+                    "slot generation is exhausted; no exports were unregistered",
+                ));
+            }
             self.functions.snapshot(export.slot).map_err(|error| {
                 ModuleDiagnostic::new(
                     ModuleDiagnosticCode::FunctionRegistrationFailed,
@@ -390,18 +398,28 @@ impl<'a> HostModuleRegistry<'a> {
                 )
             })?;
         }
+
+        let mut cleanup_errors = Vec::new();
         for export in module.exports.values() {
-            self.functions.unregister(export.slot).map_err(|error| {
-                ModuleDiagnostic::new(
-                    ModuleDiagnosticCode::FunctionRegistrationFailed,
-                    specifier,
-                    "",
-                    format!("{error:?}"),
-                )
-            })?;
+            if let Err(error) = self.functions.unregister(export.slot) {
+                cleanup_errors.push(format!("{error:?}"));
+            }
         }
         self.modules.borrow_mut().remove(specifier);
-        Ok(())
+
+        if cleanup_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ModuleDiagnostic::new(
+                ModuleDiagnosticCode::FunctionRegistrationFailed,
+                specifier,
+                "",
+                format!(
+                    "module exports were unregistered, but ABI cleanup failed: {}",
+                    cleanup_errors.join(", ")
+                ),
+            ))
+        }
     }
 
     pub fn module_version(&self, specifier: &str) -> Option<String> {
@@ -1393,6 +1411,20 @@ mod tests {
 
         let error = modules.register(descriptor).unwrap_err();
         assert_eq!(error.code, ModuleDiagnosticCode::FunctionRegistrationFailed);
+        assert_eq!(functions.metrics().active_slots, 0);
+        assert_eq!(modules.module_version("ogma:math"), None);
+    }
+
+    #[test]
+    fn unregister_removes_module_metadata_and_all_function_slots() {
+        let functions = HostFunctionRegistry::new().unwrap();
+        let modules = HostModuleRegistry::new(&functions);
+        modules.register(math_module()).unwrap();
+        assert_eq!(functions.metrics().active_slots, 3);
+        assert_eq!(modules.module_version("ogma:math").as_deref(), Some("1.0.0"));
+
+        modules.unregister("ogma:math").unwrap();
+
         assert_eq!(functions.metrics().active_slots, 0);
         assert_eq!(modules.module_version("ogma:math"), None);
     }
