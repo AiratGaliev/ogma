@@ -391,6 +391,7 @@ pub struct InterpreterFrame {
     pub function: String,
     pub closure_environment: Vec<GcRef>,
     pub locals: Vec<JsValue>,
+    pub operand_stack: Vec<JsValue>,
 }
 
 impl InterpreterFrame {
@@ -398,20 +399,27 @@ impl InterpreterFrame {
         function: impl Into<String>,
         closure_environment: Vec<GcRef>,
         locals: Vec<JsValue>,
+        operand_stack: Vec<JsValue>,
     ) -> Self {
         Self {
             function: function.into(),
             closure_environment,
             locals,
+            operand_stack,
         }
     }
 
     fn roots(&self) -> Vec<GcRef> {
         let mut roots = self.closure_environment.clone();
-        roots.extend(self.locals.iter().filter_map(|value| match value {
-            JsValue::Managed(reference) => Some(*reference),
-            JsValue::Undefined | JsValue::Boolean(_) | JsValue::Number(_) => None,
-        }));
+        roots.extend(
+            self.locals
+                .iter()
+                .chain(self.operand_stack.iter())
+                .filter_map(|value| match value {
+                    JsValue::Managed(reference) => Some(*reference),
+                    JsValue::Undefined | JsValue::Boolean(_) | JsValue::Number(_) => None,
+                }),
+        );
         roots
     }
 }
@@ -1204,6 +1212,7 @@ mod tests {
     fn gc_enumerates_interpreter_native_and_persistent_host_roots() {
         let mut heap = GcHeap::default();
         let interpreter_local = heap.allocate();
+        let interpreter_operand = heap.allocate();
         let closure_capture = heap.allocate();
         let native_local = heap.allocate();
         let host_retained = heap.allocate();
@@ -1217,6 +1226,7 @@ mod tests {
             "closure",
             vec![closure_capture],
             vec![JsValue::Managed(interpreter_local)],
+            vec![JsValue::Managed(interpreter_operand)],
         ));
 
         let frame = native_frame(native_local, SafepointId(0), Vec::new());
@@ -1227,9 +1237,10 @@ mod tests {
             .expect("host handle retained");
 
         let report = roots.collect(&mut heap).expect("collection succeeds");
-        assert_eq!(report.roots_scanned, 4);
+        assert_eq!(report.roots_scanned, 5);
         assert_eq!(report.objects_reclaimed, 1);
         assert!(heap.is_alive(interpreter_local));
+        assert!(heap.is_alive(interpreter_operand));
         assert!(heap.is_alive(closure_capture));
         assert!(heap.is_alive(native_local));
         assert!(heap.is_alive(host_retained));

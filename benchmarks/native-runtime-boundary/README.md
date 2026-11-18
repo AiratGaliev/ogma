@@ -4,7 +4,7 @@ This is a dependency-free M0 model of the cross-backend root and execution-bound
 
 ## Covered
 
-- non-moving mark/sweep root enumeration across interpreter frames/closure captures, native shadow-frame maps and persistent host handles;
+- non-moving mark/sweep root enumeration across interpreter locals, operand stack, closure captures, native shadow-frame maps and persistent host handles;
 - exact per-safepoint native root-map validation and strict LIFO frame lifecycle;
 - Native → Interpreter → Host callback → reentrant Interpreter activation transitions with pending completion roots, managed caller-local roots and host-result promotion verified against the matching persistent handle;
 - explicit Normal/Return/Break/Continue/Throw completion propagation, captured throw activation traces and source/closure context;
