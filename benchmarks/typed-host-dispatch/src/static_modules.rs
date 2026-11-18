@@ -3,8 +3,9 @@
 //! This layer composes the OGM-19 ABI and OGM-21 function table. It is not a
 //! production module loader or ECMAScript module implementation.
 
-use super::{HostFunctionDescriptor, HostFunctionRegistry,
-    HostFunctionSignature, HostFunctionSlot};
+use super::{
+    HostFunctionDescriptor, HostFunctionRegistry, HostFunctionSignature, HostFunctionSlot,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -21,7 +22,10 @@ pub struct HostCapabilityRequirement {
 
 impl HostCapabilityRequirement {
     pub fn new(name: impl Into<String>, bit: u8) -> Self {
-        Self { name: name.into(), bit }
+        Self {
+            name: name.into(),
+            bit,
+        }
     }
 }
 
@@ -122,7 +126,12 @@ impl ModuleDiagnostic {
         subject: impl Into<String>,
         detail: impl Into<String>,
     ) -> Self {
-        Self { code, module: module.into(), subject: subject.into(), detail: detail.into() }
+        Self {
+            code,
+            module: module.into(),
+            subject: subject.into(),
+            detail: detail.into(),
+        }
     }
 }
 
@@ -133,8 +142,16 @@ impl fmt::Display for ModuleDiagnostic {
             "{}: module '{}'{}{}",
             self.code.as_str(),
             self.module,
-            if self.subject.is_empty() { String::new() } else { format!(" [{}]", self.subject) },
-            if self.detail.is_empty() { String::new() } else { format!(": {}", self.detail) },
+            if self.subject.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", self.subject)
+            },
+            if self.detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", self.detail)
+            },
         )
     }
 }
@@ -260,14 +277,17 @@ impl<'a> HostModuleRegistry<'a> {
             let mut function = export.function;
             let mut all_capabilities = descriptor.required_capabilities.clone();
             all_capabilities.extend(export.required_capabilities.iter().cloned());
-            let expected_mask = capabilities_mask(&all_capabilities)
-                .map_err(|reason| ModuleDiagnostic::new(
+            let expected_mask = capabilities_mask(&all_capabilities).map_err(|reason| {
+                ModuleDiagnostic::new(
                     ModuleDiagnosticCode::InvalidCapability,
                     &descriptor.specifier,
                     &export.name,
                     reason,
-                ))?;
-            if function.required_capabilities != 0 && function.required_capabilities != expected_mask {
+                )
+            })?;
+            if function.required_capabilities != 0
+                && function.required_capabilities != expected_mask
+            {
                 for slot in registered_slots.iter().rev() {
                     let _ = self.functions.unregister(*slot);
                 }
@@ -280,13 +300,15 @@ impl<'a> HostModuleRegistry<'a> {
             }
             function.required_capabilities = expected_mask;
 
-            let signature = HostFunctionSignature::from_abi_tag(function.signature)
-                .ok_or_else(|| ModuleDiagnostic::new(
-                    ModuleDiagnosticCode::InvalidDescriptor,
-                    &descriptor.specifier,
-                    &export.name,
-                    "unknown host function signature",
-                ))?;
+            let signature =
+                HostFunctionSignature::from_abi_tag(function.signature).ok_or_else(|| {
+                    ModuleDiagnostic::new(
+                        ModuleDiagnosticCode::InvalidDescriptor,
+                        &descriptor.specifier,
+                        &export.name,
+                        "unknown host function signature",
+                    )
+                })?;
             let slot = match self.functions.register(function) {
                 Ok(slot) => slot,
                 Err(error) => {
@@ -302,23 +324,29 @@ impl<'a> HostModuleRegistry<'a> {
                 }
             };
             registered_slots.push(slot);
-            exports.insert(export.name.clone(), RegisteredExport {
-                slot,
-                signature,
-                binding: export.binding,
-                required_capabilities: export.required_capabilities.clone(),
-                required_features: export.required_features.iter().cloned().collect(),
-            });
+            exports.insert(
+                export.name.clone(),
+                RegisteredExport {
+                    slot,
+                    signature,
+                    binding: export.binding,
+                    required_capabilities: export.required_capabilities.clone(),
+                    required_features: export.required_features.iter().cloned().collect(),
+                },
+            );
         }
 
-        self.modules.borrow_mut().insert(descriptor.specifier, RegisteredModule {
-            version: descriptor.version,
-            required_capabilities: descriptor.required_capabilities,
-            required_features: descriptor.required_features.into_iter().collect(),
-            dependencies: descriptor.dependencies.into_iter().collect(),
-            native_dependencies: descriptor.native_dependencies.into_iter().collect(),
-            exports,
-        });
+        self.modules.borrow_mut().insert(
+            descriptor.specifier,
+            RegisteredModule {
+                version: descriptor.version,
+                required_capabilities: descriptor.required_capabilities,
+                required_features: descriptor.required_features.into_iter().collect(),
+                dependencies: descriptor.dependencies.into_iter().collect(),
+                native_dependencies: descriptor.native_dependencies.into_iter().collect(),
+                exports,
+            },
+        );
         Ok(())
     }
 
@@ -339,14 +367,19 @@ impl<'a> HostModuleRegistry<'a> {
                 "module cannot be unregistered while a host dispatch is active",
             ));
         }
-        let module = self.modules.borrow().get(specifier).cloned().ok_or_else(|| {
-            ModuleDiagnostic::new(
-                ModuleDiagnosticCode::UnknownModule,
-                specifier,
-                "",
-                "module is not registered",
-            )
-        })?;
+        let module = self
+            .modules
+            .borrow()
+            .get(specifier)
+            .cloned()
+            .ok_or_else(|| {
+                ModuleDiagnostic::new(
+                    ModuleDiagnosticCode::UnknownModule,
+                    specifier,
+                    "",
+                    "module is not registered",
+                )
+            })?;
         for export in module.exports.values() {
             self.functions.snapshot(export.slot).map_err(|error| {
                 ModuleDiagnostic::new(
@@ -372,10 +405,16 @@ impl<'a> HostModuleRegistry<'a> {
     }
 
     pub fn module_version(&self, specifier: &str) -> Option<String> {
-        self.modules.borrow().get(specifier).map(|module| module.version.clone())
+        self.modules
+            .borrow()
+            .get(specifier)
+            .map(|module| module.version.clone())
     }
 
-    fn validate_descriptor(&self, descriptor: &HostModuleDescriptor) -> Result<(), ModuleDiagnostic> {
+    fn validate_descriptor(
+        &self,
+        descriptor: &HostModuleDescriptor,
+    ) -> Result<(), ModuleDiagnostic> {
         let fail = |code, subject: &str, detail: &str| {
             ModuleDiagnostic::new(code, &descriptor.specifier, subject, detail)
         };
@@ -413,11 +452,31 @@ impl<'a> HostModuleRegistry<'a> {
             .map_err(|reason| fail(ModuleDiagnosticCode::InvalidCapability, "", &reason))?;
         validate_feature_names(&descriptor.required_features)
             .map_err(|reason| fail(ModuleDiagnosticCode::InvalidFeature, "", &reason))?;
-        validate_unique_strings(&descriptor.dependencies, |value| valid_module_specifier(value))
-            .map_err(|reason| fail(ModuleDiagnosticCode::InvalidDependency, "dependencies", &reason))?;
-        validate_unique_strings(&descriptor.native_dependencies, |value| valid_native_dependency(value))
-            .map_err(|reason| fail(ModuleDiagnosticCode::InvalidDependency, "nativeDependencies", &reason))?;
-        if descriptor.dependencies.iter().any(|dependency| dependency == &descriptor.specifier) {
+        validate_unique_strings(&descriptor.dependencies, |value| {
+            valid_module_specifier(value)
+        })
+        .map_err(|reason| {
+            fail(
+                ModuleDiagnosticCode::InvalidDependency,
+                "dependencies",
+                &reason,
+            )
+        })?;
+        validate_unique_strings(&descriptor.native_dependencies, |value| {
+            valid_native_dependency(value)
+        })
+        .map_err(|reason| {
+            fail(
+                ModuleDiagnosticCode::InvalidDependency,
+                "nativeDependencies",
+                &reason,
+            )
+        })?;
+        if descriptor
+            .dependencies
+            .iter()
+            .any(|dependency| dependency == &descriptor.specifier)
+        {
             return Err(fail(
                 ModuleDiagnosticCode::InvalidDependency,
                 "dependencies",
@@ -441,14 +500,17 @@ impl<'a> HostModuleRegistry<'a> {
                     "export name occurs more than once",
                 ));
             }
-            validate_feature_names(&export.required_features)
-                .map_err(|reason| fail(ModuleDiagnosticCode::InvalidFeature, &export.name, &reason))?;
+            validate_feature_names(&export.required_features).map_err(|reason| {
+                fail(ModuleDiagnosticCode::InvalidFeature, &export.name, &reason)
+            })?;
             let expected_name = format!("{}/{}", descriptor.specifier, export.name);
-            let actual_name = export.function.name().map_err(|error| fail(
-                ModuleDiagnosticCode::InvalidDescriptor,
-                &export.name,
-                &format!("invalid function descriptor name: {error:?}"),
-            ))?;
+            let actual_name = export.function.name().map_err(|error| {
+                fail(
+                    ModuleDiagnosticCode::InvalidDescriptor,
+                    &export.name,
+                    &format!("invalid function descriptor name: {error:?}"),
+                )
+            })?;
             if actual_name != expected_name {
                 return Err(fail(
                     ModuleDiagnosticCode::InvalidDescriptor,
@@ -456,15 +518,24 @@ impl<'a> HostModuleRegistry<'a> {
                     &format!("function name must be '{expected_name}'"),
                 ));
             }
-            self.functions.validate_descriptor(&export.function).map_err(|error| fail(
-                ModuleDiagnosticCode::InvalidDescriptor,
-                &export.name,
-                &format!("invalid function descriptor: {error:?}"),
-            ))?;
+            self.functions
+                .validate_descriptor(&export.function)
+                .map_err(|error| {
+                    fail(
+                        ModuleDiagnosticCode::InvalidDescriptor,
+                        &export.name,
+                        &format!("invalid function descriptor: {error:?}"),
+                    )
+                })?;
             let mut requirements = descriptor.required_capabilities.clone();
             requirements.extend(export.required_capabilities.iter().cloned());
-            let expected_mask = capabilities_mask(&requirements)
-                .map_err(|reason| fail(ModuleDiagnosticCode::InvalidCapability, &export.name, &reason))?;
+            let expected_mask = capabilities_mask(&requirements).map_err(|reason| {
+                fail(
+                    ModuleDiagnosticCode::InvalidCapability,
+                    &export.name,
+                    &reason,
+                )
+            })?;
             if export.function.required_capabilities != 0
                 && export.function.required_capabilities != expected_mask
             {
@@ -507,19 +578,31 @@ impl<'a> HostModuleRegistry<'a> {
                 0
             }
         };
-        let grant_map: BTreeMap<String, u8> = profile.granted_capabilities.iter()
+        let grant_map: BTreeMap<String, u8> = profile
+            .granted_capabilities
+            .iter()
             .map(|capability| (capability.name.clone(), capability.bit))
             .collect();
         let profile_features = profile.enabled_features.iter().cloned().collect::<Vec<_>>();
         if let Err(reason) = validate_feature_names(&profile_features) {
             diagnostics.push(ModuleDiagnostic::new(
-                ModuleDiagnosticCode::InvalidFeature, "", "profile.enabledFeatures", reason
+                ModuleDiagnosticCode::InvalidFeature,
+                "",
+                "profile.enabledFeatures",
+                reason,
             ));
         }
-        let native_grants = profile.enabled_native_dependencies.iter().cloned().collect::<Vec<_>>();
+        let native_grants = profile
+            .enabled_native_dependencies
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         if let Err(reason) = validate_unique_strings(&native_grants, valid_native_dependency) {
             diagnostics.push(ModuleDiagnostic::new(
-                ModuleDiagnosticCode::InvalidDependency, "", "profile.enabledNativeDependencies", reason
+                ModuleDiagnosticCode::InvalidDependency,
+                "",
+                "profile.enabledNativeDependencies",
+                reason,
             ));
         }
 
@@ -658,7 +741,8 @@ impl<'a> HostModuleRegistry<'a> {
             }
         }
 
-        let stripped_modules = modules.keys()
+        let stripped_modules = modules
+            .keys()
             .filter(|specifier| !included.contains(*specifier))
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -692,7 +776,9 @@ impl<'a> HostModuleRegistry<'a> {
             ModuleImportKind::NamespaceEsm => Some(GenericFallbackReason::NamespaceBinding),
             ModuleImportKind::DynamicImport => Some(GenericFallbackReason::DynamicImport),
             ModuleImportKind::CommonJsRequire => Some(GenericFallbackReason::CommonJsInterop),
-            ModuleImportKind::DynamicPropertyAccess => Some(GenericFallbackReason::DynamicPropertyAccess),
+            ModuleImportKind::DynamicPropertyAccess => {
+                Some(GenericFallbackReason::DynamicPropertyAccess)
+            }
         };
         if let Some(reason) = fallback {
             return Ok(ModuleImportResolution::GenericFallback(reason));
@@ -706,24 +792,30 @@ impl<'a> HostModuleRegistry<'a> {
             ));
         }
         let modules = self.modules.borrow();
-        let module = modules.get(specifier).ok_or_else(|| ModuleDiagnostic::new(
-            ModuleDiagnosticCode::UnknownModule,
-            specifier,
-            "",
-            "module is not registered",
-        ))?;
-        let name = export_name.ok_or_else(|| ModuleDiagnostic::new(
-            ModuleDiagnosticCode::InvalidDescriptor,
-            specifier,
-            "",
-            "static named import requires an export name",
-        ))?;
-        let export = module.exports.get(name).ok_or_else(|| ModuleDiagnostic::new(
-            ModuleDiagnosticCode::UnknownExport,
-            specifier,
-            name,
-            "static import references an unknown export",
-        ))?;
+        let module = modules.get(specifier).ok_or_else(|| {
+            ModuleDiagnostic::new(
+                ModuleDiagnosticCode::UnknownModule,
+                specifier,
+                "",
+                "module is not registered",
+            )
+        })?;
+        let name = export_name.ok_or_else(|| {
+            ModuleDiagnostic::new(
+                ModuleDiagnosticCode::InvalidDescriptor,
+                specifier,
+                "",
+                "static named import requires an export name",
+            )
+        })?;
+        let export = module.exports.get(name).ok_or_else(|| {
+            ModuleDiagnostic::new(
+                ModuleDiagnosticCode::UnknownExport,
+                specifier,
+                name,
+                "static import references an unknown export",
+            )
+        })?;
         for feature in &export.required_features {
             if !plan.enabled_features.contains(feature) {
                 return Err(ModuleDiagnostic::new(
@@ -734,7 +826,9 @@ impl<'a> HostModuleRegistry<'a> {
                 ));
             }
         }
-        let mut missing = export.required_capabilities.iter()
+        let mut missing = export
+            .required_capabilities
+            .iter()
             .filter(|required| plan_capability_bit(plan, &required.name) != Some(required.bit))
             .map(|required| required.name.clone())
             .collect::<Vec<_>>();
@@ -749,10 +843,12 @@ impl<'a> HostModuleRegistry<'a> {
             ));
         }
         match export.binding {
-            HostExportBinding::ImmutableHostFunction => Ok(ModuleImportResolution::StaticFunctionSlot {
-                slot: export.slot,
-                signature: export.signature,
-            }),
+            HostExportBinding::ImmutableHostFunction => {
+                Ok(ModuleImportResolution::StaticFunctionSlot {
+                    slot: export.slot,
+                    signature: export.signature,
+                })
+            }
             HostExportBinding::Mutable => Ok(ModuleImportResolution::GenericFallback(
                 GenericFallbackReason::MutableExport,
             )),
@@ -778,26 +874,36 @@ impl<'a> HostModuleRegistry<'a> {
             ));
         }
         let modules = self.modules.borrow();
-        let module = modules.get(specifier).ok_or_else(|| ModuleDiagnostic::new(
-            ModuleDiagnosticCode::UnknownModule,
-            specifier,
-            "",
-            "module is not registered",
-        ))?;
+        let module = modules.get(specifier).ok_or_else(|| {
+            ModuleDiagnostic::new(
+                ModuleDiagnosticCode::UnknownModule,
+                specifier,
+                "",
+                "module is not registered",
+            )
+        })?;
         let mut declaration = format!(
             "// Generated by Ogma HostModuleRegistry. Module version: {}.\ndeclare module \"{}\" {{\n",
             module.version, specifier
         );
         for (name, export) in &module.exports {
-            if export.required_features.iter().any(|feature| !plan.enabled_features.contains(feature)) {
+            if export
+                .required_features
+                .iter()
+                .any(|feature| !plan.enabled_features.contains(feature))
+            {
                 continue;
             }
-            if export.required_capabilities.iter()
+            if export
+                .required_capabilities
+                .iter()
                 .any(|required| plan_capability_bit(plan, &required.name) != Some(required.bit))
             {
                 continue;
             }
-            let capability_names = export.required_capabilities.iter()
+            let capability_names = export
+                .required_capabilities
+                .iter()
                 .map(|capability| capability.name.as_str())
                 .collect::<Vec<_>>();
             if !capability_names.is_empty() {
@@ -806,9 +912,7 @@ impl<'a> HostModuleRegistry<'a> {
                     capability_names.join(", ")
                 ));
             }
-            let feature_names = export.required_features.iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let feature_names = export.required_features.iter().cloned().collect::<Vec<_>>();
             if !feature_names.is_empty() {
                 declaration.push_str(&format!(
                     "  /** Requires features: {}. */\n",
@@ -876,7 +980,10 @@ fn visit_module(
                 ModuleDiagnosticCode::CapabilityDenied,
                 specifier,
                 &required.name,
-                format!("module requires capability '{}' at bit {}", required.name, required.bit),
+                format!(
+                    "module requires capability '{}' at bit {}",
+                    required.name, required.bit
+                ),
             ));
         }
     }
@@ -889,7 +996,15 @@ fn visit_module(
                 "declared module dependency is not registered",
             ));
         } else {
-            visit_module(dependency, modules, profile, grants, visiting, included, diagnostics);
+            visit_module(
+                dependency,
+                modules,
+                profile,
+                grants,
+                visiting,
+                included,
+                diagnostics,
+            );
         }
     }
     visiting.remove(specifier);
@@ -900,19 +1015,23 @@ fn plan_capability_bit(plan: &ModuleBuildPlan, name: &str) -> Option<u8> {
     plan.granted_capabilities.get(name).copied()
 }
 
-fn capabilities_mask(
-    capabilities: &[HostCapabilityRequirement],
-) -> Result<u64, String> {
+fn capabilities_mask(capabilities: &[HostCapabilityRequirement]) -> Result<u64, String> {
     let mut names = BTreeMap::<String, u8>::new();
     let mut bits = BTreeMap::<u8, String>::new();
     let mut mask = 0_u64;
     for capability in capabilities {
         if !valid_capability_name(&capability.name) || capability.bit >= 64 {
-            return Err(format!("invalid capability '{}' at bit {}", capability.name, capability.bit));
+            return Err(format!(
+                "invalid capability '{}' at bit {}",
+                capability.name, capability.bit
+            ));
         }
         if let Some(previous) = names.get(&capability.name) {
             if previous != &capability.bit {
-                return Err(format!("capability '{}' is assigned to multiple bits", capability.name));
+                return Err(format!(
+                    "capability '{}' is assigned to multiple bits",
+                    capability.name
+                ));
             }
         }
         if let Some(previous) = bits.get(&capability.bit) {
@@ -943,10 +1062,7 @@ fn validate_feature_names(features: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_unique_strings(
-    values: &[String],
-    valid: impl Fn(&str) -> bool,
-) -> Result<(), String> {
+fn validate_unique_strings(values: &[String], valid: impl Fn(&str) -> bool) -> Result<(), String> {
     let mut seen = BTreeSet::new();
     for value in values {
         if !valid(value) {
@@ -962,8 +1078,14 @@ fn validate_unique_strings(
 fn valid_module_specifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.as_bytes().first().is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && value.as_bytes().last().is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'/' | b'-' | b'_' | b'.' | b'@')
         })
@@ -974,46 +1096,110 @@ fn valid_module_specifier(value: &str) -> bool {
 fn valid_native_dependency(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn valid_capability_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
-        && value.as_bytes().first().is_some_and(|byte| byte.is_ascii_lowercase())
-        && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b':' | b'-' | b'_'))
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b':' | b'-' | b'_')
+        })
 }
 
 fn valid_feature_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-        && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b':' | b'-' | b'_'))
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b':' | b'-' | b'_')
+        })
 }
 
 fn is_semver(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
-    parts.len() == 3 && parts.iter().all(|part| {
-        !part.is_empty()
-            && part.bytes().all(|byte| byte.is_ascii_digit())
-            && (part == &"0" || !part.starts_with('0'))
-    })
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part == &"0" || !part.starts_with('0'))
+        })
 }
 
 fn is_typescript_identifier(value: &str) -> bool {
     const RESERVED: &[&str] = &[
-        "await", "break", "case", "catch", "class", "const", "continue", "debugger",
-        "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally",
-        "for", "function", "if", "import", "in", "instanceof", "new", "null", "return",
-        "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void",
-        "while", "with", "yield", "let", "implements", "interface", "package", "private",
-        "protected", "public", "static", "type", "namespace", "module",
+        "await",
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "default",
+        "delete",
+        "do",
+        "else",
+        "enum",
+        "export",
+        "extends",
+        "false",
+        "finally",
+        "for",
+        "function",
+        "if",
+        "import",
+        "in",
+        "instanceof",
+        "new",
+        "null",
+        "return",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "typeof",
+        "var",
+        "void",
+        "while",
+        "with",
+        "yield",
+        "let",
+        "implements",
+        "interface",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "static",
+        "type",
+        "namespace",
+        "module",
     ];
     let mut chars = value.chars();
-    let Some(first) = chars.next() else { return false; };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     (first.is_ascii_alphabetic() || first == '_' || first == '$')
-        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '$')
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '$'
+        })
         && !RESERVED.contains(&value)
 }
 
@@ -1026,13 +1212,12 @@ fn sort_diagnostics(diagnostics: &mut Vec<ModuleDiagnostic>) {
 mod tests {
     use super::*;
     use crate::{
-        JsCallable, OrdinaryHostObject, PropertyReceiver, DispatchValue, HostFunctionId,
+        DispatchValue, HostFunctionId, JsCallable, OrdinaryHostObject, PropertyReceiver,
         EFFECT_MAY_ALLOCATE, EFFECT_MAY_GC, EFFECT_MAY_REENTER, EFFECT_MAY_THROW,
     };
     use ogma_host_execution_scope_proof::{HostExecutionContext, LibrarySyncMode};
     use ogma_rust_abi_proof::{
-        OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus, OgmaCompletion,
-        COMPLETION_NORMAL,
+        OgmaCompletion, OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus, COMPLETION_NORMAL,
     };
     use std::ffi::c_void;
     use std::ptr;
@@ -1045,7 +1230,9 @@ mod tests {
         completion: *mut OgmaCompletion,
         _user_data: *mut c_void,
     ) -> OgmaStatus {
-        if completion.is_null() { return OgmaStatus::INVALID_ARGUMENT; }
+        if completion.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
         unsafe {
             completion.write(OgmaCompletion {
                 kind: COMPLETION_NORMAL,
@@ -1064,8 +1251,12 @@ mod tests {
         output: *mut f64,
         _user_data: *mut c_void,
     ) -> OgmaStatus {
-        if output.is_null() { return OgmaStatus::INVALID_ARGUMENT; }
-        unsafe { output.write(left + right); }
+        if output.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        unsafe {
+            output.write(left + right);
+        }
         OgmaStatus::OK
     }
 
@@ -1080,7 +1271,8 @@ mod tests {
                 typed_add,
                 generic_ok,
                 ptr::null_mut(),
-            ).unwrap(),
+            )
+            .unwrap(),
             required_capabilities: Vec::new(),
             required_features: Vec::new(),
             binding,
@@ -1136,7 +1328,10 @@ mod tests {
         assert_eq!(functions.metrics().active_slots, 0);
 
         modules.register(math_module()).unwrap();
-        assert_eq!(modules.module_version("ogma:math").as_deref(), Some("1.0.0"));
+        assert_eq!(
+            modules.module_version("ogma:math").as_deref(),
+            Some("1.0.0")
+        );
         assert_eq!(functions.metrics().active_slots, 3);
     }
 
@@ -1156,7 +1351,8 @@ mod tests {
                     EFFECT_MAY_THROW | EFFECT_MAY_ALLOCATE | EFFECT_MAY_GC | EFFECT_MAY_REENTER,
                     generic_ok,
                     ptr::null_mut(),
-                ).unwrap(),
+                )
+                .unwrap(),
                 required_capabilities: Vec::new(),
                 required_features: Vec::new(),
                 binding: HostExportBinding::ImmutableHostFunction,
@@ -1164,11 +1360,10 @@ mod tests {
         ];
         modules.register(descriptor).unwrap();
         let plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
-        let generated = modules.generate_typescript_declarations(&plan, "ogma:math").unwrap();
-        assert_eq!(
-            generated,
-            include_str!("../tests/fixtures/ogma-math.d.ts")
-        );
+        let generated = modules
+            .generate_typescript_declarations(&plan, "ogma:math")
+            .unwrap();
+        assert_eq!(generated, include_str!("../tests/fixtures/ogma-math.d.ts"));
     }
 
     #[test]
@@ -1178,46 +1373,82 @@ mod tests {
         modules.register(math_module()).unwrap();
         let plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
 
-        let static_add = modules.resolve_import(
-            &plan, "ogma:math", Some("add"), ModuleImportKind::StaticNamedEsm
-        ).unwrap();
+        let static_add = modules
+            .resolve_import(
+                &plan,
+                "ogma:math",
+                Some("add"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap();
         let ModuleImportResolution::StaticFunctionSlot { slot, signature } = static_add else {
             panic!("immutable static import should resolve to a typed slot");
         };
         assert_eq!(signature, HostFunctionSignature::F64Binary);
 
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", Some("replaceable"), ModuleImportKind::StaticNamedEsm).unwrap(),
+            modules
+                .resolve_import(
+                    &plan,
+                    "ogma:math",
+                    Some("replaceable"),
+                    ModuleImportKind::StaticNamedEsm
+                )
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::MutableExport)
         );
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", Some("dynamic"), ModuleImportKind::StaticNamedEsm).unwrap(),
+            modules
+                .resolve_import(
+                    &plan,
+                    "ogma:math",
+                    Some("dynamic"),
+                    ModuleImportKind::StaticNamedEsm
+                )
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::DynamicExport)
         );
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", None, ModuleImportKind::DynamicImport).unwrap(),
+            modules
+                .resolve_import(&plan, "ogma:math", None, ModuleImportKind::DynamicImport)
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::DynamicImport)
         );
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", None, ModuleImportKind::NamespaceEsm).unwrap(),
+            modules
+                .resolve_import(&plan, "ogma:math", None, ModuleImportKind::NamespaceEsm)
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::NamespaceBinding)
         );
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", None, ModuleImportKind::CommonJsRequire).unwrap(),
+            modules
+                .resolve_import(&plan, "ogma:math", None, ModuleImportKind::CommonJsRequire)
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::CommonJsInterop)
         );
         assert_eq!(
-            modules.resolve_import(&plan, "ogma:math", Some("add"), ModuleImportKind::DynamicPropertyAccess).unwrap(),
+            modules
+                .resolve_import(
+                    &plan,
+                    "ogma:math",
+                    Some("add"),
+                    ModuleImportKind::DynamicPropertyAccess
+                )
+                .unwrap(),
             ModuleImportResolution::GenericFallback(GenericFallbackReason::DynamicPropertyAccess)
         );
 
         let host = host_scope();
         let scope = host.enter_scope().unwrap();
         assert_eq!(
-            functions.invoke_slot(
-                &scope, slot, plan.capability_mask,
-                &[DispatchValue::Number(4.0), DispatchValue::Number(7.0)]
-            ).unwrap(),
+            functions
+                .invoke_slot(
+                    &scope,
+                    slot,
+                    plan.capability_mask,
+                    &[DispatchValue::Number(4.0), DispatchValue::Number(7.0)]
+                )
+                .unwrap(),
             crate::JsCompletion::Normal(DispatchValue::Number(11.0))
         );
 
@@ -1228,14 +1459,16 @@ mod tests {
         let guard = functions.resolve_call_site(&object, "run").unwrap();
         object.replace("run", JsCallable::script(DispatchValue::Number(99.0)));
         assert_eq!(
-            functions.call_property(
-                &scope,
-                PropertyReceiver::Ordinary(&object),
-                "run",
-                Some(&guard),
-                plan.capability_mask,
-                &[DispatchValue::Number(1.0), DispatchValue::Number(2.0)]
-            ).unwrap(),
+            functions
+                .call_property(
+                    &scope,
+                    PropertyReceiver::Ordinary(&object),
+                    "run",
+                    Some(&guard),
+                    plan.capability_mask,
+                    &[DispatchValue::Number(1.0), DispatchValue::Number(2.0)]
+                )
+                .unwrap(),
             crate::JsCompletion::Normal(DispatchValue::Number(99.0))
         );
     }
@@ -1247,38 +1480,56 @@ mod tests {
         let mut descriptor = math_module();
         descriptor.required_features = vec!["host-modules.v1".to_owned(), "graphics.v2".to_owned()];
         descriptor.required_capabilities = vec![HostCapabilityRequirement::new("render.read", 3)];
-        descriptor.exports[0].required_capabilities.push(
-            HostCapabilityRequirement::new("render.write", 4)
-        );
+        descriptor.exports[0]
+            .required_capabilities
+            .push(HostCapabilityRequirement::new("render.write", 4));
         modules.register(descriptor).unwrap();
 
         let no_feature = profile(&["ogma:math"]);
         let first = modules.build_profile(&no_feature).unwrap_err();
         let second = modules.build_profile(&no_feature).unwrap_err();
         assert_eq!(first, second);
-        assert!(first.iter().any(|item| item.code == ModuleDiagnosticCode::MissingFeature
-            && item.subject == "graphics.v2"));
-        assert!(first.iter().any(|item| item.code == ModuleDiagnosticCode::CapabilityDenied
-            && item.subject == "render.read"));
+        assert!(first
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::MissingFeature
+                && item.subject == "graphics.v2"));
+        assert!(first
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::CapabilityDenied
+                && item.subject == "render.read"));
         assert!(first.windows(2).all(|pair| pair[0] <= pair[1]));
 
         let mut granted = profile(&["ogma:math"]);
         granted.enabled_features.insert("graphics.v2".to_owned());
-        granted.granted_capabilities.push(HostCapabilityRequirement::new("render.read", 3));
+        granted
+            .granted_capabilities
+            .push(HostCapabilityRequirement::new("render.read", 3));
         let plan = modules.build_profile(&granted).unwrap();
-        let denied = modules.resolve_import(
-            &plan, "ogma:math", Some("add"), ModuleImportKind::StaticNamedEsm
-        ).unwrap_err();
+        let denied = modules
+            .resolve_import(
+                &plan,
+                "ogma:math",
+                Some("add"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap_err();
         assert_eq!(denied.code, ModuleDiagnosticCode::CapabilityDenied);
         assert_eq!(denied.subject, "add");
         assert!(denied.detail.contains("render.write"));
 
-        granted.granted_capabilities.push(HostCapabilityRequirement::new("render.write", 4));
+        granted
+            .granted_capabilities
+            .push(HostCapabilityRequirement::new("render.write", 4));
         let fully_granted_plan = modules.build_profile(&granted).unwrap();
         assert!(matches!(
-            modules.resolve_import(
-                &fully_granted_plan, "ogma:math", Some("add"), ModuleImportKind::StaticNamedEsm
-            ).unwrap(),
+            modules
+                .resolve_import(
+                    &fully_granted_plan,
+                    "ogma:math",
+                    Some("add"),
+                    ModuleImportKind::StaticNamedEsm
+                )
+                .unwrap(),
             ModuleImportResolution::StaticFunctionSlot { .. }
         ));
     }
@@ -1294,13 +1545,19 @@ mod tests {
             kind: ModuleImportKind::StaticNamedEsm,
             imported_names: vec!["add".to_owned()],
         });
-        selected.native_module_dependencies.insert("ogma:math".to_owned());
+        selected
+            .native_module_dependencies
+            .insert("ogma:math".to_owned());
 
         let first = modules.build_profile(&selected).unwrap_err();
         let second = modules.build_profile(&selected).unwrap_err();
         assert_eq!(first, second);
-        assert!(first.iter().any(|item| item.code == ModuleDiagnosticCode::RuntimeImportModuleStripped));
-        assert!(first.iter().any(|item| item.code == ModuleDiagnosticCode::NativeModuleDependencyStripped));
+        assert!(first
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::RuntimeImportModuleStripped));
+        assert!(first
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::NativeModuleDependencyStripped));
     }
 
     #[test]
@@ -1310,23 +1567,42 @@ mod tests {
         modules.register(math_module()).unwrap();
         let mut physics = math_module();
         physics.specifier = "ogma:physics".to_owned();
-        physics.exports = vec![math_export(52_001, "step", HostExportBinding::ImmutableHostFunction)];
+        physics.exports = vec![math_export(
+            52_001,
+            "step",
+            HostExportBinding::ImmutableHostFunction,
+        )];
         physics.dependencies = vec!["ogma:math".to_owned()];
         physics.native_dependencies = vec!["physics-kernel".to_owned()];
         physics.exports[0].function = HostFunctionDescriptor::f64_binary(
-            HostFunctionId(52_001), "ogma:physics/step", 0, 0, typed_add, generic_ok, ptr::null_mut()
-        ).unwrap();
+            HostFunctionId(52_001),
+            "ogma:physics/step",
+            0,
+            0,
+            typed_add,
+            generic_ok,
+            ptr::null_mut(),
+        )
+        .unwrap();
         modules.register(physics).unwrap();
 
-        let plan = modules.build_profile(&profile(&["ogma:physics"])).unwrap_err();
-        assert!(plan.iter().any(|item| item.code == ModuleDiagnosticCode::MissingNativeDependency));
+        let plan = modules
+            .build_profile(&profile(&["ogma:physics"]))
+            .unwrap_err();
+        assert!(plan
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::MissingNativeDependency));
 
         let mut enabled = profile(&["ogma:physics"]);
-        enabled.enabled_native_dependencies.insert("physics-kernel".to_owned());
+        enabled
+            .enabled_native_dependencies
+            .insert("physics-kernel".to_owned());
         let plan = modules.build_profile(&enabled).unwrap();
         assert_eq!(
             plan.included_modules,
-            ["ogma:math".to_owned(), "ogma:physics".to_owned()].into_iter().collect()
+            ["ogma:math".to_owned(), "ogma:physics".to_owned()]
+                .into_iter()
+                .collect()
         );
         assert!(plan.stripped_modules.is_empty());
     }
@@ -1341,8 +1617,15 @@ mod tests {
         alpha.exports = vec![HostModuleExport {
             name: "run".to_owned(),
             function: HostFunctionDescriptor::f64_binary(
-                HostFunctionId(54_001), "ogma:alpha/run", 0, 0, typed_add, generic_ok, ptr::null_mut()
-            ).unwrap(),
+                HostFunctionId(54_001),
+                "ogma:alpha/run",
+                0,
+                0,
+                typed_add,
+                generic_ok,
+                ptr::null_mut(),
+            )
+            .unwrap(),
             required_capabilities: Vec::new(),
             required_features: Vec::new(),
             binding: HostExportBinding::ImmutableHostFunction,
@@ -1353,8 +1636,15 @@ mod tests {
         beta.exports = vec![HostModuleExport {
             name: "run".to_owned(),
             function: HostFunctionDescriptor::f64_binary(
-                HostFunctionId(54_002), "ogma:beta/run", 0, 0, typed_add, generic_ok, ptr::null_mut()
-            ).unwrap(),
+                HostFunctionId(54_002),
+                "ogma:beta/run",
+                0,
+                0,
+                typed_add,
+                generic_ok,
+                ptr::null_mut(),
+            )
+            .unwrap(),
             required_capabilities: Vec::new(),
             required_features: Vec::new(),
             binding: HostExportBinding::ImmutableHostFunction,
@@ -1362,10 +1652,16 @@ mod tests {
         modules.register(alpha).unwrap();
         modules.register(beta).unwrap();
 
-        let first = modules.build_profile(&profile(&["ogma:alpha"])).unwrap_err();
-        let second = modules.build_profile(&profile(&["ogma:alpha"])).unwrap_err();
+        let first = modules
+            .build_profile(&profile(&["ogma:alpha"]))
+            .unwrap_err();
+        let second = modules
+            .build_profile(&profile(&["ogma:alpha"]))
+            .unwrap_err();
         assert_eq!(first, second);
-        assert!(first.iter().any(|item| item.code == ModuleDiagnosticCode::DependencyCycle));
+        assert!(first
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::DependencyCycle));
     }
 
     #[test]
@@ -1374,14 +1670,29 @@ mod tests {
         let modules = HostModuleRegistry::new(&functions);
         let mut physics = math_module();
         physics.specifier = "ogma:physics".to_owned();
-        physics.exports = vec![math_export(53_001, "step", HostExportBinding::ImmutableHostFunction)];
+        physics.exports = vec![math_export(
+            53_001,
+            "step",
+            HostExportBinding::ImmutableHostFunction,
+        )];
         physics.dependencies = vec!["ogma:missing".to_owned()];
         physics.exports[0].function = HostFunctionDescriptor::f64_binary(
-            HostFunctionId(53_001), "ogma:physics/step", 0, 0, typed_add, generic_ok, ptr::null_mut()
-        ).unwrap();
+            HostFunctionId(53_001),
+            "ogma:physics/step",
+            0,
+            0,
+            typed_add,
+            generic_ok,
+            ptr::null_mut(),
+        )
+        .unwrap();
         modules.register(physics).unwrap();
-        let errors = modules.build_profile(&profile(&["ogma:physics"])).unwrap_err();
-        assert!(errors.iter().any(|item| item.code == ModuleDiagnosticCode::MissingDependency
-            && item.subject == "ogma:missing"));
+        let errors = modules
+            .build_profile(&profile(&["ogma:physics"]))
+            .unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|item| item.code == ModuleDiagnosticCode::MissingDependency
+                && item.subject == "ogma:missing"));
     }
 }

@@ -1,7 +1,7 @@
 # OGM-25 — Static Host Modules and feature profiles
 
-**Status:** M0 architectural proof contract  
-**Implementation:** benchmarks/typed-host-dispatch/src/static_modules.rs  
+**Status:** M0 architectural proof contract
+**Implementation:** benchmarks/typed-host-dispatch/src/static_modules.rs
 **Upstream contracts:** [OGM-19 versioned Rust ABI](rust-abi-contract.md), [OGM-21 typed host dispatch](typed-host-dispatch-contract.md), Notion architecture §8.9.6
 
 ## 1. Purpose and implementation boundary
