@@ -1300,7 +1300,10 @@ fn cargo_artifact_summary(target_directory: &Path, crate_names: &[&str]) -> Buil
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if crate_names.iter().any(|crate_name| name.contains(crate_name)) {
+        if crate_names
+            .iter()
+            .any(|crate_name| name.contains(crate_name))
+        {
             summary.files += 1;
             summary.bytes += entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
             summary.matching_files.push(name);
@@ -1334,8 +1337,7 @@ fn main() -> Result<()> {
         });
     let cargo_target_directory = cargo_target_directory();
     let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["cranelift"]);
-    let llvm_artifacts =
-        cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
+    let llvm_artifacts = cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
     let report = Report {
         schema_version: 1,
         task: "OGM-30",
