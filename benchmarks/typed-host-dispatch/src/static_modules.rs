@@ -923,9 +923,10 @@ impl<'a> HostModuleRegistry<'a> {
                 .chain(export.required_capabilities.iter())
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            if required_capabilities.iter().any(|required| {
-                plan_capability_bit(plan, &required.name) != Some(required.bit)
-            }) {
+            if required_capabilities
+                .iter()
+                .any(|required| plan_capability_bit(plan, &required.name) != Some(required.bit))
+            {
                 continue;
             }
 
@@ -1405,9 +1406,11 @@ mod tests {
         let functions = HostFunctionRegistry::new().unwrap();
         let modules = HostModuleRegistry::new(&functions);
         let mut descriptor = math_module();
-        descriptor
-            .exports
-            .push(math_export(50_001, "duplicate_id", HostExportBinding::ImmutableHostFunction));
+        descriptor.exports.push(math_export(
+            50_001,
+            "duplicate_id",
+            HostExportBinding::ImmutableHostFunction,
+        ));
 
         let error = modules.register(descriptor).unwrap_err();
         assert_eq!(error.code, ModuleDiagnosticCode::FunctionRegistrationFailed);
@@ -1421,7 +1424,10 @@ mod tests {
         let modules = HostModuleRegistry::new(&functions);
         modules.register(math_module()).unwrap();
         assert_eq!(functions.metrics().active_slots, 3);
-        assert_eq!(modules.module_version("ogma:math").as_deref(), Some("1.0.0"));
+        assert_eq!(
+            modules.module_version("ogma:math").as_deref(),
+            Some("1.0.0")
+        );
 
         modules.unregister("ogma:math").unwrap();
 

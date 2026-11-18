@@ -831,7 +831,7 @@ jobs:
         run: python3 .github/scripts/validate_static_host_modules.py --report "$RUNNER_TEMP/ogm25-static-host-modules-report.json"
 
       - name: Upload OGM-25 contract evidence
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ogm25-static-host-modules-evidence
