@@ -27,7 +27,7 @@ compile-time layout test.
 
 | Field | Contract |
 |---|---|
-| struct_size | Size of the complete descriptor; smaller/unknown layouts are rejected |
+| struct_size | Must equal the complete v1 descriptor size exactly; smaller and larger/unknown layouts are rejected |
 | descriptor_version | Descriptor schema version, currently 1 |
 | abi_major, abi_minor | Negotiated OGM ABI version; major must match and requested minor must be supported |
 | function_id | Host-assigned non-zero HostFunctionId, stable within one ABI major; duplicates are rejected |
@@ -152,9 +152,9 @@ CPU label, source revision and tested revision. The CI job emits a JSON artifact
 
 Generic benchmark paths create temporary mock values. Because the OGM-19 proof heap
 uses explicit reclamation, the harness collects it every 128 generic operations
-between timed chunks; collection time is excluded from latency/throughput samples,
-and the report records collection cycles and interval. Allocation counters include
-the collector's own allocations.
+between timed chunks; collection time is excluded from latency/throughput samples.
+The report records measured collection cycles (warm-up collections are excluded) and
+the collection interval. Allocation counters include the collector's own allocations.
 
 The measurements are an isolated M0 comparison on the mock ABI. They are not a
 production engine performance claim and must not be extrapolated to an actual
