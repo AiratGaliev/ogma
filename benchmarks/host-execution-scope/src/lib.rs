@@ -189,13 +189,17 @@ pub struct ScopeMetrics {
 /// ```compile_fail
 /// use ogma_host_execution_scope_proof::HostExecutionContext;
 /// fn require_send<T: Send>() {}
-/// require_send::<HostExecutionContext>();
+/// fn main() {
+///     require_send::<HostExecutionContext>();
+/// }
 /// ```
 ///
 /// ```compile_fail
 /// use ogma_host_execution_scope_proof::HostExecutionContext;
 /// fn require_sync<T: Sync>() {}
-/// require_sync::<HostExecutionContext>();
+/// fn main() {
+///     require_sync::<HostExecutionContext>();
+/// }
 /// ```
 pub struct HostExecutionContext {
     owner_thread: ThreadId,
