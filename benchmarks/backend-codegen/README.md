@@ -16,7 +16,7 @@ a stale handwritten lowering.
 | SSA branch | `positive-ssa-branch.json` | `js.strict_equal`, branch and return |
 | Loop-carried values | `positive-loop-carried-values.json` | loop CFG, `js.strict_equal`, `js.add`, `js.to_number` |
 | Dynamic exception | `positive-dynamic-exception.json` | `js.add`, explicit exception edge and `js.throw` completion |
-| Call boundary | `positive-call-boundary.json` | `js.strict_equal`, string/number `js.add`, indirect `js.call` |
+| Call boundary | `positive-call-boundary.json` | string/number `js.add` and indirect `js.call`; the fixture's unused pure equality result may be eliminated by either optimizer |
 | Host capability | `positive-host-call.json` | `host.call` with stable symbol `benchmark.host.echo` |
 
 The host-call fixture is also added to the canonical Core IR fixture manifest and is
@@ -34,7 +34,10 @@ validated by the project's existing Core IR Fast checks.
   symbols; semantic checks run before timing.
 - The loop fixture lowers numeric `js.add` to a boxed helper result followed by
   `js.to_number`. The call-boundary fixture exercises string-plus-number concatenation
-  and an indirect function-reference call. The dynamic-exception fixture lowers the
+  (the C helper checks the exact expected string) and an indirect function-reference
+  call. Its `js.strict_equal` result is unused and can be dead-code-eliminated, so its
+  runtime cost is not attributed to that workload; observable strict equality is
+  measured in the branch/loop workloads. The dynamic-exception fixture lowers the
   explicit exception edge to a tagged completion and exercises `js.throw` propagation.
 - Helpers are deterministic benchmark stubs, not the production Ogma Runtime. They
   exercise helper dispatch and call overhead but do not implement full ECMAScript
@@ -58,10 +61,13 @@ cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --relea
 ```
 
 The report records source/tested revisions, Rust/LLVM/Clang and OS versions, CPU model
-and target features, compile/link latency distributions with raw samples,
+and target features, cold first-invocation compile/link latency, three discarded compile/link
+warmups, and 101-sample steady-state compile/link distributions with raw samples,
 object/shared-library sizes, per-fixture p50/p95/p99 and throughput, direct helper
-baselines, target lookup, selected LLVM package footprint (the report names the exact packages), Cargo source and build-artifact
-footprints (including the resolved Cargo target directory and matched artifact counts), and integration notes. Target lookup is not a cross-link or target ABI
+baselines, target lookup, installed size for each selected LLVM toolchain package, Cargo
+source size and recursively scanned native build artifacts (including the explicitly
+configured Cargo target directory, matched filenames, file counts and byte totals), and
+integration notes. Target lookup is not a cross-link or target ABI
 proof. Peak compiler RSS, cross-target linking and deployment-package measurements
 are not collected by this M0 harness and must not be inferred from the reported
 metrics. Results are specific to the recorded runner.

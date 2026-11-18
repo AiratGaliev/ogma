@@ -23,6 +23,7 @@ use libloading::Library;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
+    collections::{BTreeMap, BTreeSet},
     env,
     ffi::CString,
     fs,
@@ -457,6 +458,20 @@ fn load_corpus() -> Result<CoreCorpus> {
             include_str!("../../../tests/core-ir/fixtures/positive-host-call.json"),
         ),
     ];
+    let manifest_ids: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["id"].as_str().unwrap_or(""))
+        .collect();
+    let unique_manifest_ids: BTreeSet<&str> = manifest_ids.iter().copied().collect();
+    if entries.len() != sources.len() || unique_manifest_ids.len() != entries.len() {
+        bail!("workload manifest must contain each canonical workload exactly once");
+    }
+    for (label, _, _) in sources {
+        if !unique_manifest_ids.contains(label) {
+            bail!("workload manifest is missing canonical workload {label}");
+        }
+    }
+
     let mut fixtures = Vec::new();
     for (label, path, raw) in sources {
         let entry = entries
@@ -945,8 +960,8 @@ const HELPERS: &str = r#"
 #include <string.h>
 static const uint64_t PAYLOAD_MASK=UINT64_C(0x00ffffffffffffff);
 static char dynamic_string[128];
-int64_t ogma_js_add_number(double a,double b){union{double d;uint64_t u;}v;v.d=a+b;return (int64_t)v.u;}
-double ogma_js_to_number(int64_t boxed){union{double d;uint64_t u;}v;v.u=(uint64_t)boxed;return v.d;}
+int64_t ogma_js_add_number(double a,double b){double value=a+b;int64_t boxed;memcpy(&boxed,&value,sizeof(boxed));return boxed;}
+double ogma_js_to_number(int64_t boxed){double value;memcpy(&value,&boxed,sizeof(value));return value;}
 int64_t ogma_js_add_completion(int64_t a,int64_t b){
  uint64_t tag=(a==INT64_MIN)?1:0;uint64_t payload=(a==INT64_MIN)?(uint64_t)b:(uint64_t)a+(uint64_t)b;
  return (int64_t)((tag<<56)|(payload&PAYLOAD_MASK));
@@ -955,7 +970,7 @@ int64_t ogma_js_throw(int64_t completion){return completion;}
 int64_t ogma_js_add_mixed(int64_t text,double number){const char *left=(const char *)(uintptr_t)text;(void)snprintf(dynamic_string,sizeof(dynamic_string),"%s%.0f",left,number);return (int64_t)(uintptr_t)dynamic_string;}
 typedef int64_t (*OgmaCallTarget)(int64_t,int64_t);
 int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){OgmaCallTarget target=(OgmaCallTarget)(uintptr_t)callee;return target(receiver,arg);}
-int64_t ogma_js_call_target(int64_t receiver,int64_t arg){const char *value=(const char *)(uintptr_t)arg;return receiver+(int64_t)strlen(value);}
+int64_t ogma_js_call_target(int64_t receiver,int64_t arg){const char *value=(const char *)(uintptr_t)arg;if(strcmp(value,"item=5")!=0)return -1;return receiver+(int64_t)strlen(value);}
 int64_t ogma_host_echo(int64_t arg){return arg+11;}
 "#;
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
@@ -1035,34 +1050,66 @@ fn bench<F: FnMut(u64)>(o: &Options, mut f: F) -> Distribution {
 }
 #[derive(Serialize)]
 struct BackendReport {
+    first_compile_ns: u64,
     compile_time_ns: LatencyDistribution,
+    first_link_ns: u64,
     link_time_ns: LatencyDistribution,
     object_bytes: u64,
     shared_library_bytes: u64,
     workloads: JsonValue,
 }
-fn compile_rounds(backend: &str, root: &Path, c: &CoreCorpus) -> Result<(Vec<f64>, PathBuf)> {
-    let mut samples = Vec::new();
-    let mut last = PathBuf::new();
-    for n in 0..31 {
-        last = root.join(format!("{backend}-{n}.o"));
-        let t = if backend == "cranelift" {
-            compile_cranelift(&last, c)?
-        } else {
-            compile_llvm(&last, c)?
-        };
-        samples.push(t as f64);
+fn compile_once(backend: &str, path: &Path, c: &CoreCorpus) -> Result<u64> {
+    if backend == "cranelift" {
+        compile_cranelift(path, c)
+    } else {
+        compile_llvm(path, c)
     }
-    Ok((samples, last))
+}
+
+fn compile_rounds(
+    backend: &str,
+    root: &Path,
+    c: &CoreCorpus,
+    o: &Options,
+) -> Result<(u64, Vec<f64>, PathBuf)> {
+    let first_path = root.join(format!("{backend}-compile-first.o"));
+    let first_compile_ns = compile_once(backend, &first_path, c)?;
+
+    for n in 0..o.warmups {
+        let path = root.join(format!("{backend}-compile-warmup-{n}.o"));
+        compile_once(backend, &path, c)?;
+    }
+
+    let mut samples = Vec::with_capacity(o.samples);
+    let mut last = PathBuf::new();
+    for n in 0..o.samples {
+        last = root.join(format!("{backend}-compile-{n}.o"));
+        samples.push(compile_once(backend, &last, c)? as f64);
+    }
+    Ok((first_compile_ns, samples, last))
+}
+
+fn link_rounds(
+    object: &Path,
+    shared: &Path,
+    helper: &Path,
+    o: &Options,
+) -> Result<(u64, Vec<f64>)> {
+    let first_link_ns = link(object, shared, helper)?;
+    for _ in 0..o.warmups {
+        link(object, shared, helper)?;
+    }
+    let mut samples = Vec::with_capacity(o.samples);
+    for _ in 0..o.samples {
+        samples.push(link(object, shared, helper)? as f64);
+    }
+    Ok((first_link_ns, samples))
 }
 fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<BackendReport> {
-    let (compile, object) = compile_rounds(name, root, c)?;
+    let (first_compile_ns, compile, object) = compile_rounds(name, root, c, o)?;
     let shared = root.join(format!("{name}.so"));
     let helper = root.join(format!("{name}.c"));
-    let mut link_samples = Vec::new();
-    for _ in 0..5 {
-        link_samples.push(link(&object, &shared, &helper)? as f64);
-    }
+    let (first_link_ns, link_samples) = link_rounds(&object, &shared, &helper, o)?;
     let lib = unsafe { Library::new(&shared)? };
     let branch: BinaryF64 = unsafe { *lib.get(sym(&c.symbol("branch")?).as_slice())? };
     let loop_fn: TernaryF64 = unsafe { *lib.get(sym(&c.symbol("loop")?).as_slice())? };
@@ -1080,8 +1127,15 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if unsafe { branch(0.0, -0.0) }.to_bits() != 0.0_f64.to_bits() {
         bail!("{name}: strict equality must treat positive and negative zero as equal");
     }
-    if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0 {
-        bail!("{name}: loop mismatch");
+    if unsafe { branch(f64::NAN, 3.0) } != 3.0
+        || !unsafe { branch(3.0, f64::NAN) }.is_nan()
+    {
+        bail!("{name}: strict equality must treat NaN as unequal");
+    }
+    if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0
+        || unsafe { loop_fn(0.5, 3.5, 0.75) } != 3.5
+    {
+        bail!("{name}: loop-carried value mismatch");
     }
     if unsafe { exception(7, 8) } != 15 {
         bail!("{name}: normal completion mismatch");
@@ -1091,7 +1145,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         bail!("{name}: Throw completion payload/tag was not preserved");
     }
     if unsafe { call(callee, 2, text_handle, 4, 4, 5.0) } != 8 {
-        bail!("{name}: call-boundary result mismatch");
+        bail!("{name}: call-boundary string/result mismatch");
     }
     if unsafe { host(31) } != 42 {
         bail!("{name}: host.call mismatch");
@@ -1123,7 +1177,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
       "direct_host_helper":bench(o,|n|{black_box(unsafe{host_direct(n as i64)});})
     });
     Ok(BackendReport {
+        first_compile_ns,
         compile_time_ns: latency_distribution(compile),
+        first_link_ns,
         link_time_ns: latency_distribution(link_samples),
         object_bytes: fs::metadata(&object)?.len(),
         shared_library_bytes: fs::metadata(&shared)?.len(),
@@ -1151,6 +1207,7 @@ struct Report {
     measurement_samples: usize,
     target_lookup: JsonValue,
     llvm_package_footprint_kib: Option<u64>,
+    llvm_package_sizes_kib: BTreeMap<String, u64>,
     llvm_package_footprint_packages: Vec<&'static str>,
     cargo_target_directory: String,
     cranelift_build_artifact_files: u64,
@@ -1335,23 +1392,29 @@ fn main() -> Result<()> {
     fs::create_dir_all(&root)?;
     let cranelift = run_backend("cranelift", &o, &root, &c)?;
     let llvm_backend = run_backend("llvm", &o, &root, &c)?;
-    let footprint = Command::new("dpkg-query")
+    let llvm_package_sizes_kib = Command::new("dpkg-query")
         .args([
             "-W",
-            concat!("-f=$", "{Installed-Size}\\n"),
+            r"-f=${binary:Package}\t${Installed-Size}\n",
             "llvm-18-dev",
             "llvm-18",
             "clang-18",
         ])
         .output()
         .ok()
-        .filter(|x| x.status.success())
-        .map(|x| {
-            String::from_utf8_lossy(&x.stdout)
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
                 .lines()
-                .filter_map(|v| v.parse::<u64>().ok())
-                .sum()
-        });
+                .filter_map(|line| {
+                    let (name, size) = line.split_once(char::from(9))?;
+                    Some((name.to_owned(), size.parse::<u64>().ok()?))
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let footprint = (!llvm_package_sizes_kib.is_empty())
+        .then(|| llvm_package_sizes_kib.values().sum::<u64>());
     let cargo_target_directory = cargo_target_directory();
     let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["cranelift"]);
     let llvm_artifacts = cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
@@ -1374,6 +1437,7 @@ fn main() -> Result<()> {
         measurement_samples: o.samples,
         target_lookup: target_lookup(),
         llvm_package_footprint_kib: footprint,
+        llvm_package_sizes_kib,
         llvm_package_footprint_packages: vec!["llvm-18-dev", "llvm-18", "clang-18"],
         cargo_target_directory: cargo_target_directory.display().to_string(),
         cranelift_build_artifact_files: cranelift_artifacts.files,
@@ -1417,6 +1481,34 @@ mod tests {
         document["function"]["blocks"][0]["instructions"][1]["operands"][0] =
             JsonValue::String("wrong_value".into());
         assert!(validate_lowering_profile("call_boundary", &document).is_err());
+    }
+
+    #[test]
+    fn build_artifact_scanner_counts_only_native_backend_crates() {
+        let root = env::temp_dir().join(format!("ogm30-artifacts-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let deps = root.join("release/deps/nested");
+        fs::create_dir_all(&deps).unwrap();
+        fs::write(deps.join("libcranelift_codegen-test.rlib"), [0_u8; 13]).unwrap();
+        fs::write(deps.join("libinkwell-test.rlib"), [0_u8; 17]).unwrap();
+        fs::write(deps.join("libllvm_sys-test.so"), [0_u8; 19]).unwrap();
+        fs::write(deps.join("libunrelated-test.rlib"), [0_u8; 23]).unwrap();
+
+        let cranelift = cargo_artifact_summary(&root, &["cranelift"]);
+        let llvm = cargo_artifact_summary(&root, &["inkwell", "llvm_sys"]);
+
+        assert!(cranelift.search_directory_exists);
+        assert_eq!((cranelift.files, cranelift.bytes), (1, 13));
+        assert_eq!(cranelift.matching_files, vec!["deps/nested/libcranelift_codegen-test.rlib".to_owned()]);
+        assert_eq!((llvm.files, llvm.bytes), (2, 36));
+        assert_eq!(
+            llvm.matching_files,
+            vec![
+                "deps/nested/libinkwell-test.rlib".to_owned(),
+                "deps/nested/libllvm_sys-test.so".to_owned()
+            ]
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
