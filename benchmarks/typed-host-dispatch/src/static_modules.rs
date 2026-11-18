@@ -833,9 +833,7 @@ impl<'a> HostModuleRegistry<'a> {
         let mut missing_module_capabilities = module
             .required_capabilities
             .iter()
-            .filter(|required| {
-                plan_capability_bit(plan, &required.name) != Some(required.bit)
-            })
+            .filter(|required| plan_capability_bit(plan, &required.name) != Some(required.bit))
             .map(|required| required.name.clone())
             .collect::<Vec<_>>();
         missing_module_capabilities.sort();
@@ -1622,7 +1620,9 @@ mod tests {
         assert_eq!(feature_denial.code, ModuleDiagnosticCode::MissingFeature);
         assert_eq!(feature_denial.module, "ogma:math");
 
-        tampered_plan.enabled_features.insert("graphics.v2".to_owned());
+        tampered_plan
+            .enabled_features
+            .insert("graphics.v2".to_owned());
         tampered_plan.granted_capabilities.remove("render.read");
         let module_capability_denial = modules
             .resolve_import(
@@ -1636,9 +1636,7 @@ mod tests {
             module_capability_denial.code,
             ModuleDiagnosticCode::CapabilityDenied
         );
-        assert!(module_capability_denial
-            .detail
-            .contains("render.read"));
+        assert!(module_capability_denial.detail.contains("render.read"));
 
         let denied = modules
             .resolve_import(
