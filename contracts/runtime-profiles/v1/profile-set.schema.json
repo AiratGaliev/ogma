@@ -17,6 +17,7 @@
       "type": "string"
     },
     "schemaVersion": {
+      "type": "integer",
       "const": 1
     },
     "ecmaEdition": {
