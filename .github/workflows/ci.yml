@@ -411,3 +411,80 @@ jobs:
           path: ${{ runner.temp }}/ogm-20-host-execution-scope-report.json
           if-no-files-found: error
           retention-days: 30
+
+
+  ogm21-typed-host-dispatch-proof:
+    name: OGM-21 typed host function dispatch proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-21-typed-host-function-dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Capture toolchain and runner metadata
+        id: benchmark_environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          if [[ -z "$cpu_model" ]]; then
+            cpu_model="$(uname -m)"
+          fi
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run typed host dispatch contract tests
+        run: cargo test --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-features --locked
+
+      - name: Compile C11 descriptor and slot layout smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cc -std=c11 -Wall -Wextra -Werror -pedantic \
+            -I benchmarks/typed-host-dispatch/include \
+            -I benchmarks/rust-abi/include \
+            benchmarks/typed-host-dispatch/tests/c_abi_layout.c \
+            -o "$RUNNER_TEMP/ogma-typed-host-dispatch-c-layout"
+          "$RUNNER_TEMP/ogma-typed-host-dispatch-c-layout"
+
+      - name: Run reproducible typed host dispatch comparison
+        env:
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM21_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --locked --release --bin ogma-typed-dispatch-bench -- \
+            --iterations 10000 \
+            --warmups 3 \
+            --samples 101 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --tested-revision "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/ogm-21-typed-host-dispatch-report.json"
+
+      - name: Validate OGM-21 benchmark JSON report
+        run: python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$RUNNER_TEMP/ogm-21-typed-host-dispatch-report.json"
+
+      - name: Upload OGM-21 proof report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-21-typed-host-dispatch-evidence
+          path: ${{ runner.temp }}/ogm-21-typed-host-dispatch-report.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,19 @@
+[package]
+name = "ogma-typed-host-dispatch-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 proof of versioned typed host-function registration and dispatch"
+
+[dependencies]
+ogma-rust-abi-proof = { path = "../rust-abi" }
+ogma-host-execution-scope-proof = { path = "../host-execution-scope" }
+
+[[bin]]
+name = "ogma-typed-dispatch-bench"
+path = "src/bin/benchmark.rs"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
