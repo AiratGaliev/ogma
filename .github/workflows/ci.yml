@@ -879,8 +879,8 @@ jobs:
       - name: Run reproducible GC comparison benchmark
         id: benchmark
         env:
-          RUSTC_VERSION: \${{ steps.benchmark_environment.outputs.rustc_version }}
-          OGM26_CPU_MODEL: \${{ steps.benchmark_environment.outputs.cpu_model }}
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM26_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
         shell: bash
         run: |
           set -euo pipefail
@@ -888,7 +888,7 @@ jobs:
             --objects 2048 \
             --warmups 3 \
             --samples 101 \
-            --revision "\${{ github.event.pull_request.head.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM26_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-26-gc-comparison-report.json"
@@ -901,6 +901,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ogm-26-gc-comparison-evidence
-          path: \${{ runner.temp }}/ogm-26-gc-comparison-report.json
+          path: ${{ runner.temp }}/ogm-26-gc-comparison-report.json
           if-no-files-found: error
           retention-days: 30
