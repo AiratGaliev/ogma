@@ -1,0 +1,21 @@
+[package]
+name = "ogma-frame-snapshot-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 reference-consumer proof for Ogma FrameSnapshot and batch host APIs"
+
+[lib]
+name = "ogma_frame_snapshot_proof"
+
+[[bin]]
+name = "ogma-frame-snapshot-bench"
+path = "src/bin/benchmark.rs"
+
+[dependencies]
+rquickjs = { version = "=0.14.0", features = ["std"] }
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
