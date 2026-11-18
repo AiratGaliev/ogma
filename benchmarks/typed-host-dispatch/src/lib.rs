@@ -332,6 +332,22 @@ struct RootScopeGuard {
     token: OgmaRootScopeHandle,
     active: bool,
 }
+
+/// Persistent root that keeps an ABI handle alive until the guard is dropped.
+/// Its lifetime is tied to the owning registry and it is thread-affine.
+pub struct PersistentHandleRoot<'registry> {
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    token: OgmaPersistentHandle,
+    _registry: PhantomData<&'registry HostFunctionRegistry>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl Drop for PersistentHandleRoot<'_> {
+    fn drop(&mut self) {
+        let _ = unsafe { ogma_persistent_release(self.runtime, self.context, self.token) };
+    }
+}
 impl RootScopeGuard {
     fn open(
         runtime: *const OgmaRuntime,
@@ -722,6 +738,28 @@ impl HostFunctionRegistry {
         } else {
             Err(DispatchError::Abi(status))
         }
+    }
+
+    /// Creates a persistent root for a value that must survive unrooted collection.
+    pub fn root_handle(
+        &self,
+        handle: OgmaHandle,
+    ) -> Result<PersistentHandleRoot<'_>, DispatchError> {
+        self.ensure_owner_thread()?;
+        let mut token = OgmaPersistentHandle::default();
+        let status = unsafe {
+            ogma_persistent_create(self.runtime, self.context, handle, &mut token)
+        };
+        if status != OgmaStatus::OK {
+            return Err(DispatchError::Abi(status));
+        }
+        Ok(PersistentHandleRoot {
+            runtime: self.runtime,
+            context: self.context,
+            token,
+            _registry: PhantomData,
+            _not_send_or_sync: PhantomData,
+        })
     }
 
     pub fn read_number(&self, handle: OgmaHandle) -> Result<f64, DispatchError> {
@@ -1495,6 +1533,22 @@ mod tests {
                 )
                 .unwrap(),
             JsCompletion::Normal(DispatchValue::Number(10.0))
+        );
+    }
+
+    #[test]
+    fn persistent_handle_root_survives_collection_until_guard_drop() {
+        let registry = HostFunctionRegistry::new().unwrap();
+        let handle = registry.create_number(13.0).unwrap();
+        {
+            let _root = registry.root_handle(handle).unwrap();
+            registry.collect_unrooted().unwrap();
+            assert_eq!(registry.read_number(handle).unwrap(), 13.0);
+        }
+        registry.collect_unrooted().unwrap();
+        assert_eq!(
+            registry.read_number(handle),
+            Err(DispatchError::Abi(OgmaStatus::STALE_HANDLE)),
         );
     }
 
