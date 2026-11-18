@@ -524,8 +524,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn percentile_sample_count_is_large_enough_to_report_tail_latency() {
-        assert!(101 >= 3);
-    }
 }
