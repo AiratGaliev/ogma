@@ -5,7 +5,7 @@ on:
     branches: [dev, test, main]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [dev, test, main]
+    branches: [dev, test, main, feat/ogm-30-benchmark-cranelift-llvm]
   workflow_dispatch:
 
 permissions:
@@ -262,7 +262,7 @@ jobs:
         run: python -m unittest discover -s benchmarks/object-shapes-inline-cache -p "test_*.py" -v
 
       - name: Run OGM-18 throughput and memory proof
-        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
+        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha || github.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
 
       - name: Upload OGM-18 proof report
         if: always()
@@ -1000,7 +1000,7 @@ jobs:
 
   ogm30-native-backend-comparison:
     name: OGM-30 Cranelift ObjectModule vs LLVM benchmark
-    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')
+    if: (github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')) || (github.event_name == 'push' && github.ref == 'refs/heads/feat/ogm-30-benchmark-cranelift-llvm')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -1013,7 +1013,7 @@ jobs:
       - name: Checkout tested PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Install LLVM and native linker
