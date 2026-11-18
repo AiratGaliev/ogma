@@ -1610,7 +1610,7 @@ mod tests {
     fn releasing_consumed_completion_removes_its_temporary_root() {
         let mut heap = GcHeap::default();
         let exception = heap.allocate();
-        let mut providers = RootProviders::default();
+        let providers = RootProviders::default();
         let mut stack = ActivationStack::default();
         let thrown = Completion::Throw(JsValue::Managed(exception));
 
