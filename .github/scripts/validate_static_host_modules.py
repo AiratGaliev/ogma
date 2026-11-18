@@ -109,6 +109,20 @@ def validate(
                 validate(item, child_schema, schema_path, documents, f"{location}.{key}")
 
 
+def expect_invalid(
+    value: Any,
+    schema: dict[str, Any],
+    schema_path: Path,
+    documents: dict[Path, Any],
+    location: str,
+) -> None:
+    try:
+        validate(value, schema, schema_path, documents, location)
+    except ValueError:
+        return
+    raise ValueError(f"{location}: invalid fixture was unexpectedly accepted")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", type=Path)
@@ -128,6 +142,17 @@ def main() -> int:
     profile = load_json(profile_fixture_path)
     validate(descriptor, documents[descriptor_path.resolve()], descriptor_path.resolve(), documents)
     validate(profile, documents[profile_path.resolve()], profile_path.resolve(), documents)
+
+    for restricted_name in ("arguments", "eval"):
+        invalid_descriptor = json.loads(json.dumps(descriptor))
+        invalid_descriptor["exports"][0]["name"] = restricted_name
+        expect_invalid(
+            invalid_descriptor,
+            documents[descriptor_path.resolve()],
+            descriptor_path.resolve(),
+            documents,
+            f"$.exports[0].name({restricted_name})",
+        )
 
     exports = descriptor["exports"]
     names = [item["name"] for item in exports]

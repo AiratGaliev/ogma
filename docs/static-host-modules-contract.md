@@ -24,7 +24,7 @@ A module descriptor records:
 
 Capability names map to fixed bit positions (0..63). One name cannot be assigned to multiple bits and one bit cannot identify different names. A module-level capability is merged into every registered export descriptor, so the existing OGM-21 dispatch path continues checking it on every invocation. Export-specific capabilities are enforced by profile resolution and the existing slot invocation guard.
 
-Export function descriptor names are canonicalized as <module-specifier>/<export-name>. Descriptor validation is performed before registration. If a function-table registration fails part-way through a module, already registered slots from that module are unregistered; the module is never published as partially registered.
+Export function descriptor names are canonicalized as <module-specifier>/<export-name>. Descriptor v1 export names are ASCII TypeScript binding identifiers; strict-mode restricted names such as `arguments` and `eval` are rejected. Descriptor validation is performed before registration. If a function-table registration fails part-way through a module, already registered slots from that module are unregistered; the module is never published as partially registered.
 
 The module descriptor is Rust-side metadata. It does not append fields to OGM-19 C structs or alter OGM ABI 1.x layouts.
 
@@ -39,6 +39,8 @@ Current v1 mappings are intentionally narrow:
 | Generic | (...args: unknown[]) => unknown |
 | F64Binary | (left: number, right: number) => number |
 | NumberHandleBinary | (left: number, right: number) => number |
+
+Mutable exports are emitted as `export let`; immutable host-function and dynamically read-only exports are emitted as `export const`. This keeps the declaration binding category aligned with the descriptor rather than incorrectly presenting every export as immutable.
 
 The generated ogma:math output is checked byte-for-byte against [ogma-math.d.ts](../benchmarks/typed-host-dispatch/tests/fixtures/ogma-math.d.ts). This is a binding proof for the current typed signature set, not a full ogma-bindgen or TypeScript type-system implementation.
 
@@ -75,6 +77,8 @@ build_profile computes a deterministic transitive closure of declared module dep
 Unused registered modules appear in ModuleBuildPlan::stripped_modules. A module referenced by a runtime import or native-module dependency must be present in the validated closure. Removing it from the profile yields RuntimeImportModuleStripped or NativeModuleDependencyStripped; it is never silently dropped. A module's declared native libraries/adapters must also be present in enabledNativeDependencies.
 
 Diagnostics are stable values with machine-readable codes and are sorted by (code, module, subject, detail). They can be rendered without depending on hash-map iteration order.
+
+A build plan is an immutable, registry-bound snapshot. Successful module registration or unregistration advances the registry revision; plans created by an earlier revision or another registry are rejected by both static resolution and declaration generation. This prevents an old dependency closure from being reused after modules are replaced or removed.
 
 ## 6. Verification map
 

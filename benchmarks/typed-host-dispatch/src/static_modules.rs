@@ -6,7 +6,7 @@
 use super::{
     HostFunctionDescriptor, HostFunctionRegistry, HostFunctionSignature, HostFunctionSlot,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
@@ -83,6 +83,7 @@ pub enum ModuleDiagnosticCode {
     RuntimeImportModuleStripped,
     NativeModuleDependencyStripped,
     MissingNativeDependency,
+    StaleBuildPlan,
 }
 
 impl ModuleDiagnosticCode {
@@ -107,6 +108,7 @@ impl ModuleDiagnosticCode {
             Self::RuntimeImportModuleStripped => "runtime_import_module_stripped",
             Self::NativeModuleDependencyStripped => "native_module_dependency_stripped",
             Self::MissingNativeDependency => "missing_native_dependency",
+            Self::StaleBuildPlan => "stale_build_plan",
         }
     }
 }
@@ -205,15 +207,61 @@ pub struct HostFeatureProfile {
     pub native_module_dependencies: BTreeSet<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Immutable build snapshot tied to one registry identity and revision.
+/// It becomes stale after any successful module registration or unregistration.
+#[derive(Clone, Debug)]
 pub struct ModuleBuildPlan {
-    pub profile_id: String,
-    pub included_modules: BTreeSet<String>,
-    pub stripped_modules: BTreeSet<String>,
-    pub native_dependencies: BTreeSet<String>,
-    pub capability_mask: u64,
-    pub enabled_features: BTreeSet<String>,
-    pub granted_capabilities: BTreeMap<String, u8>,
+    profile_id: String,
+    included_modules: BTreeSet<String>,
+    stripped_modules: BTreeSet<String>,
+    native_dependencies: BTreeSet<String>,
+    capability_mask: u64,
+    enabled_features: BTreeSet<String>,
+    granted_capabilities: BTreeMap<String, u8>,
+    registry_token: Rc<()>,
+    registry_revision: u64,
+}
+
+impl PartialEq for ModuleBuildPlan {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.registry_token, &other.registry_token)
+            && self.registry_revision == other.registry_revision
+            && self.profile_id == other.profile_id
+            && self.included_modules == other.included_modules
+            && self.stripped_modules == other.stripped_modules
+            && self.native_dependencies == other.native_dependencies
+            && self.capability_mask == other.capability_mask
+            && self.enabled_features == other.enabled_features
+            && self.granted_capabilities == other.granted_capabilities
+    }
+}
+
+impl Eq for ModuleBuildPlan {}
+
+impl ModuleBuildPlan {
+    pub fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    pub fn included_modules(&self) -> &BTreeSet<String> {
+        &self.included_modules
+    }
+
+    pub fn stripped_modules(&self) -> &BTreeSet<String> {
+        &self.stripped_modules
+    }
+
+    pub fn native_dependencies(&self) -> &BTreeSet<String> {
+        &self.native_dependencies
+    }
+
+    pub fn capability_mask(&self) -> u64 {
+        self.capability_mask
+    }
+
+    pub fn enabled_features(&self) -> &BTreeSet<String> {
+        &self.enabled_features
+    }
 }
 
 #[derive(Clone)]
@@ -238,6 +286,8 @@ struct RegisteredModule {
 pub struct HostModuleRegistry<'a> {
     functions: &'a HostFunctionRegistry,
     modules: RefCell<BTreeMap<String, RegisteredModule>>,
+    registry_token: Rc<()>,
+    revision: Cell<u64>,
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
 
@@ -246,6 +296,8 @@ impl<'a> HostModuleRegistry<'a> {
         Self {
             functions,
             modules: RefCell::new(BTreeMap::new()),
+            registry_token: Rc::new(()),
+            revision: Cell::new(0),
             _not_send_or_sync: PhantomData,
         }
     }
@@ -347,6 +399,7 @@ impl<'a> HostModuleRegistry<'a> {
                 exports,
             },
         );
+        self.bump_revision();
         Ok(())
     }
 
@@ -406,6 +459,7 @@ impl<'a> HostModuleRegistry<'a> {
             }
         }
         self.modules.borrow_mut().remove(specifier);
+        self.bump_revision();
 
         if cleanup_errors.is_empty() {
             Ok(())
@@ -420,6 +474,24 @@ impl<'a> HostModuleRegistry<'a> {
                 ),
             ))
         }
+    }
+
+    fn bump_revision(&self) {
+        self.revision.set(self.revision.get().wrapping_add(1));
+    }
+
+    fn validate_plan(&self, plan: &ModuleBuildPlan) -> Result<(), ModuleDiagnostic> {
+        if !Rc::ptr_eq(&plan.registry_token, &self.registry_token)
+            || plan.registry_revision != self.revision.get()
+        {
+            return Err(ModuleDiagnostic::new(
+                ModuleDiagnosticCode::StaleBuildPlan,
+                "",
+                "",
+                "build plan belongs to another registry or an earlier registry revision",
+            ));
+        }
+        Ok(())
     }
 
     pub fn module_version(&self, specifier: &str) -> Option<String> {
@@ -778,6 +850,8 @@ impl<'a> HostModuleRegistry<'a> {
             capability_mask: granted_mask,
             enabled_features: profile.enabled_features.clone(),
             granted_capabilities: grant_map,
+            registry_token: Rc::clone(&self.registry_token),
+            registry_revision: self.revision.get(),
         })
     }
 
@@ -789,6 +863,7 @@ impl<'a> HostModuleRegistry<'a> {
         export_name: Option<&str>,
         kind: ModuleImportKind,
     ) -> Result<ModuleImportResolution, ModuleDiagnostic> {
+        self.validate_plan(plan)?;
         let fallback = match kind {
             ModuleImportKind::StaticNamedEsm => None,
             ModuleImportKind::NamespaceEsm => Some(GenericFallbackReason::NamespaceBinding),
@@ -915,6 +990,7 @@ impl<'a> HostModuleRegistry<'a> {
         plan: &ModuleBuildPlan,
         specifier: &str,
     ) -> Result<String, ModuleDiagnostic> {
+        self.validate_plan(plan)?;
         if !plan.included_modules.contains(specifier) {
             return Err(ModuleDiagnostic::new(
                 ModuleDiagnosticCode::ModuleNotEnabled,
@@ -985,7 +1061,13 @@ impl<'a> HostModuleRegistry<'a> {
                     "(left: number, right: number) => number"
                 }
             };
-            declaration.push_str(&format!("  export const {name}: {function_type};\n"));
+            let binding_keyword = match export.binding {
+                HostExportBinding::Mutable => "let",
+                HostExportBinding::ImmutableHostFunction | HostExportBinding::Dynamic => "const",
+            };
+            declaration.push_str(&format!(
+                "  export {binding_keyword} {name}: {function_type};\n"
+            ));
         }
         declaration.push_str("}\n");
         Ok(declaration)
@@ -1219,6 +1301,8 @@ fn is_typescript_identifier(value: &str) -> bool {
         "extends",
         "false",
         "finally",
+        "arguments",
+        "eval",
         "for",
         "function",
         "if",
@@ -1420,6 +1504,8 @@ mod tests {
                 required_features: Vec::new(),
                 binding: HostExportBinding::ImmutableHostFunction,
             },
+            math_export(51_003, "replaceable", HostExportBinding::Mutable),
+            math_export(51_004, "dynamic", HostExportBinding::Dynamic),
         ];
         modules.register(descriptor).unwrap();
         let mut declaration_profile = profile(&["ogma:math"]);
@@ -1575,6 +1661,77 @@ mod tests {
     }
 
     #[test]
+    fn strict_mode_restricted_export_names_are_rejected() {
+        for name in ["arguments", "eval"] {
+            let functions = HostFunctionRegistry::new().unwrap();
+            let modules = HostModuleRegistry::new(&functions);
+            let mut descriptor = math_module();
+            descriptor.exports[0].name = name.to_owned();
+
+            let error = modules.register(descriptor).unwrap_err();
+            assert_eq!(error.code, ModuleDiagnosticCode::InvalidExportName);
+            assert_eq!(error.subject, name);
+            assert_eq!(functions.metrics().active_slots, 0);
+        }
+    }
+
+    #[test]
+    fn build_plans_are_invalidated_after_registry_changes_and_across_registries() {
+        let functions = HostFunctionRegistry::new().unwrap();
+        let modules = HostModuleRegistry::new(&functions);
+        modules.register(math_module()).unwrap();
+        let plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
+
+        modules.unregister("ogma:math").unwrap();
+        let mut replacement = math_module();
+        replacement.version = "2.0.0".to_owned();
+        replacement.required_features = vec!["host-modules.v2".to_owned()];
+        replacement.exports = vec![math_export(
+            55_001,
+            "subtract",
+            HostExportBinding::ImmutableHostFunction,
+        )];
+        modules.register(replacement).unwrap();
+
+        let static_error = modules
+            .resolve_import(
+                &plan,
+                "ogma:math",
+                Some("subtract"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap_err();
+        assert_eq!(static_error.code, ModuleDiagnosticCode::StaleBuildPlan);
+
+        let fallback_error = modules
+            .resolve_import(
+                &plan,
+                "ogma:math",
+                None,
+                ModuleImportKind::DynamicImport,
+            )
+            .unwrap_err();
+        assert_eq!(fallback_error.code, ModuleDiagnosticCode::StaleBuildPlan);
+
+        let declaration_error = modules
+            .generate_typescript_declarations(&plan, "ogma:math")
+            .unwrap_err();
+        assert_eq!(declaration_error.code, ModuleDiagnosticCode::StaleBuildPlan);
+
+        let other_registry = HostModuleRegistry::new(&functions);
+        let foreign_plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
+        let foreign_error = other_registry
+            .resolve_import(
+                &foreign_plan,
+                "ogma:math",
+                Some("subtract"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap_err();
+        assert_eq!(foreign_error.code, ModuleDiagnosticCode::StaleBuildPlan);
+    }
+
+    #[test]
     fn capability_and_feature_denials_have_stable_diagnostics() {
         let functions = HostFunctionRegistry::new().unwrap();
         let modules = HostModuleRegistry::new(&functions);
@@ -1649,6 +1806,23 @@ mod tests {
         assert_eq!(denied.code, ModuleDiagnosticCode::CapabilityDenied);
         assert_eq!(denied.subject, "add");
         assert!(denied.detail.contains("render.write"));
+
+        let mut import_profile = profile(&["ogma:math"]);
+        import_profile.enabled_features.insert("graphics.v2".to_owned());
+        import_profile
+            .granted_capabilities
+            .push(HostCapabilityRequirement::new("render.read", 3));
+        import_profile.runtime_imports.push(RuntimeModuleImport {
+            specifier: "ogma:math".to_owned(),
+            kind: ModuleImportKind::StaticNamedEsm,
+            imported_names: vec!["add".to_owned()],
+        });
+        let import_errors = modules.build_profile(&import_profile).unwrap_err();
+        assert!(import_errors.iter().any(|item| {
+            item.code == ModuleDiagnosticCode::CapabilityDenied
+                && item.subject == "add"
+                && item.detail.contains("render.write")
+        }));
 
         granted
             .granted_capabilities

@@ -6,4 +6,10 @@ declare module "ogma:math" {
   /** Requires capabilities: math.read. */
   /** Requires features: host-modules.v1. */
   export const log: (...args: unknown[]) => unknown;
+  /** Requires capabilities: math.read. */
+  /** Requires features: host-modules.v1. */
+  export let replaceable: (left: number, right: number) => number;
+  /** Requires capabilities: math.read. */
+  /** Requires features: host-modules.v1. */
+  export const dynamic: (left: number, right: number) => number;
 }
