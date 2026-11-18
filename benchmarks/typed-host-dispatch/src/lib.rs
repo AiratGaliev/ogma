@@ -573,7 +573,7 @@ impl HostFunctionRegistry {
         &self, scope: &HostExecutionScope<'_>, slot: HostFunctionSlot,
         capabilities: u64, args: &[DispatchValue], force_generic: bool,
     ) -> Result<JsCompletion, DispatchError> {
-        scope.run_callback(|_| self.invoke_inner(slot, capabilities, args, force_generic))
+        scope.run_callback(|| self.invoke_inner(slot, capabilities, args, force_generic))
             .map_err(DispatchError::HostExecution)?
     }
 

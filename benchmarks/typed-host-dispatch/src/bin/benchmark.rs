@@ -15,6 +15,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
+use std::ptr;
 use std::slice;
 use std::time::Instant;
 
@@ -234,12 +235,12 @@ where
         }
     }
 
-    let mut latency = Vec::with_capacity(config.samples);
+    let mut latency = Vec::with_capacity(config.iterations);
     let mut batch_latency = Vec::with_capacity(config.samples);
     let metrics_before = registry.metrics();
     let allocations_before = AllocationSnapshot::now();
 
-    for _ in 0..config.samples {
+    for _ in 0..config.iterations {
         let start = Instant::now();
         operation()?;
         latency.push(start.elapsed().as_nanos() as f64);
@@ -292,12 +293,12 @@ fn measure_lookup<F>(
     name: &'static str,
     config: &Config,
     registry: &HostFunctionRegistry,
-    mut operation: F,
+    operation: F,
 ) -> Result<Measurement, String>
 where
     F: FnMut() -> Result<(), String>,
 {
-    measure(name, config, registry, || operation())
+    measure(name, config, registry, operation)
 }
 
 fn json_escape(input: &str) -> String {
@@ -335,7 +336,8 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
     let _ = writeln!(output, "    \"profile\": \"{}\",", if cfg!(debug_assertions) { "debug" } else { "release" });
     let _ = writeln!(output, "    \"iterations_per_batch\": {},", config.iterations);
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
-    let _ = writeln!(output, "    \"measurement_samples\": {}", config.samples);
+    let _ = writeln!(output, "    \"measurement_samples\": {},", config.samples);
+    let _ = writeln!(output, "    \"single_call_latency_samples\": {}", config.iterations);
     let _ = writeln!(output, "  }},");
     let _ = writeln!(output, "  \"abi\": {{\"major\": {}, \"minor\": {}, \"descriptor_version\": 1}},", abi_major, abi_minor);
     let _ = writeln!(output, "  \"measurements\": [");
@@ -347,7 +349,7 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
         let _ = writeln!(output, "      \"batch_median_latency_ns\": {:.2},", item.batch_p50_ns);
         let _ = writeln!(output, "      \"throughput_ops_per_second\": {:.2},", item.throughput_ops_sec);
         let _ = writeln!(output, "      \"allocations\": {{\"alloc_calls\": {}, \"realloc_calls\": {}, \"allocated_bytes\": {}}},", item.allocation.alloc_calls, item.allocation.realloc_calls, item.allocation.allocated_bytes);
-        let _ = writeln!(output, "      \"dispatch\": {{\"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
+        let _ = writeln!(output, "      \"dispatch\": {{\"table_version\": {}, \"active_slots\": {}, \"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.table_version, item.metrics.active_slots, item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
         let _ = writeln!(output, "    }}{comma}");
     }
     let _ = writeln!(output, "  ]");
@@ -376,7 +378,7 @@ fn main() -> Result<(), String> {
     let generic = registry.register(
         HostFunctionDescriptor::generic(
             HostFunctionId(0x2103), "ogma:bench/generic-add", 0, 0,
-            generic_add as OgmaHostCallback, ptr::null_mut(),
+            generic_add, ptr::null_mut(),
         ).map_err(|e| format!("generic descriptor: {e:?}"))?
     ).map_err(|e| format!("generic registration: {e:?}"))?;
 
