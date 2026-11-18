@@ -887,22 +887,31 @@ impl<'a> HostModuleRegistry<'a> {
             module.version, specifier
         );
         for (name, export) in &module.exports {
-            if export
+            let required_features = module
                 .required_features
+                .union(&export.required_features)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if required_features
                 .iter()
                 .any(|feature| !plan.enabled_features.contains(feature))
             {
                 continue;
             }
-            if export
+
+            let required_capabilities = module
                 .required_capabilities
                 .iter()
-                .any(|required| plan_capability_bit(plan, &required.name) != Some(required.bit))
-            {
+                .chain(export.required_capabilities.iter())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if required_capabilities.iter().any(|required| {
+                plan_capability_bit(plan, &required.name) != Some(required.bit)
+            }) {
                 continue;
             }
-            let capability_names = export
-                .required_capabilities
+
+            let capability_names = required_capabilities
                 .iter()
                 .map(|capability| capability.name.as_str())
                 .collect::<Vec<_>>();
@@ -912,7 +921,7 @@ impl<'a> HostModuleRegistry<'a> {
                     capability_names.join(", ")
                 ));
             }
-            let feature_names = export.required_features.iter().cloned().collect::<Vec<_>>();
+            let feature_names = required_features.into_iter().collect::<Vec<_>>();
             if !feature_names.is_empty() {
                 declaration.push_str(&format!(
                     "  /** Requires features: {}. */\n",
@@ -1340,6 +1349,9 @@ mod tests {
         let functions = HostFunctionRegistry::new().unwrap();
         let modules = HostModuleRegistry::new(&functions);
         let mut descriptor = math_module();
+        descriptor
+            .required_capabilities
+            .push(HostCapabilityRequirement::new("math.read", 2));
         descriptor.exports = vec![
             math_export(51_001, "add", HostExportBinding::ImmutableHostFunction),
             HostModuleExport {
@@ -1359,11 +1371,30 @@ mod tests {
             },
         ];
         modules.register(descriptor).unwrap();
-        let plan = modules.build_profile(&profile(&["ogma:math"])).unwrap();
+        let mut declaration_profile = profile(&["ogma:math"]);
+        declaration_profile
+            .granted_capabilities
+            .push(HostCapabilityRequirement::new("math.read", 2));
+        let plan = modules.build_profile(&declaration_profile).unwrap();
         let generated = modules
             .generate_typescript_declarations(&plan, "ogma:math")
             .unwrap();
         assert_eq!(generated, include_str!("../tests/fixtures/ogma-math.d.ts"));
+    }
+
+    #[test]
+    fn partial_module_registration_rolls_back_all_previously_registered_exports() {
+        let functions = HostFunctionRegistry::new().unwrap();
+        let modules = HostModuleRegistry::new(&functions);
+        let mut descriptor = math_module();
+        descriptor
+            .exports
+            .push(math_export(50_001, "duplicate_id", HostExportBinding::ImmutableHostFunction));
+
+        let error = modules.register(descriptor).unwrap_err();
+        assert_eq!(error.code, ModuleDiagnosticCode::FunctionRegistrationFailed);
+        assert_eq!(functions.metrics().active_slots, 0);
+        assert_eq!(modules.module_version("ogma:math"), None);
     }
 
     #[test]

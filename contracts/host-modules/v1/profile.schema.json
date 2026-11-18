@@ -70,8 +70,7 @@
             "type": "array",
             "uniqueItems": true,
             "items": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "descriptor.schema.json#/$defs/export/properties/name"
             }
           }
         }

@@ -135,6 +135,12 @@ def main() -> int:
         raise ValueError(f"unexpected descriptor fixture exports: {names!r}")
     if profile["runtimeImports"][0]["specifier"] not in profile["enabledModules"]:
         raise ValueError("profile fixture strips a referenced runtime import")
+    exported_names = set(names)
+    for runtime_import in profile["runtimeImports"]:
+        if runtime_import["kind"] == "static-named-esm":
+            unknown = sorted(set(runtime_import["importedNames"]) - exported_names)
+            if unknown:
+                raise ValueError(f"runtime import references unknown exports: {unknown!r}")
     if not declaration_path.is_file() or 'declare module "ogma:math"' not in declaration_path.read_text(encoding="utf-8"):
         raise ValueError("TypeScript declaration fixture is missing or malformed")
 
