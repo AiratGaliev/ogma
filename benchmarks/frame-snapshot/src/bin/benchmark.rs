@@ -436,7 +436,7 @@ fn main() -> Result<(), String> {
         }
 
         let scalar_callbacks = 10 + 6 + 2 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
-        let batch_callbacks = 10 + 6 + 2 + 1 + 1 + 1 + 2;
+        let batch_callbacks = 10 + 6 + 2 + 1 + 1 + 1 + 1 + 2;
         for (mode, update_mode, callback_count) in [
             (
                 "string_ids_scalar_callbacks",

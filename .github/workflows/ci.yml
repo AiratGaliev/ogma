@@ -659,6 +659,22 @@ jobs:
           })
 
           for case in report["cases"]:
+              if case["phase"] == "cge_reference_consumer_js_update_and_dispatch":
+                  if case["mode"] == "cge_scalar_callbacks":
+                      assert case["host_callbacks_per_update"] == 2 * case["entity_count"] + 9
+                  else:
+                      assert case["host_callbacks_per_update"] == 10
+              elif case["phase"] == "cge_javascript_update_only":
+                  assert case["host_callbacks_per_update"] == 0
+              elif case["phase"] == "reference_consumer_js_update_and_dispatch":
+                  if case["mode"] == "string_ids_scalar_callbacks":
+                      expected_callbacks = 22 + 2 * case["entity_count"] + 2 * (case["entity_count"] // 8)
+                  elif case["mode"] in {"numeric_bitsets_batch_set", "numeric_bitsets_batch_bulk"}:
+                      expected_callbacks = 24
+                  else:
+                      raise AssertionError(f"unexpected extended consumer mode: {case['mode']}")
+                  assert case["host_callbacks_per_update"] == expected_callbacks
+
               for metric in ("p50_ns_per_op", "p95_ns_per_op", "p99_ns_per_op"):
                   value = case[metric]
                   assert math.isfinite(value) and value >= 0, (case["phase"], case["mode"], metric, value)
