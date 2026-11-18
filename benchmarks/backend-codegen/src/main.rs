@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context as _, Result};
 use cranelift_codegen::{
-    ir::{condcodes::{FloatCC, IntCC}, types, AbiParam, InstBuilder, Signature, UserFuncName, Value},
-    settings, Context as ClifContext,
+    ir::{condcodes::{FloatCC, IntCC}, instructions::BlockArg, types, AbiParam, InstBuilder, Signature, UserFuncName, Value},
+    settings::{self, Configurable}, Context as ClifContext,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{default_libcall_names, FuncId, Linkage, Module};
@@ -120,10 +120,10 @@ fn sym(name:&str)->Vec<u8>{let mut b=name.as_bytes().to_vec();b.push(0);b}
 fn define_clif<F>(m:&mut ObjectModule,id:FuncId,sig:Signature,build:F)->Result<()>
 where F:FnOnce(&mut ObjectModule,&mut FunctionBuilder<'_>,&[Value])->Result<()>{
     let mut ctx=m.make_context();
-    ctx.func=ClifContext::for_function(cranelift_codegen::ir::Function::with_name_signature(UserFuncName::user(0,id.as_u32()),sig));
+    ctx.func.name=UserFuncName::user(0,id.as_u32());ctx.func.signature=sig;
     let mut fbctx=FunctionBuilderContext::new();
     {let mut b=FunctionBuilder::new(&mut ctx.func,&mut fbctx);let entry=b.create_block();b.append_block_params_for_function_params(entry);b.switch_to_block(entry);
-        let p=b.block_params(entry).to_vec();build(m,&mut b,&p)?;b.seal_all_blocks();b.finalize();}
+        let p=b.block_params(entry).to_vec();build(m,&mut b,&p)?;b.seal_all_blocks();b.finalize(m.target_config());}
     m.define_function(id,&mut ctx)?;m.clear_context(&mut ctx);Ok(())
 }
 fn unary_i64_sig(m:&mut ObjectModule)->Signature{let mut s=m.make_signature();s.params.push(AbiParam::new(types::I64));s.returns.push(AbiParam::new(types::I64));s}
@@ -164,16 +164,16 @@ fn compile_cranelift(path:&Path,c:&CoreCorpus)->Result<u64>{
         let current=b.append_block_param(lp,types::F64);let limit=b.append_block_param(lp,types::F64);let step=b.append_block_param(lp,types::F64);
         let bc=b.append_block_param(body,types::F64);let bl=b.append_block_param(body,types::F64);let bs=b.append_block_param(body,types::F64);
         let out=b.append_block_param(exit,types::F64);
-        b.ins().jump(lp,&[p[0],p[1],p[2]]);b.switch_to_block(lp);
-        let eq=b.ins().fcmp(FloatCC::Equal,current,limit);b.ins().brif(eq,exit,&[current],body,&[current,limit,step]);
+        let entry_args=[BlockArg::Value(p[0]),BlockArg::Value(p[1]),BlockArg::Value(p[2])];b.ins().jump(lp,&entry_args);b.switch_to_block(lp);
+        let eq=b.ins().fcmp(FloatCC::Equal,current,limit);let exit_args=[BlockArg::Value(current)];let body_args=[BlockArg::Value(current),BlockArg::Value(limit),BlockArg::Value(step)];b.ins().brif(eq,exit,&exit_args,body,&body_args);
         b.switch_to_block(body);let add_ref=m.declare_func_in_func(add_number,b.func);let add=b.ins().call(add_ref,&[bc,bs]);
         let boxed=b.inst_results(add)[0];let conv_ref=m.declare_func_in_func(to_number,b.func);let conv=b.ins().call(conv_ref,&[boxed]);
-        let next=b.inst_results(conv)[0];b.ins().jump(lp,&[next,bl,bs]);
+        let next=b.inst_results(conv)[0];let next_args=[BlockArg::Value(next),BlockArg::Value(bl),BlockArg::Value(bs)];b.ins().jump(lp,&next_args);
         b.switch_to_block(exit);b.ins().return_(&[out]);Ok(())
     })?;
     define_clif(&mut m,exception,exception_sig,|m,b,p|{
         let add_ref=m.declare_func_in_func(add_completion,b.func);let add=b.ins().call(add_ref,&[p[0],p[1]]);
-        let result=b.inst_results(add)[0];let tag=b.ins().ushr_imm(result,56);let zero=b.ins().iconst(types::I64,0);
+        let result=b.inst_results(add)[0];let tag=b.ins().ushr_imm_u(result,56);let zero=b.ins().iconst(types::I64,0);
         let normal=b.ins().icmp(IntCC::Equal,tag,zero);let ok=b.create_block();let thrown=b.create_block();
         b.ins().brif(normal,ok,&[],thrown,&[]);b.switch_to_block(ok);b.ins().return_(&[result]);
         b.switch_to_block(thrown);let throw_ref=m.declare_func_in_func(js_throw,b.func);let rethrow=b.ins().call(throw_ref,&[result]);
@@ -193,7 +193,7 @@ fn compile_cranelift(path:&Path,c:&CoreCorpus)->Result<u64>{
 }
 
 fn llvm_call_i64<'ctx>(b:&inkwell::builder::Builder<'ctx>,f:inkwell::values::FunctionValue<'ctx>,args:&[inkwell::values::BasicMetadataValueEnum<'ctx>],name:&str)->Result<IntValue<'ctx>>{
-    Ok(b.build_call(f,args,name)?.try_as_basic_value().left().context("expected i64 result")?.into_int_value())
+    Ok(b.build_call(f,args,name)?.try_as_basic_value().unwrap_basic().context("expected i64 result")?.into_int_value())
 }
 fn llvm_call_f64<'ctx>(b:&inkwell::builder::Builder<'ctx>,f:inkwell::values::FunctionValue<'ctx>,args:&[inkwell::values::BasicMetadataValueEnum<'ctx>],name:&str)->Result<FloatValue<'ctx>>{
     Ok(b.build_call(f,args,name)?.try_as_basic_value().left().context("expected f64 result")?.into_float_value())
@@ -228,9 +228,9 @@ fn compile_llvm(path:&Path,c:&CoreCorpus)->Result<u64>{
     let boxed=llvm_call_i64(&b,add_number,&[current_v.into(),step_v.into()],"js_add")?;
     let next=llvm_call_f64(&b,to_number,&[boxed.into()],"to_number")?;b.build_unconditional_branch(loop_bb)?;
     let body_end=b.get_insert_block().context("loop body missing")?;
-    let start=loop_fn.get_nth_param(0).unwrap().into_float_value();let max=loop_fn.get_nth_param(1).unwrap().into_float_value();
+    let start_value=loop_fn.get_nth_param(0).unwrap().into_float_value();let max=loop_fn.get_nth_param(1).unwrap().into_float_value();
     let increment=loop_fn.get_nth_param(2).unwrap().into_float_value();
-    current.add_incoming(&[(&start,loop_entry),(&next,body_end)]);
+    current.add_incoming(&[(&start_value,loop_entry),(&next,body_end)]);
     limit.add_incoming(&[(&max,loop_entry),(&limit_v,body_end)]);
     step.add_incoming(&[(&increment,loop_entry),(&step_v,body_end)]);
     b.position_at_end(exit);b.build_return(Some(&current_v))?;
@@ -313,11 +313,11 @@ fn run_backend(name:&str,o:&Options,root:&Path,c:&CoreCorpus)->Result<BackendRep
     let (compile,object)=compile_rounds(name,root,c)?;let shared=root.join(format!("{name}.so"));let helper=root.join(format!("{name}.c"));
     let mut link_samples=Vec::new();for _ in 0..5{link_samples.push(link(&object,&shared,&helper)? as f64);}
     let lib=unsafe{Library::new(&shared)?};
-    let branch:BinaryF64=unsafe{*lib.get(&sym(&c.symbol("branch")?) )?};
-    let loop_fn:TernaryF64=unsafe{*lib.get(&sym(&c.symbol("loop")?) )?};
-    let exception:BinaryI64=unsafe{*lib.get(&sym(&c.symbol("dynamic_exception")?) )?};
-    let call:CallBoundary=unsafe{*lib.get(&sym(&c.symbol("call_boundary")?) )?};
-    let host:UnaryI64=unsafe{*lib.get(&sym(&c.symbol("host_call")?) )?};
+    let branch:BinaryF64=unsafe{*lib.get(sym(&c.symbol("branch")?).as_slice())?};
+    let loop_fn:TernaryF64=unsafe{*lib.get(sym(&c.symbol("loop")?).as_slice())?};
+    let exception:BinaryI64=unsafe{*lib.get(sym(&c.symbol("dynamic_exception")?).as_slice())?};
+    let call:CallBoundary=unsafe{*lib.get(sym(&c.symbol("call_boundary")?).as_slice())?};
+    let host:UnaryI64=unsafe{*lib.get(sym(&c.symbol("host_call")?).as_slice())?};
     if unsafe{branch(7.0,7.0)}!=7.0||unsafe{branch(7.0,8.0)}!=8.0{bail!("{name}: branch mismatch");}
     if unsafe{loop_fn(0.0,5.0,1.0)}!=5.0{bail!("{name}: loop mismatch");}
     if unsafe{exception(7,8)}!=15{bail!("{name}: normal completion mismatch");}
@@ -348,7 +348,7 @@ struct Report{
  schema_version:u32,task:&'static str,source_revision:String,tested_revision:String,rustc:String,llvm:String,clang:String,os:String,
  host_arch:&'static str,cpu_model:String,build_configuration:&'static str,iterations_per_sample:u64,warmup_rounds:usize,measurement_samples:usize,
  target_lookup:JsonValue,llvm_package_footprint_kib:Option<u64>,cranelift_crate_source_bytes:u64,llvm_binding_source_bytes:u64,
- cranelift_build_artifact_bytes:u64,llvm_binding_build_artifact_bytes:u64,integration_notes:Value,cranelift:BackendReport,llvm_backend:BackendReport,
+ cranelift_build_artifact_bytes:u64,llvm_binding_build_artifact_bytes:u64,integration_notes:JsonValue,cranelift:BackendReport,llvm_backend:BackendReport,
 }
 fn command(p:&str,a:&[&str])->String{Command::new(p).args(a).output().ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_else(||"unavailable".into())}
 fn target_lookup()->JsonValue{
