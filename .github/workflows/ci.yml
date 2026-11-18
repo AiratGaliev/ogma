@@ -552,3 +552,145 @@ jobs:
           path: ${{ runner.temp }}/ogm-22-buffer-interop-report.json
           if-no-files-found: error
           retention-days: 30
+
+  ogm23-frame-snapshot-batch-host-api-proof:
+    name: OGM-23 FrameSnapshot and batch host API proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-23-batch-framesnapshot-host-api')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Capture toolchain and runner metadata
+        id: benchmark_environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          if [[ -z "$cpu_model" ]]; then cpu_model="$(uname -m)"; fi
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/frame-snapshot/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/frame-snapshot/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run FrameSnapshot, host API and consumer contract tests
+        run: cargo test --manifest-path benchmarks/frame-snapshot/Cargo.toml --all-features --locked
+
+      - name: Run reproducible FrameSnapshot and batch host API benchmark
+        id: benchmark
+        env:
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM23_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/frame-snapshot/Cargo.toml --locked --release --bin ogma-frame-snapshot-bench -- \
+            --iterations 1000 \
+            --warmups 3 \
+            --samples 101 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --tested-revision "$GITHUB_SHA" \
+            --cpu "$OGM23_CPU_MODEL" \
+            --output "$RUNNER_TEMP/ogm-23-frame-snapshot-report.json"
+
+      - name: Validate OGM-23 benchmark report and scope labels
+        run: |
+          python3 - "$RUNNER_TEMP/ogm-23-frame-snapshot-report.json" <<'PY'
+          import json
+          import math
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report_file:
+              report = json.load(report_file)
+
+          assert report["task"] == "OGM-23"
+          assert report["cge_reference_revision"] == "c47ad08c3da9a3857f8429cebbed6ce88969715d"
+          assert report["cge_reference_workload"].startswith("quickjs_host_api/frame_submit_and_update")
+          assert report["limitations"]["ogma_runtime_dispatch"].startswith("not_measured:")
+          assert report["limitations"]["host_physics"].startswith("synthetic")
+          assert report["limitations"]["host_ecs"].startswith("synthetic")
+          assert len(report["cases"]) == 64, f"expected 64 cases, got {len(report['cases'])}"
+
+          required_phases = {
+              "frame_snapshot_construction",
+              "frame_snapshot_handoff",
+              "reference_consumer_js_update_and_dispatch",
+              "cge_reference_consumer_js_update_and_dispatch",
+              "cge_javascript_update_only",
+              "javascript_update_only",
+              "host_physics_active_pose_cache_model",
+              "host_ecs_sync_model",
+              "command_drain_reuse",
+          }
+          assert required_phases.issubset({case["phase"] for case in report["cases"]})
+
+          required_modes = {
+              "string_ids_scalar_callbacks",
+              "numeric_bitsets_batch_set",
+              "numeric_bitsets_batch_bulk",
+              "javascript_only_preloaded_arrays",
+              "sparse_changed_entity_updates",
+              "dense_full_transform_query",
+              "consumer_50_percent_adaptive_selector",
+              "cge_scalar_callbacks",
+              "cge_array_read_positions_set",
+              "cge_array_read_positions_numeric_set",
+              "cge_typed_id_bulk",
+              "cge_javascript_only_preloaded_output",
+          }
+          assert required_modes.issubset({case["mode"] for case in report["cases"]})
+          assert {16, 64, 256}.issubset({
+              case["entity_count"]
+              for case in report["cases"]
+              if case["phase"] == "cge_reference_consumer_js_update_and_dispatch"
+          })
+
+          for case in report["cases"]:
+              if case["phase"] == "cge_reference_consumer_js_update_and_dispatch":
+                  if case["mode"] == "cge_scalar_callbacks":
+                      assert case["host_callbacks_per_update"] == 2 * case["entity_count"] + 9
+                  else:
+                      assert case["host_callbacks_per_update"] == 10
+              elif case["phase"] == "cge_javascript_update_only":
+                  assert case["host_callbacks_per_update"] == 0
+              elif case["phase"] == "reference_consumer_js_update_and_dispatch":
+                  if case["mode"] == "string_ids_scalar_callbacks":
+                      expected_callbacks = 22 + 2 * case["entity_count"] + 2 * (case["entity_count"] // 8)
+                  elif case["mode"] in {"numeric_bitsets_batch_set", "numeric_bitsets_batch_bulk"}:
+                      expected_callbacks = 24
+                  else:
+                      raise AssertionError(f"unexpected extended consumer mode: {case['mode']}")
+                  assert case["host_callbacks_per_update"] == expected_callbacks
+
+              for metric in ("p50_ns_per_op", "p95_ns_per_op", "p99_ns_per_op"):
+                  value = case[metric]
+                  assert math.isfinite(value) and value >= 0, (case["phase"], case["mode"], metric, value)
+              assert case["p50_ns_per_op"] <= case["p95_ns_per_op"] <= case["p99_ns_per_op"]
+              assert case["min_ns_per_op"] <= case["p50_ns_per_op"] <= case["max_ns_per_op"]
+              assert case["rust_allocations_per_op"] >= 0
+              assert case["rust_allocated_bytes_per_op"] >= 0
+
+          print(f"Validated {len(report['cases'])} OGM-23 benchmark cases.")
+          PY
+
+      - name: Upload OGM-23 benchmark evidence
+        if: always() && steps.benchmark.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-23-frame-snapshot-host-api-evidence
+          path: ${{ runner.temp }}/ogm-23-frame-snapshot-report.json
+          if-no-files-found: error
+          retention-days: 30
