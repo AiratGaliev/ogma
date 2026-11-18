@@ -405,7 +405,7 @@ fn main() -> Result<()> {
     let cranelift = run_backend("cranelift",&o,&root,&manifest)?;
     let llvm_backend = run_backend("llvm",&o,&root,&manifest)?;
     let footprint = Command::new("dpkg-query")
-        .args(["-W","-f=\${Installed-Size}\\n","llvm-18-dev","llvm-18","clang-18"])
+        .args(["-W",r"-f=${Installed-Size}\n","llvm-18-dev","llvm-18","clang-18"])
         .output().ok().filter(|x|x.status.success())
         .map(|x|String::from_utf8_lossy(&x.stdout).lines().filter_map(|v|v.parse::<u64>().ok()).sum());
     let report = Report {
