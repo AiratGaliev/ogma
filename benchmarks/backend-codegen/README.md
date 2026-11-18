@@ -60,8 +60,8 @@ cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --relea
 The report records source/tested revisions, Rust/LLVM/Clang and OS versions, CPU model
 and target features, compile/link latency distributions with raw samples,
 object/shared-library sizes, per-fixture p50/p95/p99 and throughput, direct helper
-baselines, target lookup, LLVM package footprint, Cargo source and build-artifact
-footprints, and integration notes. Target lookup is not a cross-link or target ABI
+baselines, target lookup, selected LLVM package footprint (the report names the exact packages), Cargo source and build-artifact
+footprints (including the resolved Cargo target directory and matched artifact counts), and integration notes. Target lookup is not a cross-link or target ABI
 proof. Peak compiler RSS, cross-target linking and deployment-package measurements
 are not collected by this M0 harness and must not be inferred from the reported
 metrics. Results are specific to the recorded runner.

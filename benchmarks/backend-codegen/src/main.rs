@@ -1151,6 +1151,10 @@ struct Report {
     measurement_samples: usize,
     target_lookup: JsonValue,
     llvm_package_footprint_kib: Option<u64>,
+    llvm_package_footprint_packages: Vec<&'static str>,
+    cargo_target_directory: String,
+    cranelift_build_artifact_files: u64,
+    llvm_binding_build_artifact_files: u64,
     cranelift_crate_source_bytes: u64,
     llvm_binding_source_bytes: u64,
     cranelift_build_artifact_bytes: u64,
@@ -1247,21 +1251,39 @@ fn cargo_source_size(prefixes: &[&str]) -> u64 {
         })
         .sum()
 }
-fn cargo_artifact_size(prefix: &str) -> u64 {
-    let root = env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
-    let Ok(e) = fs::read_dir(root.join("release").join("deps")) else {
-        return 0;
-    };
-    e.flatten()
-        .filter_map(|x| {
-            x.file_name()
-                .to_string_lossy()
-                .starts_with(prefix)
-                .then(|| x.metadata().map(|m| m.len()).unwrap_or(0))
+#[derive(Serialize)]
+struct BuildArtifactSummary {
+    files: u64,
+    bytes: u64,
+}
+
+fn cargo_target_directory() -> PathBuf {
+    env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
         })
-        .sum()
+        .or_else(|| env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+}
+
+fn cargo_artifact_summary(target_directory: &Path, prefixes: &[&str]) -> BuildArtifactSummary {
+    let Ok(entries) = fs::read_dir(target_directory.join("release").join("deps")) else {
+        return BuildArtifactSummary { files: 0, bytes: 0 };
+    };
+    let mut summary = BuildArtifactSummary { files: 0, bytes: 0 };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+            summary.files += 1;
+            summary.bytes += entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        }
+    }
+    summary
 }
 fn main() -> Result<()> {
     let o = options()?;
@@ -1287,6 +1309,10 @@ fn main() -> Result<()> {
                 .filter_map(|v| v.parse::<u64>().ok())
                 .sum()
         });
+    let cargo_target_directory = cargo_target_directory();
+    let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["libcranelift_"]);
+    let llvm_artifacts =
+        cargo_artifact_summary(&cargo_target_directory, &["libinkwell-", "libllvm_sys-"]);
     let report = Report {
         schema_version: 1,
         task: "OGM-30",
@@ -1306,11 +1332,14 @@ fn main() -> Result<()> {
         measurement_samples: o.samples,
         target_lookup: target_lookup(),
         llvm_package_footprint_kib: footprint,
+        llvm_package_footprint_packages: vec!["llvm-18-dev", "llvm-18", "clang-18"],
+        cargo_target_directory: cargo_target_directory.display().to_string(),
+        cranelift_build_artifact_files: cranelift_artifacts.files,
+        llvm_binding_build_artifact_files: llvm_artifacts.files,
         cranelift_crate_source_bytes: cargo_source_size(&["cranelift-"]),
         llvm_binding_source_bytes: cargo_source_size(&["inkwell-", "llvm-sys-181"]),
-        cranelift_build_artifact_bytes: cargo_artifact_size("libcranelift_"),
-        llvm_binding_build_artifact_bytes: cargo_artifact_size("libinkwell-")
-            + cargo_artifact_size("libllvm_sys-"),
+        cranelift_build_artifact_bytes: cranelift_artifacts.bytes,
+        llvm_binding_build_artifact_bytes: llvm_artifacts.bytes,
         integration_notes: serde_json::json!({"core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixtures",
  "cranelift":"Rust crates and in-process ObjectModule; no external LLVM toolchain",
  "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
