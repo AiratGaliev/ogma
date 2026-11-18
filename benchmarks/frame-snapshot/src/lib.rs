@@ -602,7 +602,7 @@ impl ScriptHarness {
                                     )
                                 })?;
                                 let output_ptr = raw.as_ptr() as *mut f32;
-                                if (output_ptr as usize) % align_of::<f32>() != 0 {
+                                if !(output_ptr as usize).is_multiple_of(align_of::<f32>()) {
                                     return Err(JsError::new_from_js(
                                         "Float32Array",
                                         "position output is misaligned",
@@ -724,7 +724,7 @@ impl ScriptHarness {
                                     )
                                 })?;
                                 let output_ptr = raw.as_ptr() as *mut u32;
-                                if (output_ptr as usize) % align_of::<u32>() != 0 {
+                                if !(output_ptr as usize).is_multiple_of(align_of::<u32>()) {
                                     return Err(JsError::new_from_js(
                                         "Uint32Array",
                                         "collision output is misaligned",
