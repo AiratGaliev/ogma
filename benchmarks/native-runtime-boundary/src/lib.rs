@@ -710,10 +710,7 @@ impl ActivationStack {
 
     /// Returns the captured source/closure stack for the top-level result.
     pub fn host_stack_trace(&self) -> Option<&[Activation]> {
-        self.host_completion
-            .as_ref()?
-            .stack_trace
-            .as_deref()
+        self.host_completion.as_ref()?.stack_trace.as_deref()
     }
 
     /// Transfers a pending callee completion into the current activation's
@@ -782,10 +779,8 @@ impl ActivationStack {
             .ok_or(TransitionError::ConsumedCompletionNotFound)?;
         let record = frame.consumed_completions.remove(position);
         if let Some(reference) = record.value.managed_root() {
-            if let Some(root_position) = frame
-                .live_roots
-                .iter()
-                .rposition(|root| *root == reference)
+            if let Some(root_position) =
+                frame.live_roots.iter().rposition(|root| *root == reference)
             {
                 frame.live_roots.remove(root_position);
             }
@@ -863,10 +858,7 @@ impl ActivationStack {
             }
         };
 
-        let current = self
-            .frames
-            .last()
-            .ok_or(TransitionError::FrameStackOrder)?;
+        let current = self.frames.last().ok_or(TransitionError::FrameStackOrder)?;
         if current.token != token {
             return Err(TransitionError::FrameStackOrder);
         }
@@ -1493,8 +1485,14 @@ mod tests {
                                             assert_eq!(original_trace.len(), 4);
                                             assert_eq!(original_trace[0].function, "native_outer");
                                             assert_eq!(original_trace[1].closure_context, Some(42));
-                                            assert_eq!(original_trace[2].kind, ActivationKind::HostCallback);
-                                            assert_eq!(original_trace[3].function, "throwing_callee");
+                                            assert_eq!(
+                                                original_trace[2].kind,
+                                                ActivationKind::HostCallback
+                                            );
+                                            assert_eq!(
+                                                original_trace[3].function,
+                                                "throwing_callee"
+                                            );
                                             assert_eq!(original_trace[3].source.line, 4);
                                             providers
                                                 .collect_with_execution(&mut heap, stack)
