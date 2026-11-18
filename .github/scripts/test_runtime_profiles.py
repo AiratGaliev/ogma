@@ -33,16 +33,99 @@ class RuntimeProfileContractTests(unittest.TestCase):
             set(first),
             {
                 "debug-interpreter",
+                "debug-hybrid-native",
                 "development-test",
+                "development-hybrid-native",
                 "portable-interpreter-release",
                 "hybrid-native-release",
                 "node-compatibility-portable-release",
+                "node-compatibility-hybrid-native-release",
             },
         )
         for plan in first.values():
             self.assertIn("ecmascript-semantics", plan["includedComponents"])
             self.assertIn("portable-interpreter", plan["includedComponents"])
             self.assertIn("host-module-registry", plan["includedComponents"])
+
+    def test_debug_and_development_profiles_are_orthogonal_to_execution_backend(self) -> None:
+        profiles = self.document["profiles"]
+        for mode in ("debug", "development"):
+            backends = {
+                profile["executionBackend"]
+                for profile in profiles
+                if profile["buildMode"] == mode and profile["hostCompatibility"] == "none"
+            }
+            self.assertEqual(backends, {"portable-interpreter", "hybrid-native"})
+
+    def test_node_compatibility_layer_is_available_for_both_execution_backends(self) -> None:
+        profiles = [
+            profile for profile in self.document["profiles"]
+            if profile["hostCompatibility"] == "node"
+        ]
+        self.assertEqual(
+            {profile["executionBackend"] for profile in profiles},
+            {"portable-interpreter", "hybrid-native"},
+        )
+        plans = self.validate()
+        for profile in profiles:
+            included = set(plans[profile["id"]]["includedComponents"])
+            self.assertTrue({"node-module-resolver", "node-compat-api"}.issubset(included))
+
+    def test_hybrid_debug_profile_keeps_debugger_on_interpreter_fallback(self) -> None:
+        profile = next(item for item in self.document["profiles"] if item["id"] == "debug-hybrid-native")
+        included = set(self.validate()["debug-hybrid-native"]["includedComponents"])
+        self.assertIn("native-aot-execution", included)
+        self.assertIn("portable-interpreter", included)
+        self.assertIn("debugger-api", included)
+        self.assertIn("interpreter-debug-hooks", included)
+        self.assertIn("source-debug-metadata", included)
+        self.assertEqual(profile["metadata"]["debugSymbols"], "embedded")
+        self.assertIn("native AOT stepping remains a later milestone", profile["purpose"])
+
+    def test_development_profiles_require_dap_profiler_and_hot_reload(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "development-hybrid-native")
+        profile["includeRoots"].remove("hot-reload")
+        profile["featureFlags"].remove("tools.hot-reload")
+        profile["tooling"]["hotReload"] = False
+        with self.assertRaisesRegex(ProfileValidationError, "must include DAP, profiler hooks and Hot Reload"):
+            self.validate(invalid)
+
+    def test_debug_and_development_profiles_require_embedded_source_maps(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "debug-hybrid-native")
+        profile["metadata"]["sourceMaps"] = "external"
+        with self.assertRaisesRegex(ProfileValidationError, "must embed source maps"):
+            self.validate(invalid)
+
+    def test_profile_matrix_rejects_a_missing_backend_mode_combination(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        invalid["profiles"] = [
+            profile for profile in invalid["profiles"]
+            if profile["id"] != "debug-hybrid-native"
+        ]
+        with self.assertRaisesRegex(ProfileValidationError, "missing required build/backend/host combinations"):
+            self.validate(invalid)
+
+    def test_rust_build_settings_are_explicit_and_match_the_profile_mode(self) -> None:
+        plans = self.validate()
+        self.assertEqual(plans["debug-interpreter"]["rustBuild"]["optLevel"], "0")
+        self.assertEqual(plans["development-test"]["rustBuild"]["optLevel"], "1")
+        self.assertEqual(plans["hybrid-native-release"]["rustBuild"]["optLevel"], "3")
+        invalid = copy.deepcopy(self.document)
+        release = next(item for item in invalid["profiles"] if item["id"] == "hybrid-native-release")
+        release["rustBuild"]["optLevel"] = "1"
+        with self.assertRaisesRegex(ProfileValidationError, "rustBuild settings conflict"):
+            self.validate(invalid)
+
+    def test_release_symbol_policy_matches_compiler_stripping(self) -> None:
+        plans = self.validate()
+        portable = plans["portable-interpreter-release"]
+        native = plans["hybrid-native-release"]
+        self.assertEqual(portable["metadataPolicy"]["debugSymbols"], "not-applicable")
+        self.assertEqual(portable["rustBuild"]["strip"], "symbols")
+        self.assertEqual(native["metadataPolicy"]["debugSymbols"], "external")
+        self.assertEqual(native["rustBuild"]["strip"], "debuginfo")
 
     def test_dependency_required_by_an_included_component_cannot_be_stripped(self) -> None:
         invalid = copy.deepcopy(self.document)
