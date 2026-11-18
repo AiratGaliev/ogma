@@ -246,23 +246,93 @@ fn distribution(samples: &[Sample], select: impl Fn(&Sample) -> u128) -> (f64, f
     )
 }
 
-fn summarize(
-    collector: CollectorKind,
-    workload: Workload,
-    config: &Config,
-) -> Result<Summary, String> {
-    for _ in 0..config.warmups {
-        let _ = run_sample(collector, workload, config.objects)?;
+fn summarize(workload: Workload, config: &Config) -> Result<Vec<Summary>, String> {
+    let collectors = [
+        CollectorKind::RcCycleRemoval,
+        CollectorKind::MarkSweep,
+    ];
+    let mut samples: [Vec<Sample>; 2] = [
+        Vec::with_capacity(config.samples),
+        Vec::with_capacity(config.samples),
+    ];
+
+    // Alternate candidate order for every paired warmup and measurement sample
+    // to reduce systematic order, thermal and scheduler bias.
+    for warmup in 0..config.warmups {
+        let order = if warmup % 2 == 0 {
+            collectors
+        } else {
+            [collectors[1], collectors[0]]
+        };
+        for collector in order {
+            let _ = run_sample(collector, workload, config.objects)?;
+        }
     }
-    let mut samples = Vec::with_capacity(config.samples);
-    for _ in 0..config.samples {
-        samples.push(run_sample(collector, workload, config.objects)?);
+
+    for sample_index in 0..config.samples {
+        let order = if sample_index % 2 == 0 {
+            collectors
+        } else {
+            [collectors[1], collectors[0]]
+        };
+        let mut pair: [Option<Sample>; 2] = [None, None];
+
+        for collector in order {
+            let index = match collector {
+                CollectorKind::RcCycleRemoval => 0,
+                CollectorKind::MarkSweep => 1,
+            };
+            pair[index] = Some(run_sample(collector, workload, config.objects)?);
+        }
+
+        let rc_sample = pair[0].take().ok_or("missing RC benchmark sample")?;
+        let tracing_sample = pair[1].take().ok_or("missing tracing benchmark sample")?;
+        if rc_sample.graph != tracing_sample.graph {
+            return Err(format!(
+                "candidate graph mismatch in {} sample {}: {:?} != {:?}",
+                workload.name(),
+                sample_index,
+                rc_sample.graph,
+                tracing_sample.graph
+            ));
+        }
+
+        let rc_liveness = (
+            rc_sample.objects_after,
+            rc_sample.reclaimed_total,
+            rc_sample.live_heap_bytes_after,
+        );
+        let tracing_liveness = (
+            tracing_sample.objects_after,
+            tracing_sample.reclaimed_total,
+            tracing_sample.live_heap_bytes_after,
+        );
+        if rc_liveness != tracing_liveness {
+            return Err(format!(
+                "candidate liveness mismatch in {} sample {}: {:?} != {:?}",
+                workload.name(),
+                sample_index,
+                rc_liveness,
+                tracing_liveness
+            ));
+        }
+
+        samples[0].push(rc_sample);
+        samples[1].push(tracing_sample);
     }
-    Ok(Summary {
-        workload: workload.name(),
-        collector: collector.name(),
-        samples,
-    })
+
+    Ok(vec![
+        Summary {
+            workload: workload.name(),
+            collector: collectors[0].name(),
+            samples: std::mem::take(&mut samples[0]),
+        },
+        Summary {
+            workload: workload.name(),
+            collector: collectors[1].name(),
+            samples: std::mem::take(&mut samples[1]),
+        },
+    ])
 }
 
 fn json_escape(input: &str) -> String {
@@ -454,45 +524,7 @@ fn run() -> Result<(), String> {
     let mut summaries = Vec::new();
 
     for workload in Workload::ALL {
-        let mut reference_shape: Option<GraphShape> = None;
-        let mut reference_after = None;
-        for collector in CollectorKind::ALL {
-            let summary = summarize(collector, workload, &config)?;
-            let first = summary.samples.first().ok_or("missing benchmark sample")?;
-
-            if let Some(expected) = &reference_shape {
-                if expected != &first.graph {
-                    return Err(format!(
-                        "candidate graph mismatch in {}: {:?} != {:?}",
-                        workload.name(),
-                        expected,
-                        first.graph
-                    ));
-                }
-            } else {
-                reference_shape = Some(first.graph.clone());
-                reference_after = Some((
-                    first.objects_after,
-                    first.reclaimed_total,
-                    first.live_heap_bytes_after,
-                ));
-            }
-
-            let actual = (
-                first.objects_after,
-                first.reclaimed_total,
-                first.live_heap_bytes_after,
-            );
-            if reference_after != Some(actual) {
-                return Err(format!(
-                    "candidate liveness mismatch in {}: {:?} != {:?}",
-                    workload.name(),
-                    reference_after,
-                    actual
-                ));
-            }
-            summaries.push(summary);
-        }
+        summaries.extend(summarize(workload, &config)?);
     }
 
     let output = report(&config, &summaries);
