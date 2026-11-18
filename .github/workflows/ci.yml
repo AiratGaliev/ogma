@@ -1009,22 +1009,39 @@ jobs:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
 
     steps:
-      - name: Checkout repository
+      - name: Checkout tested PR head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - name: Skip benchmark evidence commit re-run
+        id: run_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          author="$(git log -1 --format='%an')"
+          subject="$(git log -1 --format='%s')"
+          if [[ "$author" == "github-actions[bot]" && "$subject" == "test(ogm-30): record benchmark measurements and dependency lock" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install LLVM and native linker
+        if: steps.run_gate.outputs.run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y llvm-18-dev clang-18 build-essential
 
       - name: Set up pinned Rust toolchain
+        if: steps.run_gate.outputs.run == 'true'
         uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
 
       - name: Record toolchain versions
+        if: steps.run_gate.outputs.run == 'true'
         run: |
           rustc --version
           cargo --version
@@ -1033,25 +1050,28 @@ jobs:
           cc --version
 
       - name: Resolve and capture dependency lock
+        if: steps.run_gate.outputs.run == 'true'
         run: |
+          set -euo pipefail
           if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
             cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
           fi
           cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm30-Cargo.lock"
 
-      - name: Format and verify OGM-30 source (temporary extraction)
-        run: |
-          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all
-          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
-          cat benchmarks/backend-codegen/src/main.rs
+      - name: Check formatting
+        if: steps.run_gate.outputs.run == 'true'
+        run: cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
 
       - name: Run Clippy
+        if: steps.run_gate.outputs.run == 'true'
         run: cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
       - name: Run backend contract and manifest tests
+        if: steps.run_gate.outputs.run == 'true'
         run: cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
 
       - name: Run reproducible dual-backend benchmark
+        if: steps.run_gate.outputs.run == 'true'
         run: |
           set -euo pipefail
           cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release -- \
@@ -1060,7 +1080,7 @@ jobs:
             --output "$RUNNER_TEMP/ogm30-backend-report.json"
 
       - name: Upload OGM-30 raw measurements and dependency lock
-        if: always()
+        if: always() && steps.run_gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ogm30-backend-comparison-evidence
@@ -1070,19 +1090,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Commit initial benchmark evidence to the PR branch
-        if: success() && github.event_name == 'pull_request'
+      - name: Commit benchmark evidence to the PR branch
+        if: success() && steps.run_gate.outputs.run == 'true'
         env:
-          BRANCH: ${{ github.head_ref }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
+          git fetch origin "$BRANCH"
+          current_head="$(git rev-parse FETCH_HEAD)"
+          if [[ "$current_head" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "PR head moved during benchmark; refusing to attach stale evidence."
+            exit 1
+          fi
+          git checkout -B "$BRANCH" FETCH_HEAD
           mkdir -p benchmarks/backend-codegen/results
-          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
-            cp "$RUNNER_TEMP/ogm30-Cargo.lock" benchmarks/backend-codegen/Cargo.lock
-          fi
-          if [ ! -f benchmarks/backend-codegen/results/ogm30-report.json ]; then
-            cp "$RUNNER_TEMP/ogm30-backend-report.json" benchmarks/backend-codegen/results/ogm30-report.json
-          fi
+          cp "$RUNNER_TEMP/ogm30-Cargo.lock" benchmarks/backend-codegen/Cargo.lock
+          cp "$RUNNER_TEMP/ogm30-backend-report.json" benchmarks/backend-codegen/results/ogm30-report.json
           git add benchmarks/backend-codegen/Cargo.lock benchmarks/backend-codegen/results/ogm30-report.json
           if git diff --cached --quiet; then
             exit 0
@@ -1090,4 +1116,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "test(ogm-30): record benchmark measurements and dependency lock"
-          git push origin "HEAD:$BRANCH"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push origin "HEAD:$BRANCH"

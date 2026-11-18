@@ -559,7 +559,7 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     );
     let to_number = module.add_function(
         "ogma_js_to_number",
-        i64t.fn_type(&[i64t.into()], false),
+        f64t.fn_type(&[i64t.into()], false),
         None,
     );
     let loop_fn = module.add_function(&c.symbol("loop")?, ternary_f, None);
@@ -791,14 +791,18 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if unsafe { branch(7.0, 7.0) } != 7.0 || unsafe { branch(7.0, 8.0) } != 8.0 {
         bail!("{name}: branch mismatch");
     }
+    if unsafe { branch(0.0, -0.0) }.to_bits() != 0.0_f64.to_bits() {
+        bail!("{name}: strict equality must treat positive and negative zero as equal");
+    }
     if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0 {
         bail!("{name}: loop mismatch");
     }
     if unsafe { exception(7, 8) } != 15 {
         bail!("{name}: normal completion mismatch");
     }
-    if ((unsafe { exception(i64::MIN, 9) } as u64) >> 56) != 1 {
-        bail!("{name}: Throw completion missing");
+    let thrown = unsafe { exception(i64::MIN, 9) };
+    if thrown != ((1_u64 << 56) | 9) as i64 {
+        bail!("{name}: Throw completion payload/tag was not preserved");
     }
     if unsafe { call(callee, 2, text_handle, 4, 4, 5.0) } != 8 {
         bail!("{name}: call-boundary result mismatch");
@@ -810,6 +814,17 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let to_number: ToNumber = unsafe { *lib.get(b"ogma_js_to_number\0")? };
     let add_completion: BinaryI64 = unsafe { *lib.get(b"ogma_js_add_completion\0")? };
     let host_direct: UnaryI64 = unsafe { *lib.get(b"ogma_host_echo\0")? };
+    for (left, right, expected) in [
+        (1.25_f64, 2.75_f64, 4.0_f64),
+        (-7.5_f64, 2.0_f64, -5.5_f64),
+        (0.0_f64, -0.0_f64, 0.0_f64),
+    ] {
+        let boxed = unsafe { add_number(left, right) };
+        let actual = unsafe { to_number(boxed) };
+        if actual.to_bits() != expected.to_bits() {
+            bail!("{name}: numeric add/to_number helper ABI mismatch");
+        }
+    }
     let workloads = serde_json::json!({
       "core_ir_ssa_branch":bench(o,|n|{black_box(unsafe{branch((n%17)as f64,(n%13)as f64)});}),
       "core_ir_loop_js_add_to_number":bench(o,|_|{black_box(unsafe{loop_fn(0.0,5.0,1.0)});}),
@@ -963,7 +978,7 @@ fn main() -> Result<()> {
         schema_version: 1,
         task: "OGM-30",
         source_revision: o.revision.clone(),
-        tested_revision: env::var("GITHUB_SHA").unwrap_or_else(|_| o.revision.clone()),
+        tested_revision: o.revision.clone(),
         rustc: command("rustc", &["--version"]),
         llvm: command("llvm-config-18", &["--version"]),
         clang: command("clang-18", &["--version"]),
