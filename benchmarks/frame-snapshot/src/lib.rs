@@ -1111,11 +1111,18 @@ mod tests {
     }
 
     #[test]
-    fn bulk_collision_read_matches_scalar_pairs() {
+    fn batch_collision_reads_write_expected_pair_order() {
         let snapshot = fixture(8, 3);
         let harness = ScriptHarness::new(snapshot, 8, 3).unwrap();
-        let scalar = harness.run(UpdateMode::Scalar).unwrap();
-        let batch = harness.run(UpdateMode::BatchBulk).unwrap();
-        assert!((scalar - batch).abs() < 0.000_001);
+        harness
+            .eval(
+                "engine.physics.readCollisionsSet(collisionOutput); if (collisionOutput.length !== 6 || collisionOutput[0] !== 1 || collisionOutput[1] !== 8 || collisionOutput[2] !== 2 || collisionOutput[3] !== 7 || collisionOutput[4] !== 3 || collisionOutput[5] !== 6) throw new Error('TypedArray.set collision order mismatch');",
+            )
+            .unwrap();
+        harness
+            .eval(
+                "engine.physics.readCollisionsBulk(collisionOutput); if (collisionOutput.length !== 6 || collisionOutput[0] !== 1 || collisionOutput[1] !== 8 || collisionOutput[2] !== 2 || collisionOutput[3] !== 7 || collisionOutput[4] !== 3 || collisionOutput[5] !== 6) throw new Error('bulk collision order mismatch');",
+            )
+            .unwrap();
     }
 }

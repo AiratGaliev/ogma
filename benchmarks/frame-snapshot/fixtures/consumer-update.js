@@ -69,9 +69,11 @@ globalThis.runBatchBulk = function runBatchBulk() {
 
     for (let index = 0; index < keyboardIds.length; index += 1) {
         if (engine.input.isDownId(keyboardIds[index])) checksum += 1;
+        if (engine.input.wasPressedId(keyboardIds[index])) checksum += 1;
     }
     for (let index = 0; index < gamepadIds.length; index += 1) {
         if (engine.input.gamepad.isDownId(gamepadIds[index])) checksum += 1;
+        if (engine.input.gamepad.wasPressedId(gamepadIds[index])) checksum += 1;
     }
 
     engine.entities.readPositionsBulk(entityIds, positionOutput);
