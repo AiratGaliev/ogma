@@ -1,0 +1,19 @@
+[package]
+name = "ogma-isolate-allocator-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 proof of per-Isolate allocation quotas, reuse pools and compile-unit arenas"
+
+[lib]
+name = "ogma_isolate_allocator_proof"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ogma-isolate-allocator-bench"
+path = "src/bin/benchmark.rs"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
