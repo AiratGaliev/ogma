@@ -135,6 +135,7 @@
           "buildMode",
           "executionBackend",
           "rustBuild",
+          "aotBuild",
           "hostCompatibility",
           "includeRoots",
           "excludeComponents",
@@ -333,6 +334,45 @@
                   "none",
                   "debuginfo",
                   "symbols"
+                ]
+              }
+            }
+          },
+          "aotBuild": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "enabled",
+              "optimization",
+              "debugInfo",
+              "symbols"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "optimization": {
+                "enum": [
+                  "not-applicable",
+                  "minimal",
+                  "balanced",
+                  "aggressive"
+                ]
+              },
+              "debugInfo": {
+                "enum": [
+                  "not-applicable",
+                  "full",
+                  "line-tables-only",
+                  "none"
+                ]
+              },
+              "symbols": {
+                "enum": [
+                  "not-applicable",
+                  "embedded",
+                  "external",
+                  "omitted"
                 ]
               }
             }
