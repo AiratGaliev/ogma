@@ -89,9 +89,12 @@ No production GC choice is declared by this source alone. The recommendation mus
 
 The first paired measurement run was produced by [CI run #333](https://github.com/AiratGaliev/ogma/actions/runs/44322470507), with the OGM-26 proof job and repository Fast CI both successful.
 
-**Environment:** Rust 1.100.0; Linux x86_64; AMD EPYC 9V74 80-Core Processor.  
-**Configuration:** 2,048 objects; three warmup rounds; 101 paired samples per collector/workload; nearest-rank percentiles; alternating collector order per sample.  
-**Measured source revision:** `b473992c45ae67d588abe528648f67fde3687d5c`.  
+**Environment:** Rust 1.100.0; Linux x86_64; AMD EPYC 9V74 80-Core Processor.
+
+**Configuration:** 2,048 objects; three warmup rounds; 101 paired samples per collector/workload; nearest-rank percentiles; alternating collector order per sample.
+
+**Measured source revision:** `b473992c45ae67d588abe528648f67fde3687d5c`.
+
 **CI tested revision:** `cf84dca607f55e33f8a69ccb9cbcca835155970b`.
 
 Collection and root-scan values are microseconds; end-to-end is graph build + collection. RC maintenance operations are averaged over the 101 samples.
