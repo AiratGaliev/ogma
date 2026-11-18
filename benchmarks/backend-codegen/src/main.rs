@@ -23,7 +23,7 @@ use libloading::Library;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
-    env, fs,
+    env, ffi::CString, fs,
     hint::black_box,
     path::{Path, PathBuf},
     process::Command,
@@ -812,7 +812,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
       "core_ir_loop_js_add_to_number":bench(o,|_|{black_box(unsafe{loop_fn(0.0,5.0,1.0)});}),
       "core_ir_dynamic_add_normal_completion":bench(o,|n|{black_box(unsafe{exception((n%100)as i64,7)});}),
       "core_ir_dynamic_add_throw_completion":bench(o,|_|{black_box(unsafe{exception(i64::MIN,7)});}),
-      "core_ir_js_add_js_call_boundary":bench(o,|n|{black_box(unsafe{call(1,2,n as i64,4,4,5.0)});}),
+      "core_ir_js_add_js_call_boundary":bench(o,|_|{black_box(unsafe{call(callee,2,text_handle,4,4,5.0)});}),
       "core_ir_host_call":bench(o,|n|{black_box(unsafe{host(n as i64)});}),
       "direct_js_add_number_helper":bench(o,|n|{black_box(unsafe{to_number(add_number(n as f64,1.0))});}),
       "direct_dynamic_completion_helper":bench(o,|n|{black_box(unsafe{add_completion(n as i64,7)});}),
