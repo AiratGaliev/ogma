@@ -471,17 +471,27 @@ impl GcHeap {
         let collection_start = Instant::now();
         let root_scan_start = Instant::now();
         let inventory = self.root_inventory()?;
-        let mut root_counts = vec![0_u64; self.slots.len()];
-        for reference in &inventory.references {
-            self.validate(*reference)?;
-            root_counts[reference.index] = root_counts[reference.index]
-                .checked_add(1)
-                .ok_or(GcError::RootCountOverflow)?;
-        }
         let root_scan_ns = root_scan_start.elapsed().as_nanos();
+
+        // Per-slot root multiplicities are only needed by trial deletion. Keep
+        // this RC-specific bookkeeping out of the tracing collector's hot path
+        // and out of the shared root-inventory timing.
+        let root_counts = if self.collector == CollectorKind::RcCycleRemoval {
+            let mut counts = vec![0_u64; self.slots.len()];
+            for reference in &inventory.references {
+                self.validate(*reference)?;
+                counts[reference.index] = counts[reference.index]
+                    .checked_add(1)
+                    .ok_or(GcError::RootCountOverflow)?;
+            }
+            Some(counts)
+        } else {
+            None
+        };
 
         let (marked, marked_objects, edges_examined) = match self.collector {
             CollectorKind::RcCycleRemoval => {
+                let root_counts = root_counts.as_deref().ok_or(GcError::RefCountInvariant)?;
                 let mut trial_counts = vec![0_u64; self.slots.len()];
                 for (index, slot) in self.slots.iter().enumerate() {
                     if let Some(cell) = &slot.cell {
@@ -542,8 +552,8 @@ impl GcHeap {
         }
 
         let (reclaimed_objects, reclaimed_bytes) = self.sweep(&dead);
-        if self.collector == CollectorKind::RcCycleRemoval {
-            self.recompute_ref_counts(&root_counts)?;
+        if let Some(root_counts) = root_counts.as_deref() {
+            self.recompute_ref_counts(root_counts)?;
         }
 
         self.stats.collections += 1;
