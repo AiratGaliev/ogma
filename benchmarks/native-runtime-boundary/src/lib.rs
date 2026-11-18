@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -526,6 +527,18 @@ impl RootProviders {
         roots.extend(self.persistent.roots());
         Ok(heap.collect(roots)?)
     }
+
+    pub fn collect_with_execution(
+        &self,
+        heap: &mut GcHeap,
+        execution: &ActivationStack,
+    ) -> Result<CollectionStats, RootCollectionError> {
+        let mut roots = self.interpreter.roots();
+        roots.extend(self.native.roots()?);
+        roots.extend(self.persistent.roots());
+        roots.extend(execution.roots());
+        Ok(heap.collect(roots)?)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -591,6 +604,13 @@ struct ActivationToken(u64);
 pub enum TransitionError {
     FrameStackOrder,
     TokenSpaceExhausted,
+    PendingCompletionNotConsumed,
+    MissingPendingCompletion,
+    CompletionMismatch,
+    HostCompletionNotConsumed,
+    MissingHostCompletion,
+    HostCompletionMismatch,
+    LiveRootNotFound,
 }
 
 impl fmt::Display for TransitionError {
@@ -601,23 +621,114 @@ impl fmt::Display for TransitionError {
 
 impl std::error::Error for TransitionError {}
 
+struct ActiveActivation {
+    token: ActivationToken,
+    context: Activation,
+    pending_completion: Option<Completion>,
+    live_roots: Vec<GcRef>,
+}
+
 #[derive(Default)]
 pub struct ActivationStack {
     next_token: u64,
-    frames: Vec<(ActivationToken, Activation)>,
+    frames: Vec<ActiveActivation>,
+    host_completion: Option<Completion>,
 }
 
 impl ActivationStack {
     pub fn current(&self) -> Option<&Activation> {
-        self.frames.last().map(|(_, frame)| frame)
+        self.frames.last().map(|frame| &frame.context)
     }
 
     pub fn snapshot(&self) -> Vec<Activation> {
-        self.frames.iter().map(|(_, frame)| frame.clone()).collect()
+        self.frames
+            .iter()
+            .map(|frame| frame.context.clone())
+            .collect()
     }
 
     pub fn depth(&self) -> usize {
         self.frames.len()
+    }
+
+    /// Roots pending completions and completion values consumed into active
+    /// caller locals. The top-level result stays rooted until host promotion.
+    pub fn roots(&self) -> Vec<GcRef> {
+        let mut roots = Vec::new();
+        for frame in &self.frames {
+            roots.extend(frame.live_roots.iter().copied());
+            if let Some(reference) = frame
+                .pending_completion
+                .and_then(Completion::managed_root)
+            {
+                roots.push(reference);
+            }
+        }
+        if let Some(reference) = self.host_completion.and_then(Completion::managed_root) {
+            roots.push(reference);
+        }
+        roots
+    }
+
+    /// Transfers a pending callee completion into the current activation's
+    /// live roots before the caller inspects or otherwise uses its value.
+    pub fn consume_pending_completion(
+        &mut self,
+        expected: Completion,
+    ) -> Result<(), TransitionError> {
+        let frame = self
+            .frames
+            .last_mut()
+            .ok_or(TransitionError::MissingPendingCompletion)?;
+        let completion = frame
+            .pending_completion
+            .take()
+            .ok_or(TransitionError::MissingPendingCompletion)?;
+        if completion != expected {
+            frame.pending_completion = Some(completion);
+            return Err(TransitionError::CompletionMismatch);
+        }
+        if let Some(reference) = completion.managed_root() {
+            frame.live_roots.push(reference);
+        }
+        Ok(())
+    }
+
+    /// Releases one completion-derived local root after the caller has either
+    /// finished using the value or transferred it to another registered root.
+    pub fn release_live_root(&mut self, reference: GcRef) -> Result<(), TransitionError> {
+        let frame = self
+            .frames
+            .last_mut()
+            .ok_or(TransitionError::LiveRootNotFound)?;
+        let position = frame
+            .live_roots
+            .iter()
+            .rposition(|root| *root == reference)
+            .ok_or(TransitionError::LiveRootNotFound)?;
+        frame.live_roots.remove(position);
+        Ok(())
+    }
+
+    pub fn host_completion(&self) -> Option<Completion> {
+        self.host_completion
+    }
+
+    /// Call only after a managed host result has been promoted to a persistent
+    /// host handle. Primitive completions need no persistent root.
+    pub fn release_host_completion_after_promotion(
+        &mut self,
+        expected: Completion,
+    ) -> Result<(), TransitionError> {
+        let completion = self
+            .host_completion
+            .take()
+            .ok_or(TransitionError::MissingHostCompletion)?;
+        if completion != expected {
+            self.host_completion = Some(completion);
+            return Err(TransitionError::HostCompletionMismatch);
+        }
+        Ok(())
     }
 
     pub fn invoke(
@@ -625,6 +736,17 @@ impl ActivationStack {
         activation: Activation,
         callback: impl FnOnce(&mut Self) -> Completion,
     ) -> Result<Completion, TransitionError> {
+        if self.host_completion.is_some() {
+            return Err(TransitionError::HostCompletionNotConsumed);
+        }
+        if self
+            .frames
+            .last()
+            .is_some_and(|frame| frame.pending_completion.is_some())
+        {
+            return Err(TransitionError::PendingCompletionNotConsumed);
+        }
+
         let token_value = if self.next_token == 0 {
             1
         } else {
@@ -634,15 +756,56 @@ impl ActivationStack {
             .checked_add(1)
             .ok_or(TransitionError::TokenSpaceExhausted)?;
         let token = ActivationToken(token_value);
-        self.frames.push((token, activation));
+        self.frames.push(ActiveActivation {
+            token,
+            context: activation,
+            pending_completion: None,
+            live_roots: Vec::new(),
+        });
 
-        let completion = callback(self);
+        let callback_result = catch_unwind(AssertUnwindSafe(|| callback(self)));
+        let completion = match callback_result {
+            Ok(completion) => completion,
+            Err(payload) => {
+                match self.frames.last() {
+                    Some(frame) if frame.token == token => {
+                        self.frames.pop();
+                    }
+                    _ => {
+                        resume_unwind(payload);
+                    }
+                }
+                resume_unwind(payload);
+            }
+        };
 
-        let (current, _) = self.frames.last().ok_or(TransitionError::FrameStackOrder)?;
-        if *current != token {
+        let current = self
+            .frames
+            .last()
+            .ok_or(TransitionError::FrameStackOrder)?;
+        if current.token != token {
             return Err(TransitionError::FrameStackOrder);
         }
+        if current
+            .pending_completion
+            .is_some_and(|pending| pending != completion)
+        {
+            self.frames.pop();
+            return Err(TransitionError::CompletionMismatch);
+        }
+
         self.frames.pop();
+        if let Some(parent) = self.frames.last_mut() {
+            if parent.pending_completion.is_some() {
+                return Err(TransitionError::PendingCompletionNotConsumed);
+            }
+            parent.pending_completion = Some(completion);
+        } else {
+            if self.host_completion.is_some() {
+                return Err(TransitionError::HostCompletionNotConsumed);
+            }
+            self.host_completion = Some(completion);
+        }
         Ok(completion)
     }
 }
@@ -654,6 +817,21 @@ pub enum Completion {
     Break(u32),
     Continue(u32),
     Throw(JsValue),
+}
+
+impl Completion {
+    pub fn managed_root(self) -> Option<GcRef> {
+        match self {
+            Self::Normal(JsValue::Managed(reference))
+            | Self::Return(JsValue::Managed(reference))
+            | Self::Throw(JsValue::Managed(reference)) => Some(reference),
+            Self::Normal(JsValue::Undefined | JsValue::Boolean(_) | JsValue::Number(_))
+            | Self::Return(JsValue::Undefined | JsValue::Boolean(_) | JsValue::Number(_))
+            | Self::Throw(JsValue::Undefined | JsValue::Boolean(_) | JsValue::Number(_))
+            | Self::Break(_)
+            | Self::Continue(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1063,6 +1241,11 @@ mod tests {
                 .expect("native transition succeeds");
             assert_eq!(actual, completion);
             assert_eq!(stack.depth(), 0);
+            assert_eq!(stack.host_completion(), Some(completion));
+            stack
+                .release_host_completion_after_promotion(completion)
+                .expect("top-level completion released after handoff");
+            assert_eq!(stack.host_completion(), None);
         }
     }
 
@@ -1136,6 +1319,133 @@ mod tests {
 
         assert_eq!(result, Completion::Throw(JsValue::Number(404)));
         assert_eq!(stack.depth(), 0);
+        assert_eq!(stack.host_completion(), Some(result));
+        stack
+            .release_host_completion_after_promotion(result)
+            .expect("primitive result released");
+    }
+
+    #[test]
+    fn managed_completion_stays_rooted_across_callbacks_gc_and_host_promotion() {
+        let mut heap = GcHeap::default();
+        let exception = heap.allocate();
+        let mut providers = RootProviders::default();
+        let mut stack = ActivationStack::default();
+        let thrown = Completion::Throw(JsValue::Managed(exception));
+
+        let result = stack
+            .invoke(
+                Activation::new(ActivationKind::Native, "native_outer", None, source(1)),
+                |stack| {
+                    stack
+                        .invoke(
+                            Activation::new(
+                                ActivationKind::Interpreter,
+                                "script_caller",
+                                Some(42),
+                                source(2),
+                            ),
+                            |stack| {
+                                let callback_result = stack
+                                    .invoke(
+                                        Activation::new(
+                                            ActivationKind::HostCallback,
+                                            "host_callback",
+                                            Some(42),
+                                            source(3),
+                                        ),
+                                        |stack| {
+                                            let completion = stack
+                                                .invoke(
+                                                    Activation::new(
+                                                        ActivationKind::Interpreter,
+                                                        "throwing_callee",
+                                                        Some(42),
+                                                        source(4),
+                                                    ),
+                                                    |_| thrown,
+                                                )
+                                                .expect("throwing interpreter returns");
+
+                                            assert_eq!(stack.host_completion(), None);
+                                            assert_eq!(stack.roots(), vec![exception]);
+                                            providers
+                                                .collect_with_execution(&mut heap, stack)
+                                                .expect("GC sees pending completion root");
+                                            assert!(heap.is_alive(exception));
+
+                                            stack
+                                                .consume_pending_completion(completion)
+                                                .expect("caller consumes pending completion");
+                                            assert_eq!(stack.roots(), vec![exception]);
+                                            providers
+                                                .collect_with_execution(&mut heap, stack)
+                                                .expect("GC sees caller live root");
+                                            assert!(heap.is_alive(exception));
+                                            completion
+                                        },
+                                    )
+                                    .expect("host callback returns");
+
+                                stack
+                                    .consume_pending_completion(callback_result)
+                                    .expect("interpreter caller consumes callback completion");
+                                assert_eq!(stack.roots(), vec![exception]);
+                                callback_result
+                            },
+                        )
+                        .expect("script caller returns")
+                },
+            )
+            .expect("native entry returns");
+
+        assert_eq!(result, thrown);
+        assert_eq!(stack.roots(), vec![exception]);
+        let handle = providers
+            .persistent
+            .retain(&heap, exception)
+            .expect("host promotes managed exception to persistent handle");
+        stack
+            .release_host_completion_after_promotion(result)
+            .expect("execution root released only after host promotion");
+
+        providers
+            .collect_with_execution(&mut heap, &stack)
+            .expect("persistent handle keeps exception alive");
+        assert!(heap.is_alive(exception));
+
+        providers.persistent.release(handle).expect("handle released");
+        providers
+            .collect_with_execution(&mut heap, &stack)
+            .expect("collection runs after host handle release");
+        assert!(!heap.is_alive(exception));
+    }
+
+    #[test]
+    fn panic_unwinds_all_activation_frames_without_leaking_stack_state() {
+        let mut stack = ActivationStack::default();
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = stack.invoke(
+                Activation::new(ActivationKind::Native, "native_outer", None, source(1)),
+                |stack| {
+                    stack
+                        .invoke(
+                            Activation::new(
+                                ActivationKind::Interpreter,
+                                "panicking_script",
+                                None,
+                                source(2),
+                            ),
+                            |_| panic!("simulated panic inside script callback"),
+                        )
+                        .expect("panic must resume through caller")
+                },
+            );
+        }));
+
+        assert!(panic_result.is_err());
+        assert_eq!(stack.depth(), 0);
+        assert_eq!(stack.host_completion(), None);
     }
 
     #[test]

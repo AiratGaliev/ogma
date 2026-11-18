@@ -45,7 +45,7 @@ All execution backends use one activation/completion model:
 - Interpreter → host callback calls push a callback activation; callback re-entry into the interpreter pushes another interpreter activation with its own closure/source context.
 - Returns unwind activations in strict LIFO order. The caller's activation remains available until the callee's completion is consumed.
 - Script completions are explicit values: `Normal`, `Return`, `Break`, `Continue` and `Throw`. A `Throw` is not an ABI transport failure. Transport failures remain ABI status values.
-- The completion payload is kept rooted while crossing a boundary. Exception stack/source metadata must be captured before frames are removed.
+- The completion payload is kept rooted while crossing a boundary. A nested callee publishes its completion into the caller activation's pending-completion root before returning. The caller either propagates that same completion or consumes it, transferring a managed value into its own live roots before further execution. At the outermost boundary, the returned completion stays in a host-completion root until the host first promotes a managed value to a persistent handle and only then releases that temporary execution root. Exception stack/source metadata must be captured before frames are removed.
 
 The existing Rust ABI v1 proof defines opaque handles, callback lifetime, reentrancy and completion-vs-status separation. This prototype composes those rules; it does not add fields to or change the v1 public ABI. Rust panic/unwind must never cross the external ABI. The ABI boundary remains responsible for panic containment; script exceptions use explicit completions.
 

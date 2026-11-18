@@ -6,7 +6,7 @@ This is a dependency-free M0 model of the cross-backend root and execution-bound
 
 - non-moving mark/sweep root enumeration across interpreter frames/closure captures, native shadow-frame maps and persistent host handles;
 - exact per-safepoint native root-map validation and strict LIFO frame lifecycle;
-- Native → Interpreter → Host callback → reentrant Interpreter activation transitions;
+- Native → Interpreter → Host callback → reentrant Interpreter activation transitions with pending completion roots, managed caller-local roots and host-result promotion;
 - explicit Normal/Return/Break/Continue/Throw completion propagation and source/closure context;
 - a shared deterministic budget/cancellation meter with bounded poll windows and maximum work-unit overshoot;
 - explicit RegExp, comparator sort, JSON and string interrupt policies.
