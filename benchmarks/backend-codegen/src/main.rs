@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context as _, Result};
 use cranelift_codegen::{
-    ir::{types, AbiParam, FloatCC, InstBuilder, IntCC, Signature, UserFuncName, Value},
+    ir::{condcodes::{FloatCC, IntCC}, types, AbiParam, InstBuilder, Signature, UserFuncName, Value},
     settings, Context as ClifContext,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -14,7 +14,7 @@ use inkwell::{
 };
 use libloading::Library;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 use std::{env, fs, hint::black_box, path::{Path, PathBuf}, process::Command, time::Instant};
 use target_lexicon::Triple;
 
@@ -56,7 +56,7 @@ impl CoreCorpus{
     fn symbol(&self,label:&str)->Result<String>{let f=self.get(label)?;Ok(format!("ogma_{}_{}",f.label,f.id))}
 }
 fn parse_fixture(label:&'static str,raw:&str)->Result<CoreFixture>{
-    let doc:Value=serde_json::from_str(raw)?;
+    let doc:JsonValue=serde_json::from_str(raw)?;
     if doc["contract"]!="ogma.core-ir"||doc["version"]!="1.0.0"{bail!("{label}: not ogma.core-ir/1.0.0");}
     let f=&doc["function"];
     let id=f["id"].as_str().context("Core IR id missing")?.to_owned();
@@ -75,7 +75,7 @@ fn parse_fixture(label:&'static str,raw:&str)->Result<CoreFixture>{
     Ok(CoreFixture{label,id,param_representations:params,return_representation:ret,operations,terminators,exception_edge,host_symbol})
 }
 fn load_corpus()->Result<CoreCorpus>{
-    let manifest:Value=serde_json::from_str(include_str!("../fixtures/workloads.json"))?;
+    let manifest:JsonValue=serde_json::from_str(include_str!("../fixtures/workloads.json"))?;
     if manifest["contract"]!="ogma.backend-codegen-workloads"||manifest["version"]!="1.0.0"||manifest["core_ir_contract"]!="ogma.core-ir/1.0.0"{bail!("unsupported workload manifest");}
     let entries=manifest["workloads"].as_array().context("workloads missing")?;
     let sources=[
@@ -303,7 +303,7 @@ fn bench<F:FnMut(u64)>(o:&Options,mut f:F)->Distribution{
     distribution(samples)
 }
 #[derive(Serialize)]
-struct BackendReport{compile_time_ns:LatencyDistribution,link_time_ns:LatencyDistribution,object_bytes:u64,shared_library_bytes:u64,workloads:Value}
+struct BackendReport{compile_time_ns:LatencyDistribution,link_time_ns:LatencyDistribution,object_bytes:u64,shared_library_bytes:u64,workloads:JsonValue}
 fn compile_rounds(backend:&str,root:&Path,c:&CoreCorpus)->Result<(Vec<f64>,PathBuf)>{
     let mut samples=Vec::new();let mut last=PathBuf::new();
     for n in 0..31{last=root.join(format!("{backend}-{n}.o"));let t=if backend=="cranelift"{compile_cranelift(&last,c)?}else{compile_llvm(&last,c)?};samples.push(t as f64);}
@@ -347,14 +347,14 @@ fn run_backend(name:&str,o:&Options,root:&Path,c:&CoreCorpus)->Result<BackendRep
 struct Report{
  schema_version:u32,task:&'static str,source_revision:String,tested_revision:String,rustc:String,llvm:String,clang:String,os:String,
  host_arch:&'static str,cpu_model:String,build_configuration:&'static str,iterations_per_sample:u64,warmup_rounds:usize,measurement_samples:usize,
- target_lookup:Value,llvm_package_footprint_kib:Option<u64>,cranelift_crate_source_bytes:u64,llvm_binding_source_bytes:u64,
+ target_lookup:JsonValue,llvm_package_footprint_kib:Option<u64>,cranelift_crate_source_bytes:u64,llvm_binding_source_bytes:u64,
  cranelift_build_artifact_bytes:u64,llvm_binding_build_artifact_bytes:u64,integration_notes:Value,cranelift:BackendReport,llvm_backend:BackendReport,
 }
 fn command(p:&str,a:&[&str])->String{Command::new(p).args(a).output().ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_else(||"unavailable".into())}
-fn target_lookup()->Value{
+fn target_lookup()->JsonValue{
  Target::initialize_all(&InitializationConfig::default());
  let triples=["x86_64-unknown-linux-gnu","aarch64-unknown-linux-gnu","x86_64-pc-windows-msvc","aarch64-apple-darwin"];
- Value::Array(triples.iter().map(|name|{let t:Triple=name.parse().unwrap();serde_json::json!({"triple":name,
+ JsonValue::Array(triples.iter().map(|name|{let t:Triple=name.parse().unwrap();serde_json::json!({"triple":name,
  "cranelift":cranelift_codegen::isa::lookup(t).is_ok(),"llvm":Target::from_triple(&TargetTriple::create(name)).is_ok(),
  "scope":"target lookup only; no cross-link or ABI claim"})}).collect())
 }

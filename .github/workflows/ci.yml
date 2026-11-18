@@ -1003,6 +1003,8 @@ jobs:
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: write
     env:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
 
@@ -1030,7 +1032,9 @@ jobs:
 
       - name: Resolve and capture dependency lock
         run: |
-          cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
+          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
+            cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
+          fi
           cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm30-Cargo.lock"
 
       - name: Format and verify OGM-30 source (temporary extraction)
@@ -1063,3 +1067,25 @@ jobs:
             ${{ runner.temp }}/ogm30-Cargo.lock
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Commit initial benchmark evidence to the PR branch
+        if: success() && github.event_name == 'pull_request'
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p benchmarks/backend-codegen/results
+          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
+            cp "$RUNNER_TEMP/ogm30-Cargo.lock" benchmarks/backend-codegen/Cargo.lock
+          fi
+          if [ ! -f benchmarks/backend-codegen/results/ogm30-report.json ]; then
+            cp "$RUNNER_TEMP/ogm30-backend-report.json" benchmarks/backend-codegen/results/ogm30-report.json
+          fi
+          git add benchmarks/backend-codegen/Cargo.lock benchmarks/backend-codegen/results/ogm30-report.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(ogm-30): record benchmark measurements and dependency lock"
+          git push origin "HEAD:$BRANCH"

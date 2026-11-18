@@ -42,7 +42,7 @@ validated by the project's existing Core IR Fast checks.
 
 ## Reproduction
 
-The focused CI job pins Rust 1.100.0, Cranelift 0.137.1, Inkwell 0.11.0 and LLVM 18.1.
+The focused CI job pins Rust 1.100.0, Cranelift 0.137.2, Inkwell 0.11.0 and LLVM 18.1.
 On Ubuntu 24.04 with `llvm-18-dev`, `clang-18` and `build-essential`:
 
 ```sh
