@@ -46,7 +46,7 @@ profiles.json defines eight complete, deterministic configurations across three 
 
 ### Compiler and native build settings
 
-Every profile pins its Rust native build settings in `rustBuild`; the validator checks that these are consistent with its build mode/backend and includes them in the deterministic plan/evidence report. They map to the eventual Cargo `[profile.*]` settings. They are a versioned M0 build contract, not a claim that a production Runtime workspace already consumes them.
+Every profile pins two separate sets of settings: `rustBuild` for compiling the Rust-native Engine/Runtime crates and `aotBuild` for generated JavaScript functions compiled by the Native AOT backend. They must not be conflated: Cargo optimisation of the Engine is not the same decision as optimisation/debug information for generated application code. The validator checks both sets against the selected build mode/backend and includes them in the deterministic plan/evidence report. `rustBuild` maps to eventual Cargo `[profile.*]` settings; `aotBuild` is the Ogma Toolchain contract for generated native code. Both are versioned M0 settings, not a claim that a production Runtime/AOT compiler already consumes them.
 
 | Build mode / backend | `optLevel` | `debug` | Assertions / overflow checks | LTO | Codegen units | `panic` | Final strip policy |
 |---|---:|---|---|---|---:|---|---|
@@ -56,6 +56,17 @@ Every profile pins its Rust native build settings in `rustBuild`; the validator 
 | Release / Hybrid Native | 3 | true while extracting external symbols | disabled | thin | 1 | unwind | debuginfo |
 
 For Hybrid Native Release, debug information is generated so the build can emit a separate external symbol artifact before debug sections are removed from the shipped executable. The external artifact is not linked into the Runtime package. For Debug/Development Hybrid Native, native symbols remain embedded in the internal build. The interpreter-only Release strips symbol data because native AOT symbols are not applicable.
+
+The separate `aotBuild` policy for generated JavaScript code is:
+
+| Execution backend / mode | Enabled | AOT optimization | AOT debug information | AOT symbols |
+|---|---|---|---|---|
+| Portable Interpreter, any mode | No | Not applicable | Not applicable | Not applicable |
+| Hybrid Native, Debug | Yes | Minimal | Full | Embedded |
+| Hybrid Native, Development | Yes | Balanced | Full | Embedded |
+| Hybrid Native, Release | Yes | Aggressive | Full in the symbol-generation stage | External artifact |
+
+This records that Debug uses minimally optimized native code, Development uses moderate optimization, and Release uses production optimization while retaining portable bytecode/interpreter fallback for dynamic and non-lowerable code. OGM-33's currently proven debugger commands operate on that interpreter fallback; `aotBuild.debugInfo` and symbol policy do not claim that native AOT stepping already exists.
 
 ### Feature-flag mapping
 
@@ -147,7 +158,7 @@ The Fast-PR-specific OGM-28 job emits ogm28-runtime-profile-evidence. It records
 - profile-manifest and schema byte sizes;
 - number of logical components and resolved/stripped components per profile;
 - linked-runtime, runtime-module, tooling-only and metadata component counts;
-- resolved compiler/Rust build settings (optimization level, debug info, assertions, LTO, codegen units, panic strategy and stripping) for all eight build/backend/host combinations;
+- resolved Rust compiler and generated-code AOT settings (optimization, debug information, assertions, LTO, codegen units, panic strategy and symbol stripping) for all eight build/backend/host combinations;
 - Rust/Python toolchain and runner metadata;
 - exact size and SHA-256 of the existing OGM-25 ogma-typed-dispatch-bench Release proof executable.
 
@@ -176,7 +187,7 @@ No full Test262, differential conformance or browser/runtime acceptance is claim
 
 | OGM-28 criterion | Contract / verification |
 |---|---|
-| Profile matrix lists included/excluded components, flags, compiler options and binary impact | profiles.json, all eight backend/build/host combinations, rustBuild settings and validator's resolved component/packaging report |
+| Profile matrix lists included/excluded components, flags, compiler options and binary impact | profiles.json, all eight backend/build/host combinations, rustBuild/aotBuild settings and validator's resolved component/packaging report |
 | Production stripping is dependency-aware and rejects required removed components | Dependency-closure validator; OGM-25 registry proof validates concrete host imports/native references |
 | Debugger transport/UI removal does not alter semantics | Developer-tooling graph nodes are checked semantics-neutral; shared ECMAScript semantic contract is immutable |
 | Dynamic-code semantics remain enabled in general compatibility profiles | Schema and validator pin dynamicCode: preserved; no dynamic-code language feature flag exists |
