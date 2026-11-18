@@ -530,14 +530,14 @@ jobs:
       - name: Run copy versus zero-copy benchmark
         id: benchmark
         env:
-          RUSTC_VERSION: \${{ steps.benchmark_environment.outputs.rustc_version }}
-          OGM22_CPU_MODEL: \${{ steps.benchmark_environment.outputs.cpu_model }}
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM22_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
         shell: bash
         run: |
           set -euo pipefail
           cargo run --manifest-path benchmarks/buffer-interop/Cargo.toml --locked --release --bin ogma-buffer-interop-bench -- \
             --iterations 2000 --warmups 3 --samples 101 \
-            --revision "\${{ github.event.pull_request.head.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" --cpu "$OGM22_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-22-buffer-interop-report.json"
 
@@ -549,6 +549,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ogm-22-buffer-interop-evidence
-          path: \${{ runner.temp }}/ogm-22-buffer-interop-report.json
+          path: ${{ runner.temp }}/ogm-22-buffer-interop-report.json
           if-no-files-found: error
           retention-days: 30
