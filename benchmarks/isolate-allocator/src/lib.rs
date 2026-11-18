@@ -5,7 +5,7 @@
 //! ownership and quota accounting; no JS object/GC semantics are modeled.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -17,6 +17,8 @@ const MIN_SIZE_CLASS: usize = 16;
 const MAX_SIZE_CLASS: usize = 4096;
 pub const ARENA_CHUNK_BYTES: usize = 16 * 1024;
 static NEXT_ALLOCATOR_ID: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
+static TEST_SHUTDOWN_RECLAIMS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AllocatorStrategy {
@@ -112,6 +114,7 @@ impl Allocation {
 pub enum DeallocationErrorKind {
     WrongThread,
     WrongAllocator,
+    StaleAllocation,
 }
 
 /// A failed deallocation returns ownership of the allocation to the caller.
@@ -143,6 +146,7 @@ pub struct IsolateAllocator {
     strategy: AllocatorStrategy,
     quota_bytes: usize,
     free: BTreeMap<BucketKey, Vec<FreeBlock>>,
+    live_blocks: HashMap<usize, Layout>,
     stats: AllocatorStats,
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
@@ -155,6 +159,7 @@ impl IsolateAllocator {
             strategy,
             quota_bytes,
             free: BTreeMap::new(),
+            live_blocks: HashMap::new(),
             stats: AllocatorStats::default(),
             _not_send_or_sync: PhantomData,
         }
@@ -218,6 +223,10 @@ impl IsolateAllocator {
             .live_backing_bytes
             .checked_add(backing_layout.size())
             .ok_or(AllocationError::QuotaExceeded)?;
+        let previous = self
+            .live_blocks
+            .insert(pointer.as_ptr() as usize, backing_layout);
+        debug_assert!(previous.is_none(), "allocator issued an already-live pointer");
         self.update_peaks();
 
         Ok(Allocation {
@@ -235,6 +244,8 @@ impl IsolateAllocator {
             Some(DeallocationErrorKind::WrongThread)
         } else if allocation.allocator_id != self.id {
             Some(DeallocationErrorKind::WrongAllocator)
+        } else if !self.live_blocks.contains_key(&(allocation.pointer.as_ptr() as usize)) {
+            Some(DeallocationErrorKind::StaleAllocation)
         } else {
             None
         };
@@ -242,6 +253,11 @@ impl IsolateAllocator {
             return Err(DeallocationError { kind, allocation });
         }
 
+        let live_layout = self
+            .live_blocks
+            .remove(&(allocation.pointer.as_ptr() as usize))
+            .expect("live allocation was validated above");
+        debug_assert_eq!(live_layout, allocation.backing_layout);
         self.stats.live_requested_bytes = self
             .stats
             .live_requested_bytes
@@ -375,6 +391,17 @@ impl IsolateAllocator {
 
 impl Drop for IsolateAllocator {
     fn drop(&mut self) {
+        // Isolate shutdown owns the final lifetime boundary. Return any live
+        // blocks that have not been explicitly released, then reclaim cached
+        // blocks. Allocation tokens become stale when this owner is dropped.
+        for (address, layout) in self.live_blocks.drain() {
+            // SAFETY: each live block is uniquely registered to this allocator.
+            unsafe { System.dealloc(address as *mut u8, layout) };
+            #[cfg(test)]
+            TEST_SHUTDOWN_RECLAIMS.fetch_add(1, Ordering::Relaxed);
+        }
+        self.stats.live_requested_bytes = 0;
+        self.stats.live_backing_bytes = 0;
         for blocks in self.free.values_mut() {
             for block in blocks.drain(..) {
                 // SAFETY: cached blocks remain uniquely owned by this allocator.
@@ -704,6 +731,21 @@ mod tests {
             .allocate(layout(128, 8))
             .expect("reuse reserved chunk");
         assert_eq!(arena.stats().reserved_bytes, ARENA_CHUNK_BYTES);
+    }
+
+    #[test]
+    fn isolate_shutdown_reclaims_allocations_still_live_at_drop() {
+        let reclaimed_before = TEST_SHUTDOWN_RECLAIMS.load(Ordering::Relaxed);
+        {
+            let mut allocator = IsolateAllocator::new(AllocatorStrategy::PerIsolateReuse, 128);
+            let _outstanding = allocator
+                .allocate(layout(64, 8))
+                .expect("live allocation before isolate shutdown");
+        }
+        assert_eq!(
+            TEST_SHUTDOWN_RECLAIMS.load(Ordering::Relaxed),
+            reclaimed_before + 1
+        );
     }
 
     #[test]
