@@ -25,7 +25,9 @@ The benchmark runs both strategies with identical no-op, typed and nested worklo
 - no additional runtime synchronization;
 - a separate synthetic mutex acquired once per callback.
 
-Each measurement records nearest-rank p50/p95/p99 and min/max latency, workload and callback throughput, allocation/reallocation/deallocation counts and bytes, application lock acquisitions/contentions/wait time, synthetic runtime-sync acquisitions/contentions/wait time, scope entries, state borrows and a final-state equivalence check.
+Each workload records p50/p95/p99/min/max from 10,000 individually timed workload iterations. A workload iteration is one no-op, one typed callback or a three-callback nested sequence. Two `Instant` reads are included in every single-iteration observation; an independent empty timer-pair baseline is reported and not subtracted. Throughput is measured separately from 101 batches of 10,000 iterations, and batch p50/p95/p99 are retained in the JSON report. This avoids mislabelling percentiles of batch means as individual-operation tail latency.
+
+Reports also include allocation/reallocation/deallocation counts and bytes, application lock acquisitions/contentions/wait time, synthetic-control lock acquisitions/contentions/wait time, scope entries, state borrows and a final-state equivalence check.
 
 A separate four-thread shared-lock probe reports contention and per-operation tail latency. The owner-thread context is not accessed concurrently: cross-thread use is represented by owned commands and tested through the bounded dispatcher.
 
@@ -46,7 +48,14 @@ The runner rejects fewer than 101 measurement samples. The report includes sourc
 
 This is an M0 mock host-dispatch proof, not an ECMAScript parser, interpreter, production Ogma Runtime or production binding integration. It does not claim QuickJS/rquickjs or another third-party library has no internal locks.
 
-No third-party binding/runtime library is linked into this proof. Therefore actual binding-library synchronization cannot be measured here. The additional mutex is an explicitly labelled synthetic control to keep independent runtime/library synchronization visible in the accounting; it must not be cited as a measurement of any real library.
+The exact binding-library synchronization profile used by the existing CGE reference consumer is source-audited and reported separately from the mock timings:
+
+- CGE Experiments pins `rquickjs` 0.14.0 with default features and `std`; it does not enable `parallel` or `futures`.
+- In this configuration, rquickjs stores `Runtime` through `Rc<Mut<RawRuntime>>`; `Mut` wraps `core::cell::RefCell`, and `Mut::lock()` calls `borrow_mut()`. This is single-thread borrow exclusion, not a cross-thread OS mutex.
+- `Context::with()` acquires that runtime borrow once and keeps it for the closure/JS execution. The CGE `call_hook()` enters one `Context::with()` around the lifecycle function call, so the library borrow is one per hook/frame execution, not one additional borrow per host callback.
+- Enabling rquickjs `parallel` changes the holder to `Arc<Mutex<...>>`; the `futures` path exposes `AsyncRuntime` backed by `async_lock::Mutex`. Neither feature is enabled by the inspected CGE dependency configuration.
+
+This is a source audit and exact lock/entry-count report, not a timed rquickjs benchmark: the Ogma proof crate intentionally has no rquickjs runtime dependency. The independent synthetic mutex remains only a control for demonstrating a separate synchronization cost; it is not attributed to rquickjs.
 
 The contention probe characterizes the shared-lock baseline under concurrent producers; it is not a claim that mutable owner-thread Runtime state should be shared across threads. Such work must be transferred as owned commands/tasks and applied by the Runtime owner. Benchmark timings have no machine-independent pass/fail threshold.
 
@@ -60,8 +69,8 @@ Keep synchronization where the ownership model actually requires it. Calls arriv
 
 A scope must not retain an exclusive mutable borrow, raw reference or lock across arbitrary JavaScript execution, callback re-entry, await, yield or suspension. Nested execution receives an explicit nested scope; conflicting access fails deterministically. Any synchronization internal to a selected binding/runtime library remains a separate cost and must be measured for that concrete library/version.
 
-This is an architecture recommendation, not a production performance claim. The proof compares dispatch mechanics and host-state locking only. Actual binding-library synchronization and end-to-end Ogma performance remain unmeasured until a real Runtime/binding integration exists.
+This is an architecture recommendation, not a production performance claim. The mock benchmark compares dispatch mechanics and host-state locking; the current rquickjs consumer's internal borrow/lock profile is reported separately from those mock timings. End-to-end Ogma performance remains unmeasured until Ogma has a real Runtime/binding integration.
 
 ## Normative references
 
-The architecture invariants follow the Ogma [architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.9.1, 8.9.7 and 8.9.8. The motivating per-callback mutex pattern was inspected in [CGE Experiments scripting.rs](https://github.com/AiratGaliev/cge-experiments/blob/c47ad08c3da9a3857f8429cebbed6ce88969715d/rust-brick-breaker/src/scripting.rs) at commit c47ad08c3da9a3857f8429cebbed6ce88969715d. OGM-20 does not modify or execute that consumer project.
+The architecture invariants follow the Ogma [architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.9.1, 8.9.7 and 8.9.8. The motivating per-callback mutex pattern and concrete `rquickjs` dependency profile were inspected in [CGE Experiments scripting.rs](https://github.com/AiratGaliev/cge-experiments/blob/c47ad08c3da9a3857f8429cebbed6ce88969715d/rust-brick-breaker/src/scripting.rs) and [Cargo.toml](https://github.com/AiratGaliev/cge-experiments/blob/c47ad08c3da9a3857f8429cebbed6ce88969715d/rust-brick-breaker/Cargo.toml) at commit c47ad08c3da9a3857f8429cebbed6ce88969715d. The binding implementation was checked in [rquickjs `safe_ref.rs`](https://github.com/DelSkayn/rquickjs/blob/5a9560dd821d5498ded9e0745250d42fcadf8608/core/src/safe_ref.rs), [runtime/base.rs](https://github.com/DelSkayn/rquickjs/blob/5a9560dd821d5498ded9e0745250d42fcadf8608/core/src/runtime/base.rs) and [context/base.rs](https://github.com/DelSkayn/rquickjs/blob/5a9560dd821d5498ded9e0745250d42fcadf8608/core/src/context/base.rs). OGM-20 does not add rquickjs as an Ogma dependency or modify the CGE consumer.
