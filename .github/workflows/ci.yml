@@ -905,6 +905,70 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  ogm28-runtime-feature-profile-proof:
+    name: OGM-28 runtime profiles and fail-closed stripping proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-28-runtime-feature-profiles')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/ogm28-target
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Python for profile validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Capture toolchain versions
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+          echo "cargo_version=$(cargo --version)" >> "$GITHUB_OUTPUT"
+
+      - name: Check OGM-25 proof formatting
+        run: cargo fmt --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all -- --check
+
+      - name: Run OGM-25 proof Clippy
+        run: cargo clippy --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run host-module registration and dependency-closure tests
+        run: cargo test --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-features --locked
+
+      - name: Run OGM-28 profile graph and stripping regressions
+        run: python3 -m unittest discover -s .github/scripts -p "test_runtime_profiles.py" -v
+
+      - name: Build pinned OGM-25 proof executable for footprint baseline
+        run: cargo build --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --bin ogma-typed-dispatch-bench --release --locked --target-dir "$CARGO_TARGET_DIR"
+
+      - name: Validate profiles and collect M0 footprint evidence
+        env:
+          RUSTC_VERSION: ${{ steps.toolchain.outputs.rustc_version }}
+          CARGO_VERSION: ${{ steps.toolchain.outputs.cargo_version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/validate_runtime_profiles.py \
+            --proof-binary "$CARGO_TARGET_DIR/release/ogma-typed-dispatch-bench" \
+            --report "$RUNNER_TEMP/ogm28-runtime-profile-report.json"
+
+      - name: Upload OGM-28 runtime profile evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm28-runtime-profile-evidence
+          path: ${{ runner.temp }}/ogm28-runtime-profile-report.json
+          if-no-files-found: error
+          retention-days: 30
+
   ogm27-native-runtime-boundary-proof:
     name: OGM-27 native Runtime roots, safepoints and transitions proof
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-27-native-frames-safepoints')
