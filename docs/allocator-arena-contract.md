@@ -68,24 +68,24 @@ No production allocator, quota API, GC interaction, JS object semantics, compile
 
 ## Final measured result and recommendation (2026-11-18)
 
-Evidence: [CI run 44300297357](https://github.com/AiratGaliev/ogma/actions/runs/44300297357), artifact [`ogm-24-allocator-arena-evidence`](https://github.com/AiratGaliev/ogma/actions/runs/44300297357/artifacts/14425239185). Environment: Rust 1.100.0, Linux x86_64, AMD EPYC 7763 64-Core Processor; three warmups, 101 samples, 100 iterations/sample. Source revision: `d3da74b55e022d9bae4bab733e4e6747eb3ee4a1`; tested merge revision: `98dcfbbdc2aa5c146416b633792810510600f2bd`.
+Evidence: [CI run 44302179996](https://github.com/AiratGaliev/ogma/actions/runs/44302179996), artifact [`ogm-24-allocator-arena-evidence`](https://github.com/AiratGaliev/ogma/actions/runs/44302179996/artifacts/14426447232). Environment: Rust 1.100.0, Linux x86_64, AMD EPYC 9V74 80-Core Processor; three warmups, 101 samples, 100 iterations/sample. Source revision: `a84b2266879c7fb16bc28b253652352669b6130a`; tested PR merge-ref revision: `ab65f020f3c20f06c1403ac5d68c20c4beff2c0d`.
 
 | Candidate | Throughput | Allocation p50/p95/p99 | Deallocation or reset p50/p95/p99 | Peak reserved |
 |---|---:|---:|---:|---:|
-| System + quota wrapper | 9.950 M ops/s | 50 / 91 / 130 ns | 50 / 70 / 80 ns | 156,808 B |
-| Per-Isolate exact reuse | 9.365 M ops/s | 60 / 80 / 130 ns | 51 / 120 / 150 ns | 157,168 B |
-| Per-Isolate size-class pool | 9.538 M ops/s | 60 / 71 / 110 ns | 50 / 110 / 140 ns | 158,304 B |
-| System per-node compile allocation | 24,552 units/s | 30 / 50 / 89 ns | 30 / 41 / 50 ns | 26,368 B |
-| Compile-unit bump arena | 48,795 units/s | 31 / 40 / 41 ns | 40 / 41 / 41 ns | 32,768 B |
+| System + quota wrapper | 12.023 M ops/s | 50 / 80 / 110 ns | 40 / 60 / 70 ns | 156,808 B |
+| Per-Isolate exact reuse | 11.387 M ops/s | 50 / 61 / 101 ns | 50 / 90 / 120 ns | 157,168 B |
+| Per-Isolate size-class pool | 11.442 M ops/s | 50 / 61 / 90 ns | 50 / 90 / 120 ns | 158,304 B |
+| System per-node compile allocation | 30,195 units/s | 30 / 40 / 70 ns | 30 / 40 / 41 ns | 26,368 B |
+| Compile-unit bump arena | 59,843 units/s | 30 / 30 / 31 ns | 30 / 31 / 40 ns | 32,768 B |
 
 ### Recommendation
 
-- **Runtime heap:** retain System as the default baseline. Under this mixed-size churn workload, exact reuse and size classes reduced total throughput by 5.9% and 4.1%. Size classes improved allocation p95/p99 (91/130 → 71/110 ns), but worsened deallocation p95/p99 (70/80 → 110/140 ns) and retained 158,304 B. Exact reuse provided no p99 allocation improvement and had even higher deallocation tail latency. Evidence does not support enabling either custom pool by default. A size-class allocator is only a possible targeted option where allocation-tail latency outweighs free-path latency and retained memory.
-- **Compiler scratch:** a compile-unit bump arena is promising for homogeneous POD-like AST/semantic/Core IR scratch with a strict compile-unit lifetime. It improved measured throughput by 98.7% and reduced allocation p95/p99 from 50/89 to 40/41 ns, while retaining 6,400 B of slack across two chunks. Reset p50 was higher (40 vs 30 ns); keep objects requiring Drop, escaping data and JS heap objects outside this arena.
+- **Runtime heap:** retain System as the default baseline. In this mixed-size churn workload, exact reuse and size classes reduced overall throughput by approximately 5.3% and 4.8%. Both custom strategies improved allocation p95/p99, but worsened deallocation p95/p99 from 60/70 ns to 90/120 ns and retained 157–158 KiB. The evidence does not support enabling either custom pool by default. Consider size classes only for a target workload where allocation-tail latency is materially more important than free-path latency and retained capacity.
+- **Compiler scratch:** a compile-unit bump arena is promising for homogeneous POD-like AST/semantic/Core IR scratch with a strict compile-unit lifetime. It improved measured throughput by approximately 98.2%, reduced allocation p95/p99 from 40/70 ns to 30/31 ns, and reduced release/reset p95/p99 from 40/41 ns to 31/40 ns. It retained 6,400 B of slack across two chunks (19.5% of reserved capacity). Keep objects requiring Drop, escaping data and JS heap objects outside this arena.
 - These decisions are provisional M0 evidence, not production policy. A real Ogma heap/compiler workload and additional controlled runner/platform measurements are required before a production allocator selection.
 
 ### Lifecycle, quota and measurement caveats
 
-The allocator now tracks active blocks by address and backing layout, rejects stale/cross-Isolate deallocation, and reclaims still-live plus cached blocks at Isolate shutdown. A regression test proves shutdown cleanup for an outstanding allocation token. The token must not be used after its allocator owner is destroyed.
+The allocator tracks active blocks by address and backing layout, rejects stale/cross-Isolate deallocation, and reclaims still-live plus cached blocks at Isolate shutdown. Regression coverage verifies cleanup for an outstanding allocation token, the cache's 128-block-per-bucket ceiling, large/over-aligned System fallback and arena chunk alignment when a later request requires stronger alignment. Allocation tokens must not be used after their allocator owner is destroyed.
 
 The quota enforced here covers allocation backing bytes, including live blocks, cache-resident blocks and arena chunks. It does **not** count the Rust allocator bookkeeping structures (bucket maps, vectors and live-block registry) or process/runtime overhead; the result proves that the custom block allocation path cannot bypass its configured backing-byte quota, not that the entire Isolate process is capped at that value. Peak RSS includes benchmark scratch buffers and is only a process-level corroborating metric. System allocator internal/external fragmentation is not introspectable. This was one synthetic workload on one CI host; it cannot establish JS object allocation or GC performance.
