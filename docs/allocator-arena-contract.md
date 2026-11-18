@@ -64,3 +64,26 @@ Do not select an allocator based on throughput alone. Compare results alongside 
 A custom per-Isolate strategy is justified only for workloads where reuse materially improves latency/throughput without unacceptable retained memory, quota pressure or maintenance cost. If gains are negligible or narrow, prefer the System baseline. Enable size classes only for measured, recurring size distributions. Keep compile-unit arenas only for bounded compiler data whose lifetime is genuinely compile-unit-scoped.
 
 No production allocator, quota API, GC interaction, JS object semantics, compiler allocation path, multi-thread Runtime behaviour or cross-platform allocator comparison is proved here.
+
+
+## First measured result and recommendation (2026-11-18)
+
+Evidence: [CI run 44299593835](https://github.com/AiratGaliev/ogma/actions/runs/44299593835), artifact `ogm-24-allocator-arena-evidence`. Environment: Rust 1.100.0, Linux x86_64, Intel Xeon 6975P-C; three warmups, 101 samples, 100 iterations/sample.
+
+| Candidate | Throughput | Allocation p50/p95/p99 | Deallocation or reset p50/p95/p99 | Peak reserved |
+|---|---:|---:|---:|---:|
+| System + quota wrapper | 12.524 M ops/s | 45 / 72 / 105 ns | 38 / 50 / 59 ns | 156,808 B |
+| Per-Isolate exact reuse | 12.055 M ops/s | 45 / 55 / 89 ns | 41 / 85 / 113 ns | 157,168 B |
+| Per-Isolate size-class pool | 12.204 M ops/s | 46 / 48 / 81 ns | 41 / 81 / 111 ns | 158,304 B |
+| System per-node compile allocation | 29,551 units/s | 28 / 49 / 80 ns | 30 / 40 / 46 ns | 26,368 B |
+| Compile-unit bump arena | 53,218 units/s | 37 / 38 / 39 ns | 41 / 46 / 54 ns | 32,768 B |
+
+### Recommendation
+
+- **Runtime heap:** retain System as the default baseline. Under this mixed-size churn workload, exact reuse and size classes did not improve total throughput (about 3.7% and 2.6% lower respectively). Their allocation p95/p99 improved, but deallocation p95/p99 regressed substantially and roughly 157–158 KiB remained cached. Consider size classes only for a measured allocation-tail-sensitive workload that can tolerate the free-path and cache-retention trade-off.
+- **Compiler scratch:** a compile-unit bump arena is promising for homogeneous POD-like AST/semantic/Core IR scratch with a strict compile-unit lifetime. It improved measured throughput by about 80% and reduced allocation p95/p99, with 6,400 B peak slack across two retained chunks. Keep objects requiring Drop, escaping data and JS heap objects outside this arena.
+- These decisions are provisional M0 evidence, not production policy. A real Ogma heap/compiler workload and another controlled runner are needed before a production allocator selection.
+
+### Measurement caveats
+
+The quota enforced here covers allocation backing bytes, including cache-resident blocks and arena chunks. It does **not** count the Rust allocator bookkeeping structures (bucket maps/vectors) or process/runtime overhead; the result proves that the custom block allocation path cannot bypass its configured backing-byte quota, not that the whole Isolate process is capped at that value. Peak RSS includes benchmark scratch buffers and is only a process-level corroborating metric. The run is one synthetic workload on one CI host; it cannot establish JS object allocation or GC performance.

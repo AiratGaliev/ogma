@@ -39,3 +39,25 @@ The feature-PR CI job executes these checks and uploads a machine-readable JSON 
 ## Interpretation limits
 
 The System candidate exposes logical allocator accounting but cannot introspect the platform allocator's internal or external fragmentation. The reported internal-fragmentation proxy is reserved bytes minus live requested bytes; it includes pool-retained capacity and size-class slack, not OS allocator fragmentation. Peak RSS is a process-level high-water mark, including benchmark harness overhead, and is not attributed wholly to the allocator. These measurements do not establish Ogma Runtime or JS heap performance; they inform a future Runtime allocator contract only.
+
+
+## Recorded result (CI run 44299593835)
+
+The first pinned Linux x86_64 run used Rust 1.100.0 on an Intel Xeon 6975P-C runner, 101 samples, three warmups and 100 iterations per sample. The complete machine-readable report is attached to [CI run 44299593835](https://github.com/AiratGaliev/ogma/actions/runs/44299593835) as `ogm-24-allocator-arena-evidence`.
+
+| Runtime allocator candidate | Throughput (ops/s) | Allocation p50/p95/p99 (ns) | Deallocation p50/p95/p99 (ns) | Peak reserved (bytes) |
+|---|---:|---:|---:|---:|
+| System + quota wrapper | 12,524,045 | 45 / 72 / 105 | 38 / 50 / 59 | 156,808 |
+| Per-Isolate exact reuse | 12,054,711 | 45 / 55 / 89 | 41 / 85 / 113 | 157,168 |
+| Per-Isolate size classes | 12,203,528 | 46 / 48 / 81 | 41 / 81 / 111 | 158,304 |
+
+Both reuse candidates reduced allocation p95/p99 in this workload, but total throughput was 2.6–3.7% lower and deallocation p95/p99 was substantially higher. The pools retained roughly 157–158 KiB of free blocks. This does not support making a custom pool the default Isolate allocator. A size-class pool remains a candidate only for a demonstrated consumer workload where allocation tail latency is more important than free-path latency and retained cache memory.
+
+| Compile-unit candidate | Throughput (units/s) | Allocation p50/p95/p99 (ns) | Release/reset p50/p95/p99 (ns) | Peak reserved / payload (bytes) |
+|---|---:|---:|---:|---:|
+| System per-node allocation | 29,551 | 28 / 49 / 80 | 30 / 40 / 46 | 26,368 / 26,368 |
+| Compile-unit bump arena | 53,218 | 37 / 38 / 39 | 41 / 46 / 54 | 32,768 / 26,368 |
+
+The bump arena increased throughput by about 80% and improved p95/p99 allocation latency, while p50 allocation and reset/release latency were higher. It retained two 16 KiB chunks (6,400 bytes of reserved slack at the measured peak). This is promising for homogeneous POD-like compiler scratch whose lifetime ends at a compile-unit boundary; it is not evidence for arena allocation of JS heap objects or values requiring destructors.
+
+These are single-run, synthetic raw-memory results from one CI host. They are not production Runtime timings. Peak RSS is a per-process high-water metric and includes benchmark-process overhead; System allocator internal/external fragmentation cannot be introspected.
