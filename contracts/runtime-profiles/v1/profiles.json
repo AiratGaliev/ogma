@@ -318,6 +318,148 @@
         "tools.inspector",
         "tools.inspector-ui",
         "tools.repl"
+      ],
+      "rustBuild": {
+        "optLevel": "0",
+        "debug": true,
+        "debugAssertions": true,
+        "overflowChecks": true,
+        "lto": "off",
+        "codegenUnits": 256,
+        "panic": "unwind",
+        "strip": "none"
+      }
+    },
+    {
+      "id": "debug-hybrid-native",
+      "purpose": "Hybrid AOT debug build with full native symbols. OGM-33 debugger controls currently apply to portable-interpreter fallback; native AOT stepping remains a later milestone.",
+      "buildMode": "debug",
+      "executionBackend": "hybrid-native",
+      "rustBuild": {
+        "optLevel": "0",
+        "debug": true,
+        "debugAssertions": true,
+        "overflowChecks": true,
+        "lto": "off",
+        "codegenUnits": 256,
+        "panic": "unwind",
+        "strip": "none"
+      },
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "native-aot-execution",
+        "host-module-registry",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl"
+      ],
+      "excludeComponents": [
+        "node-module-resolver",
+        "node-compat-api",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "tooling": {
+        "debuggerApi": true,
+        "interpreterHooks": true,
+        "dapTransport": true,
+        "inspector": true,
+        "inspectorUi": true,
+        "repl": true,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "embedded",
+        "sourceMaps": "embedded",
+        "debugSymbols": "embedded",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "debug.api",
+        "debug.interpreter-hooks",
+        "debug.source-metadata",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.native-aot",
+        "execution.native-root-maps",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules",
+        "tools.dap-transport",
+        "tools.inspector",
+        "tools.inspector-ui",
+        "tools.repl"
+      ]
+    },
+    {
+      "id": "development-hybrid-native",
+      "purpose": "Hybrid AOT development/test build. DAP and Hot Reload apply to portable-interpreter fallback; native AOT debug stepping remains outside the M0 debugger contract.",
+      "buildMode": "development",
+      "executionBackend": "hybrid-native",
+      "rustBuild": {
+        "optLevel": "1",
+        "debug": true,
+        "debugAssertions": true,
+        "overflowChecks": true,
+        "lto": "off",
+        "codegenUnits": 16,
+        "panic": "unwind",
+        "strip": "none"
+      },
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "native-aot-execution",
+        "host-module-registry",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "excludeComponents": [
+        "node-module-resolver",
+        "node-compat-api"
+      ],
+      "tooling": {
+        "debuggerApi": true,
+        "interpreterHooks": true,
+        "dapTransport": true,
+        "inspector": true,
+        "inspectorUi": true,
+        "repl": true,
+        "profilerHooks": true,
+        "hotReload": true
+      },
+      "metadata": {
+        "sourceDebugMetadata": "embedded",
+        "sourceMaps": "embedded",
+        "debugSymbols": "embedded",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "debug.api",
+        "debug.interpreter-hooks",
+        "debug.source-metadata",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.native-aot",
+        "execution.native-root-maps",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules",
+        "tools.dap-transport",
+        "tools.hot-reload",
+        "tools.inspector",
+        "tools.inspector-ui",
+        "tools.profiler-hooks",
+        "tools.repl"
       ]
     },
     {
@@ -374,7 +516,17 @@
         "tools.inspector-ui",
         "tools.profiler-hooks",
         "tools.repl"
-      ]
+      ],
+      "rustBuild": {
+        "optLevel": "1",
+        "debug": true,
+        "debugAssertions": true,
+        "overflowChecks": true,
+        "lto": "off",
+        "codegenUnits": 16,
+        "panic": "unwind",
+        "strip": "none"
+      }
     },
     {
       "id": "portable-interpreter-release",
@@ -424,7 +576,17 @@
         "runtime.core",
         "runtime.host-abi",
         "runtime.host-modules"
-      ]
+      ],
+      "rustBuild": {
+        "optLevel": "3",
+        "debug": false,
+        "debugAssertions": false,
+        "overflowChecks": false,
+        "lto": "thin",
+        "codegenUnits": 1,
+        "panic": "unwind",
+        "strip": "symbols"
+      }
     },
     {
       "id": "hybrid-native-release",
@@ -474,7 +636,17 @@
         "runtime.core",
         "runtime.host-abi",
         "runtime.host-modules"
-      ]
+      ],
+      "rustBuild": {
+        "optLevel": "3",
+        "debug": true,
+        "debugAssertions": false,
+        "overflowChecks": false,
+        "lto": "thin",
+        "codegenUnits": 1,
+        "panic": "unwind",
+        "strip": "debuginfo"
+      }
     },
     {
       "id": "node-compatibility-portable-release",
@@ -521,6 +693,77 @@
         "compat.node-resolver",
         "execution.bytecode-verifier",
         "execution.interpreter",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules"
+      ],
+      "rustBuild": {
+        "optLevel": "3",
+        "debug": false,
+        "debugAssertions": false,
+        "overflowChecks": false,
+        "lto": "thin",
+        "codegenUnits": 1,
+        "panic": "unwind",
+        "strip": "symbols"
+      }
+    },
+    {
+      "id": "node-compatibility-hybrid-native-release",
+      "purpose": "Hybrid AOT with the same explicit Node compatibility adapters and host ABI as the portable interpreter profile; portable fallback is retained for dynamic or non-lowerable code.",
+      "buildMode": "release",
+      "executionBackend": "hybrid-native",
+      "rustBuild": {
+        "optLevel": "3",
+        "debug": true,
+        "debugAssertions": false,
+        "overflowChecks": false,
+        "lto": "thin",
+        "codegenUnits": 1,
+        "panic": "unwind",
+        "strip": "debuginfo"
+      },
+      "hostCompatibility": "node",
+      "includeRoots": [
+        "native-aot-execution",
+        "host-module-registry",
+        "node-compat-api"
+      ],
+      "excludeComponents": [
+        "source-debug-metadata",
+        "debugger-api",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "tooling": {
+        "debuggerApi": false,
+        "interpreterHooks": false,
+        "dapTransport": false,
+        "inspector": false,
+        "inspectorUi": false,
+        "repl": false,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "stripped",
+        "sourceMaps": "external",
+        "debugSymbols": "external",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "compat.node-api",
+        "compat.node-resolver",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.native-aot",
+        "execution.native-root-maps",
         "execution.portable-bytecode",
         "runtime.core",
         "runtime.host-abi",
