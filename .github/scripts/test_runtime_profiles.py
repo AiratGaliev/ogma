@@ -64,6 +64,18 @@ class RuntimeProfileContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ProfileValidationError, "unknown component"):
             self.validate(invalid)
 
+    def test_json_schema_constant_comparison_keeps_boolean_distinct_from_integer(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        invalid["schemaVersion"] = True
+        with self.assertRaisesRegex(ProfileValidationError, "expected type integer"):
+            self.validate(invalid)
+
+    def test_identifier_patterns_reject_trailing_line_terminators(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        invalid["components"][0]["id"] += "\\n"
+        with self.assertRaisesRegex(ProfileValidationError, "does not match pattern"):
+            self.validate(invalid)
+
     def test_component_dependency_cycles_fail_closed(self) -> None:
         invalid = copy.deepcopy(self.document)
         semantic_core = next(item for item in invalid["components"] if item["id"] == "ecmascript-semantics")
