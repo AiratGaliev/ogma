@@ -360,3 +360,65 @@ def build_report(
             "profileSetBytes": manifest_path.stat().st_size,
             "profileSchemaBytes": schema_path.stat().st_size,
             "logicalComponentCount": len(document["components"]),
+            "profileCount": len(plans),
+            "profiles": {
+                profile_id: {
+                    "includedComponentCount": len(plan["includedComponents"]),
+                    "strippedComponentCount": len(plan["strippedComponents"]),
+                    "linkedRuntimeComponentCount": len(plan["linkedRuntimeComponents"]),
+                    "runtimeModuleComponentCount": len(plan["runtimeModuleComponents"]),
+                    "toolingOnlyComponentCount": len(plan["toolingOnlyComponents"]),
+                    "metadataComponentCount": len(plan["metadataComponents"]),
+                }
+                for profile_id, plan in plans.items()
+            },
+            "m0ProofExecutable": binary_measurement,
+            "productionRuntimeExecutable": {
+                "status": "not-implemented",
+                "bytes": None,
+                "reason": "The repository is still M0 bootstrap and has no production Runtime/workspace; a per-profile Runtime binary delta is not yet measurable.",
+            },
+        },
+        "profilePlans": plans,
+        "limitations": [
+            "Logical component IDs are architectural build boundaries, not existing Cargo crate names or claims that the components are implemented.",
+            "OGM-25 remains the authority for concrete host-module/native dependency closure and fail-closed runtime-import/native-module diagnostics.",
+            "OGM-33 remains the authority for debugger DTO/source metadata and the executable-payload-preserving metadata-strip proof.",
+            "The OGM-25 proof executable size is a measured tooling baseline only; it must not be presented as the size of any Ogma Runtime profile.",
+        ],
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--proof-binary", type=Path)
+    args = parser.parse_args()
+
+    try:
+        document = json.loads(args.manifest.read_text(encoding="utf-8"))
+        schema = json.loads(args.schema.read_text(encoding="utf-8"))
+        plans = build_profile_plans(document, schema)
+        report = build_report(document, schema, plans, args.manifest, args.schema, args.proof_binary)
+    except (OSError, json.JSONDecodeError, ProfileValidationError) as exc:
+        print(f"Runtime profile validation failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    print(
+        f"Validated OGM-28 runtime profiles: {len(plans)} profiles, "
+        f"{len(document['components'])} logical components."
+    )
+    if args.proof_binary:
+        print(f"Measured OGM-25 M0 proof executable: {report['contractMeasurements']['m0ProofExecutable']['bytes']} bytes.")
+    print("Production Runtime binary size is not measurable in the current M0 bootstrap.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
