@@ -333,7 +333,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/ogm-19-rust-abi-report.json"
 
