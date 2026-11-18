@@ -87,33 +87,34 @@ No production GC choice is declared by this source alone. The recommendation mus
 
 ## Recorded result and M0 recommendation (2026-11-18)
 
-The latest paired measurement report was produced by [CI run 44323273442](https://github.com/AiratGaliev/ogma/actions/runs/44323273442); the OGM-26 proof job and repository Fast CI both succeeded.
+The latest reproducible paired run is [CI run #340](https://github.com/AiratGaliev/ogma/actions/runs/44326700282). Its specialized OGM-26 job and repository `fast-checks` job both passed. The benchmarked source revision is `4a572f992bf522278b053335be38768254fb3109`; the CI-tested merge revision is `044beb35569eac2a9a3ed6738dc76b67b5f8bda8`.
 
-**Environment:** Rust 1.100.0; Linux x86_64; Intel Xeon 6975P-C.
+Environment and sampling: Rust 1.100.0, Linux x86_64, AMD EPYC 7763 64-Core Processor; 2,048 objects, 3 warmups, 101 samples per workload and collector, nearest-rank percentiles, alternating candidate order. The report contains every raw sample.
 
-**Configuration:** 2,048 objects; three warmup rounds; 101 paired samples per collector/workload; nearest-rank percentiles; alternating collector order per sample.
+The build timer stops after deterministic heap, edge and root construction. Graph fingerprinting is performed after that timer and is used only for equivalence validation. Root-scan time measures creation and validation of the common root inventory; RC-only per-slot root multiplicities are built inside RC collection and are not charged to the tracing collector.
 
-**Measured source revision:** `3d831df33948eb0b0b6b79c7d894e65d74c0ed34`.
+All times below are microseconds. Collection shows p50/p95/p99; other latency columns show p50.
 
-**CI tested revision:** `75933f40dd2e7807b37103d0eb9ca1f2c88dad8e`.
+| Workload | Collector | Collection p50/p95/p99 | Root scan p50 | Build p50 | End-to-end p50 | Avg. edges examined | Avg. RC ops | Live / reclaimed |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Balanced roots and cycles | RC + cycle removal | 46.057 / 53.361 / 55.905 | 0.932 | 67.517 | 114.556 | 3,875 | 6,406 | 1,696 / 352 |
+| Balanced roots and cycles | Mark-sweep | 25.428 / 28.464 / 40.316 | 0.942 | 65.373 | 91.212 | 1,754 | 0 | 1,696 / 352 |
+| Persistent host retention | RC + cycle removal | 45.016 / 57.519 / 65.434 | 1.142 | 65.985 | 111.039 | 3,938 | 6,486 | 1,756 / 292 |
+| Persistent host retention | Mark-sweep | 24.015 / 26.320 / 35.376 | 1.122 | 65.033 | 89.018 | 1,817 | 0 | 1,756 / 292 |
+| Allocation churn | RC + cycle removal | 60.744 / 68.910 / 71.805 | 0.370 | 73.208 | 135.124 | 2,274 | 5,453 | 148 / 1,900 |
+| Allocation churn | Mark-sweep | 41.128 / 45.365 / 52.228 | 0.360 | 67.958 | 110.138 | 153 | 0 | 148 / 1,900 |
 
-Collection and root-scan values are microseconds; end-to-end is graph build + collection. RC maintenance operations are averaged over the 101 samples.
+Mark-sweep reduced collection p50 by 44.8% in the balanced workload, 46.7% with persistent host handles and 32.3% under allocation churn. End-to-end p50 (build plus collection) improved by 20.4%, 19.8% and 18.5%, respectively. Its p95 and p99 collection pauses were also lower in each workload. Root-inventory scan cost was similar between candidates. Equivalent graph fingerprints and per-sample liveness/reclamation matched across all 101 pairs in all three workloads.
 
-| Workload | Collector | Collection p50 / p95 / p99 (µs) | Root scan p50 (µs) | End-to-end p50 (µs) | Edges examined (avg.) | RC ops (avg.) | Live / reclaimed objects |
-|---|---|---:|---:|---:|---:|---:|---:|
-| Balanced roots and cycles | RC + cycle removal | 31.662 / 32.751 / 39.872 | 1.211 | 164.975 | 3,875 | 6,406 | 1,696 / 352 |
-| Balanced roots and cycles | Non-moving mark-sweep | 17.546 / 18.074 / 27.060 | 1.216 | 150.522 | 1,754 | 0 | 1,696 / 352 |
-| Persistent host retention | RC + cycle removal | 33.001 / 52.721 / 59.517 | 1.460 | 170.020 | 3,938 | 6,486 | 1,756 / 292 |
-| Persistent host retention | Non-moving mark-sweep | 17.884 / 25.786 / 32.047 | 1.441 | 154.198 | 1,817 | 0 | 1,756 / 292 |
-| Allocation churn | RC + cycle removal | 39.906 / 63.054 / 69.961 | 0.534 | 174.944 | 2,274 | 5,453 | 148 / 1,900 |
-| Allocation churn | Non-moving mark-sweep | 28.040 / 42.507 / 47.839 | 0.547 | 159.592 | 153 | 0 | 148 / 1,900 |
+**M0 recommendation:** use non-moving tracing mark-sweep as the preferred next candidate for Runtime integration. This is a decision based on this shared synthetic model, not a final production GC selection. Production choice still requires the actual Runtime object layout, complete native root maps/safepoints, host-reference integration, and stress tests covering the real interpreter/native boundary.
 
-### Recommendation
+Logical heap bytes are common-model object/edge accounting, not collector-specific memory consumption. They do not measure mark bitmaps, trial-deletion scratch arrays, root registry capacity, Vec spare capacity, allocator metadata, fragmentation or process RSS. This proof therefore makes no claim that the two production collectors would have equal memory overhead.
 
-**Prefer non-moving tracing mark-sweep as the next GC candidate for Ogma Runtime integration.** In this model it reduced collection-pause p50 by 42.3–84.5% across the three workloads; p95 and p99 were also lower in every workload. Build + collection p50 improved by 9.6–10.3%. Paired graph fingerprints and final liveness/reclaimed counts matched exactly for both collectors.
+## Reproducible report artifact
 
-The model also indicates the lifecycle trade-off: RC reclaims acyclic chains immediately when their last external reference is released, but pays reference-count maintenance on root/edge mutations and still needs a full trial-deletion/cycle pass. Mark-sweep avoids that per-edge/root reference-count traffic and traversed fewer edges in these generated graphs. Root-inventory scan costs were close between candidates.
+The raw paired JSON is retained as a gzip file in this repository at `benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz` and was uploaded as artifact `ogm-26-gc-comparison-evidence` in [CI run #340](https://github.com/AiratGaliev/ogma/actions/runs/44326700282) (artifact ID `14438170549`).
 
-This is an **M0 model-level recommendation, not a production GC lock**. Equal `peak_heap_bytes` values are not evidence of equal collector memory cost: the metric accounts for the common logical object records, payloads and edge slots, but excludes collector-specific scratch/side tables, Vec spare capacity, allocator metadata, root-registry storage and process overhead. The proof also does not model finalization, weak references, ephemerons, real ECMAScript object layouts, or compiler-generated native stack maps/safepoints. Those require real Runtime integration and separate GC/root stress evidence before the production choice is final.
+- Raw JSON SHA-256: `81cdf5e46b553d0043c055bff523a3543fcf880e6060a6e140cbd71a45da7d4f`
+- Compressed gzip SHA-256: `31d3a9d977949c4a1ebf26205cce14d297ab26b63369a62eefd92c40beb67f03`
 
-The raw paired report for this run is available as the CI artifact attached to [run 44323273442](https://github.com/AiratGaliev/ogma/actions/runs/44323273442). A local copy of the exact JSON and gzip report is attached to this task response. The repository gzip copy should be refreshed from that artifact and verified against its SHA-256 before treating the raw-sample commit criterion as complete.
+The validator cross-checks the reported percentiles, averages, throughput, heap/lifecycle summaries and root inventory against the complete raw samples, and verifies paired graph identity and liveness.
