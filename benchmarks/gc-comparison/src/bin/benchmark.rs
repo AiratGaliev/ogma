@@ -24,7 +24,11 @@ enum Workload {
 }
 
 impl Workload {
-    const ALL: [Self; 3] = [Self::BalancedRoots, Self::HostRetained, Self::AllocationChurn];
+    const ALL: [Self; 3] = [
+        Self::BalancedRoots,
+        Self::HostRetained,
+        Self::AllocationChurn,
+    ];
 
     const fn name(self) -> &'static str {
         match self {
@@ -110,13 +114,18 @@ fn build_graph(
 
     // Every four objects form the same cyclic component for both collectors.
     for base in (0..object_count).step_by(4) {
-        heap.add_edge(objects[base], objects[base + 1]).map_err(err)?;
-        heap.add_edge(objects[base + 1], objects[base + 2]).map_err(err)?;
-        heap.add_edge(objects[base + 2], objects[base + 3]).map_err(err)?;
-        heap.add_edge(objects[base + 3], objects[base]).map_err(err)?;
+        heap.add_edge(objects[base], objects[base + 1])
+            .map_err(err)?;
+        heap.add_edge(objects[base + 1], objects[base + 2])
+            .map_err(err)?;
+        heap.add_edge(objects[base + 2], objects[base + 3])
+            .map_err(err)?;
+        heap.add_edge(objects[base + 3], objects[base])
+            .map_err(err)?;
         let component = base / 4;
         if component % 7 == 0 && base + 4 < object_count {
-            heap.add_edge(objects[base], objects[base + 5]).map_err(err)?;
+            heap.add_edge(objects[base], objects[base + 5])
+                .map_err(err)?;
         }
     }
 
@@ -129,7 +138,9 @@ fn build_graph(
         let base = component * 4;
         match workload {
             Workload::BalancedRoots => match component % 5 {
-                0 => heap.add_frame_root(interpreter, objects[base]).map_err(err)?,
+                0 => heap
+                    .add_frame_root(interpreter, objects[base])
+                    .map_err(err)?,
                 1 => heap.add_frame_root(native, objects[base]).map_err(err)?,
                 2 => {
                     heap.retain_host_handle(objects[base]).map_err(err)?;
@@ -141,7 +152,9 @@ fn build_graph(
                 0 | 2 => {
                     heap.retain_host_handle(objects[base]).map_err(err)?;
                 }
-                1 => heap.add_frame_root(interpreter, objects[base]).map_err(err)?,
+                1 => heap
+                    .add_frame_root(interpreter, objects[base])
+                    .map_err(err)?,
                 3 => heap.add_frame_root(native, objects[base]).map_err(err)?,
                 4 => heap.scope_add(scope, objects[base]).map_err(err)?,
                 _ => {}
@@ -370,10 +383,9 @@ fn report(config: &Config, summaries: &[Summary]) -> String {
     let _ = writeln!(out, "{{");
     let _ = writeln!(out, "  \"schema_version\": 1,");
     let _ = writeln!(out, "  \"task\": \"OGM-26\",");
-    let _ = writeln!(out, "  \"source_revision\": \"{}\",", json_escape(&config.revision));
     let _ = writeln!(
         out,
-        "  \"tested_revision\": \"{}\",",
+        "  \"source_revision\": \"{}\",",
         json_escape(&config.tested_revision)
     );
     let _ = writeln!(out, "  \"environment\": {{");
@@ -407,7 +419,11 @@ fn report(config: &Config, summaries: &[Summary]) -> String {
     let _ = writeln!(out, "  ],");
     let _ = writeln!(out, "  \"results\": [");
     for (index, summary) in summaries.iter().enumerate() {
-        let comma = if index + 1 == summaries.len() { "" } else { "," };
+        let comma = if index + 1 == summaries.len() {
+            ""
+        } else {
+            ","
+        };
         let _ = writeln!(out, "    {}{}", summary_json(summary), comma);
     }
     let _ = writeln!(out, "  ]");
