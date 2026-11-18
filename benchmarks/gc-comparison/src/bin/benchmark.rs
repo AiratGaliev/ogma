@@ -247,10 +247,7 @@ fn distribution(samples: &[Sample], select: impl Fn(&Sample) -> u128) -> (f64, f
 }
 
 fn summarize(workload: Workload, config: &Config) -> Result<Vec<Summary>, String> {
-    let collectors = [
-        CollectorKind::RcCycleRemoval,
-        CollectorKind::MarkSweep,
-    ];
+    let collectors = [CollectorKind::RcCycleRemoval, CollectorKind::MarkSweep];
     let mut samples: [Vec<Sample>; 2] = [
         Vec::with_capacity(config.samples),
         Vec::with_capacity(config.samples),
