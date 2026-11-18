@@ -4,9 +4,11 @@ This is an M0 backend-selection benchmark. It consumes the project's canonical
 `ogma.core-ir/1.0.0` positive fixtures rather than inventing a second IR schema.
 The workload manifest points to exact fixtures under `tests/core-ir/fixtures`;
 the Rust harness parses and checks their contract version, operations, CFG shape,
-parameter representations, exception edge and host capability symbol. Both backend
-lowerers receive the same parsed corpus and use the fixture identity to name their
-generated functions.
+parameter representations, exception edge and host capability symbol. Both backend lowerers receive the same parsed corpus and use the fixture identity to name their
+generated functions. The current M0 adapter is deliberately fixture-specific: it
+lowers the selected operation/control-flow patterns into equivalent native functions,
+not arbitrary Core IR programs. It is not the OGM-31 production interpreter/AOT
+dual-consumer proof.
 
 ## Canonical Core IR workloads
 
