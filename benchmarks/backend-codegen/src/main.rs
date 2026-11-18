@@ -1155,6 +1155,12 @@ struct Report {
     cargo_target_directory: String,
     cranelift_build_artifact_files: u64,
     llvm_binding_build_artifact_files: u64,
+    cranelift_build_artifact_directory: String,
+    llvm_binding_build_artifact_directory: String,
+    cranelift_build_artifact_directory_exists: bool,
+    llvm_binding_build_artifact_directory_exists: bool,
+    cranelift_build_artifact_matching_files: Vec<String>,
+    llvm_binding_build_artifact_matching_files: Vec<String>,
     cranelift_crate_source_bytes: u64,
     llvm_binding_source_bytes: u64,
     cranelift_build_artifact_bytes: u64,
@@ -1255,6 +1261,9 @@ fn cargo_source_size(prefixes: &[&str]) -> u64 {
 struct BuildArtifactSummary {
     files: u64,
     bytes: u64,
+    deps_directory: String,
+    deps_directory_exists: bool,
+    matching_files: Vec<String>,
 }
 
 fn cargo_target_directory() -> PathBuf {
@@ -1270,17 +1279,31 @@ fn cargo_target_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
 }
 
-fn cargo_artifact_summary(target_directory: &Path, prefixes: &[&str]) -> BuildArtifactSummary {
-    let Ok(entries) = fs::read_dir(target_directory.join("release").join("deps")) else {
-        return BuildArtifactSummary { files: 0, bytes: 0 };
+fn cargo_artifact_summary(target_directory: &Path, crate_names: &[&str]) -> BuildArtifactSummary {
+    let deps_directory = target_directory.join("release").join("deps");
+    let mut summary = BuildArtifactSummary {
+        files: 0,
+        bytes: 0,
+        deps_directory: deps_directory.display().to_string(),
+        deps_directory_exists: deps_directory.is_dir(),
+        matching_files: Vec::new(),
     };
-    let mut summary = BuildArtifactSummary { files: 0, bytes: 0 };
+    let Ok(entries) = fs::read_dir(&deps_directory) else {
+        return summary;
+    };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+        let path = entry.path();
+        let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !matches!(extension, "rlib" | "rmeta" | "so" | "a" | "dylib" | "dll") {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate_names.iter().any(|crate_name| name.contains(crate_name)) {
             summary.files += 1;
             summary.bytes += entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            summary.matching_files.push(name);
         }
     }
     summary
@@ -1310,9 +1333,9 @@ fn main() -> Result<()> {
                 .sum()
         });
     let cargo_target_directory = cargo_target_directory();
-    let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["libcranelift_"]);
+    let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["cranelift"]);
     let llvm_artifacts =
-        cargo_artifact_summary(&cargo_target_directory, &["libinkwell-", "libllvm_sys-"]);
+        cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
     let report = Report {
         schema_version: 1,
         task: "OGM-30",
@@ -1336,6 +1359,12 @@ fn main() -> Result<()> {
         cargo_target_directory: cargo_target_directory.display().to_string(),
         cranelift_build_artifact_files: cranelift_artifacts.files,
         llvm_binding_build_artifact_files: llvm_artifacts.files,
+        cranelift_build_artifact_directory: cranelift_artifacts.deps_directory.clone(),
+        llvm_binding_build_artifact_directory: llvm_artifacts.deps_directory.clone(),
+        cranelift_build_artifact_directory_exists: cranelift_artifacts.deps_directory_exists,
+        llvm_binding_build_artifact_directory_exists: llvm_artifacts.deps_directory_exists,
+        cranelift_build_artifact_matching_files: cranelift_artifacts.matching_files.clone(),
+        llvm_binding_build_artifact_matching_files: llvm_artifacts.matching_files.clone(),
         cranelift_crate_source_bytes: cargo_source_size(&["cranelift-"]),
         llvm_binding_source_bytes: cargo_source_size(&["inkwell-", "llvm-sys-181"]),
         cranelift_build_artifact_bytes: cranelift_artifacts.bytes,
