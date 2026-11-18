@@ -226,7 +226,10 @@ impl IsolateAllocator {
         let previous = self
             .live_blocks
             .insert(pointer.as_ptr() as usize, backing_layout);
-        debug_assert!(previous.is_none(), "allocator issued an already-live pointer");
+        debug_assert!(
+            previous.is_none(),
+            "allocator issued an already-live pointer"
+        );
         self.update_peaks();
 
         Ok(Allocation {
@@ -244,7 +247,10 @@ impl IsolateAllocator {
             Some(DeallocationErrorKind::WrongThread)
         } else if allocation.allocator_id != self.id {
             Some(DeallocationErrorKind::WrongAllocator)
-        } else if !self.live_blocks.contains_key(&(allocation.pointer.as_ptr() as usize)) {
+        } else if !self
+            .live_blocks
+            .contains_key(&(allocation.pointer.as_ptr() as usize))
+        {
             Some(DeallocationErrorKind::StaleAllocation)
         } else {
             None
