@@ -1,7 +1,7 @@
 use ogma_host_execution_scope_proof::{HostExecutionContext, LibrarySyncMode};
 use ogma_rust_abi_proof::{
     ogma_context_create_number, ogma_context_get_number, ogma_primitive_add_f64, OgmaCompletion,
-    OgmaContextHandle, OgmaHandle, OgmaHostCallback, OgmaRuntime, OgmaStatus,
+    OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus,
     COMPLETION_NORMAL,
 };
 use ogma_typed_host_dispatch_proof::{
