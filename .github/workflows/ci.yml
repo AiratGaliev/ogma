@@ -489,3 +489,66 @@ jobs:
           path: ${{ runner.temp }}/ogm-21-typed-host-dispatch-report.json
           if-no-files-found: error
           retention-days: 30
+
+
+  ogm22-buffer-interop-proof:
+    name: OGM-22 buffer ownership and zero-copy proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-22-buffer-interop-zero-copy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Capture toolchain and runner metadata
+        id: benchmark_environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          if [[ -z "$cpu_model" ]]; then cpu_model="$(uname -m)"; fi
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/buffer-interop/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/buffer-interop/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run buffer ownership and borrow contract tests
+        run: cargo test --manifest-path benchmarks/buffer-interop/Cargo.toml --all-features --locked
+
+      - name: Run copy versus zero-copy benchmark
+        id: benchmark
+        env:
+          RUSTC_VERSION: \${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM22_CPU_MODEL: \${{ steps.benchmark_environment.outputs.cpu_model }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/buffer-interop/Cargo.toml --locked --release --bin ogma-buffer-interop-bench -- \
+            --iterations 2000 --warmups 3 --samples 101 \
+            --revision "\${{ github.event.pull_request.head.sha }}" \
+            --tested-revision "$GITHUB_SHA" --cpu "$OGM22_CPU_MODEL" \
+            --output "$RUNNER_TEMP/ogm-22-buffer-interop-report.json"
+
+      - name: Validate OGM-22 benchmark JSON report
+        run: python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$RUNNER_TEMP/ogm-22-buffer-interop-report.json"
+
+      - name: Upload OGM-22 proof report
+        if: always() && steps.benchmark.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-22-buffer-interop-evidence
+          path: \${{ runner.temp }}/ogm-22-buffer-interop-report.json
+          if-no-files-found: error
+          retention-days: 30
