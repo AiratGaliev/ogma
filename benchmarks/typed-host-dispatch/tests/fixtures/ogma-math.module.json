@@ -1,0 +1,38 @@
+{
+  "descriptorVersion": 1,
+  "abi": {
+    "major": 1,
+    "minimumMinor": 0
+  },
+  "specifier": "ogma:math",
+  "version": "1.0.0",
+  "requiredCapabilities": [],
+  "requiredFeatures": [
+    "host-modules.v1"
+  ],
+  "dependencies": [],
+  "nativeDependencies": [],
+  "exports": [
+    {
+      "name": "add",
+      "signature": "f64-binary",
+      "effects": [],
+      "requiredCapabilities": [],
+      "requiredFeatures": [],
+      "binding": "immutable-host-function"
+    },
+    {
+      "name": "log",
+      "signature": "generic",
+      "effects": [
+        "throw",
+        "allocate",
+        "gc",
+        "reenter"
+      ],
+      "requiredCapabilities": [],
+      "requiredFeatures": [],
+      "binding": "immutable-host-function"
+    }
+  ]
+}

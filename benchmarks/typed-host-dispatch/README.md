@@ -56,3 +56,10 @@ collector allocations.
 
 Host values that must survive explicit collection can be kept alive with the
 registry's `root_handle` RAII guard.
+
+
+## OGM-25 — Static Host Modules
+
+src/static_modules.rs layers declarative host module registration, profile-aware TypeScript declaration generation and static import-to-slot resolution on top of this OGM-21 table. The contract and boundaries are documented in docs/static-host-modules-contract.md. JSON descriptor/profile schemas and checked-in fixtures live under contracts/host-modules/v1 and tests/fixtures.
+
+The proof intentionally resolves only immutable named ESM host-function bindings to slots. Namespace/dynamic/CommonJS/property paths and mutable/dynamic exports remain generic. Profile planning computes transitive module/native dependencies and fails closed when a runtime or native reference would be stripped.

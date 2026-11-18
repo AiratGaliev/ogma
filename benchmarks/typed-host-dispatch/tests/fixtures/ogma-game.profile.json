@@ -1,0 +1,21 @@
+{
+  "profileId": "game-runtime-minimal",
+  "enabledModules": [
+    "ogma:math"
+  ],
+  "enabledFeatures": [
+    "host-modules.v1"
+  ],
+  "grantedCapabilities": [],
+  "enabledNativeDependencies": [],
+  "runtimeImports": [
+    {
+      "specifier": "ogma:math",
+      "kind": "static-named-esm",
+      "importedNames": [
+        "add"
+      ]
+    }
+  ],
+  "nativeModuleDependencies": []
+}
