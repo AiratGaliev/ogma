@@ -250,10 +250,7 @@ pub struct NativeFrame {
 }
 
 impl NativeFrame {
-    pub fn new(
-        descriptor: FrameDescriptor,
-        slots: Vec<JsValue>,
-    ) -> Result<Self, FrameError> {
+    pub fn new(descriptor: FrameDescriptor, slots: Vec<JsValue>) -> Result<Self, FrameError> {
         if slots.len() != descriptor.slot_count {
             return Err(FrameError::SlotCountMismatch);
         }
@@ -359,10 +356,7 @@ impl NativeFrameStack {
         Ok(token)
     }
 
-    pub fn current_mut(
-        &mut self,
-        token: NativeFrameToken,
-    ) -> Result<&mut NativeFrame, FrameError> {
+    pub fn current_mut(&mut self, token: NativeFrameToken) -> Result<&mut NativeFrame, FrameError> {
         let (current, frame) = self.frames.last_mut().ok_or(FrameError::InvalidFrame)?;
         if *current != token {
             return Err(FrameError::FrameStackOrder);
@@ -440,7 +434,10 @@ impl InterpreterStack {
     }
 
     fn roots(&self) -> Vec<GcRef> {
-        self.frames.iter().flat_map(InterpreterFrame::roots).collect()
+        self.frames
+            .iter()
+            .flat_map(InterpreterFrame::roots)
+            .collect()
     }
 }
 
@@ -463,11 +460,7 @@ pub struct PersistentHandles {
 }
 
 impl PersistentHandles {
-    pub fn retain(
-        &mut self,
-        heap: &GcHeap,
-        reference: GcRef,
-    ) -> Result<HostHandle, HeapError> {
+    pub fn retain(&mut self, heap: &GcHeap, reference: GcRef) -> Result<HostHandle, HeapError> {
         heap.validate(reference)?;
         let index = if let Some(index) = self.free.pop() {
             self.slots[index].target = Some(reference);
@@ -682,7 +675,9 @@ pub enum BuiltinKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InterruptStrategy {
-    CooperativeChunks { max_work_per_poll: u64 },
+    CooperativeChunks {
+        max_work_per_poll: u64,
+    },
     ComparatorCallbacks {
         poll_before_and_after: bool,
         managed_callback_must_poll: bool,
@@ -706,11 +701,9 @@ pub const fn interrupt_policy(kind: BuiltinKind) -> BuiltinPolicy {
             managed_callback_must_poll: true,
             untrusted_native_callback_requires_isolation: true,
         },
-        BuiltinKind::Json | BuiltinKind::String => {
-            InterruptStrategy::CooperativeChunks {
-                max_work_per_poll: 256,
-            }
-        }
+        BuiltinKind::Json | BuiltinKind::String => InterruptStrategy::CooperativeChunks {
+            max_work_per_poll: 256,
+        },
     };
     BuiltinPolicy { kind, strategy }
 }
@@ -897,8 +890,7 @@ mod tests {
         maps.extend(additional_maps);
         let descriptor =
             FrameDescriptor::new("native_function", 1, entry, maps).expect("valid descriptor");
-        NativeFrame::new(descriptor, vec![JsValue::Managed(reference)])
-            .expect("valid native frame")
+        NativeFrame::new(descriptor, vec![JsValue::Managed(reference)]).expect("valid native frame")
     }
 
     #[test]
@@ -983,10 +975,7 @@ mod tests {
             .expect("exact root map accepted");
 
         let mut providers = RootProviders::default();
-        providers
-            .native
-            .enter(frame)
-            .expect("native frame entered");
+        providers.native.enter(frame).expect("native frame entered");
         let report = providers.collect(&mut heap).expect("collection succeeds");
         assert_eq!(report.objects_reclaimed, 1);
         assert!(heap.is_alive(second));
@@ -1056,12 +1045,7 @@ mod tests {
             let mut stack = ActivationStack::default();
             let actual = stack
                 .invoke(
-                    Activation::new(
-                        ActivationKind::Native,
-                        "aot_entry",
-                        None,
-                        source(1),
-                    ),
+                    Activation::new(ActivationKind::Native, "aot_entry", None, source(1)),
                     |stack| {
                         stack
                             .invoke(
@@ -1098,7 +1082,10 @@ mod tests {
                                 source(20),
                             ),
                             |stack| {
-                                assert_eq!(stack.current().map(|frame| frame.closure_context), Some(Some(9001)));
+                                assert_eq!(
+                                    stack.current().map(|frame| frame.closure_context),
+                                    Some(Some(9001))
+                                );
                                 stack
                                     .invoke(
                                         Activation::new(
@@ -1120,9 +1107,18 @@ mod tests {
                                                     |stack| {
                                                         let snapshot = stack.snapshot();
                                                         assert_eq!(snapshot.len(), 4);
-                                                        assert_eq!(snapshot[1].function, "closure_body");
-                                                        assert_eq!(snapshot[1].closure_context, Some(9001));
-                                                        assert_eq!(snapshot[2].kind, ActivationKind::HostCallback);
+                                                        assert_eq!(
+                                                            snapshot[1].function,
+                                                            "closure_body"
+                                                        );
+                                                        assert_eq!(
+                                                            snapshot[1].closure_context,
+                                                            Some(9001)
+                                                        );
+                                                        assert_eq!(
+                                                            snapshot[2].kind,
+                                                            ActivationKind::HostCallback
+                                                        );
                                                         assert_eq!(snapshot[3].source.line, 22);
                                                         Completion::Throw(JsValue::Number(404))
                                                     },
@@ -1207,7 +1203,12 @@ mod tests {
                 |stack| {
                     stack
                         .invoke(
-                            Activation::new(ActivationKind::Interpreter, "script", Some(1), source(2)),
+                            Activation::new(
+                                ActivationKind::Interpreter,
+                                "script",
+                                Some(1),
+                                source(2),
+                            ),
                             |stack| {
                                 stack
                                     .invoke(
