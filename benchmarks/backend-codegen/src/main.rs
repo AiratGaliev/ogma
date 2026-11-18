@@ -1127,14 +1127,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if unsafe { branch(0.0, -0.0) }.to_bits() != 0.0_f64.to_bits() {
         bail!("{name}: strict equality must treat positive and negative zero as equal");
     }
-    if unsafe { branch(f64::NAN, 3.0) } != 3.0
-        || !unsafe { branch(3.0, f64::NAN) }.is_nan()
-    {
+    if unsafe { branch(f64::NAN, 3.0) } != 3.0 || !unsafe { branch(3.0, f64::NAN) }.is_nan() {
         bail!("{name}: strict equality must treat NaN as unequal");
     }
-    if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0
-        || unsafe { loop_fn(0.5, 3.5, 0.75) } != 3.5
-    {
+    if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0 || unsafe { loop_fn(0.5, 3.5, 0.75) } != 3.5 {
         bail!("{name}: loop-carried value mismatch");
     }
     if unsafe { exception(7, 8) } != 15 {
@@ -1413,8 +1409,8 @@ fn main() -> Result<()> {
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
-    let footprint = (!llvm_package_sizes_kib.is_empty())
-        .then(|| llvm_package_sizes_kib.values().sum::<u64>());
+    let footprint =
+        (!llvm_package_sizes_kib.is_empty()).then(|| llvm_package_sizes_kib.values().sum::<u64>());
     let cargo_target_directory = cargo_target_directory();
     let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["cranelift"]);
     let llvm_artifacts = cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
@@ -1499,7 +1495,10 @@ mod tests {
 
         assert!(cranelift.search_directory_exists);
         assert_eq!((cranelift.files, cranelift.bytes), (1, 13));
-        assert_eq!(cranelift.matching_files, vec!["deps/nested/libcranelift_codegen-test.rlib".to_owned()]);
+        assert_eq!(
+            cranelift.matching_files,
+            vec!["deps/nested/libcranelift_codegen-test.rlib".to_owned()]
+        );
         assert_eq!((llvm.files, llvm.bytes), (2, 36));
         assert_eq!(
             llvm.matching_files,
