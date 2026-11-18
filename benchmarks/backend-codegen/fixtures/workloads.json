@@ -1,0 +1,15 @@
+{
+  "contract": "ogma.backend-benchmark-core-ir",
+  "version": "1.0.0",
+  "core_ir_contract": "ogma.core-ir/1.0.0",
+  "semantic_subset": "i64-backed benchmark values; dynamic operations and completions cross explicit runtime-helper boundaries",
+  "functions": [
+    {"name":"ogma_arithmetic","kind":"arithmetic","params":1,"effects":[]},
+    {"name":"ogma_branch","kind":"control_flow","params":1,"effects":[]},
+    {"name":"ogma_internal","kind":"internal_callee","params":1,"effects":[]},
+    {"name":"ogma_internal_call","kind":"internal_call","params":1,"effects":["may_call_host"]},
+    {"name":"ogma_dynamic_add","kind":"dynamic_add","params":2,"effects":["may_call_host","may_throw"]},
+    {"name":"ogma_completion","kind":"completion","params":1,"effects":["may_call_host","may_throw"]},
+    {"name":"ogma_host_call","kind":"host_call","params":1,"effects":["may_call_host","may_reenter"]}
+  ]
+}
