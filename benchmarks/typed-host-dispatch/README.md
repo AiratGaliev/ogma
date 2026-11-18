@@ -53,3 +53,6 @@ Generic benchmark cases periodically collect temporary OGM-19 mock values every 
 operations between timed chunks. Collection time is excluded from latency/throughput
 samples; collection cycles are reported separately, while allocation counters include
 collector allocations.
+
+Host values that must survive explicit collection can be kept alive with the
+registry's `root_handle` RAII guard.

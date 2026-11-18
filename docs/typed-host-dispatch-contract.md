@@ -74,6 +74,9 @@ Rust object, or function implementation.
 - A slot is registry-local and thread-affine. A token from another registry is rejected.
 - The generic mock function is persistently rooted while registered. Unregister removes
   the callback and root and collects the now-unrooted mock function.
+- Host-owned values which must survive explicit collection use
+  `HostFunctionRegistry::root_handle`. Its `PersistentHandleRoot` guard is tied to
+  the registry lifetime and is thread-affine; dropping it releases the persistent root.
 
 The table snapshots the registered thunk, callback and metadata, then releases its
 RefCell borrow before invoking external code. No mutable table borrow is held while

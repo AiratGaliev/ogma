@@ -296,9 +296,9 @@ where
         let start = Instant::now();
         operation()?;
         latency.push(start.elapsed().as_nanos() as f64);
-        if collection_interval.is_some_and(|interval| {
-            (index + 1) % interval == 0 || index + 1 == config.iterations
-        }) {
+        if collection_interval
+            .is_some_and(|interval| (index + 1) % interval == 0 || index + 1 == config.iterations)
+        {
             collect()?;
             collector_runs = collector_runs.saturating_add(1);
         }
@@ -647,14 +647,7 @@ fn main() -> Result<(), String> {
         "dynamic_name_lookup_generic_callback",
         &config,
         &registry,
-        || {
-            checked(registry.invoke_by_name(
-                &scope,
-                "ogma:bench/generic-add",
-                0,
-                &primitive_args,
-            ))
-        },
+        || checked(registry.invoke_by_name(&scope, "ogma:bench/generic-add", 0, &primitive_args)),
     )?);
 
     measurements.push(measure_with_periodic_collection(
