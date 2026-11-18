@@ -1,6 +1,6 @@
 # OGM-7 — Rust embedding and host-performance evidence
 
-**Status:** M0 evidence synthesis, 2026-11-18  
+**Status:** M0 evidence synthesis, 2026-11-18
 **Authority:** The [Ogma architecture and implementation specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 0.5 and 8.1–8.9.8, remains authoritative. This page is an index and synthesis of the completed OGM-19…OGM-25 proofs; it does not introduce a second ABI, a production API, or a new architecture authority.
 
 ## 1. Purpose and scope
