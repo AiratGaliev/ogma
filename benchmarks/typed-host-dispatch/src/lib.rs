@@ -633,10 +633,14 @@ impl HostFunctionRegistry {
         &self, entry: RegisteredFunction, left: OgmaHandle, right: OgmaHandle,
     ) -> Result<JsCompletion, DispatchError> {
         let thunk = entry.descriptor.number_handle_f64_thunk.ok_or(DispatchError::InvalidDescriptor)?;
+        let roots = RootScopeGuard::open(self.runtime, self.context)?;
+        roots.add(left)?;
+        roots.add(right)?;
         let mut out = 0.0;
         let status = unsafe {
             thunk(self.runtime, self.context, left, right, &mut out, entry.descriptor.user_data)
         };
+        roots.close()?;
         self.map_typed_status(status, out)
     }
 
@@ -1018,12 +1022,20 @@ mod tests {
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
         let args = [DispatchValue::Number(1.0), DispatchValue::Number(2.0)];
-        assert_eq!(registry.invoke_slot(&scope, slot, 0b0100, &args).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(3.0)));
-        assert_eq!(registry.invoke_slot(&scope, slot, 0, &args).unwrap(),
-            JsCompletion::Throw(JsException::CapabilityDenied { missing: 0b0100 }));
-        assert_eq!(registry.metrics().typed_calls, 1);
-        assert_eq!(registry.metrics().capability_denials, 1);
+        let mut object = OrdinaryHostObject::new();
+        object.define("secureAdd", JsCallable::host(slot));
+        let guard = registry.resolve_call_site(&object, "secureAdd").unwrap();
+        let allowed = registry.call_property(&scope, PropertyReceiver::Ordinary(&object),
+            "secureAdd", Some(&guard), 0b0100, &args).unwrap();
+        assert_eq!(allowed, JsCompletion::Normal(DispatchValue::Number(3.0)));
+        let denied = registry.call_property(&scope, PropertyReceiver::Ordinary(&object),
+            "secureAdd", Some(&guard), 0, &args).unwrap();
+        assert_eq!(denied, JsCompletion::Throw(
+            JsException::CapabilityDenied { missing: 0b0100 }));
+        let metrics = registry.metrics();
+        assert_eq!(metrics.typed_calls, 1);
+        assert_eq!(metrics.capability_denials, 1);
+        assert_eq!(metrics.cache_hits, 2);
     }
 
     #[test]
@@ -1160,4 +1172,25 @@ mod tests {
             JsCompletion::Normal(DispatchValue::Number(11.0)));
         assert_eq!(registry.table_version(), 2);
     }
+    #[test]
+    fn proxy_get_trap_override_controls_the_observed_function_value() {
+        let registry = HostFunctionRegistry::new().unwrap();
+        let slot = register_add(&registry, 1001, "ogma:math/add");
+        let mut target = OrdinaryHostObject::new();
+        target.define("run", JsCallable::host(slot));
+        let guard = registry.resolve_call_site(&target, "run").unwrap();
+        let mut proxy = ProxyHostObject::new(target);
+        proxy.set_get_result("run", JsCallable::script(DispatchValue::Number(91.0)));
+        let host = scope_context();
+        let scope = host.enter_scope().unwrap();
+
+        let result = registry.call_property(&scope, PropertyReceiver::Proxy(&proxy), "run",
+            Some(&guard), 0, &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]).unwrap();
+
+        assert_eq!(result, JsCompletion::Normal(DispatchValue::Number(91.0)));
+        assert_eq!(proxy.get_trap_calls(), 1);
+        assert_eq!(registry.metrics().typed_calls, 0);
+        assert_eq!(registry.metrics().generic_calls, 0);
+    }
+
 }
