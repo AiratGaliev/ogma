@@ -38,6 +38,7 @@ type TernaryF64 = unsafe extern "C" fn(f64, f64, f64) -> f64;
 type AddNumber = unsafe extern "C" fn(f64, f64) -> i64;
 type ToNumber = unsafe extern "C" fn(i64) -> f64;
 type CallBoundary = unsafe extern "C" fn(i64, i64, i64, i64, i64, f64) -> i64;
+type CallTarget = unsafe extern "C" fn(i64, i64) -> i64;
 
 #[derive(Clone)]
 struct Options {
@@ -651,7 +652,10 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
 
 const HELPERS: &str = r#"
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 static const uint64_t PAYLOAD_MASK=UINT64_C(0x00ffffffffffffff);
+static char dynamic_string[128];
 int64_t ogma_js_add_number(double a,double b){union{double d;uint64_t u;}v;v.d=a+b;return (int64_t)v.u;}
 double ogma_js_to_number(int64_t boxed){union{double d;uint64_t u;}v;v.u=(uint64_t)boxed;return v.d;}
 int64_t ogma_js_add_completion(int64_t a,int64_t b){
@@ -659,8 +663,10 @@ int64_t ogma_js_add_completion(int64_t a,int64_t b){
  return (int64_t)((tag<<56)|(payload&PAYLOAD_MASK));
 }
 int64_t ogma_js_throw(int64_t completion){return completion;}
-int64_t ogma_js_add_mixed(int64_t text,double number){union{double d;uint64_t u;}v;v.d=number;return (int64_t)((uint64_t)text^v.u);}
-int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){return (int64_t)((uint64_t)callee+(uint64_t)receiver+(uint64_t)arg);}
+int64_t ogma_js_add_mixed(int64_t text,double number){const char *left=(const char *)(uintptr_t)text;(void)snprintf(dynamic_string,sizeof(dynamic_string),"%s%.0f",left,number);return (int64_t)(uintptr_t)dynamic_string;}
+typedef int64_t (*OgmaCallTarget)(int64_t,int64_t);
+int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){OgmaCallTarget target=(OgmaCallTarget)(uintptr_t)callee;return target(receiver,arg);}
+int64_t ogma_js_call_target(int64_t receiver,int64_t arg){const char *value=(const char *)(uintptr_t)arg;return receiver+(int64_t)strlen(value);}
 int64_t ogma_host_echo(int64_t arg){return arg+11;}
 "#;
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
@@ -774,6 +780,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let exception: BinaryI64 =
         unsafe { *lib.get(sym(&c.symbol("dynamic_exception")?).as_slice())? };
     let call: CallBoundary = unsafe { *lib.get(sym(&c.symbol("call_boundary")?).as_slice())? };
+    let call_target: CallTarget = unsafe { *lib.get(b"ogma_js_call_target\0")? };
+    let callee = call_target as usize as i64;
+    let text = CString::new("item=").unwrap();
+    let text_handle = text.as_ptr() as i64;
     let host: UnaryI64 = unsafe { *lib.get(sym(&c.symbol("host_call")?).as_slice())? };
     if unsafe { branch(7.0, 7.0) } != 7.0 || unsafe { branch(7.0, 8.0) } != 8.0 {
         bail!("{name}: branch mismatch");
@@ -787,7 +797,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if ((unsafe { exception(i64::MIN, 9) } as u64) >> 56) != 1 {
         bail!("{name}: Throw completion missing");
     }
-    if unsafe { call(1, 2, 3, 4, 4, 5.0) } != 3 + (3_i64 ^ (5.0_f64.to_bits() as i64)) {
+    if unsafe { call(callee, 2, text_handle, 4, 4, 5.0) } != 8 {
         bail!("{name}: call-boundary result mismatch");
     }
     if unsafe { host(31) } != 42 {

@@ -30,8 +30,8 @@ validated by the project's existing Core IR Fast checks.
 - Both emit PIC object files using the same exported C ABI signatures and link the
   same helper shim. Generated functions are loaded and exercised through their native
   symbols; semantic checks run before timing.
-- The loop fixture lowers `js.add` to a boxed numeric helper result followed by
-  `js.to_number`. The dynamic-exception fixture lowers the exception edge to an
+- The loop fixture lowers numeric `js.add` to a boxed helper result followed by
+  `js.to_number`. The call-boundary fixture exercises string-plus-number concatenation and an indirect function-reference call. The dynamic-exception fixture lowers the exception edge to an
   explicit tagged completion and exercises the `js.throw` propagation helper.
 - Helpers are deterministic benchmark stubs, not the production Ogma Runtime. They
   exercise helper dispatch and call overhead but do not implement full ECMAScript
