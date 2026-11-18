@@ -36,9 +36,25 @@ where
     Ok(times)
 }
 fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    use std::fmt::Write as _;
+
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\u{0008}' => escaped.push_str("\\b"),
+            '\u{000c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            control if control <= '\u{001f}' => {
+                let _ = write!(escaped, "\\u{:04x}", control as u32);
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -98,4 +114,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&output, report)?;
     println!("Wrote {output}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::esc;
+
+    #[test]
+    fn json_string_escapes_quotes_backslashes_and_all_control_characters() {
+        assert_eq!(
+            esc("\"\\\u{0000}\u{0008}\u{0009}\n\r\u{001f}"),
+            "\\\"\\\\\\u0000\\b\\t\\n\\r\\u001f"
+        );
+    }
 }
