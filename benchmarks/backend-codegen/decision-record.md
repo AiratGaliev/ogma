@@ -1,9 +1,9 @@
 # OGM-30 — M0 native backend selection decision
 
-**Status:** Decision for the M0 backend prototype; production AOT integration remains future work  
-**Date:** 2026-11-18  
-**Measured source revision:** `459305265372347befba90a1e3b3db2c0b4d7dfb`  
-**CI run:** [PR #26 benchmark run](https://github.com/AiratGaliev/ogma/actions/runs/44362880422)  
+**Status:** Decision for the M0 backend prototype; production AOT integration remains future work
+**Date:** 2026-11-18
+**Measured source revision:** `459305265372347befba90a1e3b3db2c0b4d7dfb`
+**CI run:** [PR #26 benchmark run](https://github.com/AiratGaliev/ogma/actions/runs/44362880422)
 **Raw evidence:** [`results/ogm30-report.json.gz`](results/ogm30-report.json.gz)
 
 ## Decision
