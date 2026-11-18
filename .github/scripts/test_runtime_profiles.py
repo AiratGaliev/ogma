@@ -118,6 +118,21 @@ class RuntimeProfileContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ProfileValidationError, "rustBuild settings conflict"):
             self.validate(invalid)
 
+    def test_aot_optimization_and_symbol_policy_are_backend_specific(self) -> None:
+        plans = self.validate()
+        self.assertFalse(plans["debug-interpreter"]["aotBuild"]["enabled"])
+        self.assertEqual(plans["debug-hybrid-native"]["aotBuild"]["optimization"], "minimal")
+        self.assertEqual(plans["development-hybrid-native"]["aotBuild"]["optimization"], "balanced")
+        self.assertEqual(plans["hybrid-native-release"]["aotBuild"]["optimization"], "aggressive")
+        self.assertEqual(plans["hybrid-native-release"]["aotBuild"]["symbols"], "external")
+        self.assertEqual(plans["node-compatibility-hybrid-native-release"]["aotBuild"]["symbols"], "external")
+
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "hybrid-native-release")
+        profile["aotBuild"]["optimization"] = "minimal"
+        with self.assertRaisesRegex(ProfileValidationError, "AOT settings conflict"):
+            self.validate(invalid)
+
     def test_release_symbol_policy_matches_compiler_stripping(self) -> None:
         plans = self.validate()
         portable = plans["portable-interpreter-release"]
