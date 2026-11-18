@@ -1123,7 +1123,7 @@ mod tests {
                                                         Completion::Throw(JsValue::Number(404))
                                                     },
                                                 )
-                                                .expect("reentrant interpreter returns");
+                                                .expect("reentrant interpreter returns")
                                         },
                                     )
                                     .expect("host callback returns")
