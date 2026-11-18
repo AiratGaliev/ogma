@@ -171,8 +171,12 @@ impl FrameSnapshot {
         self.input = frame.input.clone();
         self.positions.clear();
         self.positions.reserve(frame.positions.len());
-        self.positions
-            .extend(frame.positions.iter().map(|(id, position)| (*id, *position)));
+        self.positions.extend(
+            frame
+                .positions
+                .iter()
+                .map(|(id, position)| (*id, *position)),
+        );
         self.collisions.clear();
         self.collisions.extend_from_slice(&frame.collisions);
     }
@@ -198,7 +202,10 @@ impl FrameSnapshot {
     }
 
     pub fn position(&self, entity_id: u32) -> [f32; 2] {
-        self.positions.get(&entity_id).copied().unwrap_or([0.0, 0.0])
+        self.positions
+            .get(&entity_id)
+            .copied()
+            .unwrap_or([0.0, 0.0])
     }
 
     pub fn collision(&self, index: u32) -> Option<CollisionPair> {
@@ -329,7 +336,9 @@ impl HostEcsSync {
 
     pub fn sync_sparse(&mut self, changes: &[PositionChange]) {
         for change in changes {
-            if let Some(transform) = change.entity_id.checked_sub(1)
+            if let Some(transform) = change
+                .entity_id
+                .checked_sub(1)
                 .and_then(|index| self.transforms.get_mut(index as usize))
             {
                 *transform = change.position;
@@ -657,9 +666,15 @@ impl ScriptHarness {
                             ctx.clone(),
                             move |output: TypedArray<'_, u32>| -> rquickjs::Result<()> {
                                 let snapshot = lock(&state);
-                                let required = snapshot.collisions().len().checked_mul(2).ok_or_else(
-                                    || JsError::new_from_js("Uint32Array", "collision length overflow"),
-                                )?;
+                                let required =
+                                    snapshot.collisions().len().checked_mul(2).ok_or_else(
+                                        || {
+                                            JsError::new_from_js(
+                                                "Uint32Array",
+                                                "collision length overflow",
+                                            )
+                                        },
+                                    )?;
                                 if output.len() != required {
                                     return Err(JsError::new_from_js(
                                         "Uint32Array",
@@ -684,9 +699,15 @@ impl ScriptHarness {
                             move |output: TypedArray<'_, u32>| -> rquickjs::Result<()> {
                                 let snapshot = lock(&state);
                                 let output_len = output.len();
-                                let required = snapshot.collisions().len().checked_mul(2).ok_or_else(
-                                    || JsError::new_from_js("Uint32Array", "collision length overflow"),
-                                )?;
+                                let required =
+                                    snapshot.collisions().len().checked_mul(2).ok_or_else(
+                                        || {
+                                            JsError::new_from_js(
+                                                "Uint32Array",
+                                                "collision length overflow",
+                                            )
+                                        },
+                                    )?;
                                 if output_len != required {
                                     return Err(JsError::new_from_js(
                                         "Uint32Array",
@@ -773,14 +794,12 @@ impl ScriptHarness {
                     .collect::<Vec<_>>();
                 let pure_key_pressed = TypedArray::<u8>::new(ctx.clone(), key_pressed)?;
                 ctx.globals().set("pureKeyPressed", pure_key_pressed)?;
-                let pure_gamepad =
-                    TypedArray::<u8>::new(ctx.clone(), gamepad_down)?;
+                let pure_gamepad = TypedArray::<u8>::new(ctx.clone(), gamepad_down)?;
                 ctx.globals().set("pureGamepadDown", pure_gamepad)?;
                 let gamepad_pressed = (0..3)
                     .map(|id| u8::from(frame.input().was_gamepad_pressed_id(id)))
                     .collect::<Vec<_>>();
-                let pure_gamepad_pressed =
-                    TypedArray::<u8>::new(ctx.clone(), gamepad_pressed)?;
+                let pure_gamepad_pressed = TypedArray::<u8>::new(ctx.clone(), gamepad_pressed)?;
                 ctx.globals()
                     .set("pureGamepadPressed", pure_gamepad_pressed)?;
                 ctx.globals()
@@ -910,7 +929,12 @@ mod tests {
             assert_eq!(collisions[index * 2], pair.entity_a);
             assert_eq!(collisions[index * 2 + 1], pair.entity_b);
         }
-        for (name, id) in [("A", KEY_A), ("D", KEY_D), ("ArrowLeft", KEY_ARROW_LEFT), ("Space", KEY_SPACE)] {
+        for (name, id) in [
+            ("A", KEY_A),
+            ("D", KEY_D),
+            ("ArrowLeft", KEY_ARROW_LEFT),
+            ("Space", KEY_SPACE),
+        ] {
             assert_eq!(
                 snapshot.input().is_key_down(name),
                 snapshot.input().is_key_down_id(id)
@@ -980,14 +1004,16 @@ mod tests {
     #[test]
     fn physics_cache_coalesces_updates_and_keeps_final_deactivation_pose() {
         let mut cache = PhysicsPoseCache::new(3);
-        cache.apply_active_poses(
-            &[(1, [1.0, 2.0]), (2, [3.0, 4.0])],
-            &[(1, [5.0, 6.0])],
-        );
+        cache.apply_active_poses(&[(1, [1.0, 2.0]), (2, [3.0, 4.0])], &[(1, [5.0, 6.0])]);
         assert_eq!(cache.changes().len(), 2);
         assert_eq!(cache.positions()[&1], [5.0, 6.0]);
         assert_eq!(
-            cache.changes().iter().find(|change| change.entity_id == 1).unwrap().position,
+            cache
+                .changes()
+                .iter()
+                .find(|change| change.entity_id == 1)
+                .unwrap()
+                .position,
             [5.0, 6.0]
         );
     }
@@ -1001,8 +1027,14 @@ mod tests {
             (4, [2.0, -1.0]),
         ]);
         let changes = vec![
-            PositionChange { entity_id: 1, position: positions[&1] },
-            PositionChange { entity_id: 3, position: positions[&3] },
+            PositionChange {
+                entity_id: 1,
+                position: positions[&1],
+            },
+            PositionChange {
+                entity_id: 3,
+                position: positions[&3],
+            },
         ];
         let mut sparse = HostEcsSync::new(4);
         let mut dense = HostEcsSync::new(4);
@@ -1024,14 +1056,26 @@ mod tests {
     fn command_drain_swaps_reusable_storage_and_preserves_order() {
         let mut pending = CommandBuffer::with_commands(3, 10);
         let mut output = Vec::with_capacity(8);
-        output.push(HostCommand { entity_id: 99, opcode: 99 });
+        output.push(HostCommand {
+            entity_id: 99,
+            opcode: 99,
+        });
         pending.drain_into(&mut output);
         assert_eq!(
             output,
             vec![
-                HostCommand { entity_id: 1, opcode: 10 },
-                HostCommand { entity_id: 2, opcode: 11 },
-                HostCommand { entity_id: 3, opcode: 12 },
+                HostCommand {
+                    entity_id: 1,
+                    opcode: 10
+                },
+                HostCommand {
+                    entity_id: 2,
+                    opcode: 11
+                },
+                HostCommand {
+                    entity_id: 3,
+                    opcode: 12
+                },
             ]
         );
         assert!(pending.pending.is_empty());

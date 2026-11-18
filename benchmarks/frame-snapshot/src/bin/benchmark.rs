@@ -165,7 +165,10 @@ where
 }
 
 fn iterations_for(base: usize, entity_count: usize) -> usize {
-    base.saturating_mul(40).checked_div(entity_count.max(1)).unwrap_or(1).max(1)
+    base.saturating_mul(40)
+        .checked_div(entity_count.max(1))
+        .unwrap_or(1)
+        .max(1)
 }
 
 fn command_drain_records(
@@ -221,11 +224,7 @@ fn main() -> Result<(), String> {
     let revision = string_argument(&arguments, "--revision", "local");
     let tested_revision = string_argument(&arguments, "--tested-revision", "local");
     let cpu = string_argument(&arguments, "--cpu", std::env::consts::ARCH);
-    let output = string_argument(
-        &arguments,
-        "--output",
-        "ogm-23-frame-snapshot-report.json",
-    );
+    let output = string_argument(&arguments, "--output", "ogm-23-frame-snapshot-report.json");
 
     let mut records = Vec::new();
     for entity_count in [40_usize, 256, 1024] {
@@ -401,10 +400,26 @@ fn main() -> Result<(), String> {
         let scalar_callbacks = 8 + 6 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
         let batch_callbacks = 8 + 6 + 1 + 1 + 1 + 2;
         for (mode, update_mode, callback_count) in [
-            ("string_ids_scalar_callbacks", UpdateMode::Scalar, scalar_callbacks),
-            ("numeric_bitsets_batch_set", UpdateMode::BatchSet, batch_callbacks),
-            ("numeric_bitsets_batch_bulk", UpdateMode::BatchBulk, batch_callbacks),
-            ("javascript_only_preloaded_arrays", UpdateMode::PureJavaScript, 0),
+            (
+                "string_ids_scalar_callbacks",
+                UpdateMode::Scalar,
+                scalar_callbacks,
+            ),
+            (
+                "numeric_bitsets_batch_set",
+                UpdateMode::BatchSet,
+                batch_callbacks,
+            ),
+            (
+                "numeric_bitsets_batch_bulk",
+                UpdateMode::BatchBulk,
+                batch_callbacks,
+            ),
+            (
+                "javascript_only_preloaded_arrays",
+                UpdateMode::PureJavaScript,
+                0,
+            ),
         ] {
             let metrics = measure(operation_iterations, warmups, samples, || {
                 let result = harness.run(update_mode)?;
