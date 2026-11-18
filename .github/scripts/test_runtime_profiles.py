@@ -139,3 +139,27 @@ class RuntimeProfileContractTests(unittest.TestCase):
         self.assertNotIn("inspector-ui", release)
         self.assertEqual(self.document["languageSemantics"]["dynamicCode"], "preserved")
         self.assertEqual(self.document["ecmaEdition"], "ECMAScript-2026")
+
+    def test_mandatory_verifier_and_runtime_metadata_cannot_be_stripped(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        invalid["mandatoryRuntimeMetadata"].remove("verifier-summary")
+        with self.assertRaisesRegex(ProfileValidationError, "mandatoryRuntimeMetadata"):
+            self.validate(invalid)
+
+    def test_debugger_and_tooling_components_must_be_semantics_neutral(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        transport = next(item for item in invalid["components"] if item["id"] == "dap-transport")
+        transport["semanticEffects"] = True
+        with self.assertRaisesRegex(ProfileValidationError, "must not have ECMAScript semantic effects"):
+            self.validate(invalid)
+
+    def test_feature_flags_must_match_the_resolved_component_closure(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "hybrid-native-release")
+        profile["featureFlags"].remove("execution.native-aot")
+        with self.assertRaisesRegex(ProfileValidationError, "featureFlags do not match"):
+            self.validate(invalid)
+
+
+if __name__ == "__main__":
+    unittest.main()
