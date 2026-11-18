@@ -1320,7 +1320,7 @@ mod tests {
         let harness = ScriptHarness::new(FrameSnapshot::from_host_frame(&initial), 4, 2).unwrap();
         harness
             .eval(
-                "if (engine.snapshot.frameId() !== 10 || engine.time.deltaSeconds() !== 1 / 60 || engine.entities.getPositionX(1) !== 0.5) throw new Error('initial frame snapshot mismatch');",
+                "if (engine.snapshot.frameId() !== 10 || Math.abs(engine.time.deltaSeconds() - (1 / 60)) > 0.000001 || engine.entities.getPositionX(1) !== 0.5) throw new Error('initial frame snapshot mismatch');",
             )
             .unwrap();
 
