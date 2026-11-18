@@ -940,10 +940,7 @@ mod tests {
                 heap.resolve_host_handle(host),
                 Err(GcError::StaleHostHandle)
             );
-            assert_eq!(
-                heap.resolve_host_handle(replacement_host),
-                Ok(replacement)
-            );
+            assert_eq!(heap.resolve_host_handle(replacement_host), Ok(replacement));
         }
     }
 
