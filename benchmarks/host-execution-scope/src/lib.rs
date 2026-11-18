@@ -573,7 +573,6 @@ fn worker_loop(receiver: Receiver<Message>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Barrier;
 
     #[test]
     fn both_strategies_produce_equivalent_noop_typed_and_nested_results() {
