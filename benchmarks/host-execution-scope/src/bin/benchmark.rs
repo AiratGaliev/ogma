@@ -542,7 +542,7 @@ fn build_report(
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
     let _ = writeln!(
         output,
-        "    \"batch_measurement_samples\": {}",
+        "    \"batch_measurement_samples\": {},",
         config.samples
     );
     let _ = writeln!(
