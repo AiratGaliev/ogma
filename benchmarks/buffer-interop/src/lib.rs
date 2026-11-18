@@ -106,6 +106,7 @@ struct BackingStore {
     len: usize,
     detached: bool,
     finalizer: FinalizerProbe,
+    active_leases: Rc<Cell<usize>>,
 }
 impl Drop for BackingStore {
     fn drop(&mut self) {
@@ -132,6 +133,7 @@ impl ArrayBuffer {
             len,
             detached: false,
             finalizer: finalizer.clone(),
+            active_leases: Rc::new(Cell::new(0)),
         };
         Ok((
             Self {
@@ -335,14 +337,17 @@ impl Drop for BorrowGuard<'_> {
     }
 }
 struct LeaseGuard<'a> {
-    count: &'a Cell<usize>,
+    runtime_count: &'a Cell<usize>,
+    store_count: Rc<Cell<usize>>,
     token: Rc<Cell<bool>>,
 }
 impl<'a> LeaseGuard<'a> {
-    fn acquire(count: &'a Cell<usize>) -> Self {
-        count.set(count.get() + 1);
+    fn acquire(runtime_count: &'a Cell<usize>, store_count: Rc<Cell<usize>>) -> Self {
+        runtime_count.set(runtime_count.get() + 1);
+        store_count.set(store_count.get() + 1);
         Self {
-            count,
+            runtime_count,
+            store_count,
             token: Rc::new(Cell::new(true)),
         }
     }
@@ -350,7 +355,8 @@ impl<'a> LeaseGuard<'a> {
 impl Drop for LeaseGuard<'_> {
     fn drop(&mut self) {
         self.token.set(false);
-        self.count.set(self.count.get() - 1);
+        self.runtime_count.set(self.runtime_count.get() - 1);
+        self.store_count.set(self.store_count.get() - 1);
     }
 }
 struct ExecutionGuard<'a>(&'a Cell<usize>);
@@ -439,7 +445,15 @@ impl Runtime {
         if self.borrows.get() != 0 {
             return Err(BufferError::JsExecutionWhileBorrowed);
         }
-        let _lease = LeaseGuard::acquire(&self.leases);
+        let store_leases = {
+            let store = buffer
+                .inner
+                .try_borrow()
+                .map_err(|_| BufferError::BorrowConflict)?;
+            ensure_attached(&store)?;
+            store.active_leases.clone()
+        };
+        let _lease = LeaseGuard::acquire(&self.leases, store_leases);
         let view = LeasedArrayBuffer {
             buffer: buffer.clone(),
             active: _lease.token.clone(),
@@ -453,6 +467,9 @@ impl Runtime {
             .try_borrow_mut()
             .map_err(|_| BufferError::BorrowConflict)?;
         ensure_attached(&s)?;
+        if s.active_leases.get() != 0 {
+            return Err(BufferError::LeaseActive);
+        }
         if new_len > s.memory.capacity() {
             return Err(BufferError::ResizeExceedsCapacity);
         }
@@ -471,6 +488,9 @@ impl Runtime {
             .inner
             .try_borrow_mut()
             .map_err(|_| BufferError::BorrowConflict)?;
+        if s.active_leases.get() != 0 {
+            return Err(BufferError::LeaseActive);
+        }
         if s.detached {
             return Err(BufferError::Detached);
         }
@@ -657,6 +677,41 @@ mod tests {
         );
         assert_eq!(buffer.byte_len(), Ok(4));
         assert_eq!(buffer.address().unwrap(), address);
+    }
+
+    #[test]
+    fn scoped_lease_blocks_invalidation_across_runtime_instances() {
+        let (buffer, _) = ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let lease_runtime = Runtime::new();
+        let other_runtime = Runtime::new();
+
+        lease_runtime
+            .with_scoped_view(&buffer, |view| {
+                assert_eq!(view.byte_len(), Ok(4));
+                assert_eq!(
+                    other_runtime.resize(&buffer, 8),
+                    Err(BufferError::LeaseActive)
+                );
+                assert_eq!(other_runtime.detach(&buffer), Err(BufferError::LeaseActive));
+                assert_eq!(buffer.byte_len(), Ok(4));
+            })
+            .unwrap();
+
+        assert_eq!(buffer.byte_len(), Ok(4));
+        other_runtime.resize(&buffer, 8).unwrap();
+        assert_eq!(buffer.byte_len(), Ok(8));
+    }
+
+    #[test]
+    fn scoped_lease_rejects_detached_buffer() {
+        let (buffer, _) = ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let runtime = Runtime::new();
+        runtime.detach(&buffer).unwrap();
+
+        assert_eq!(
+            runtime.with_scoped_view(&buffer, |_| ()),
+            Err(BufferError::Detached)
+        );
     }
 
     #[test]
