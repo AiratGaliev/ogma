@@ -648,8 +648,7 @@ mod tests {
     }
     #[test]
     fn resize_beyond_capacity_preserves_length_and_pointer() {
-        let (buffer, _) =
-            ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let (buffer, _) = ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
         let address = buffer.address().unwrap();
         let runtime = Runtime::new();
         assert_eq!(
@@ -662,8 +661,7 @@ mod tests {
 
     #[test]
     fn scoped_lease_is_revoked_during_panic_unwinding() {
-        let (buffer, _) =
-            ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let (buffer, _) = ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
         let runtime = Runtime::new();
         let escaped = std::cell::RefCell::new(None);
         let panic = catch_unwind(AssertUnwindSafe(|| {
