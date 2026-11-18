@@ -55,6 +55,10 @@ def main() -> int:
         configuration["percentile_method"] == "nearest-rank",
         "percentile method must be nearest-rank",
     )
+    require(
+        configuration["candidate_order"] == "alternating-per-sample",
+        "candidate order must alternate to limit systematic order bias",
+    )
 
     results = report["results"]
     require(
