@@ -60,7 +60,7 @@ impl OwnedMemory {
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-    pub fn address(&self) -> usize {
+    fn address(&self) -> usize {
         self.ptr.as_ptr() as usize
     }
     pub fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<(), BufferError> {
@@ -646,6 +646,38 @@ mod tests {
             Err(BufferError::ReentrancyLimit)
         );
     }
+    #[test]
+    fn resize_beyond_capacity_preserves_length_and_pointer() {
+        let (buffer, _) =
+            ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let address = buffer.address().unwrap();
+        let runtime = Runtime::new();
+        assert_eq!(
+            runtime.resize(&buffer, 9),
+            Err(BufferError::ResizeExceedsCapacity)
+        );
+        assert_eq!(buffer.byte_len(), Ok(4));
+        assert_eq!(buffer.address().unwrap(), address);
+    }
+
+    #[test]
+    fn scoped_lease_is_revoked_during_panic_unwinding() {
+        let (buffer, _) =
+            ArrayBuffer::take_ownership(memory(&[1, 2, 3, 4], 8, 8), 4).unwrap();
+        let runtime = Runtime::new();
+        let escaped = std::cell::RefCell::new(None);
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let _ = runtime.with_scoped_view(&buffer, |view| {
+                *escaped.borrow_mut() = Some(view.clone());
+                panic!("host panic while lease is active");
+            });
+        }));
+        assert!(panic.is_err());
+        let escaped = escaped.into_inner().unwrap();
+        assert_eq!(escaped.byte_len(), Err(BufferError::LeaseExpired));
+        assert_eq!(runtime.collect_garbage(), Ok(1));
+    }
+
     #[test]
     fn invalid_alignment_and_overflow_are_rejected() {
         assert_eq!(
