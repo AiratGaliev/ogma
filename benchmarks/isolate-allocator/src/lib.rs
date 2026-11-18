@@ -37,7 +37,9 @@ impl AllocatorStrategy {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|strategy| strategy.name() == value)
+        Self::ALL
+            .into_iter()
+            .find(|strategy| strategy.name() == value)
     }
 }
 
@@ -249,9 +251,9 @@ impl IsolateAllocator {
             .saturating_sub(allocation.backing_layout.size());
         self.stats.deallocations += 1;
 
-        let cache_key = allocation.bucket.filter(|key| {
-            self.free.get(key).map_or(0, Vec::len) < MAX_CACHED_BLOCKS_PER_BUCKET
-        });
+        let cache_key = allocation
+            .bucket
+            .filter(|key| self.free.get(key).map_or(0, Vec::len) < MAX_CACHED_BLOCKS_PER_BUCKET);
 
         if let Some(key) = cache_key {
             self.stats.free_cached_bytes += allocation.backing_layout.size();
@@ -284,9 +286,7 @@ impl IsolateAllocator {
                 if size > MAX_SIZE_CLASS || requested.align() > MIN_SIZE_CLASS {
                     return None;
                 }
-                let class_size = size
-                    .max(MIN_SIZE_CLASS)
-                    .checked_next_power_of_two()?;
+                let class_size = size.max(MIN_SIZE_CLASS).checked_next_power_of_two()?;
                 Some(BucketKey {
                     size: class_size,
                     align: MIN_SIZE_CLASS,
@@ -334,7 +334,10 @@ impl IsolateAllocator {
                 .expect("a selected cache bucket contains a block");
             // SAFETY: the block is owned by this allocator's cache.
             unsafe { System.dealloc(block.pointer.as_ptr(), block.layout) };
-            self.stats.reserved_bytes = self.stats.reserved_bytes.saturating_sub(block.layout.size());
+            self.stats.reserved_bytes = self
+                .stats
+                .reserved_bytes
+                .saturating_sub(block.layout.size());
             self.stats.free_cached_bytes = self
                 .stats
                 .free_cached_bytes
@@ -458,8 +461,8 @@ impl CompileUnitArena {
             .ok_or(AllocationError::InvalidLayout)?;
         let capacity = required.max(ARENA_CHUNK_BYTES);
         let chunk_align = align.max(64);
-        let chunk_layout =
-            Layout::from_size_align(capacity, chunk_align).map_err(|_| AllocationError::InvalidLayout)?;
+        let chunk_layout = Layout::from_size_align(capacity, chunk_align)
+            .map_err(|_| AllocationError::InvalidLayout)?;
         if self
             .stats
             .reserved_bytes
@@ -523,14 +526,8 @@ impl CompileUnitArena {
         self.unit_padding_bytes = self.unit_padding_bytes.saturating_add(padding);
         self.stats.allocations += 1;
         self.stats.allocated_payload_bytes = self.unit_payload_bytes;
-        self.stats.peak_used_bytes = self
-            .stats
-            .peak_used_bytes
-            .max(self.unit_payload_bytes);
-        self.stats.peak_padding_bytes = self
-            .stats
-            .peak_padding_bytes
-            .max(self.unit_padding_bytes);
+        self.stats.peak_used_bytes = self.stats.peak_used_bytes.max(self.unit_payload_bytes);
+        self.stats.peak_padding_bytes = self.stats.peak_padding_bytes.max(self.unit_padding_bytes);
     }
 }
 
@@ -561,16 +558,22 @@ mod tests {
     fn system_allocator_enforces_quota_and_releases_on_deallocation() {
         let mut allocator = IsolateAllocator::new(AllocatorStrategy::System, 128);
         let first = allocator.allocate(layout(64, 8)).expect("first allocation");
-        let second = allocator.allocate(layout(64, 8)).expect("second allocation");
+        let second = allocator
+            .allocate(layout(64, 8))
+            .expect("second allocation");
         assert_eq!(
             allocator.allocate(layout(1, 1)).unwrap_err(),
             AllocationError::QuotaExceeded
         );
         assert_eq!(allocator.stats().reserved_bytes, 128);
 
-        allocator.deallocate(first).expect("release first allocation");
+        allocator
+            .deallocate(first)
+            .expect("release first allocation");
         assert_eq!(allocator.stats().reserved_bytes, 64);
-        allocator.deallocate(second).expect("release second allocation");
+        allocator
+            .deallocate(second)
+            .expect("release second allocation");
         assert_eq!(allocator.stats().reserved_bytes, 0);
         assert_eq!(allocator.stats().live_requested_bytes, 0);
     }
@@ -579,19 +582,27 @@ mod tests {
     fn per_isolate_allocator_reuses_exact_blocks_and_counts_cache_against_quota() {
         let mut allocator = IsolateAllocator::new(AllocatorStrategy::PerIsolateReuse, 128);
         let first = allocator.allocate(layout(64, 8)).expect("first allocation");
-        let second = allocator.allocate(layout(64, 8)).expect("second allocation");
+        let second = allocator
+            .allocate(layout(64, 8))
+            .expect("second allocation");
         assert_eq!(
             allocator.allocate(layout(1, 1)).unwrap_err(),
             AllocationError::QuotaExceeded
         );
 
         allocator.deallocate(first).expect("cache first allocation");
-        let reused = allocator.allocate(layout(64, 8)).expect("reuse cached block");
+        let reused = allocator
+            .allocate(layout(64, 8))
+            .expect("reuse cached block");
         assert_eq!(allocator.stats().reserved_bytes, 128);
         assert_eq!(allocator.stats().reused_allocations, 1);
 
-        allocator.deallocate(second).expect("cache second allocation");
-        allocator.deallocate(reused).expect("cache reused allocation");
+        allocator
+            .deallocate(second)
+            .expect("cache second allocation");
+        allocator
+            .deallocate(reused)
+            .expect("cache reused allocation");
         assert_eq!(allocator.stats().live_requested_bytes, 0);
         assert_eq!(allocator.stats().free_cached_bytes, 128);
         assert!(allocator.stats().peak_reserved_bytes <= allocator.quota_bytes());
@@ -600,13 +611,19 @@ mod tests {
     #[test]
     fn size_classes_round_up_and_preserve_alignment() {
         let mut allocator = IsolateAllocator::new(AllocatorStrategy::SizeClassPool, 256);
-        let allocation = allocator.allocate(layout(17, 8)).expect("pooled allocation");
+        let allocation = allocator
+            .allocate(layout(17, 8))
+            .expect("pooled allocation");
         assert_eq!(allocation.requested_size(), 17);
         assert_eq!(allocation.backing_size(), 32);
         assert_eq!(allocation.as_non_null().as_ptr() as usize % 16, 0);
-        allocator.deallocate(allocation).expect("cache pooled allocation");
+        allocator
+            .deallocate(allocation)
+            .expect("cache pooled allocation");
 
-        let same_class = allocator.allocate(layout(31, 16)).expect("reuse same class");
+        let same_class = allocator
+            .allocate(layout(31, 16))
+            .expect("reuse same class");
         assert_eq!(same_class.backing_size(), 32);
         assert_eq!(allocator.stats().reused_allocations, 1);
         allocator
@@ -625,14 +642,20 @@ mod tests {
         first
             .deallocate(mismatch.into_allocation())
             .expect("return block to owning isolate");
-        second.deallocate(second_block).expect("release second isolate");
+        second
+            .deallocate(second_block)
+            .expect("release second isolate");
     }
 
     #[test]
     fn size_class_pool_evicts_cached_blocks_before_rejecting_a_new_class() {
         let mut allocator = IsolateAllocator::new(AllocatorStrategy::SizeClassPool, 128);
-        let first = allocator.allocate(layout(64, 8)).expect("first 64-byte block");
-        let second = allocator.allocate(layout(64, 8)).expect("second 64-byte block");
+        let first = allocator
+            .allocate(layout(64, 8))
+            .expect("first 64-byte block");
+        let second = allocator
+            .allocate(layout(64, 8))
+            .expect("second 64-byte block");
         allocator.deallocate(first).expect("cache first block");
         allocator.deallocate(second).expect("cache second block");
 
@@ -641,7 +664,9 @@ mod tests {
             .expect("evict cached blocks and allocate larger class");
         assert_eq!(allocator.stats().cache_evictions, 2);
         assert_eq!(allocator.stats().reserved_bytes, 128);
-        allocator.deallocate(replacement).expect("cache replacement");
+        allocator
+            .deallocate(replacement)
+            .expect("cache replacement");
         assert!(allocator.stats().peak_reserved_bytes <= allocator.quota_bytes());
     }
 
@@ -673,7 +698,9 @@ mod tests {
         );
         assert_eq!(arena.stats().reserved_bytes, ARENA_CHUNK_BYTES);
         arena.reset().expect("reset after full compile unit");
-        arena.allocate(layout(128, 8)).expect("reuse reserved chunk");
+        arena
+            .allocate(layout(128, 8))
+            .expect("reuse reserved chunk");
         assert_eq!(arena.stats().reserved_bytes, ARENA_CHUNK_BYTES);
     }
 
@@ -683,6 +710,8 @@ mod tests {
         let zero = allocator.allocate(layout(0, 8)).expect("zero-sized layout");
         assert_eq!(zero.requested_size(), 0);
         assert_eq!(zero.backing_size(), 1);
-        allocator.deallocate(zero).expect("release zero-sized allocation");
+        allocator
+            .deallocate(zero)
+            .expect("release zero-sized allocation");
     }
 }

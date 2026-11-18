@@ -1,7 +1,7 @@
 use ogma_isolate_allocator_proof::{
     Allocation, AllocatorStrategy, CompileUnitArena, IsolateAllocator,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{Layout, System};
 use std::env;
 use std::fs;
 use std::hint::black_box;
@@ -14,9 +14,7 @@ const ALLOCATOR_QUOTA_BYTES: usize = 1024 * 1024;
 const COMPILE_UNIT_QUOTA_BYTES: usize = 2 * 1024 * 1024;
 const ALLOCATIONS_PER_ITERATION: usize = 128;
 const NODES_PER_COMPILE_UNIT: usize = 256;
-const ALLOCATION_SIZES: [usize; 12] = [
-    16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096,
-];
+const ALLOCATION_SIZES: [usize; 12] = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096];
 const NODE_SIZES: [usize; 5] = [24, 40, 64, 128, 256];
 
 #[derive(Clone)]
@@ -131,8 +129,7 @@ fn run_allocator_sample(
     let mut transient = Vec::with_capacity(ALLOCATIONS_PER_ITERATION);
     let mut retained = Vec::with_capacity(128);
     let mut allocation_latencies = Vec::with_capacity(iterations * ALLOCATIONS_PER_ITERATION);
-    let mut deallocation_latencies =
-        Vec::with_capacity(iterations * ALLOCATIONS_PER_ITERATION);
+    let mut deallocation_latencies = Vec::with_capacity(iterations * ALLOCATIONS_PER_ITERATION);
     let started = Instant::now();
 
     for iteration in 0..iterations {
@@ -304,20 +301,26 @@ fn run_system_compile_unit_sample(iterations: usize) -> Result<ArenaSample, Stri
             let size = NODE_SIZES[(unit + node) % NODE_SIZES.len()];
             let layout = Layout::from_size_align(size, 8)
                 .map_err(|_| "invalid compiler workload layout".to_owned())?;
-            if reserved.checked_add(layout.size()).is_none_or(|total| total > COMPILE_UNIT_QUOTA_BYTES) {
+            if reserved
+                .checked_add(layout.size())
+                .is_none_or(|total| total > COMPILE_UNIT_QUOTA_BYTES)
+            {
                 return Err("system compile-unit allocator exceeded quota".to_owned());
             }
             let allocation_started = Instant::now();
             // SAFETY: layout is valid and non-zero; the returned block is stored
             // until the compile-unit lifetime ends below.
             let raw = unsafe { System.alloc(layout) };
-            let pointer =
-                NonNull::new(raw).ok_or_else(|| "system compile-unit allocation failed".to_owned())?;
+            let pointer = NonNull::new(raw)
+                .ok_or_else(|| "system compile-unit allocation failed".to_owned())?;
             allocation_latencies.push(allocation_started.elapsed().as_nanos() as f64);
             // SAFETY: allocation owns the requested writable bytes.
             unsafe {
                 pointer.as_ptr().write((node as u8).wrapping_add(1));
-                pointer.as_ptr().add(size - 1).write((node as u8).wrapping_add(2));
+                pointer
+                    .as_ptr()
+                    .add(size - 1)
+                    .write((node as u8).wrapping_add(2));
             }
             blocks.push((pointer, layout));
             reserved += size;
@@ -365,7 +368,10 @@ fn run_bump_arena_sample(iterations: usize) -> Result<ArenaSample, String> {
             // SAFETY: this pointer is valid until the compile-unit arena is reset.
             unsafe {
                 pointer.as_ptr().write((node as u8).wrapping_add(1));
-                pointer.as_ptr().add(size - 1).write((node as u8).wrapping_add(2));
+                pointer
+                    .as_ptr()
+                    .add(size - 1)
+                    .write((node as u8).wrapping_add(2));
             }
             black_box(pointer);
         }
