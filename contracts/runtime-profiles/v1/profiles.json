@@ -328,6 +328,12 @@
         "codegenUnits": 256,
         "panic": "unwind",
         "strip": "none"
+      },
+      "aotBuild": {
+        "enabled": false,
+        "optimization": "not-applicable",
+        "debugInfo": "not-applicable",
+        "symbols": "not-applicable"
       }
     },
     {
@@ -393,7 +399,13 @@
         "tools.inspector",
         "tools.inspector-ui",
         "tools.repl"
-      ]
+      ],
+      "aotBuild": {
+        "enabled": true,
+        "optimization": "minimal",
+        "debugInfo": "full",
+        "symbols": "embedded"
+      }
     },
     {
       "id": "development-hybrid-native",
@@ -460,7 +472,13 @@
         "tools.inspector-ui",
         "tools.profiler-hooks",
         "tools.repl"
-      ]
+      ],
+      "aotBuild": {
+        "enabled": true,
+        "optimization": "balanced",
+        "debugInfo": "full",
+        "symbols": "embedded"
+      }
     },
     {
       "id": "development-test",
@@ -526,6 +544,12 @@
         "codegenUnits": 16,
         "panic": "unwind",
         "strip": "none"
+      },
+      "aotBuild": {
+        "enabled": false,
+        "optimization": "not-applicable",
+        "debugInfo": "not-applicable",
+        "symbols": "not-applicable"
       }
     },
     {
@@ -586,6 +610,12 @@
         "codegenUnits": 1,
         "panic": "unwind",
         "strip": "symbols"
+      },
+      "aotBuild": {
+        "enabled": false,
+        "optimization": "not-applicable",
+        "debugInfo": "not-applicable",
+        "symbols": "not-applicable"
       }
     },
     {
@@ -646,6 +676,12 @@
         "codegenUnits": 1,
         "panic": "unwind",
         "strip": "debuginfo"
+      },
+      "aotBuild": {
+        "enabled": true,
+        "optimization": "aggressive",
+        "debugInfo": "full",
+        "symbols": "external"
       }
     },
     {
@@ -707,6 +743,12 @@
         "codegenUnits": 1,
         "panic": "unwind",
         "strip": "symbols"
+      },
+      "aotBuild": {
+        "enabled": false,
+        "optimization": "not-applicable",
+        "debugInfo": "not-applicable",
+        "symbols": "not-applicable"
       }
     },
     {
@@ -768,7 +810,13 @@
         "runtime.core",
         "runtime.host-abi",
         "runtime.host-modules"
-      ]
+      ],
+      "aotBuild": {
+        "enabled": true,
+        "optimization": "aggressive",
+        "debugInfo": "full",
+        "symbols": "external"
+      }
     }
   ]
 }
