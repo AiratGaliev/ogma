@@ -610,6 +610,7 @@ pub enum TransitionError {
     HostCompletionNotConsumed,
     MissingHostCompletion,
     HostCompletionMismatch,
+    HostResultNotPromoted,
     ConsumedCompletionNotFound,
     LiveRootNotFound,
 }
@@ -792,11 +793,14 @@ impl ActivationStack {
         self.host_completion.as_ref().map(|record| record.value)
     }
 
-    /// Call only after a managed host result has been promoted to a persistent
-    /// host handle. Primitive completions need no persistent root.
+    /// Releases the top-level completion only after its managed value has
+    /// been promoted into the supplied persistent-handle registry. Primitive
+    /// completions must be handed off without a handle.
     pub fn release_host_completion_after_promotion(
         &mut self,
         expected: Completion,
+        promoted_handle: Option<HostHandle>,
+        persistent_handles: &PersistentHandles,
     ) -> Result<(), TransitionError> {
         let record = self
             .host_completion
@@ -806,6 +810,19 @@ impl ActivationStack {
             self.host_completion = Some(record);
             return Err(TransitionError::HostCompletionMismatch);
         }
+
+        let promotion_matches = match (record.value.managed_root(), promoted_handle) {
+            (Some(reference), Some(handle)) => {
+                persistent_handles.resolve(handle).ok() == Some(reference)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !promotion_matches {
+            self.host_completion = Some(record);
+            return Err(TransitionError::HostResultNotPromoted);
+        }
+
         Ok(())
     }
 
@@ -1123,12 +1140,15 @@ pub fn run_chunked_builtin(
     work_units: u64,
     meter: &mut BudgetMeter,
 ) -> Result<(), PollError> {
-    let chunk_size = match interrupt_policy(kind).strategy {
+    let policy_chunk_size = match interrupt_policy(kind).strategy {
         InterruptStrategy::CooperativeChunks { max_work_per_poll } => max_work_per_poll,
         InterruptStrategy::ComparatorCallbacks { .. } => {
             return Err(PollError::BuiltinRequiresComparatorBoundary);
         }
     };
+    // A stricter execution-level poll window always wins over the built-in's
+    // default chunk policy.
+    let chunk_size = policy_chunk_size.min(meter.max_unpolled_work());
 
     meter.poll(PollSite::FunctionEntry)?;
     let mut completed = 0;
@@ -1352,8 +1372,12 @@ mod tests {
             assert_eq!(stack.depth(), 0);
             assert_eq!(stack.host_completion(), Some(completion));
             stack
-                .release_host_completion_after_promotion(completion)
-                .expect("top-level completion released after handoff");
+                .release_host_completion_after_promotion(
+                    completion,
+                    None,
+                    &PersistentHandles::default(),
+                )
+                .expect("primitive top-level completion released after handoff");
             assert_eq!(stack.host_completion(), None);
         }
     }
@@ -1430,7 +1454,11 @@ mod tests {
         assert_eq!(stack.depth(), 0);
         assert_eq!(stack.host_completion(), Some(result));
         stack
-            .release_host_completion_after_promotion(result)
+            .release_host_completion_after_promotion(
+                result,
+                None,
+                &PersistentHandles::default(),
+            )
             .expect("primitive result released");
     }
 
@@ -1544,8 +1572,12 @@ mod tests {
             .retain(&heap, exception)
             .expect("host promotes managed exception to persistent handle");
         stack
-            .release_host_completion_after_promotion(result)
-            .expect("execution root released only after host promotion");
+            .release_host_completion_after_promotion(
+                result,
+                Some(handle),
+                &providers.persistent,
+            )
+            .expect("execution root released only after matching host promotion");
 
         providers
             .collect_with_execution(&mut heap, &stack)
@@ -1602,7 +1634,11 @@ mod tests {
         assert_eq!(result, thrown);
         assert_eq!(stack.host_completion(), Some(thrown));
         stack
-            .release_host_completion_after_promotion(thrown)
+            .release_host_completion_after_promotion(
+                thrown,
+                None,
+                &PersistentHandles::default(),
+            )
             .expect("primitive completion released");
     }
 
@@ -1819,6 +1855,69 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn chunked_builtins_respect_a_tighter_execution_poll_window() {
+        for kind in [BuiltinKind::RegExp, BuiltinKind::Json, BuiltinKind::String] {
+            let mut meter = BudgetMeter::new(100, 7).expect("valid tighter poll window");
+
+            run_chunked_builtin(kind, 20, &mut meter)
+                .expect("built-in adapts its chunks to the execution poll window");
+
+            assert_eq!(meter.spent(), 20);
+            assert_eq!(meter.poll_trace().len(), 4);
+            assert_eq!(meter.poll_trace()[0], PollSite::FunctionEntry);
+            assert!(meter.poll_trace()[1..]
+                .iter()
+                .all(|site| *site == PollSite::BuiltinChunk(kind)));
+        }
+    }
+
+    #[test]
+    fn managed_host_completion_cannot_be_released_without_matching_persistent_handle() {
+        let mut heap = GcHeap::default();
+        let exception = heap.allocate();
+        let other = heap.allocate();
+        let mut handles = PersistentHandles::default();
+        let other_handle = handles.retain(&heap, other).expect("other value retained");
+        let mut stack = ActivationStack::default();
+        let thrown = Completion::Throw(JsValue::Managed(exception));
+
+        stack
+            .invoke(
+                Activation::new(ActivationKind::Native, "native_outer", None, source(1)),
+                |_| thrown,
+            )
+            .expect("native invocation returns managed throw");
+
+        assert_eq!(
+            stack.release_host_completion_after_promotion(thrown, None, &handles),
+            Err(TransitionError::HostResultNotPromoted)
+        );
+        assert_eq!(stack.roots(), vec![exception]);
+
+        assert_eq!(
+            stack.release_host_completion_after_promotion(thrown, Some(other_handle), &handles),
+            Err(TransitionError::HostResultNotPromoted)
+        );
+        assert_eq!(stack.roots(), vec![exception]);
+
+        let exception_handle = handles
+            .retain(&heap, exception)
+            .expect("exception promoted to persistent handle");
+        stack
+            .release_host_completion_after_promotion(
+                thrown,
+                Some(exception_handle),
+                &handles,
+            )
+            .expect("matching persistent handle permits root handoff");
+        assert!(stack.roots().is_empty());
+
+        let report = heap.collect(handles.roots()).expect("persistent roots collect");
+        assert!(heap.is_alive(exception));
+        assert_eq!(report.objects_reclaimed, 0);
     }
 
     #[test]
