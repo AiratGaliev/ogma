@@ -283,11 +283,7 @@ fn validate_lowering_profile(label: &str, document: &JsonValue) -> Result<()> {
             if entry["target"] != "loop" {
                 bail!("loop entry does not jump to the loop header");
             }
-            expect_names(
-                &entry["arguments"],
-                &["start", "limit", "e0"],
-                "loop entry",
-            )?;
+            expect_names(&entry["arguments"], &["start", "limit", "e0"], "loop entry")?;
             expect_instruction_count(function, "loop", 1)?;
             expect_instruction(
                 function,
@@ -347,18 +343,9 @@ fn validate_lowering_profile(label: &str, document: &JsonValue) -> Result<()> {
         "dynamic_exception" => {
             expect_block_order(function, &["entry", "return_block", "handler"])?;
             expect_instruction_count(function, "entry", 1)?;
-            expect_instruction(
-                function,
-                "entry",
-                0,
-                "js.add",
-                &["lhs", "rhs"],
-                Some("sum"),
-            )?;
+            expect_instruction(function, "entry", 0, "js.add", &["lhs", "rhs"], Some("sum"))?;
             let add = &function_block(function, "entry")?["instructions"][0];
-            if add["exception"]["kind"] != "edge"
-                || add["exception"]["target"] != "handler"
-            {
+            if add["exception"]["kind"] != "edge" || add["exception"]["target"] != "handler" {
                 bail!("dynamic exception edge differs from the OGM-30 lowering profile");
             }
             expect_names(
@@ -1177,8 +1164,11 @@ fn cpu_model() -> String {
         .ok()
         .and_then(|contents| {
             contents.lines().find_map(|line| {
-                line.strip_prefix("model name")
-                    .and_then(|value| value.split_once(':').map(|(_, name)| name.trim().to_owned()))
+                line.strip_prefix("model name").and_then(|value| {
+                    value
+                        .split_once(':')
+                        .map(|(_, name)| name.trim().to_owned())
+                })
             })
         })
         .filter(|value| !value.is_empty())
