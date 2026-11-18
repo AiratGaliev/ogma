@@ -87,39 +87,33 @@ No production GC choice is declared by this source alone. The recommendation mus
 
 ## Recorded result and M0 recommendation (2026-11-18)
 
-The first paired measurement run was produced by [CI run #333](https://github.com/AiratGaliev/ogma/actions/runs/44322470507), with the OGM-26 proof job and repository Fast CI both successful.
+The latest paired measurement report was produced by [CI run 44323273442](https://github.com/AiratGaliev/ogma/actions/runs/44323273442); the OGM-26 proof job and repository Fast CI both succeeded.
 
-**Environment:** Rust 1.100.0; Linux x86_64; AMD EPYC 9V74 80-Core Processor.
+**Environment:** Rust 1.100.0; Linux x86_64; Intel Xeon 6975P-C.
 
 **Configuration:** 2,048 objects; three warmup rounds; 101 paired samples per collector/workload; nearest-rank percentiles; alternating collector order per sample.
 
-**Measured source revision:** `b473992c45ae67d588abe528648f67fde3687d5c`.
+**Measured source revision:** `3d831df33948eb0b0b6b79c7d894e65d74c0ed34`.
 
-**CI tested revision:** `cf84dca607f55e33f8a69ccb9cbcca835155970b`.
+**CI tested revision:** `75933f40dd2e7807b37103d0eb9ca1f2c88dad8e`.
 
 Collection and root-scan values are microseconds; end-to-end is graph build + collection. RC maintenance operations are averaged over the 101 samples.
 
 | Workload | Collector | Collection p50 / p95 / p99 (µs) | Root scan p50 (µs) | End-to-end p50 (µs) | Edges examined (avg.) | RC ops (avg.) | Live / reclaimed objects |
 |---|---|---:|---:|---:|---:|---:|---:|
-| Balanced roots and cycles | RC + cycle removal | 32.36 / 34.52 / 41.39 | 1.392 | 178.54 | 3,875 | 6,406 | 1,696 / 352 |
-| Balanced roots and cycles | Non-moving mark-sweep | 19.30 / 23.88 / 27.90 | 1.382 | 164.06 | 1,754 | 0 | 1,696 / 352 |
-| Persistent host retention | RC + cycle removal | 33.05 / 34.06 / 38.09 | 1.823 | 182.61 | 3,938 | 6,486 | 1,756 / 292 |
-| Persistent host retention | Non-moving mark-sweep | 19.32 / 20.40 / 21.03 | 1.823 | 167.36 | 1,817 | 0 | 1,756 / 292 |
-| Allocation churn | RC + cycle removal | 44.47 / 50.46 / 51.32 | 0.511 | 190.94 | 2,274 | 5,453 | 148 / 1,900 |
-| Allocation churn | Non-moving mark-sweep | 32.25 / 32.93 / 38.19 | 0.501 | 174.03 | 153 | 0 | 148 / 1,900 |
+| Balanced roots and cycles | RC + cycle removal | 31.662 / 32.751 / 39.872 | 1.211 | 164.975 | 3,875 | 6,406 | 1,696 / 352 |
+| Balanced roots and cycles | Non-moving mark-sweep | 17.546 / 18.074 / 27.060 | 1.216 | 150.522 | 1,754 | 0 | 1,696 / 352 |
+| Persistent host retention | RC + cycle removal | 33.001 / 52.721 / 59.517 | 1.460 | 170.020 | 3,938 | 6,486 | 1,756 / 292 |
+| Persistent host retention | Non-moving mark-sweep | 17.884 / 25.786 / 32.047 | 1.441 | 154.198 | 1,817 | 0 | 1,756 / 292 |
+| Allocation churn | RC + cycle removal | 39.906 / 63.054 / 69.961 | 0.534 | 174.944 | 2,274 | 5,453 | 148 / 1,900 |
+| Allocation churn | Non-moving mark-sweep | 28.040 / 42.507 / 47.839 | 0.547 | 159.592 | 153 | 0 | 148 / 1,900 |
 
 ### Recommendation
 
-**Prefer non-moving tracing mark-sweep as the next GC candidate for Ogma Runtime integration.** In this model it reduced collection-pause p50 by 37.9–71.1% across the three workloads; p95 and p99 were also lower in every workload. End-to-end p50 improved by 8.8–9.7%. Final live/reclaimed counts and logical live bytes matched exactly between the two collectors for every paired sample.
+**Prefer non-moving tracing mark-sweep as the next GC candidate for Ogma Runtime integration.** In this model it reduced collection-pause p50 by 42.3–84.5% across the three workloads; p95 and p99 were also lower in every workload. Build + collection p50 improved by 9.6–10.3%. Paired graph fingerprints and final liveness/reclaimed counts matched exactly for both collectors.
 
-The model also indicates the lifecycle trade-off: RC reclaims acyclic chains immediately when their last external reference is released, but pays reference-count maintenance on root/edge mutations and still needs a full trial-deletion/cycle pass. Mark-sweep avoids that per-edge/root reference-count traffic and traversed fewer edges in these generated graphs. Root-inventory scan cost was close between candidates.
+The model also indicates the lifecycle trade-off: RC reclaims acyclic chains immediately when their last external reference is released, but pays reference-count maintenance on root/edge mutations and still needs a full trial-deletion/cycle pass. Mark-sweep avoids that per-edge/root reference-count traffic and traversed fewer edges in these generated graphs. Root-inventory scan costs were close between candidates.
 
-This is an **M0 model-level recommendation, not a production GC lock**. The equal `peak_heap_bytes` values are not evidence of equal collector memory cost: the metric accounts for the common logical object records, payloads and edge slots, but excludes collector-specific scratch/side tables, Vec spare capacity, allocator metadata, root-registry storage and process overhead. The proof also does not model finalization, weak references, ephemerons, real ECMAScript object layouts, or compiler-generated native stack maps/safepoints. Those require real Runtime integration and separate GC/root stress evidence before the production choice is final.
+This is an **M0 model-level recommendation, not a production GC lock**. Equal `peak_heap_bytes` values are not evidence of equal collector memory cost: the metric accounts for the common logical object records, payloads and edge slots, but excludes collector-specific scratch/side tables, Vec spare capacity, allocator metadata, root-registry storage and process overhead. The proof also does not model finalization, weak references, ephemerons, real ECMAScript object layouts, or compiler-generated native stack maps/safepoints. Those require real Runtime integration and separate GC/root stress evidence before the production choice is final.
 
-The raw paired report is committed at `benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz`. Verify it with:
-
-    sha256sum benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz
-    gzip -dc benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz > ogm-26-gc-comparison-report.json
-
-Expected SHA-256: `f6d4d2797dbb0eda97e83d5c512e2da5801183da4a88a35620963212f63cf1e3`.
-
+The raw paired report for this run is available as the CI artifact attached to [run 44323273442](https://github.com/AiratGaliev/ogma/actions/runs/44323273442). A local copy of the exact JSON and gzip report is attached to this task response. The repository gzip copy should be refreshed from that artifact and verified against its SHA-256 before treating the raw-sample commit criterion as complete.
