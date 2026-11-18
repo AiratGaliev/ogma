@@ -838,3 +838,69 @@ jobs:
           path: ${{ runner.temp }}/ogm25-static-host-modules-report.json
           if-no-files-found: error
           retention-days: 30
+
+
+  ogm26-gc-comparison-proof:
+    name: OGM-26 RC cycle removal versus non-moving tracing mark-sweep proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-26-gc-comparison')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Capture toolchain and runner metadata
+        id: benchmark_environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cpu_model="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+          if [[ -z "$cpu_model" ]]; then cpu_model="$(uname -m)"; fi
+          echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/gc-comparison/Cargo.toml --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path benchmarks/gc-comparison/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run GC model and lifecycle tests
+        run: cargo test --manifest-path benchmarks/gc-comparison/Cargo.toml --all-features --locked
+
+      - name: Run reproducible GC comparison benchmark
+        id: benchmark
+        env:
+          RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
+          OGM26_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path benchmarks/gc-comparison/Cargo.toml --locked --release --bin ogma-gc-comparison-bench -- \
+            --objects 2048 \
+            --warmups 3 \
+            --samples 101 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --tested-revision "$GITHUB_SHA" \
+            --cpu "$OGM26_CPU_MODEL" \
+            --output "$RUNNER_TEMP/ogm-26-gc-comparison-report.json"
+
+      - name: Validate equivalent graphs, lifecycle and raw GC measurements
+        run: python3 .github/scripts/validate_gc_comparison.py "$RUNNER_TEMP/ogm-26-gc-comparison-report.json"
+
+      - name: Upload raw OGM-26 benchmark evidence
+        if: always() && steps.benchmark.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm-26-gc-comparison-evidence
+          path: ${{ runner.temp }}/ogm-26-gc-comparison-report.json
+          if-no-files-found: error
+          retention-days: 30
