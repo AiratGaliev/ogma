@@ -1704,12 +1704,7 @@ mod tests {
         assert_eq!(static_error.code, ModuleDiagnosticCode::StaleBuildPlan);
 
         let fallback_error = modules
-            .resolve_import(
-                &plan,
-                "ogma:math",
-                None,
-                ModuleImportKind::DynamicImport,
-            )
+            .resolve_import(&plan, "ogma:math", None, ModuleImportKind::DynamicImport)
             .unwrap_err();
         assert_eq!(fallback_error.code, ModuleDiagnosticCode::StaleBuildPlan);
 
@@ -1808,7 +1803,9 @@ mod tests {
         assert!(denied.detail.contains("render.write"));
 
         let mut import_profile = profile(&["ogma:math"]);
-        import_profile.enabled_features.insert("graphics.v2".to_owned());
+        import_profile
+            .enabled_features
+            .insert("graphics.v2".to_owned());
         import_profile
             .granted_capabilities
             .push(HostCapabilityRequirement::new("render.read", 3));
