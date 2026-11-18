@@ -760,7 +760,10 @@ mod tests {
         assert_eq!(caller_thread.join().unwrap(), 1.0);
 
         let metrics = host.application_lock_metrics();
-        assert!(contention_observed, "the caller did not observe a held mutex");
+        assert!(
+            contention_observed,
+            "the caller did not observe a held mutex"
+        );
         assert_eq!(metrics.acquisitions, 2);
         assert_eq!(metrics.contentions, 1);
         assert!(metrics.wait_ns > 0);
