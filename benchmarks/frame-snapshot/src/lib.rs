@@ -4,7 +4,9 @@
 //! pinned CGE-style JavaScript consumer through rquickjs 0.14.0 and models the
 //! host snapshot / command / ECS boundaries independently.
 
-use rquickjs::{Array, Context, Error as JsError, Function, Object, Persistent, Runtime, TypedArray};
+use rquickjs::{
+    Array, Context, Error as JsError, Function, Object, Persistent, Runtime, TypedArray,
+};
 use std::collections::{HashMap, HashSet};
 use std::mem::{align_of, size_of};
 use std::slice;
@@ -921,10 +923,14 @@ impl ScriptHarness {
                     .set("pureGamepadPressed", pure_gamepad_pressed)?;
                 ctx.globals()
                     .set("deltaSecondsValue", frame.delta_seconds())?;
-                ctx.globals()
-                    .set("pureGamepadConnectedValue", frame.input().gamepad_connected())?;
-                ctx.globals()
-                    .set("pureGamepadLeftStickXValue", frame.input().gamepad_left_stick_x())?;
+                ctx.globals().set(
+                    "pureGamepadConnectedValue",
+                    frame.input().gamepad_connected(),
+                )?;
+                ctx.globals().set(
+                    "pureGamepadLeftStickXValue",
+                    frame.input().gamepad_left_stick_x(),
+                )?;
                 ctx.globals()
                     .set("pureCgeKeyDownValue", frame.input().is_key_down("A"))?;
                 drop(frame);
@@ -1259,9 +1265,7 @@ mod tests {
 
         let cge_scalar = harness.run(UpdateMode::CgeScalar).unwrap();
         let cge_read_positions = harness.run(UpdateMode::CgeReadPositions).unwrap();
-        let cge_numeric_set = harness
-            .run(UpdateMode::CgeNumericReadPositions)
-            .unwrap();
+        let cge_numeric_set = harness.run(UpdateMode::CgeNumericReadPositions).unwrap();
         let cge_bulk = harness.run(UpdateMode::CgeBulk).unwrap();
         let cge_pure = harness.run(UpdateMode::CgePureJavaScript).unwrap();
         assert!((cge_scalar - cge_read_positions).abs() < 0.000_001);
@@ -1313,12 +1317,7 @@ mod tests {
     #[test]
     fn publishing_snapshot_changes_the_next_complete_js_frame() {
         let initial = HostFrame::fixture(10, 4, 2);
-        let harness = ScriptHarness::new(
-            FrameSnapshot::from_host_frame(&initial),
-            4,
-            2,
-        )
-        .unwrap();
+        let harness = ScriptHarness::new(FrameSnapshot::from_host_frame(&initial), 4, 2).unwrap();
         harness
             .eval(
                 "if (engine.snapshot.frameId() !== 10 || engine.time.deltaSeconds() !== 1 / 60 || engine.entities.getPositionX(1) !== 0.5) throw new Error('initial frame snapshot mismatch');",

@@ -435,8 +435,7 @@ fn main() -> Result<(), String> {
             }
         }
 
-        let scalar_callbacks =
-            10 + 6 + 2 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
+        let scalar_callbacks = 10 + 6 + 2 + (entity_count * 2) + 1 + (collision_count * 2) + 1 + 2;
         let batch_callbacks = 10 + 6 + 2 + 1 + 1 + 1 + 2;
         for (mode, update_mode, callback_count) in [
             (
@@ -513,7 +512,11 @@ fn main() -> Result<(), String> {
         let scalar_callbacks = entity_count * 2 + 8 + 1;
         let array_set_callbacks = 1 + 8 + 1;
         for (mode, update_mode, callback_count) in [
-            ("cge_scalar_callbacks", UpdateMode::CgeScalar, scalar_callbacks),
+            (
+                "cge_scalar_callbacks",
+                UpdateMode::CgeScalar,
+                scalar_callbacks,
+            ),
             (
                 "cge_array_read_positions_set",
                 UpdateMode::CgeReadPositions,
@@ -524,7 +527,11 @@ fn main() -> Result<(), String> {
                 UpdateMode::CgeNumericReadPositions,
                 array_set_callbacks,
             ),
-            ("cge_typed_id_bulk", UpdateMode::CgeBulk, array_set_callbacks),
+            (
+                "cge_typed_id_bulk",
+                UpdateMode::CgeBulk,
+                array_set_callbacks,
+            ),
             (
                 "cge_javascript_only_preloaded_output",
                 UpdateMode::CgePureJavaScript,
