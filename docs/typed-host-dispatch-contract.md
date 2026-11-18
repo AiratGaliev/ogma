@@ -126,6 +126,7 @@ production host-state integration in this proof.
 The benchmark compares:
 
 - raw ogma_primitive_add_f64 ABI baseline;
+- dynamic ordinary-object property lookup with generic fallback;
 - name lookup only;
 - dynamic name lookup plus typed primitive thunk;
 - pre-resolved primitive slot;

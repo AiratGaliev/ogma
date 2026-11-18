@@ -14,7 +14,8 @@ embed the production ECMAScript runtime.
   and an ordinary-object/Proxy call-site guard proof.
 - include/ogma_host_dispatch.h is the C11 layout contract for descriptors and slots.
 - src/bin/benchmark.rs contains representative generated-style typed thunks and a
-  reproducible benchmark harness.
+  reproducible benchmark harness. It compares dynamic property/name lookup, pre-resolved
+  slots, typed primitive/handle calls, generic fallback and guarded call-site hits.
 - tests/c_abi_layout.c checks the C layout independently of Rust.
 
 Typed thunks are fixed extern "C-unwind" function pointers using the negotiated ABI

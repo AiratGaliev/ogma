@@ -574,6 +574,22 @@ fn main() -> Result<(), String> {
     )?);
 
     measurements.push(measure(
+        "dynamic_property_lookup_generic_fallback",
+        &config,
+        &registry,
+        || {
+            checked(registry.call_property(
+                &scope,
+                PropertyReceiver::Ordinary(&object),
+                "add",
+                None,
+                0,
+                &primitive_args,
+            ))
+        },
+    )?);
+
+    measurements.push(measure(
         "guarded_ordinary_object_callsite_hit",
         &config,
         &registry,
