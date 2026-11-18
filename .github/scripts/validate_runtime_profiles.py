@@ -115,7 +115,7 @@ def validate_schema_instance(value: Any, schema: dict[str, Any], location: str =
     if isinstance(value, dict):
         for key in schema.get("required", []):
             if key not in value:
-     _fail(f"{location}: required property {key!r} is missing")
+                _fail(f"{location}: required property {key!r} is missing")
         properties = schema.get("properties", {})
         if schema.get("additionalProperties") is False:
             unexpected = sorted(set(value) - set(properties))
