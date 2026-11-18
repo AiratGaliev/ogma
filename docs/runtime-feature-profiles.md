@@ -22,15 +22,40 @@ This is an M0 contract proof, not a production build implementation. Component i
 
 ## 2. Profile matrix
 
-profiles.json defines five complete, deterministic configurations. includeRoots are explicit profile roots; the resolved inclusion set is the transitive closure of the requires graph. excludeComponents are hard exclusions: a profile is invalid if an included component requires one. All unreferenced components are listed in strippedComponents.
+profiles.json defines eight complete, deterministic configurations across three independent axes: `buildMode`, `executionBackend` and `hostCompatibility`. Debug and Development are represented for both execution backends; the Node compatibility overlay is represented for both interpreter and hybrid-native Release. This is deliberate: tooling/build mode must not be coupled to a single execution backend, and Node adapters must not be tied to only one backend.
 
-| Profile | Execution / host | Included runtime composition | Excluded by default | Debug metadata and artifacts |
+`includeRoots` are explicit profile roots; the resolved inclusion set is the transitive closure of the `requires` graph. `excludeComponents` are hard exclusions: a profile is invalid if an included component requires one. All unreferenced components are listed in `strippedComponents`.
+
+| Profile | Execution / host | Included runtime composition | Default exclusions | Debug metadata / compiler policy |
 |---|---|---|---|---|
-| debug-interpreter | Portable interpreter; no Node layer | Runtime core, host ABI/registry, portable bytecode + verifier + interpreter, debugger API and interpreter hooks | Native AOT, native root maps, Node resolver/APIs, profiler, Hot Reload | Source maps and source/debug metadata embedded; DAP, Inspector/UI and REPL included |
-| development-test | Portable interpreter; no Node layer | Same execution core plus debugger hooks, DAP, Inspector/UI, REPL, profiler hooks and Hot Reload | Native AOT, native root maps, Node resolver/APIs | Source maps and source/debug metadata embedded; optimized-out values remain explicitly unavailable |
-| portable-interpreter-release | Portable interpreter; no Node layer | Runtime core, host ABI/registry, portable bytecode, verifier and interpreter | Native AOT/root maps, source/debug metadata, debugger transport/API, Inspector/UI, REPL, profiler, Hot Reload and Node compatibility | Optional source/debug metadata omitted from runtime package; symbols not applicable; crash artifacts may be external |
-| hybrid-native-release | Native AOT + portable fallback; no Node layer | Portable execution core, native root maps, AOT bridge, host ABI/registry | Debugger API/hooks, DAP, Inspector/UI, REPL, profiler, Hot Reload, Node compatibility and embedded source/debug metadata | Source maps and native debug symbols may be retained as separate artifacts; not linked into runtime package by default |
-| node-compatibility-portable-release | Portable interpreter + explicit Node layer | Portable execution core, host ABI/registry, Node module resolver and selected Node API adapters | Native AOT/root maps and developer tooling/debug metadata | Same release stripping policy as portable interpreter; enabling Node compatibility does not enable developer tooling |
+| `debug-interpreter` | Portable interpreter; no Node layer | Runtime core, host ABI/registry, portable bytecode + verifier + interpreter, debugger API/hooks, DAP, Inspector/UI and REPL | Native AOT/root maps, Node resolver/APIs, profiler and Hot Reload | Full source metadata/maps; native symbols not applicable; Rust opt-level 0, full debug info |
+| `debug-hybrid-native` | Hybrid AOT + portable fallback; no Node layer | Same debugger/tooling composition plus native root maps and AOT bridge | Node resolver/APIs, profiler and Hot Reload | Full source metadata/maps and embedded native symbols; debugger controls apply to interpreter fallback; native AOT stepping remains M3; opt-level 0 |
+| `development-test` | Portable interpreter; no Node layer | Interpreter execution core, debugger API/hooks, DAP, Inspector/UI, REPL, profiler hooks and Hot Reload | Native AOT/root maps and Node resolver/APIs | Embedded source/debug metadata and maps; opt-level 1, debug assertions and overflow checks enabled |
+| `development-hybrid-native` | Hybrid AOT + portable fallback; no Node layer | Development tooling plus native root maps and AOT bridge | Node resolver/APIs | Embedded source/debug metadata/maps and native symbols; DAP/Hot Reload apply to interpreter fallback; opt-level 1 |
+| `portable-interpreter-release` | Portable interpreter; no Node layer | Minimal Runtime, host ABI/registry, portable bytecode, verifier and interpreter | Native AOT/root maps, source/debug metadata, debugger/API hooks, DAP, Inspector/UI, REPL, profiler, Hot Reload and Node compatibility | Source/debug metadata omitted; symbols not applicable; compiler opt-level 3, thin LTO, symbol stripping |
+| `hybrid-native-release` | Native AOT + portable fallback; no Node layer | Portable execution core, native root maps, AOT bridge and host ABI/registry | Debugger/API hooks, DAP, Inspector/UI, REPL, profiler, Hot Reload, Node compatibility and embedded source/debug metadata | Source/debug metadata stripped; native symbols external; compiler opt-level 3, thin LTO, debug-info stripped from final runtime |
+| `node-compatibility-portable-release` | Portable interpreter + explicit Node layer | Portable execution core, host ABI/registry, Node module resolver and selected Node API adapters | Native AOT/root maps and all developer tooling/debug metadata | Same portable Release stripping policy; Node compatibility grants no ambient OS/process/network access |
+| `node-compatibility-hybrid-native-release` | Hybrid AOT + portable fallback + explicit Node layer | Hybrid execution core, host ABI/registry, Node module resolver and selected Node API adapters | All developer tooling/debug metadata | Same hybrid Release symbol/stripping policy; Node facade uses the same host ABI for interpreter and AOT calls |
+
+### Orthogonal execution, tooling and compatibility axes
+
+- The Debug and Development build modes exist for both Portable Interpreter and Hybrid Native execution. Hybrid profiles retain the interpreter for dynamic source and non-lowerable code.
+- OGM-33's backend-neutral Debugger API, DAP adapter and interpreter hooks are included in hybrid Debug/Development profiles. In this M0 contract, breakpoints/stepping/inspection are proven for the portable-interpreter path; native AOT stepping/debug integration remains a later milestone and is not claimed here.
+- Node compatibility is an independent host overlay, not an execution backend. Both Node Release variants include the same resolver/API adapters over the same versioned host ABI; Node APIs do not change ECMAScript semantics and do not grant capabilities merely by being imported.
+- The matrix is a set of supported baseline configurations, not a requirement that every project ship all variants. A host selects one backend/build mode/compatibility combination and may opt into extra tooling through explicit roots.
+
+### Compiler and native build settings
+
+Every profile pins its Rust native build settings in `rustBuild`; the validator checks that these are consistent with its build mode/backend and includes them in the deterministic plan/evidence report. They map to the eventual Cargo `[profile.*]` settings. They are a versioned M0 build contract, not a claim that a production Runtime workspace already consumes them.
+
+| Build mode / backend | `optLevel` | `debug` | Assertions / overflow checks | LTO | Codegen units | `panic` | Final strip policy |
+|---|---:|---|---|---|---:|---|---|
+| Debug / either backend | 0 | true | enabled | off | 256 | unwind | none |
+| Development / either backend | 1 | true | enabled | off | 16 | unwind | none |
+| Release / Portable Interpreter | 3 | false | disabled | thin | 1 | unwind | symbols |
+| Release / Hybrid Native | 3 | true while extracting external symbols | disabled | thin | 1 | unwind | debuginfo |
+
+For Hybrid Native Release, debug information is generated so the build can emit a separate external symbol artifact before debug sections are removed from the shipped executable. The external artifact is not linked into the Runtime package. For Debug/Development Hybrid Native, native symbols remain embedded in the internal build. The interpreter-only Release strips symbol data because native AOT symbols are not applicable.
 
 ### Feature-flag mapping
 
@@ -46,7 +71,7 @@ The profile data carries the complete flag set per configuration. The matrix del
 
 ## 3. Language/runtime semantic invariants
 
-Every profile pins the same ECMAScript-2026 language baseline and dynamicCode: preserved policy. eval and new Function are ECMAScript semantics, not optional debugger, Node or package-manager capabilities.
+Every profile pins the same ECMAScript-2026 language baseline and dynamicCode: preserved policy. eval and new Function are ECMAScript semantics, not optional debugger, Node or package-manager capabilities. Build-mode/compiler settings and execution backend selection are independent axes; switching Debug/Development to Hybrid Native does not switch off those semantics.
 
 - Runtime-compiled source uses the portable bytecode/interpreter path in both interpreter and hybrid-native deployments.
 - AOT may be selected only where it preserves the required semantics. If a function or construct cannot be lowered safely, use interpreter fallback when the selected Runtime implements it.
@@ -122,6 +147,7 @@ The Fast-PR-specific OGM-28 job emits ogm28-runtime-profile-evidence. It records
 - profile-manifest and schema byte sizes;
 - number of logical components and resolved/stripped components per profile;
 - linked-runtime, runtime-module, tooling-only and metadata component counts;
+- resolved compiler/Rust build settings (optimization level, debug info, assertions, LTO, codegen units, panic strategy and stripping) for all eight build/backend/host combinations;
 - Rust/Python toolchain and runner metadata;
 - exact size and SHA-256 of the existing OGM-25 ogma-typed-dispatch-bench Release proof executable.
 
@@ -150,7 +176,7 @@ No full Test262, differential conformance or browser/runtime acceptance is claim
 
 | OGM-28 criterion | Contract / verification |
 |---|---|
-| Profile matrix lists included/excluded components, flags and binary impact | profiles.json, this matrix and validator's resolved component/packaging report |
+| Profile matrix lists included/excluded components, flags, compiler options and binary impact | profiles.json, all eight backend/build/host combinations, rustBuild settings and validator's resolved component/packaging report |
 | Production stripping is dependency-aware and rejects required removed components | Dependency-closure validator; OGM-25 registry proof validates concrete host imports/native references |
 | Debugger transport/UI removal does not alter semantics | Developer-tooling graph nodes are checked semantics-neutral; shared ECMAScript semantic contract is immutable |
 | Dynamic-code semantics remain enabled in general compatibility profiles | Schema and validator pin dynamicCode: preserved; no dynamic-code language feature flag exists |
