@@ -252,6 +252,50 @@ def _validate_rust_build_settings(profile_id: str, profile: dict[str, Any]) -> N
         _fail(f"profile {profile_id!r} rustBuild settings conflict with {mode}/{backend}: {mismatches}")
 
 
+def _validate_aot_build_settings(profile_id: str, profile: dict[str, Any]) -> None:
+    """Keep generated-JS Native AOT policy separate from Rust Runtime crate settings."""
+    backend = profile["executionBackend"]
+    mode = profile["buildMode"]
+    aot = profile["aotBuild"]
+
+    if backend == "portable-interpreter":
+        expected = {
+            "enabled": False,
+            "optimization": "not-applicable",
+            "debugInfo": "not-applicable",
+            "symbols": "not-applicable",
+        }
+    elif mode == "debug":
+        expected = {
+            "enabled": True,
+            "optimization": "minimal",
+            "debugInfo": "full",
+            "symbols": "embedded",
+        }
+    elif mode == "development":
+        expected = {
+            "enabled": True,
+            "optimization": "balanced",
+            "debugInfo": "full",
+            "symbols": "embedded",
+        }
+    else:
+        expected = {
+            "enabled": True,
+            "optimization": "aggressive",
+            "debugInfo": "full",
+            "symbols": "external",
+        }
+
+    mismatches = {
+        key: (aot[key], value)
+        for key, value in expected.items()
+        if aot[key] != value
+    }
+    if mismatches:
+        _fail(f"profile {profile_id!r} AOT settings conflict with {mode}/{backend}: {mismatches}")
+
+
 def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     validate_schema_instance(document, schema)
     if document["languageSemantics"] != EXPECTED_LANGUAGE_SEMANTICS:
@@ -276,6 +320,7 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
 
     for profile_id, profile in profiles_by_id.items():
         _validate_rust_build_settings(profile_id, profile)
+        _validate_aot_build_settings(profile_id, profile)
         unknown_exclusions = sorted(set(profile["excludeComponents"]) - component_ids)
         if unknown_exclusions:
             _fail(f"profile {profile_id!r} excludes unknown components: {unknown_exclusions}")
@@ -359,6 +404,8 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
             expected_symbols = "embedded" if profile["buildMode"] in ("debug", "development") else "external"
             if profile["metadata"]["debugSymbols"] != expected_symbols:
                 _fail(f"profile {profile_id!r} must use {expected_symbols} native debug symbols for {profile['buildMode']} mode")
+            if profile["aotBuild"]["symbols"] != profile["metadata"]["debugSymbols"]:
+                _fail(f"profile {profile_id!r} AOT symbol policy must match the profile metadata policy")
 
         expected_flags = sorted(
             component["featureFlag"]
@@ -382,6 +429,7 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
             "executionBackend": profile["executionBackend"],
             "hostCompatibility": profile["hostCompatibility"],
             "rustBuild": profile["rustBuild"],
+            "aotBuild": profile["aotBuild"],
             "includedComponents": sorted(included),
             "strippedComponents": stripped,
             "linkedRuntimeComponents": linked,
