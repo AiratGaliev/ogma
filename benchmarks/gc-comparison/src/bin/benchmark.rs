@@ -106,7 +106,7 @@ fn build_graph(
     collector: CollectorKind,
     workload: Workload,
     object_count: usize,
-) -> Result<(GcHeap, GraphShape), String> {
+) -> Result<GcHeap, String> {
     let mut heap = GcHeap::new(collector);
     let objects: Vec<_> = (0..object_count)
         .map(|index| heap.allocate(16 + (index % 4) * 16))
@@ -194,8 +194,7 @@ fn build_graph(
         heap.close_scope(scope).map_err(err)?;
     }
 
-    let shape = heap.graph_shape().map_err(err)?;
-    Ok((heap, shape))
+    Ok(heap)
 }
 
 fn err(error: impl std::fmt::Display) -> String {
@@ -208,8 +207,10 @@ fn run_sample(
     object_count: usize,
 ) -> Result<Sample, String> {
     let build_start = Instant::now();
-    let (mut heap, graph) = build_graph(collector, workload, object_count)?;
+    let mut heap = build_graph(collector, workload, object_count)?;
     let build_ns = build_start.elapsed().as_nanos();
+    // Fingerprinting is a correctness cross-check, not part of heap construction.
+    let graph = heap.graph_shape().map_err(err)?;
     let objects_before = heap.live_objects();
     let report = heap.collect().map_err(err)?;
     let stats = heap.stats();
