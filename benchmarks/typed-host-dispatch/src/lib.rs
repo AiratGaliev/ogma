@@ -1350,6 +1350,9 @@ impl CallSiteGuard {
     }
 }
 
+pub mod static_modules;
+pub use static_modules::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;

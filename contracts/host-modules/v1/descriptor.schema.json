@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/contracts/host-modules/v1/descriptor.schema.json",
+  "title": "Ogma Host Module Descriptor v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "descriptorVersion",
+    "abi",
+    "specifier",
+    "version",
+    "requiredCapabilities",
+    "requiredFeatures",
+    "dependencies",
+    "nativeDependencies",
+    "exports"
+  ],
+  "properties": {
+    "descriptorVersion": {
+      "const": 1
+    },
+    "abi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "major",
+        "minimumMinor"
+      ],
+      "properties": {
+        "major": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "minimumMinor": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      }
+    },
+    "specifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?!.*//)(?!.*[.][.])[A-Za-z0-9](?:[A-Za-z0-9:/._@-]*[A-Za-z0-9])?$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "requiredCapabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "requiredFeatures": {
+      "$ref": "#/$defs/featureNames"
+    },
+    "dependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^(?!.*//)(?!.*[.][.])[A-Za-z0-9](?:[A-Za-z0-9:/._@-]*[A-Za-z0-9])?$"
+      }
+    },
+    "nativeDependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      }
+    },
+    "exports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/export"
+      }
+    }
+  },
+  "$defs": {
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "bit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._:-]*$",
+            "maxLength": 64
+          },
+          "bit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 63
+          }
+        }
+      }
+    },
+    "featureNames": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9._:-]*$",
+        "maxLength": 64
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "signature",
+        "effects",
+        "requiredCapabilities",
+        "requiredFeatures",
+        "binding"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$",
+          "not": {
+            "enum": [
+              "await",
+              "break",
+              "case",
+              "catch",
+              "class",
+              "const",
+              "continue",
+              "debugger",
+              "default",
+              "delete",
+              "do",
+              "else",
+              "enum",
+              "export",
+              "extends",
+              "false",
+              "finally",
+              "for",
+              "function",
+              "if",
+              "import",
+              "in",
+              "instanceof",
+              "new",
+              "null",
+              "return",
+              "super",
+              "switch",
+              "this",
+              "throw",
+              "true",
+              "try",
+              "typeof",
+              "var",
+              "void",
+              "while",
+              "with",
+              "yield",
+              "let",
+              "implements",
+              "interface",
+              "package",
+              "private",
+              "protected",
+              "public",
+              "static",
+              "type",
+              "namespace",
+              "module"
+            ]
+          }
+        },
+        "signature": {
+          "enum": [
+            "generic",
+            "f64-binary",
+            "number-handle-binary"
+          ]
+        },
+        "effects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "allocate",
+              "gc",
+              "throw",
+              "suspend",
+              "reenter"
+            ]
+          }
+        },
+        "requiredCapabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "requiredFeatures": {
+          "$ref": "#/$defs/featureNames"
+        },
+        "binding": {
+          "enum": [
+            "immutable-host-function",
+            "mutable",
+            "dynamic"
+          ]
+        }
+      }
+    }
+  }
+}

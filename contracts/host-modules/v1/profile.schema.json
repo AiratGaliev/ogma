@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/contracts/host-modules/v1/profile.schema.json",
+  "title": "Ogma Host Module Feature Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profileId",
+    "enabledModules",
+    "enabledFeatures",
+    "grantedCapabilities",
+    "enabledNativeDependencies",
+    "runtimeImports",
+    "nativeModuleDependencies"
+  ],
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "enabledModules": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!.*//)(?!.*[.][.])[A-Za-z0-9](?:[A-Za-z0-9:/._@-]*[A-Za-z0-9])?$"
+      }
+    },
+    "enabledFeatures": {
+      "$ref": "descriptor.schema.json#/$defs/featureNames"
+    },
+    "grantedCapabilities": {
+      "$ref": "descriptor.schema.json#/$defs/capabilities"
+    },
+    "enabledNativeDependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      }
+    },
+    "runtimeImports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "specifier",
+          "kind",
+          "importedNames"
+        ],
+        "properties": {
+          "specifier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "static-named-esm",
+              "namespace-esm",
+              "dynamic-import",
+              "commonjs-require",
+              "dynamic-property-access"
+            ]
+          },
+          "importedNames": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "nativeModuleDependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!.*//)(?!.*[.][.])[A-Za-z0-9](?:[A-Za-z0-9:/._@-]*[A-Za-z0-9])?$"
+      }
+    }
+  }
+}
