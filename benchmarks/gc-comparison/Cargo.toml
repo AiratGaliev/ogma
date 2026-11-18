@@ -1,0 +1,19 @@
+[package]
+name = "ogma-gc-comparison-proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "M0 proof comparing reference counting with cycle removal and non-moving tracing mark-sweep"
+
+[lib]
+name = "ogma_gc_comparison_proof"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ogma-gc-comparison-bench"
+path = "src/bin/benchmark.rs"
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
