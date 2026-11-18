@@ -246,6 +246,12 @@ impl GcHeap {
         self.validate(from)?;
         self.validate(to)?;
 
+        // Retain first so a checked refcount overflow cannot leave an edge
+        // installed without the matching inbound reference count.
+        if self.collector == CollectorKind::RcCycleRemoval {
+            self.increment_ref(to)?;
+        }
+
         let edge_bytes = size_of::<GcRef>() as u64;
         {
             let parent = self.cell_mut(from)?;
@@ -255,10 +261,6 @@ impl GcHeap {
         self.stats.live_bytes += edge_bytes;
         self.stats.peak_heap_bytes = self.stats.peak_heap_bytes.max(self.stats.live_bytes);
         self.stats.edge_operations += 1;
-
-        if self.collector == CollectorKind::RcCycleRemoval {
-            self.increment_ref(to)?;
-        }
         Ok(())
     }
 
@@ -292,12 +294,16 @@ impl GcHeap {
 
     pub fn add_frame_root(&mut self, frame: FrameToken, reference: GcRef) -> Result<(), GcError> {
         self.validate(reference)?;
-        let current = self.frames.last_mut().ok_or(GcError::InvalidFrame)?;
-        if current.token != frame {
+        if self.frames.last().ok_or(GcError::InvalidFrame)?.token != frame {
             return Err(GcError::RootStackOrder);
         }
-        current.references.push(reference);
-        self.retain_ref(reference)
+        self.retain_ref(reference)?;
+        self.frames
+            .last_mut()
+            .ok_or(GcError::InvalidFrame)?
+            .references
+            .push(reference);
+        Ok(())
     }
 
     pub fn end_frame(&mut self, frame: FrameToken) -> Result<(), GcError> {
@@ -323,12 +329,16 @@ impl GcHeap {
 
     pub fn scope_add(&mut self, scope: ScopeToken, reference: GcRef) -> Result<(), GcError> {
         self.validate(reference)?;
-        let current = self.scopes.last_mut().ok_or(GcError::InvalidScope)?;
-        if current.token != scope {
+        if self.scopes.last().ok_or(GcError::InvalidScope)?.token != scope {
             return Err(GcError::RootStackOrder);
         }
-        current.references.push(reference);
-        self.retain_ref(reference)
+        self.retain_ref(reference)?;
+        self.scopes
+            .last_mut()
+            .ok_or(GcError::InvalidScope)?
+            .references
+            .push(reference);
+        Ok(())
     }
 
     pub fn close_scope(&mut self, scope: ScopeToken) -> Result<(), GcError> {
@@ -345,6 +355,8 @@ impl GcHeap {
 
     pub fn retain_host_handle(&mut self, reference: GcRef) -> Result<HostHandle, GcError> {
         self.validate(reference)?;
+        // A failed retain must not publish a host slot without returning a token.
+        self.retain_ref(reference)?;
         let index = if let Some(index) = self.free_host_slots.pop() {
             let slot = &mut self.host_slots[index];
             debug_assert!(slot.target.is_none());
@@ -359,7 +371,6 @@ impl GcHeap {
             });
             index
         };
-        self.retain_ref(reference)?;
         Ok(HostHandle {
             index,
             generation: self.host_slots[index].generation,
@@ -822,6 +833,40 @@ mod tests {
 
     fn candidates() -> [CollectorKind; 2] {
         CollectorKind::ALL
+    }
+
+    #[test]
+    fn failed_reference_retains_do_not_partially_mutate_edges_or_root_registries() {
+        let mut heap = GcHeap::new(CollectorKind::RcCycleRemoval);
+        let source = heap.allocate(8);
+        let target = heap.allocate(8);
+        heap.cell_mut(target).unwrap().ref_count = u64::MAX;
+
+        assert_eq!(
+            heap.add_edge(source, target),
+            Err(GcError::RootCountOverflow)
+        );
+        assert!(heap.cell(source).unwrap().edges.is_empty());
+
+        let frame = heap.begin_frame(FrameKind::Interpreter).unwrap();
+        assert_eq!(
+            heap.add_frame_root(frame, target),
+            Err(GcError::RootCountOverflow)
+        );
+        assert!(heap.frames.last().unwrap().references.is_empty());
+
+        let scope = heap.open_scope().unwrap();
+        assert_eq!(
+            heap.scope_add(scope, target),
+            Err(GcError::RootCountOverflow)
+        );
+        assert!(heap.scopes.last().unwrap().references.is_empty());
+
+        assert_eq!(
+            heap.retain_host_handle(target),
+            Err(GcError::RootCountOverflow)
+        );
+        assert!(heap.host_slots.is_empty());
     }
 
     #[test]
