@@ -194,6 +194,9 @@ struct Measurement {
     p99_ns: f64,
     min_ns: f64,
     max_ns: f64,
+    batch_p50_ns: f64,
+    batch_p95_ns: f64,
+    batch_p99_ns: f64,
     iterations_per_second: f64,
     host_callbacks_per_second: f64,
     allocations: AllocationSnapshot,
@@ -226,33 +229,51 @@ where
         }
     }
 
-    let mut samples = Vec::with_capacity(config.samples);
+    let mut batch_samples = Vec::with_capacity(config.samples);
+    let mut latency_samples = Vec::with_capacity(config.iterations);
     let allocation_before = AllocationSnapshot::now();
     let metrics_before = metrics();
+
+    // Batch measurements estimate steady-state throughput with low timer overhead.
     for _ in 0..config.samples {
         let started = Instant::now();
         for _ in 0..config.iterations {
             operation();
         }
-        samples.push(started.elapsed().as_nanos() as f64 / config.iterations as f64);
+        batch_samples.push(started.elapsed().as_nanos() as f64 / config.iterations as f64);
     }
+
+    // Single-iteration samples expose the latency distribution instead of reporting
+    // percentiles of batch means as if they were individual-operation tail latency.
+    // The two Instant reads are included in each observation and reported separately.
+    for _ in 0..config.iterations {
+        let started = Instant::now();
+        operation();
+        latency_samples.push(started.elapsed().as_nanos() as f64);
+    }
+
     let metrics_after = metrics();
     let allocations = AllocationSnapshot::now().delta(allocation_before);
-    samples.sort_by(f64::total_cmp);
+    batch_samples.sort_by(f64::total_cmp);
+    latency_samples.sort_by(f64::total_cmp);
 
-    let p50_ns = percentile(&samples, 0.50);
+    let p50_ns = percentile(&latency_samples, 0.50);
+    let batch_p50_ns = percentile(&batch_samples, 0.50);
     let calls_per_iteration = workload.callbacks_per_iteration();
-    let iterations_per_second = 1_000_000_000.0 / p50_ns.max(f64::MIN_POSITIVE);
+    let iterations_per_second = 1_000_000_000.0 / batch_p50_ns.max(f64::MIN_POSITIVE);
     Measurement {
         strategy,
         workload: workload.name(),
         runtime_sync_mode,
         callbacks_per_iteration: calls_per_iteration,
         p50_ns,
-        p95_ns: percentile(&samples, 0.95),
-        p99_ns: percentile(&samples, 0.99),
-        min_ns: samples[0],
-        max_ns: *samples.last().expect("samples are non-empty"),
+        p95_ns: percentile(&latency_samples, 0.95),
+        p99_ns: percentile(&latency_samples, 0.99),
+        min_ns: latency_samples[0],
+        max_ns: *latency_samples.last().expect("latency samples are non-empty"),
+        batch_p50_ns,
+        batch_p95_ns: percentile(&batch_samples, 0.95),
+        batch_p99_ns: percentile(&batch_samples, 0.99),
         iterations_per_second,
         host_callbacks_per_second: iterations_per_second * calls_per_iteration as f64,
         allocations,
@@ -425,6 +446,28 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+
+struct TimerOverhead {
+    p50_ns: f64,
+    p95_ns: f64,
+    p99_ns: f64,
+}
+
+fn measure_timer_overhead(samples_count: usize) -> TimerOverhead {
+    let mut samples = Vec::with_capacity(samples_count);
+    for _ in 0..samples_count {
+        let started = Instant::now();
+        black_box(());
+        samples.push(started.elapsed().as_nanos() as f64);
+    }
+    samples.sort_by(f64::total_cmp);
+    TimerOverhead {
+        p50_ns: percentile(&samples, 0.50),
+        p95_ns: percentile(&samples, 0.95),
+        p99_ns: percentile(&samples, 0.99),
+    }
+}
+
 fn json_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 8);
     for character in value.chars() {
@@ -462,6 +505,7 @@ fn build_report(
     } else {
         "release"
     };
+    let timer_overhead = measure_timer_overhead(config.iterations);
     let mut output = String::new();
     let _ = writeln!(output, "{{");
     let _ = writeln!(output, "  \"schema_version\": 1,");
@@ -495,11 +539,23 @@ fn build_report(
         config.iterations
     );
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
-    let _ = writeln!(output, "    \"measurement_samples\": {}", config.samples);
+    let _ = writeln!(output, "    \"batch_measurement_samples\": {}", config.samples);
+    let _ = writeln!(output, "    \"single_iteration_latency_samples\": {}", config.iterations);
     let _ = writeln!(output, "  }},");
     let _ = writeln!(
         output,
-        "  \"synchronization_accounting\": {{\"application_state_lock\": \"instrumented separately\", \"binding_library_lock\": \"not linked; no real binding/runtime library synchronization is measured\", \"synthetic_control\": \"an independent mutex acquired once per host callback to show non-application synchronization cost\"}},"
+        "  \"timing_instrumentation\": {{\"method\":\"each single workload iteration is bracketed by two Instant reads; measured values are raw and timer overhead is not subtracted\",\"instant_pair_overhead_ns\":{{\"p50\":{:.3},\"p95\":{:.3},\"p99\":{:.3}}}}},",
+        timer_overhead.p50_ns,
+        timer_overhead.p95_ns,
+        timer_overhead.p99_ns
+    );
+    let _ = writeln!(
+        output,
+        "  \"synchronization_accounting\": {{\"application_state_lock\": \"instrumented separately\", \"binding_library_reference\": \"source-audited separately below; its lock/borrow counts are not part of mock timings\", \"synthetic_control\": \"an independent mutex acquired once per host callback to show non-application synchronization cost\"}},"
+    );
+    let _ = writeln!(
+        output,
+        "  \"binding_library_reference\": {{\"crate\":\"rquickjs\",\"version\":\"0.14.0\",\"consumer_repository\":\"AiratGaliev/cge-experiments\",\"consumer_revision\":\"c47ad08c3da9a3857f8429cebbed6ce88969715d\",\"consumer_dependency\":\"rquickjs = {{ version = \\"=0.14.0\\", features = [\\"std\\"] }} (default features enabled)\",\"enabled_features\":[\"default\",\"std\"],\"disabled_features\":[\"parallel\",\"futures\"],\"runtime_storage\":\"Rc<Mut<RawRuntime>>; Ref=Rc and Mut=core::cell::RefCell<T>\",\"runtime_lock_operation\":\"Mut::lock calls RefCell::borrow_mut; this is single-thread borrow exclusion, not an OS mutex\",\"context_entry\":\"Context::with acquires Runtime.inner once and holds the RefMut over the closure and JS execution\",\"host_callback_entry\":\"Rust host callbacks execute inside the active Context::with scope; ordinary callback dispatch does not acquire Runtime.inner again per callback\",\"parallel_feature_behavior\":\"when enabled, Ref=Arc and Mut=std::sync::Mutex<T>; not enabled in the inspected CGE dependency configuration\",\"futures_feature_behavior\":\"AsyncRuntime uses async_lock::Mutex<InnerRuntime>; not enabled in the inspected CGE dependency configuration\",\"source_audit\":\"DelSkayn/rquickjs commit 5a9560dd821d5498ded9e0745250d42fcadf8608: core/src/safe_ref.rs, core/src/runtime/base.rs, core/src/context/base.rs; CGE call site: rust-brick-breaker/src/scripting.rs call_hook\"}},"
     );
     let _ = writeln!(output, "  \"measurements\": [");
     for (index, measurement) in measurements.iter().enumerate() {
@@ -510,7 +566,7 @@ fn build_report(
         };
         let _ = write!(
             output,
-            "    {{\"strategy\":\"{}\",\"workload\":\"{}\",\"runtime_sync_mode\":\"{}\",\"callbacks_per_iteration\":{},\"unit\":\"ns/workload_iteration\",\"p50\":{:.3},\"p95\":{:.3},\"p99\":{:.3},\"min\":{:.3},\"max\":{:.3},\"workload_iterations_per_second_at_p50\":{:.3},\"host_callbacks_per_second_at_p50\":{:.3},",
+            "    {{\"strategy\":\"{}\",\"workload\":\"{}\",\"runtime_sync_mode\":\"{}\",\"callbacks_per_iteration\":{},\"single_iteration_latency_unit\":\"ns/workload_iteration_including_timing_overhead\",\"p50\":{:.3},\"p95\":{:.3},\"p99\":{:.3},\"min\":{:.3},\"max\":{:.3},\"batch_iteration_mean_unit\":\"ns/workload_iteration\",\"batch_p50\":{:.3},\"batch_p95\":{:.3},\"batch_p99\":{:.3},\"workload_iterations_per_second_at_batch_p50\":{:.3},\"host_callbacks_per_second_at_batch_p50\":{:.3},",
             measurement.strategy,
             measurement.workload,
             measurement.runtime_sync_mode,
@@ -520,6 +576,9 @@ fn build_report(
             measurement.p99_ns,
             measurement.min_ns,
             measurement.max_ns,
+            measurement.batch_p50_ns,
+            measurement.batch_p95_ns,
+            measurement.batch_p99_ns,
             measurement.iterations_per_second,
             measurement.host_callbacks_per_second
         );
@@ -565,9 +624,10 @@ fn build_report(
         output,
         "    \"mock host dispatch only; no ECMAScript parser, interpreter or production Runtime\","
     );
-    let _ = writeln!(output, "    \"no third-party binding library is linked; synthetic synchronization is not a measurement of rquickjs or another library\",");
+    let _ = writeln!(output, "    \"the binding-library reference is a source audit of the exact rquickjs 0.14.0 CGE profile; no rquickjs execution timings are included in the mock measurements\",");
     let _ = writeln!(output, "    \"the single-owner benchmark is serialized by design; cross-thread contention is reported separately for the shared-lock baseline\",");
-    let _ = writeln!(output, "    \"allocator counters are process-global instrumentation and include benchmark harness allocations within each measured interval\",");
+    let _ = writeln!(output, "    \"allocation sample buffers are preallocated before measurement; process-wide counters still include any unrelated process activity during the interval\",");
+    let _ = writeln!(output, "    \"single-iteration latency percentiles include Instant timing overhead; an independent timer-pair baseline is reported and not subtracted\",");
     let _ = writeln!(
         output,
         "    \"timings have no machine-independent pass/fail threshold\""
