@@ -290,11 +290,7 @@ impl GcHeap {
         Ok(token)
     }
 
-    pub fn add_frame_root(
-        &mut self,
-        frame: FrameToken,
-        reference: GcRef,
-    ) -> Result<(), GcError> {
+    pub fn add_frame_root(&mut self, frame: FrameToken, reference: GcRef) -> Result<(), GcError> {
         self.validate(reference)?;
         let current = self.frames.last_mut().ok_or(GcError::InvalidFrame)?;
         if current.token != frame {
@@ -325,11 +321,7 @@ impl GcHeap {
         Ok(token)
     }
 
-    pub fn scope_add(
-        &mut self,
-        scope: ScopeToken,
-        reference: GcRef,
-    ) -> Result<(), GcError> {
+    pub fn scope_add(&mut self, scope: ScopeToken, reference: GcRef) -> Result<(), GcError> {
         self.validate(reference)?;
         let current = self.scopes.last_mut().ok_or(GcError::InvalidScope)?;
         if current.token != scope {
@@ -673,7 +665,9 @@ impl GcHeap {
                     inventory.counts.native_frame_roots += frame.references.len()
                 }
             }
-            inventory.references.extend(frame.references.iter().copied());
+            inventory
+                .references
+                .extend(frame.references.iter().copied());
         }
 
         for slot in &self.host_slots {
@@ -685,7 +679,9 @@ impl GcHeap {
 
         for scope in &self.scopes {
             inventory.counts.temporary_scope_roots += scope.references.len();
-            inventory.references.extend(scope.references.iter().copied());
+            inventory
+                .references
+                .extend(scope.references.iter().copied());
         }
 
         for reference in &inventory.references {
