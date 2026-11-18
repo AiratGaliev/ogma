@@ -657,10 +657,7 @@ impl ActivationStack {
         let mut roots = Vec::new();
         for frame in &self.frames {
             roots.extend(frame.live_roots.iter().copied());
-            if let Some(reference) = frame
-                .pending_completion
-                .and_then(Completion::managed_root)
-            {
+            if let Some(reference) = frame.pending_completion.and_then(Completion::managed_root) {
                 roots.push(reference);
             }
         }
@@ -779,10 +776,7 @@ impl ActivationStack {
             }
         };
 
-        let current = self
-            .frames
-            .last()
-            .ok_or(TransitionError::FrameStackOrder)?;
+        let current = self.frames.last().ok_or(TransitionError::FrameStackOrder)?;
         if current.token != token {
             return Err(TransitionError::FrameStackOrder);
         }
@@ -1414,7 +1408,10 @@ mod tests {
             .expect("persistent handle keeps exception alive");
         assert!(heap.is_alive(exception));
 
-        providers.persistent.release(handle).expect("handle released");
+        providers
+            .persistent
+            .release(handle)
+            .expect("handle released");
         providers
             .collect_with_execution(&mut heap, &stack)
             .expect("collection runs after host handle release");
