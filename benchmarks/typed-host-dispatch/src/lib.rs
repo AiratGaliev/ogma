@@ -736,6 +736,18 @@ impl HostFunctionRegistry {
         }
     }
 
+    /// Reclaims ABI mock values that are no longer reachable from scopes or persistent roots.
+    /// Callers must keep externally reused handles rooted before invoking this method.
+    pub fn collect_unrooted(&self) -> Result<(), DispatchError> {
+        self.ensure_owner_thread()?;
+        let status = unsafe { ogma_context_collect_unrooted(self.runtime, self.context) };
+        if status == OgmaStatus::OK {
+            Ok(())
+        } else {
+            Err(DispatchError::Abi(status))
+        }
+    }
+
     pub fn table_version(&self) -> u64 {
         self.state.borrow().table_version
     }

@@ -143,6 +143,12 @@ counters. Inputs are prepared before timing; warmup
 and measured iteration counts are recorded with Rust toolchain, OS, architecture,
 CPU label, source revision and tested revision. The CI job emits a JSON artifact.
 
+Generic benchmark paths create temporary mock values. Because the OGM-19 proof heap
+uses explicit reclamation, the harness collects it every 128 generic operations
+between timed chunks; collection time is excluded from latency/throughput samples,
+and the report records collection cycles and interval. Allocation counters include
+the collector's own allocations.
+
 The measurements are an isolated M0 comparison on the mock ABI. They are not a
 production engine performance claim and must not be extrapolated to an actual
 interpreter or native AOT backend.

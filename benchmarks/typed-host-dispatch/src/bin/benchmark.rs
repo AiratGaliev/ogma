@@ -209,6 +209,7 @@ struct Measurement {
     allocation: AllocationSnapshot,
     metrics: DispatchMetrics,
     fallback_rate: f64,
+    collector_runs: u64,
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
@@ -224,18 +225,65 @@ fn checked(result: Result<JsCompletion, DispatchError>) -> Result<(), String> {
     }
 }
 
+const MOCK_HEAP_COLLECTION_INTERVAL: usize = 128;
+
 fn measure<F>(
     name: &'static str,
     config: &Config,
     registry: &HostFunctionRegistry,
-    mut operation: F,
+    operation: F,
 ) -> Result<Measurement, String>
 where
     F: FnMut() -> Result<(), String>,
 {
+    measure_impl(name, config, registry, operation, None, || Ok(()))
+}
+
+fn measure_with_periodic_collection<F>(
+    name: &'static str,
+    config: &Config,
+    registry: &HostFunctionRegistry,
+    operation: F,
+) -> Result<Measurement, String>
+where
+    F: FnMut() -> Result<(), String>,
+{
+    measure_impl(
+        name,
+        config,
+        registry,
+        operation,
+        Some(MOCK_HEAP_COLLECTION_INTERVAL),
+        || {
+            registry
+                .collect_unrooted()
+                .map_err(|error| format!("mock heap collection failed: {error:?}"))
+        },
+    )
+}
+
+fn measure_impl<F, C>(
+    name: &'static str,
+    config: &Config,
+    registry: &HostFunctionRegistry,
+    mut operation: F,
+    collection_interval: Option<usize>,
+    mut collect: C,
+) -> Result<Measurement, String>
+where
+    F: FnMut() -> Result<(), String>,
+    C: FnMut() -> Result<(), String>,
+{
+    let mut collector_runs = 0_u64;
     for _ in 0..config.warmups {
-        for _ in 0..config.iterations {
+        for index in 0..config.iterations {
             operation()?;
+            if collection_interval.is_some_and(|interval| {
+                (index + 1) % interval == 0 || index + 1 == config.iterations
+            }) {
+                collect()?;
+                collector_runs = collector_runs.saturating_add(1);
+            }
         }
     }
 
@@ -244,17 +292,37 @@ where
     let metrics_before = registry.metrics();
     let allocations_before = AllocationSnapshot::now();
 
-    for _ in 0..config.iterations {
+    for index in 0..config.iterations {
         let start = Instant::now();
         operation()?;
         latency.push(start.elapsed().as_nanos() as f64);
-    }
-    for _ in 0..config.samples {
-        let start = Instant::now();
-        for _ in 0..config.iterations {
-            operation()?;
+        if collection_interval.is_some_and(|interval| {
+            (index + 1) % interval == 0 || index + 1 == config.iterations
+        }) {
+            collect()?;
+            collector_runs = collector_runs.saturating_add(1);
         }
-        batch_latency.push(start.elapsed().as_nanos() as f64 / config.iterations as f64);
+    }
+
+    for _ in 0..config.samples {
+        let mut elapsed_ns = 0.0;
+        let mut completed = 0;
+        while completed < config.iterations {
+            let chunk_size = collection_interval
+                .unwrap_or(config.iterations)
+                .min(config.iterations - completed);
+            let start = Instant::now();
+            for _ in 0..chunk_size {
+                operation()?;
+            }
+            elapsed_ns += start.elapsed().as_nanos() as f64;
+            completed += chunk_size;
+            if collection_interval.is_some() {
+                collect()?;
+                collector_runs = collector_runs.saturating_add(1);
+            }
+        }
+        batch_latency.push(elapsed_ns / config.iterations as f64);
     }
 
     let allocations = AllocationSnapshot::now().delta(allocations_before);
@@ -324,9 +392,9 @@ where
             active_slots: metrics_after.active_slots,
         },
         fallback_rate,
+        collector_runs,
     })
 }
-
 fn measure_lookup<F>(
     name: &'static str,
     config: &Config,
@@ -397,8 +465,13 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
     let _ = writeln!(output, "    \"measurement_samples\": {},", config.samples);
     let _ = writeln!(
         output,
-        "    \"single_call_latency_samples\": {}",
+        "    \"single_call_latency_samples\": {},",
         config.iterations
+    );
+    let _ = writeln!(
+        output,
+        "    \"mock_heap_collection_interval\": {}",
+        MOCK_HEAP_COLLECTION_INTERVAL
     );
     let _ = writeln!(output, "  }},");
     let _ = writeln!(
@@ -429,6 +502,11 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
             output,
             "      \"throughput_ops_per_second\": {:.2},",
             item.throughput_ops_sec
+        );
+        let _ = writeln!(
+            output,
+            "      \"mock_heap_collection_runs\": {},",
+            item.collector_runs
         );
         let _ = writeln!(output, "      \"allocations\": {{\"alloc_calls\": {}, \"realloc_calls\": {}, \"allocated_bytes\": {}}},", item.allocation.alloc_calls, item.allocation.realloc_calls, item.allocation.allocated_bytes);
         let _ = writeln!(output, "      \"dispatch\": {{\"table_version\": {}, \"active_slots\": {}, \"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"property_lookups\": {}, \"guarded_property_loads\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.table_version, item.metrics.active_slots, item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.property_lookups, item.metrics.guarded_property_loads, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
@@ -565,21 +643,28 @@ fn main() -> Result<(), String> {
         || checked(registry.invoke_slot(&scope, handles, 0, &handle_args)),
     )?);
 
-    measurements.push(measure(
+    measurements.push(measure_with_periodic_collection(
         "dynamic_name_lookup_generic_callback",
         &config,
         &registry,
-        || checked(registry.invoke_by_name(&scope, "ogma:bench/generic-add", 0, &handle_args)),
+        || {
+            checked(registry.invoke_by_name(
+                &scope,
+                "ogma:bench/generic-add",
+                0,
+                &primitive_args,
+            ))
+        },
     )?);
 
-    measurements.push(measure(
+    measurements.push(measure_with_periodic_collection(
         "pre_resolved_generic_fallback",
         &config,
         &registry,
         || checked(registry.invoke_generic_slot(&scope, primitive, 0, &primitive_args)),
     )?);
 
-    measurements.push(measure(
+    measurements.push(measure_with_periodic_collection(
         "dynamic_property_lookup_generic_fallback",
         &config,
         &registry,

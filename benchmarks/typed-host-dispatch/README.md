@@ -48,3 +48,8 @@ Function values; the OGM-21 crate does not claim a production Runtime integratio
 full ECMAScript completion values, asynchronous host calls, or a complete binding
 code generator. MAY_SUSPEND descriptors are rejected because the current ABI has no
 suspension contract. Complex effects route through the generic callback path.
+
+Generic benchmark cases periodically collect temporary OGM-19 mock values every 128
+operations between timed chunks. Collection time is excluded from latency/throughput
+samples; collection cycles are reported separately, while allocation counters include
+collector allocations.
