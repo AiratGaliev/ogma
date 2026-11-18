@@ -299,6 +299,8 @@ pub struct DispatchMetrics {
     pub generic_calls: u64,
     pub generic_fallback_calls: u64,
     pub name_lookups: u64,
+    pub property_lookups: u64,
+    pub guarded_property_loads: u64,
     pub cache_hits: u64,
     pub guard_misses: u64,
     pub proxy_get_traps: u64,
@@ -1004,11 +1006,13 @@ impl HostFunctionRegistry {
         object: &OrdinaryHostObject,
         property: &str,
     ) -> Option<CallSiteGuard> {
-        match object.get(property)? {
+        let property_slot = object.property_slot(property)?;
+        match object.get_by_slot(property_slot)? {
             JsCallable::Host { identity, slot } => Some(CallSiteGuard {
                 object_identity: object.identity,
                 shape_id: object.shape_id,
                 property: property.to_owned(),
+                property_slot,
                 function_identity: identity,
                 slot,
             }),
@@ -1027,43 +1031,56 @@ impl HostFunctionRegistry {
         capabilities: u64,
         args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
-        let (callable, object_identity, shape_id, is_proxy) = match receiver {
-            PropertyReceiver::Ordinary(object) => (
-                object.get(property),
-                object.identity,
-                object.shape_id,
-                false,
-            ),
+        let callable = match receiver {
+            PropertyReceiver::Ordinary(object) => {
+                let matching_guard = guard.filter(|candidate| {
+                    candidate.object_identity == object.identity
+                        && candidate.shape_id == object.shape_id
+                        && candidate.property == property
+                });
+
+                if let Some(guard) = matching_guard {
+                    self.add_metrics(|metrics| {
+                        metrics.guarded_property_loads =
+                            metrics.guarded_property_loads.saturating_add(1);
+                    });
+                    let current = object.get_by_slot(guard.property_slot);
+                    if let Some(JsCallable::Host { identity, slot }) = current {
+                        if identity == guard.function_identity && slot == guard.slot {
+                            self.add_metrics(|metrics| {
+                                metrics.cache_hits = metrics.cache_hits.saturating_add(1);
+                            });
+                            return self.invoke_slot(scope, slot, capabilities, args);
+                        }
+                    }
+                    self.add_metrics(|metrics| {
+                        metrics.guard_misses = metrics.guard_misses.saturating_add(1);
+                    });
+                    current
+                } else {
+                    if guard.is_some() {
+                        self.add_metrics(|metrics| {
+                            metrics.guard_misses = metrics.guard_misses.saturating_add(1);
+                        });
+                    }
+                    self.add_metrics(|metrics| {
+                        metrics.property_lookups = metrics.property_lookups.saturating_add(1);
+                    });
+                    object.get(property)
+                }
+            }
             PropertyReceiver::Proxy(proxy) => {
-                self.add_metrics(|m| m.proxy_get_traps = m.proxy_get_traps.saturating_add(1));
-                (
-                    proxy.get(property),
-                    proxy.target.identity,
-                    proxy.target.shape_id,
-                    true,
-                )
+                self.add_metrics(|metrics| {
+                    metrics.proxy_get_traps = metrics.proxy_get_traps.saturating_add(1);
+                    metrics.property_lookups = metrics.property_lookups.saturating_add(1);
+                });
+                proxy.get(property)
             }
         };
+
         let Some(callable) = callable else {
             return Ok(JsCompletion::Throw(JsException::ReferenceError));
         };
-
-        if !is_proxy {
-            if let (Some(guard), JsCallable::Host { identity, slot }) = (guard, callable) {
-                if guard.object_identity == object_identity
-                    && guard.shape_id == shape_id
-                    && guard.property == property
-                    && guard.function_identity == identity
-                    && guard.slot == slot
-                {
-                    self.add_metrics(|m| m.cache_hits = m.cache_hits.saturating_add(1));
-                    return self.invoke_slot(scope, slot, capabilities, args);
-                }
-            }
-            if guard.is_some() {
-                self.add_metrics(|m| m.guard_misses = m.guard_misses.saturating_add(1));
-            }
-        }
 
         match callable {
             JsCallable::Host { slot, .. } => {
@@ -1133,42 +1150,55 @@ impl JsCallable {
 pub struct OrdinaryHostObject {
     identity: u64,
     shape_id: u64,
-    properties: HashMap<String, JsCallable>,
+    property_slots: HashMap<String, usize>,
+    properties: Vec<Option<JsCallable>>,
 }
 impl OrdinaryHostObject {
     pub fn new() -> Self {
         Self {
             identity: NEXT_OBJECT_ID.fetch_add(1, Ordering::Relaxed),
             shape_id: 1,
-            properties: HashMap::new(),
+            property_slots: HashMap::new(),
+            properties: Vec::new(),
         }
     }
     pub fn define(&mut self, property: impl Into<String>, callable: JsCallable) {
         let property = property.into();
-        if !self.properties.contains_key(&property) {
-            self.shape_id = self.shape_id.saturating_add(1);
+        if let Some(index) = self.property_slots.get(&property).copied() {
+            self.properties[index] = Some(callable);
+            return;
         }
-        self.properties.insert(property, callable);
+        let index = self.properties.len();
+        self.property_slots.insert(property, index);
+        self.properties.push(Some(callable));
+        self.shape_id = self.shape_id.saturating_add(1);
     }
     /// Replaces a property value without changing its layout; the function identity guard fails.
     pub fn replace(&mut self, property: &str, callable: JsCallable) -> bool {
-        match self.properties.get_mut(property) {
-            Some(current) => {
-                *current = callable;
+        match self.property_slots.get(property).copied() {
+            Some(index) => {
+                self.properties[index] = Some(callable);
                 true
             }
             None => false,
         }
     }
     pub fn delete(&mut self, property: &str) -> bool {
-        let removed = self.properties.remove(property).is_some();
-        if removed {
-            self.shape_id = self.shape_id.saturating_add(1);
-        }
-        removed
+        let Some(index) = self.property_slots.remove(property) else {
+            return false;
+        };
+        self.properties[index] = None;
+        self.shape_id = self.shape_id.saturating_add(1);
+        true
+    }
+    fn property_slot(&self, property: &str) -> Option<usize> {
+        self.property_slots.get(property).copied()
+    }
+    fn get_by_slot(&self, slot: usize) -> Option<JsCallable> {
+        self.properties.get(slot).copied().flatten()
     }
     fn get(&self, property: &str) -> Option<JsCallable> {
-        self.properties.get(property).copied()
+        self.get_by_slot(self.property_slot(property)?)
     }
 }
 impl Default for OrdinaryHostObject {
@@ -1216,6 +1246,7 @@ pub struct CallSiteGuard {
     object_identity: u64,
     shape_id: u64,
     property: String,
+    property_slot: usize,
     function_identity: u64,
     slot: HostFunctionSlot,
 }
@@ -1504,6 +1535,8 @@ mod tests {
         assert_eq!(metrics.typed_calls, 1);
         assert_eq!(metrics.capability_denials, 1);
         assert_eq!(metrics.cache_hits, 2);
+        assert_eq!(metrics.property_lookups, 0);
+        assert_eq!(metrics.guarded_property_loads, 2);
     }
 
     #[test]
@@ -1552,8 +1585,40 @@ mod tests {
                 .unwrap(),
             JsCompletion::Normal(DispatchValue::Number(77.0))
         );
-        assert_eq!(registry.metrics().typed_calls, 0);
-        assert_eq!(registry.metrics().guard_misses, 1);
+        let metrics = registry.metrics();
+        assert_eq!(metrics.typed_calls, 0);
+        assert_eq!(metrics.guard_misses, 1);
+        assert_eq!(metrics.property_lookups, 0);
+        assert_eq!(metrics.guarded_property_loads, 1);
+    }
+
+    #[test]
+    fn shape_change_invalidates_guard_and_uses_dynamic_property_lookup() {
+        let registry = HostFunctionRegistry::new().unwrap();
+        let slot = register_add(&registry, 1001, "ogma:math/add");
+        let mut object = OrdinaryHostObject::new();
+        object.define("run", JsCallable::host(slot));
+        let guard = registry.resolve_call_site(&object, "run").unwrap();
+        object.define("other", JsCallable::script(DispatchValue::Number(9.0)));
+
+        let host = scope_context();
+        let scope = host.enter_scope().unwrap();
+        assert_eq!(
+            registry.call_property(
+                &scope,
+                PropertyReceiver::Ordinary(&object),
+                "run",
+                Some(&guard),
+                0,
+                &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)],
+            ).unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(5.0)),
+        );
+        let metrics = registry.metrics();
+        assert_eq!(metrics.guard_misses, 1);
+        assert_eq!(metrics.property_lookups, 1);
+        assert_eq!(metrics.guarded_property_loads, 0);
+        assert_eq!(metrics.generic_calls, 1);
     }
 
     #[test]
@@ -1581,6 +1646,8 @@ mod tests {
         );
         assert_eq!(proxy.get_trap_calls(), 1);
         assert_eq!(registry.metrics().proxy_get_traps, 1);
+        assert_eq!(registry.metrics().property_lookups, 1);
+        assert_eq!(registry.metrics().guarded_property_loads, 0);
         assert_eq!(registry.metrics().typed_calls, 0);
         assert_eq!(registry.metrics().generic_calls, 1);
     }

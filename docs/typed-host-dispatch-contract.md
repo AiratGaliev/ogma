@@ -82,9 +82,10 @@ user code or a nested callback runs.
 ## 4. Dispatch and ECMAScript-observable behavior
 
 1. **Static import / valid inline-cache hit.** A call-site guard matches receiver
-   identity, object layout and the current function-object identity. The table checks
-   slot generation, ABI version, and capabilities on every invocation before calling
-   a typed thunk.
+   identity and object layout, then loads the current function value from the cached
+   property cell without a name-based property lookup. It verifies the current
+   function-object identity before using the slot. The table checks slot generation,
+   ABI version, and capabilities on every invocation before calling a typed thunk.
 2. **Function/property replacement.** Replacing a function-valued property changes
    the function identity even when the object's property layout is unchanged. The
    previous call-site guard misses; the current property value is used through the
@@ -136,8 +137,9 @@ The benchmark compares:
 - guarded ordinary-object call-site cache hit.
 
 Each path reports single-call p50/p95/p99, batch median latency and throughput,
-allocation/reallocation counts and bytes, name-lookup count, typed/generic calls,
-generic fallback rate and guard counters. Inputs are prepared before timing; warmup
+allocation/reallocation counts and bytes, name lookups, dynamic property lookups,
+guarded property-cell loads, typed/generic calls, generic fallback rate and guard
+counters. Inputs are prepared before timing; warmup
 and measured iteration counts are recorded with Rust toolchain, OS, architecture,
 CPU label, source revision and tested revision. The CI job emits a JSON artifact.
 

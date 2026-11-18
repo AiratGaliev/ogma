@@ -291,6 +291,12 @@ where
             name_lookups: metrics_after
                 .name_lookups
                 .saturating_sub(metrics_before.name_lookups),
+            property_lookups: metrics_after
+                .property_lookups
+                .saturating_sub(metrics_before.property_lookups),
+            guarded_property_loads: metrics_after
+                .guarded_property_loads
+                .saturating_sub(metrics_before.guarded_property_loads),
             typed_calls: typed,
             generic_calls: generic,
             generic_fallback_calls: metrics_after
@@ -425,7 +431,7 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
             item.throughput_ops_sec
         );
         let _ = writeln!(output, "      \"allocations\": {{\"alloc_calls\": {}, \"realloc_calls\": {}, \"allocated_bytes\": {}}},", item.allocation.alloc_calls, item.allocation.realloc_calls, item.allocation.allocated_bytes);
-        let _ = writeln!(output, "      \"dispatch\": {{\"table_version\": {}, \"active_slots\": {}, \"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.table_version, item.metrics.active_slots, item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
+        let _ = writeln!(output, "      \"dispatch\": {{\"table_version\": {}, \"active_slots\": {}, \"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"property_lookups\": {}, \"guarded_property_loads\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.table_version, item.metrics.active_slots, item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.property_lookups, item.metrics.guarded_property_loads, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
         let _ = writeln!(output, "    }}{comma}");
     }
     let _ = writeln!(output, "  ]");
