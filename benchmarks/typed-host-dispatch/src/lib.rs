@@ -493,7 +493,7 @@ impl HostFunctionRegistry {
         &self,
         descriptor: &HostFunctionDescriptor,
     ) -> Result<String, DispatchError> {
-        if descriptor.struct_size < std::mem::size_of::<HostFunctionDescriptor>() as u32
+        if descriptor.struct_size != std::mem::size_of::<HostFunctionDescriptor>() as u32
             || descriptor.descriptor_version != DESCRIPTOR_VERSION
             || descriptor.abi_major != self.abi_version.major
             || descriptor.abi_minor > self.abi_version.minor
@@ -1929,6 +1929,21 @@ mod tests {
     #[test]
     fn descriptors_reject_wrong_abi_and_unsupported_async_contracts() {
         let registry = HostFunctionRegistry::new().unwrap();
+        let mut wrong_size = HostFunctionDescriptor::generic(
+            HostFunctionId(3000),
+            "ogma:test/descriptor-size",
+            0,
+            0,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
+        wrong_size.struct_size = (std::mem::size_of::<HostFunctionDescriptor>() as u32) + 1;
+        assert_eq!(
+            registry.register(wrong_size),
+            Err(DispatchError::InvalidDescriptor)
+        );
+
         let mut wrong = HostFunctionDescriptor::generic(
             HostFunctionId(3001),
             "ogma:test/version",
