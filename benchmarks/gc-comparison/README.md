@@ -83,3 +83,40 @@ Unit tests exercise:
 This proof can select an initial algorithmic direction only for this model and workload matrix. It does not establish JavaScript/ECMAScript semantics, finalization behavior, weak references, ephemerons, concurrent or incremental collection, generational collection, AOT stack maps or production runtime latency. Those gaps must remain explicit in any M0 decision.
 
 No production GC choice is declared by this source alone. The recommendation must be based on the attached machine-readable CI report, the lifecycle trade-offs recorded here, and the remaining root protocol requirements. If measurements are noisy or inconclusive, keep the decision open rather than inventing a winner.
+
+
+## Recorded result and M0 recommendation (2026-11-18)
+
+The first paired measurement run was produced by [CI run #333](https://github.com/AiratGaliev/ogma/actions/runs/44322470507), with the OGM-26 proof job and repository Fast CI both successful.
+
+**Environment:** Rust 1.100.0; Linux x86_64; AMD EPYC 9V74 80-Core Processor.  
+**Configuration:** 2,048 objects; three warmup rounds; 101 paired samples per collector/workload; nearest-rank percentiles; alternating collector order per sample.  
+**Measured source revision:** `b473992c45ae67d588abe528648f67fde3687d5c`.  
+**CI tested revision:** `cf84dca607f55e33f8a69ccb9cbcca835155970b`.
+
+Collection and root-scan values are microseconds; end-to-end is graph build + collection. RC maintenance operations are averaged over the 101 samples.
+
+| Workload | Collector | Collection p50 / p95 / p99 (µs) | Root scan p50 (µs) | End-to-end p50 (µs) | Edges examined (avg.) | RC ops (avg.) | Live / reclaimed objects |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Balanced roots and cycles | RC + cycle removal | 32.36 / 34.52 / 41.39 | 1.392 | 178.54 | 3,875 | 6,406 | 1,696 / 352 |
+| Balanced roots and cycles | Non-moving mark-sweep | 19.30 / 23.88 / 27.90 | 1.382 | 164.06 | 1,754 | 0 | 1,696 / 352 |
+| Persistent host retention | RC + cycle removal | 33.05 / 34.06 / 38.09 | 1.823 | 182.61 | 3,938 | 6,486 | 1,756 / 292 |
+| Persistent host retention | Non-moving mark-sweep | 19.32 / 20.40 / 21.03 | 1.823 | 167.36 | 1,817 | 0 | 1,756 / 292 |
+| Allocation churn | RC + cycle removal | 44.47 / 50.46 / 51.32 | 0.511 | 190.94 | 2,274 | 5,453 | 148 / 1,900 |
+| Allocation churn | Non-moving mark-sweep | 32.25 / 32.93 / 38.19 | 0.501 | 174.03 | 153 | 0 | 148 / 1,900 |
+
+### Recommendation
+
+**Prefer non-moving tracing mark-sweep as the next GC candidate for Ogma Runtime integration.** In this model it reduced collection-pause p50 by 37.9–71.1% across the three workloads; p95 and p99 were also lower in every workload. End-to-end p50 improved by 8.8–9.7%. Final live/reclaimed counts and logical live bytes matched exactly between the two collectors for every paired sample.
+
+The model also indicates the lifecycle trade-off: RC reclaims acyclic chains immediately when their last external reference is released, but pays reference-count maintenance on root/edge mutations and still needs a full trial-deletion/cycle pass. Mark-sweep avoids that per-edge/root reference-count traffic and traversed fewer edges in these generated graphs. Root-inventory scan cost was close between candidates.
+
+This is an **M0 model-level recommendation, not a production GC lock**. The equal `peak_heap_bytes` values are not evidence of equal collector memory cost: the metric accounts for the common logical object records, payloads and edge slots, but excludes collector-specific scratch/side tables, Vec spare capacity, allocator metadata, root-registry storage and process overhead. The proof also does not model finalization, weak references, ephemerons, real ECMAScript object layouts, or compiler-generated native stack maps/safepoints. Those require real Runtime integration and separate GC/root stress evidence before the production choice is final.
+
+The raw paired report is committed at `benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz`. Verify it with:
+
+    sha256sum benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz
+    gzip -dc benchmarks/gc-comparison/results/ogm-26-gc-comparison-report.json.gz > ogm-26-gc-comparison-report.json
+
+Expected SHA-256: `f6d4d2797dbb0eda97e83d5c512e2da5801183da4a88a35620963212f63cf1e3`.
+
