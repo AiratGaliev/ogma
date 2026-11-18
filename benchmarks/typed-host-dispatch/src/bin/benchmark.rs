@@ -287,6 +287,9 @@ where
         }
     }
 
+    // Keep this metric aligned with measured calls; warm-up collections are excluded.
+    collector_runs = 0;
+
     let mut latency = Vec::with_capacity(config.iterations);
     let mut batch_latency = Vec::with_capacity(config.samples);
     let metrics_before = registry.metrics();
