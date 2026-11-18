@@ -11,8 +11,8 @@ use ogma_rust_abi_proof::{
     ogma_root_scope_open, ogma_runtime_create, ogma_runtime_destroy, OgmaAbiVersion,
     OgmaCallbackHandle, OgmaCompletion, OgmaContextHandle, OgmaHandle, OgmaHostCallback,
     OgmaPersistentHandle, OgmaRootScopeHandle, OgmaRuntime, OgmaStatus, COMPLETION_NORMAL,
-    COMPLETION_THROW, FEATURE_CALLBACKS, FEATURE_COMPLETIONS, FEATURE_OPAQUE_HANDLES,
-    FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES, FEATURE_MOCK_PROOF,
+    COMPLETION_THROW, FEATURE_CALLBACKS, FEATURE_COMPLETIONS, FEATURE_MOCK_PROOF,
+    FEATURE_OPAQUE_HANDLES, FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -1528,8 +1528,10 @@ mod tests {
         }
         let data = unsafe { &*(user_data as *const ReentrantUnregisterData) };
         let registry = unsafe { &*data.registry };
-        data.rejected_while_active
-            .set(matches!(registry.unregister(data.slot.get()), Err(DispatchError::Busy)));
+        data.rejected_while_active.set(matches!(
+            registry.unregister(data.slot.get()),
+            Err(DispatchError::Busy)
+        ));
         unsafe {
             completion.write(OgmaCompletion {
                 kind: COMPLETION_NORMAL,
