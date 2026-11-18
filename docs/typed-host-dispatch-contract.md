@@ -1,7 +1,7 @@
 # OGM-21 — typed host function table and pre-resolved dispatch
 
-**Status:** M0 architectural proof contract  
-**Implementation:** benchmarks/typed-host-dispatch  
+**Status:** M0 architectural proof contract
+**Implementation:** benchmarks/typed-host-dispatch
 **Upstream contracts:** [versioned Rust ABI](rust-abi-contract.md), OGM-20 HostExecutionScope proof
 
 ## 1. Purpose and boundary

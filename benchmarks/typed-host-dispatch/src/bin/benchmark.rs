@@ -1,8 +1,7 @@
 use ogma_host_execution_scope_proof::{HostExecutionContext, LibrarySyncMode};
 use ogma_rust_abi_proof::{
     ogma_context_create_number, ogma_context_get_number, ogma_primitive_add_f64, OgmaCompletion,
-    OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus,
-    COMPLETION_NORMAL,
+    OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus, COMPLETION_NORMAL,
 };
 use ogma_typed_host_dispatch_proof::{
     DispatchError, DispatchMetrics, DispatchValue, HostFunctionDescriptor, HostFunctionId,
@@ -94,7 +93,8 @@ macro_rules! define_f64_binary_thunk {
     };
 }
 
-define_f64_binary_thunk!(generated_primitive_add, |left: f64, right: f64| left + right);
+define_f64_binary_thunk!(generated_primitive_add, |left: f64, right: f64| left
+    + right);
 
 unsafe extern "C-unwind" fn generated_handle_add(
     runtime: *const OgmaRuntime,
@@ -177,9 +177,13 @@ fn parse_config() -> Result<Config, String> {
     };
     let mut args = env::args().skip(1);
     while let Some(argument) = args.next() {
-        let value = args.next().ok_or_else(|| format!("missing value for {argument}"))?;
+        let value = args
+            .next()
+            .ok_or_else(|| format!("missing value for {argument}"))?;
         match argument.as_str() {
-            "--iterations" => config.iterations = value.parse().map_err(|_| "invalid --iterations")?,
+            "--iterations" => {
+                config.iterations = value.parse().map_err(|_| "invalid --iterations")?
+            }
             "--warmups" => config.warmups = value.parse().map_err(|_| "invalid --warmups")?,
             "--samples" => config.samples = value.parse().map_err(|_| "invalid --samples")?,
             "--revision" => config.revision = value,
@@ -257,10 +261,18 @@ where
     let metrics_after = registry.metrics();
     latency.sort_by(f64::total_cmp);
     batch_latency.sort_by(f64::total_cmp);
-    let typed = metrics_after.typed_calls.saturating_sub(metrics_before.typed_calls);
-    let generic = metrics_after.generic_calls.saturating_sub(metrics_before.generic_calls);
+    let typed = metrics_after
+        .typed_calls
+        .saturating_sub(metrics_before.typed_calls);
+    let generic = metrics_after
+        .generic_calls
+        .saturating_sub(metrics_before.generic_calls);
     let total = typed.saturating_add(generic);
-    let fallback_rate = if total == 0 { 0.0 } else { generic as f64 / total as f64 };
+    let fallback_rate = if total == 0 {
+        0.0
+    } else {
+        generic as f64 / total as f64
+    };
     let batch_p50_ns = percentile(&batch_latency, 0.50);
 
     Ok(Measurement {
@@ -269,19 +281,39 @@ where
         p95_ns: percentile(&latency, 0.95),
         p99_ns: percentile(&latency, 0.99),
         batch_p50_ns,
-        throughput_ops_sec: if batch_p50_ns == 0.0 { 0.0 } else { 1_000_000_000.0 / batch_p50_ns },
+        throughput_ops_sec: if batch_p50_ns == 0.0 {
+            0.0
+        } else {
+            1_000_000_000.0 / batch_p50_ns
+        },
         allocation: allocations,
         metrics: DispatchMetrics {
-            name_lookups: metrics_after.name_lookups.saturating_sub(metrics_before.name_lookups),
+            name_lookups: metrics_after
+                .name_lookups
+                .saturating_sub(metrics_before.name_lookups),
             typed_calls: typed,
             generic_calls: generic,
-            generic_fallback_calls: metrics_after.generic_fallback_calls.saturating_sub(metrics_before.generic_fallback_calls),
-            cache_hits: metrics_after.cache_hits.saturating_sub(metrics_before.cache_hits),
-            guard_misses: metrics_after.guard_misses.saturating_sub(metrics_before.guard_misses),
-            proxy_get_traps: metrics_after.proxy_get_traps.saturating_sub(metrics_before.proxy_get_traps),
-            capability_denials: metrics_after.capability_denials.saturating_sub(metrics_before.capability_denials),
-            signature_mismatches: metrics_after.signature_mismatches.saturating_sub(metrics_before.signature_mismatches),
-            total_calls: metrics_after.total_calls.saturating_sub(metrics_before.total_calls),
+            generic_fallback_calls: metrics_after
+                .generic_fallback_calls
+                .saturating_sub(metrics_before.generic_fallback_calls),
+            cache_hits: metrics_after
+                .cache_hits
+                .saturating_sub(metrics_before.cache_hits),
+            guard_misses: metrics_after
+                .guard_misses
+                .saturating_sub(metrics_before.guard_misses),
+            proxy_get_traps: metrics_after
+                .proxy_get_traps
+                .saturating_sub(metrics_before.proxy_get_traps),
+            capability_denials: metrics_after
+                .capability_denials
+                .saturating_sub(metrics_before.capability_denials),
+            signature_mismatches: metrics_after
+                .signature_mismatches
+                .saturating_sub(metrics_before.signature_mismatches),
+            total_calls: metrics_after
+                .total_calls
+                .saturating_sub(metrics_before.total_calls),
             table_version: metrics_after.table_version,
             active_slots: metrics_after.active_slots,
         },
@@ -326,28 +358,72 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
     let _ = writeln!(output, "{{");
     let _ = writeln!(output, "  \"schema_version\": 1,");
     let _ = writeln!(output, "  \"benchmark\": \"ogma-typed-host-dispatch-m0\",");
-    let _ = writeln!(output, "  \"source_revision\": \"{}\",", json_escape(&config.revision));
-    let _ = writeln!(output, "  \"tested_revision\": \"{}\",", json_escape(&config.tested_revision));
+    let _ = writeln!(
+        output,
+        "  \"source_revision\": \"{}\",",
+        json_escape(&config.revision)
+    );
+    let _ = writeln!(
+        output,
+        "  \"tested_revision\": \"{}\",",
+        json_escape(&config.tested_revision)
+    );
     let _ = writeln!(output, "  \"environment\": {{");
     let _ = writeln!(output, "    \"rustc\": \"{}\",", json_escape(&rustc));
     let _ = writeln!(output, "    \"os\": \"{}\",", env::consts::OS);
     let _ = writeln!(output, "    \"arch\": \"{}\",", env::consts::ARCH);
     let _ = writeln!(output, "    \"cpu\": \"{}\",", json_escape(&cpu));
-    let _ = writeln!(output, "    \"profile\": \"{}\",", if cfg!(debug_assertions) { "debug" } else { "release" });
-    let _ = writeln!(output, "    \"iterations_per_batch\": {},", config.iterations);
+    let _ = writeln!(
+        output,
+        "    \"profile\": \"{}\",",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+    let _ = writeln!(
+        output,
+        "    \"iterations_per_batch\": {},",
+        config.iterations
+    );
     let _ = writeln!(output, "    \"warmup_rounds\": {},", config.warmups);
     let _ = writeln!(output, "    \"measurement_samples\": {},", config.samples);
-    let _ = writeln!(output, "    \"single_call_latency_samples\": {}", config.iterations);
+    let _ = writeln!(
+        output,
+        "    \"single_call_latency_samples\": {}",
+        config.iterations
+    );
     let _ = writeln!(output, "  }},");
-    let _ = writeln!(output, "  \"abi\": {{\"major\": {}, \"minor\": {}, \"descriptor_version\": 1}},", abi_major, abi_minor);
+    let _ = writeln!(
+        output,
+        "  \"abi\": {{\"major\": {}, \"minor\": {}, \"descriptor_version\": 1}},",
+        abi_major, abi_minor
+    );
     let _ = writeln!(output, "  \"measurements\": [");
     for (index, item) in measurements.iter().enumerate() {
-        let comma = if index + 1 == measurements.len() { "" } else { "," };
+        let comma = if index + 1 == measurements.len() {
+            ""
+        } else {
+            ","
+        };
         let _ = writeln!(output, "    {{");
         let _ = writeln!(output, "      \"name\": \"{}\",", item.name);
-        let _ = writeln!(output, "      \"single_call_latency_ns\": {{\"p50\": {:.2}, \"p95\": {:.2}, \"p99\": {:.2}}},", item.p50_ns, item.p95_ns, item.p99_ns);
-        let _ = writeln!(output, "      \"batch_median_latency_ns\": {:.2},", item.batch_p50_ns);
-        let _ = writeln!(output, "      \"throughput_ops_per_second\": {:.2},", item.throughput_ops_sec);
+        let _ = writeln!(
+            output,
+            "      \"single_call_latency_ns\": {{\"p50\": {:.2}, \"p95\": {:.2}, \"p99\": {:.2}}},",
+            item.p50_ns, item.p95_ns, item.p99_ns
+        );
+        let _ = writeln!(
+            output,
+            "      \"batch_median_latency_ns\": {:.2},",
+            item.batch_p50_ns
+        );
+        let _ = writeln!(
+            output,
+            "      \"throughput_ops_per_second\": {:.2},",
+            item.throughput_ops_sec
+        );
         let _ = writeln!(output, "      \"allocations\": {{\"alloc_calls\": {}, \"realloc_calls\": {}, \"allocated_bytes\": {}}},", item.allocation.alloc_calls, item.allocation.realloc_calls, item.allocation.allocated_bytes);
         let _ = writeln!(output, "      \"dispatch\": {{\"table_version\": {}, \"active_slots\": {}, \"calls\": {}, \"typed_calls\": {}, \"generic_calls\": {}, \"generic_fallback_calls\": {}, \"generic_fallback_rate\": {:.6}, \"name_lookups\": {}, \"cache_hits\": {}, \"guard_misses\": {}, \"proxy_get_traps\": {}, \"capability_denials\": {}, \"signature_mismatches\": {}}}", item.metrics.table_version, item.metrics.active_slots, item.metrics.total_calls, item.metrics.typed_calls, item.metrics.generic_calls, item.metrics.generic_fallback_calls, item.fallback_rate, item.metrics.name_lookups, item.metrics.cache_hits, item.metrics.guard_misses, item.metrics.proxy_get_traps, item.metrics.capability_denials, item.metrics.signature_mismatches);
         let _ = writeln!(output, "    }}{comma}");
@@ -359,86 +435,166 @@ fn report(config: &Config, measurements: &[Measurement], abi_major: u16, abi_min
 
 fn main() -> Result<(), String> {
     let config = parse_config()?;
-    let registry = HostFunctionRegistry::new().map_err(|e| format!("registry initialization: {e:?}"))?;
+    let registry =
+        HostFunctionRegistry::new().map_err(|e| format!("registry initialization: {e:?}"))?;
 
-    let primitive = registry.register(
-        HostFunctionDescriptor::f64_binary(
-            HostFunctionId(0x2101), "ogma:bench/add-f64", 0, 0,
-            generated_primitive_add, generic_add, ptr::null_mut(),
-        ).map_err(|e| format!("primitive descriptor: {e:?}"))?
-    ).map_err(|e| format!("primitive registration: {e:?}"))?;
+    let primitive = registry
+        .register(
+            HostFunctionDescriptor::f64_binary(
+                HostFunctionId(0x2101),
+                "ogma:bench/add-f64",
+                0,
+                0,
+                generated_primitive_add,
+                generic_add,
+                ptr::null_mut(),
+            )
+            .map_err(|e| format!("primitive descriptor: {e:?}"))?,
+        )
+        .map_err(|e| format!("primitive registration: {e:?}"))?;
 
-    let handles = registry.register(
-        HostFunctionDescriptor::number_handle_binary(
-            HostFunctionId(0x2102), "ogma:bench/add-handles", 0, 0,
-            generated_handle_add, generic_add, ptr::null_mut(),
-        ).map_err(|e| format!("handle descriptor: {e:?}"))?
-    ).map_err(|e| format!("handle registration: {e:?}"))?;
+    let handles = registry
+        .register(
+            HostFunctionDescriptor::number_handle_binary(
+                HostFunctionId(0x2102),
+                "ogma:bench/add-handles",
+                0,
+                0,
+                generated_handle_add,
+                generic_add,
+                ptr::null_mut(),
+            )
+            .map_err(|e| format!("handle descriptor: {e:?}"))?,
+        )
+        .map_err(|e| format!("handle registration: {e:?}"))?;
 
-    let generic = registry.register(
-        HostFunctionDescriptor::generic(
-            HostFunctionId(0x2103), "ogma:bench/generic-add", 0, 0,
-            generic_add, ptr::null_mut(),
-        ).map_err(|e| format!("generic descriptor: {e:?}"))?
-    ).map_err(|e| format!("generic registration: {e:?}"))?;
+    let generic = registry
+        .register(
+            HostFunctionDescriptor::generic(
+                HostFunctionId(0x2103),
+                "ogma:bench/generic-add",
+                0,
+                0,
+                generic_add,
+                ptr::null_mut(),
+            )
+            .map_err(|e| format!("generic descriptor: {e:?}"))?,
+        )
+        .map_err(|e| format!("generic registration: {e:?}"))?;
 
-    let left_handle = registry.create_number(2.0).map_err(|e| format!("left handle: {e:?}"))?;
-    let right_handle = registry.create_number(3.0).map_err(|e| format!("right handle: {e:?}"))?;
-    let handle_args = [DispatchValue::Handle(left_handle), DispatchValue::Handle(right_handle)];
+    let left_handle = registry
+        .create_number(2.0)
+        .map_err(|e| format!("left handle: {e:?}"))?;
+    let right_handle = registry
+        .create_number(3.0)
+        .map_err(|e| format!("right handle: {e:?}"))?;
+    let handle_args = [
+        DispatchValue::Handle(left_handle),
+        DispatchValue::Handle(right_handle),
+    ];
     let primitive_args = [DispatchValue::Number(2.0), DispatchValue::Number(3.0)];
 
     let host_context = HostExecutionContext::new(LibrarySyncMode::None);
-    let scope = host_context.enter_scope().map_err(|e| format!("execution scope: {e:?}"))?;
+    let scope = host_context
+        .enter_scope()
+        .map_err(|e| format!("execution scope: {e:?}"))?;
 
     let mut object = OrdinaryHostObject::new();
     object.define("add", JsCallable::host(primitive));
-    let call_site = registry.resolve_call_site(&object, "add").ok_or("could not resolve call-site guard")?;
+    let call_site = registry
+        .resolve_call_site(&object, "add")
+        .ok_or("could not resolve call-site guard")?;
 
     let mut measurements = Vec::new();
 
-    measurements.push(measure("raw_abi_primitive_baseline", &config, &registry, || {
-        let mut result = 0.0;
-        let status = unsafe { ogma_primitive_add_f64(2.0, 3.0, &mut result) };
-        if status != OgmaStatus::OK || result != 5.0 {
-            return Err(format!("raw ABI baseline failed: {status:?}, {result}"));
-        }
-        black_box(result);
-        Ok(())
-    })?);
+    measurements.push(measure(
+        "raw_abi_primitive_baseline",
+        &config,
+        &registry,
+        || {
+            let mut result = 0.0;
+            let status = unsafe { ogma_primitive_add_f64(2.0, 3.0, &mut result) };
+            if status != OgmaStatus::OK || result != 5.0 {
+                return Err(format!("raw ABI baseline failed: {status:?}, {result}"));
+            }
+            black_box(result);
+            Ok(())
+        },
+    )?);
 
-    measurements.push(measure_lookup("dynamic_name_lookup_only", &config, &registry, || {
-        let resolved = registry.resolve_name("ogma:bench/add-f64").map_err(|e| format!("{e:?}"))?;
-        if resolved != primitive { return Err("name lookup resolved a different slot".into()); }
-        black_box(resolved);
-        Ok(())
-    })?);
+    measurements.push(measure_lookup(
+        "dynamic_name_lookup_only",
+        &config,
+        &registry,
+        || {
+            let resolved = registry
+                .resolve_name("ogma:bench/add-f64")
+                .map_err(|e| format!("{e:?}"))?;
+            if resolved != primitive {
+                return Err("name lookup resolved a different slot".into());
+            }
+            black_box(resolved);
+            Ok(())
+        },
+    )?);
 
-    measurements.push(measure("dynamic_name_lookup_typed_primitive", &config, &registry, || {
-        checked(registry.invoke_by_name(&scope, "ogma:bench/add-f64", 0, &primitive_args))
-    })?);
+    measurements.push(measure(
+        "dynamic_name_lookup_typed_primitive",
+        &config,
+        &registry,
+        || checked(registry.invoke_by_name(&scope, "ogma:bench/add-f64", 0, &primitive_args)),
+    )?);
 
-    measurements.push(measure("pre_resolved_typed_primitive_slot", &config, &registry, || {
-        checked(registry.invoke_slot(&scope, primitive, 0, &primitive_args))
-    })?);
+    measurements.push(measure(
+        "pre_resolved_typed_primitive_slot",
+        &config,
+        &registry,
+        || checked(registry.invoke_slot(&scope, primitive, 0, &primitive_args)),
+    )?);
 
-    measurements.push(measure("pre_resolved_typed_opaque_handle_slot", &config, &registry, || {
-        checked(registry.invoke_slot(&scope, handles, 0, &handle_args))
-    })?);
+    measurements.push(measure(
+        "pre_resolved_typed_opaque_handle_slot",
+        &config,
+        &registry,
+        || checked(registry.invoke_slot(&scope, handles, 0, &handle_args)),
+    )?);
 
-    measurements.push(measure("dynamic_name_lookup_generic_callback", &config, &registry, || {
-        checked(registry.invoke_by_name(&scope, "ogma:bench/generic-add", 0, &handle_args))
-    })?);
+    measurements.push(measure(
+        "dynamic_name_lookup_generic_callback",
+        &config,
+        &registry,
+        || checked(registry.invoke_by_name(&scope, "ogma:bench/generic-add", 0, &handle_args)),
+    )?);
 
-    measurements.push(measure("pre_resolved_generic_fallback", &config, &registry, || {
-        checked(registry.invoke_generic_slot(&scope, primitive, 0, &primitive_args))
-    })?);
+    measurements.push(measure(
+        "pre_resolved_generic_fallback",
+        &config,
+        &registry,
+        || checked(registry.invoke_generic_slot(&scope, primitive, 0, &primitive_args)),
+    )?);
 
-    measurements.push(measure("guarded_ordinary_object_callsite_hit", &config, &registry, || {
-        checked(registry.call_property(&scope, PropertyReceiver::Ordinary(&object), "add",
-            Some(&call_site), 0, &primitive_args))
-    })?);
+    measurements.push(measure(
+        "guarded_ordinary_object_callsite_hit",
+        &config,
+        &registry,
+        || {
+            checked(registry.call_property(
+                &scope,
+                PropertyReceiver::Ordinary(&object),
+                "add",
+                Some(&call_site),
+                0,
+                &primitive_args,
+            ))
+        },
+    )?);
 
-    let report = report(&config, &measurements, primitive.abi_major, primitive.abi_minor);
+    let report = report(
+        &config,
+        &measurements,
+        primitive.abi_major,
+        primitive.abi_minor,
+    );
     if let Some(path) = config.output {
         fs::write(&path, &report).map_err(|e| format!("write {}: {e}", path.display()))?;
     } else {

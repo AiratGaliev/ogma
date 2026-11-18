@@ -7,12 +7,12 @@ use ogma_rust_abi_proof::{
     ogma_context_call, ogma_context_collect_unrooted, ogma_context_create,
     ogma_context_create_boolean, ogma_context_create_number, ogma_context_destroy,
     ogma_context_get_boolean, ogma_context_get_number, ogma_mock_function_create,
-    ogma_persistent_create, ogma_persistent_release, ogma_root_scope_add,
-    ogma_root_scope_close, ogma_root_scope_open, ogma_runtime_create, ogma_runtime_destroy,
-    OgmaAbiVersion, OgmaCallbackHandle, OgmaCompletion, OgmaContextHandle, OgmaHandle,
-    OgmaHostCallback, OgmaPersistentHandle, OgmaRootScopeHandle, OgmaRuntime, OgmaStatus,
-    COMPLETION_NORMAL, COMPLETION_THROW, FEATURE_CALLBACKS, FEATURE_COMPLETIONS,
-    FEATURE_OPAQUE_HANDLES, FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES,
+    ogma_persistent_create, ogma_persistent_release, ogma_root_scope_add, ogma_root_scope_close,
+    ogma_root_scope_open, ogma_runtime_create, ogma_runtime_destroy, OgmaAbiVersion,
+    OgmaCallbackHandle, OgmaCompletion, OgmaContextHandle, OgmaHandle, OgmaHostCallback,
+    OgmaPersistentHandle, OgmaRootScopeHandle, OgmaRuntime, OgmaStatus, COMPLETION_NORMAL,
+    COMPLETION_THROW, FEATURE_CALLBACKS, FEATURE_COMPLETIONS, FEATURE_OPAQUE_HANDLES,
+    FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -28,12 +28,18 @@ const ABI_MAJOR_REQUIRED: u16 = 1;
 const ABI_MINOR_REQUIRED: u16 = 0;
 const MAX_NAME_BYTES: usize = 128;
 const MAX_ARGUMENTS: usize = 4096;
-const KNOWN_EFFECTS: u32 = EFFECT_MAY_ALLOCATE | EFFECT_MAY_GC | EFFECT_MAY_THROW
-    | EFFECT_MAY_SUSPEND | EFFECT_MAY_REENTER;
-const COMPLEX_EFFECTS: u32 = EFFECT_MAY_ALLOCATE | EFFECT_MAY_GC
-    | EFFECT_MAY_THROW | EFFECT_MAY_REENTER;
-const REQUIRED_ABI_FEATURES: u64 = FEATURE_OPAQUE_HANDLES | FEATURE_ROOT_SCOPES
-    | FEATURE_PERSISTENT_HANDLES | FEATURE_CALLBACKS | FEATURE_COMPLETIONS;
+const KNOWN_EFFECTS: u32 = EFFECT_MAY_ALLOCATE
+    | EFFECT_MAY_GC
+    | EFFECT_MAY_THROW
+    | EFFECT_MAY_SUSPEND
+    | EFFECT_MAY_REENTER;
+const COMPLEX_EFFECTS: u32 =
+    EFFECT_MAY_ALLOCATE | EFFECT_MAY_GC | EFFECT_MAY_THROW | EFFECT_MAY_REENTER;
+const REQUIRED_ABI_FEATURES: u64 = FEATURE_OPAQUE_HANDLES
+    | FEATURE_ROOT_SCOPES
+    | FEATURE_PERSISTENT_HANDLES
+    | FEATURE_CALLBACKS
+    | FEATURE_COMPLETIONS;
 
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_OBJECT_ID: AtomicU64 = AtomicU64::new(1);
@@ -50,13 +56,21 @@ pub const SIGNATURE_F64_BINARY: u64 = 0x1001;
 pub const SIGNATURE_NUMBER_HANDLE_BINARY: u64 = 0x1002;
 
 pub type PrimitiveF64Thunk = unsafe extern "C-unwind" fn(
-    runtime: *const OgmaRuntime, context: OgmaContextHandle, left: f64, right: f64,
-    out_result: *mut f64, user_data: *mut c_void,
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    left: f64,
+    right: f64,
+    out_result: *mut f64,
+    user_data: *mut c_void,
 ) -> OgmaStatus;
 
 pub type NumberHandleF64Thunk = unsafe extern "C-unwind" fn(
-    runtime: *const OgmaRuntime, context: OgmaContextHandle, left: OgmaHandle,
-    right: OgmaHandle, out_result: *mut f64, user_data: *mut c_void,
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    left: OgmaHandle,
+    right: OgmaHandle,
+    out_result: *mut f64,
+    user_data: *mut c_void,
 ) -> OgmaStatus;
 
 #[repr(transparent)]
@@ -97,8 +111,13 @@ pub struct HostFunctionDescriptor {
 
 impl HostFunctionDescriptor {
     fn base(
-        id: HostFunctionId, name: &str, signature: HostFunctionSignature, signature_id: u64,
-        required_capabilities: u64, effects: u32, callback: OgmaHostCallback,
+        id: HostFunctionId,
+        name: &str,
+        signature: HostFunctionSignature,
+        signature_id: u64,
+        required_capabilities: u64,
+        effects: u32,
+        callback: OgmaHostCallback,
         user_data: *mut c_void,
     ) -> Result<Self, DispatchError> {
         let bytes = name.as_bytes();
@@ -131,37 +150,74 @@ impl HostFunctionDescriptor {
     }
 
     pub fn generic(
-        id: HostFunctionId, name: &str, required_capabilities: u64, effects: u32,
-        callback: OgmaHostCallback, user_data: *mut c_void,
+        id: HostFunctionId,
+        name: &str,
+        required_capabilities: u64,
+        effects: u32,
+        callback: OgmaHostCallback,
+        user_data: *mut c_void,
     ) -> Result<Self, DispatchError> {
-        Self::base(id, name, HostFunctionSignature::Generic, SIGNATURE_GENERIC,
-            required_capabilities, effects, callback, user_data)
+        Self::base(
+            id,
+            name,
+            HostFunctionSignature::Generic,
+            SIGNATURE_GENERIC,
+            required_capabilities,
+            effects,
+            callback,
+            user_data,
+        )
     }
 
     pub fn f64_binary(
-        id: HostFunctionId, name: &str, required_capabilities: u64, effects: u32,
-        typed_thunk: PrimitiveF64Thunk, generic_callback: OgmaHostCallback,
+        id: HostFunctionId,
+        name: &str,
+        required_capabilities: u64,
+        effects: u32,
+        typed_thunk: PrimitiveF64Thunk,
+        generic_callback: OgmaHostCallback,
         user_data: *mut c_void,
     ) -> Result<Self, DispatchError> {
-        let mut descriptor = Self::base(id, name, HostFunctionSignature::F64Binary,
-            SIGNATURE_F64_BINARY, required_capabilities, effects, generic_callback, user_data)?;
+        let mut descriptor = Self::base(
+            id,
+            name,
+            HostFunctionSignature::F64Binary,
+            SIGNATURE_F64_BINARY,
+            required_capabilities,
+            effects,
+            generic_callback,
+            user_data,
+        )?;
         descriptor.primitive_f64_thunk = Some(typed_thunk);
         Ok(descriptor)
     }
 
     pub fn number_handle_binary(
-        id: HostFunctionId, name: &str, required_capabilities: u64, effects: u32,
-        typed_thunk: NumberHandleF64Thunk, generic_callback: OgmaHostCallback,
+        id: HostFunctionId,
+        name: &str,
+        required_capabilities: u64,
+        effects: u32,
+        typed_thunk: NumberHandleF64Thunk,
+        generic_callback: OgmaHostCallback,
         user_data: *mut c_void,
     ) -> Result<Self, DispatchError> {
-        let mut descriptor = Self::base(id, name, HostFunctionSignature::NumberHandleBinary,
-            SIGNATURE_NUMBER_HANDLE_BINARY, required_capabilities, effects,
-            generic_callback, user_data)?;
+        let mut descriptor = Self::base(
+            id,
+            name,
+            HostFunctionSignature::NumberHandleBinary,
+            SIGNATURE_NUMBER_HANDLE_BINARY,
+            required_capabilities,
+            effects,
+            generic_callback,
+            user_data,
+        )?;
         descriptor.number_handle_f64_thunk = Some(typed_thunk);
         Ok(descriptor)
     }
 
-    pub fn function_id(&self) -> HostFunctionId { HostFunctionId(self.function_id) }
+    pub fn function_id(&self) -> HostFunctionId {
+        HostFunctionId(self.function_id)
+    }
 
     pub fn name(&self) -> Result<&str, DispatchError> {
         let len = usize::from(self.name_len);
@@ -184,16 +240,28 @@ pub struct HostFunctionSlot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DispatchValue { Undefined, Number(f64), Boolean(bool), Handle(OgmaHandle) }
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum JsException {
-    TypeError, RangeError, ReferenceError, AsyncNotSupported,
-    CapabilityDenied { missing: u64 }, Thrown(DispatchValue),
+pub enum DispatchValue {
+    Undefined,
+    Number(f64),
+    Boolean(bool),
+    Handle(OgmaHandle),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum JsCompletion { Normal(DispatchValue), Throw(JsException) }
+pub enum JsException {
+    TypeError,
+    RangeError,
+    ReferenceError,
+    AsyncNotSupported,
+    CapabilityDenied { missing: u64 },
+    Thrown(DispatchValue),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum JsCompletion {
+    Normal(DispatchValue),
+    Throw(JsException),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DispatchError {
@@ -235,7 +303,10 @@ struct RegisteredFunction {
     function: OgmaHandle,
     persistent: OgmaPersistentHandle,
 }
-struct SlotCell { generation: u32, registered: Option<RegisteredFunction> }
+struct SlotCell {
+    generation: u32,
+    registered: Option<RegisteredFunction>,
+}
 struct RegistryState {
     slots: Vec<SlotCell>,
     by_id: HashMap<HostFunctionId, usize>,
@@ -250,20 +321,38 @@ struct RootScopeGuard {
     active: bool,
 }
 impl RootScopeGuard {
-    fn open(runtime: *const OgmaRuntime, context: OgmaContextHandle) -> Result<Self, DispatchError> {
+    fn open(
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+    ) -> Result<Self, DispatchError> {
         let mut token = OgmaRootScopeHandle::default();
         let status = unsafe { ogma_root_scope_open(runtime, context, &mut token) };
-        if status != OgmaStatus::OK { return Err(DispatchError::Abi(status)); }
-        Ok(Self { runtime, context, token, active: true })
+        if status != OgmaStatus::OK {
+            return Err(DispatchError::Abi(status));
+        }
+        Ok(Self {
+            runtime,
+            context,
+            token,
+            active: true,
+        })
     }
     fn add(&self, value: OgmaHandle) -> Result<(), DispatchError> {
         let status = unsafe { ogma_root_scope_add(self.runtime, self.context, self.token, value) };
-        if status == OgmaStatus::OK { Ok(()) } else { Err(DispatchError::Abi(status)) }
+        if status == OgmaStatus::OK {
+            Ok(())
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
     fn close(mut self) -> Result<(), DispatchError> {
         self.active = false;
         let status = unsafe { ogma_root_scope_close(self.runtime, self.context, self.token) };
-        if status == OgmaStatus::OK { Ok(()) } else { Err(DispatchError::Abi(status)) }
+        if status == OgmaStatus::OK {
+            Ok(())
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
 }
 impl Drop for RootScopeGuard {
@@ -292,10 +381,16 @@ impl HostFunctionRegistry {
     pub fn new() -> Result<Self, DispatchError> {
         let mut abi = OgmaAbiVersion::default();
         let status = unsafe {
-            ogma_abi_negotiate(ABI_MAJOR_REQUIRED, ABI_MINOR_REQUIRED,
-                REQUIRED_ABI_FEATURES, &mut abi)
+            ogma_abi_negotiate(
+                ABI_MAJOR_REQUIRED,
+                ABI_MINOR_REQUIRED,
+                REQUIRED_ABI_FEATURES,
+                &mut abi,
+            )
         };
-        if status != OgmaStatus::OK { return Err(DispatchError::Abi(status)); }
+        if status != OgmaStatus::OK {
+            return Err(DispatchError::Abi(status));
+        }
 
         let mut runtime = ptr::null_mut();
         let status = unsafe { ogma_runtime_create(&mut runtime) };
@@ -316,7 +411,9 @@ impl HostFunctionRegistry {
             context,
             abi_version: abi,
             state: RefCell::new(RegistryState {
-                slots: Vec::new(), by_id: HashMap::new(), by_name: HashMap::new(),
+                slots: Vec::new(),
+                by_id: HashMap::new(),
+                by_name: HashMap::new(),
                 table_version: 0,
             }),
             metrics: Cell::new(DispatchMetrics::default()),
@@ -325,73 +422,109 @@ impl HostFunctionRegistry {
     }
 
     fn ensure_owner_thread(&self) -> Result<(), DispatchError> {
-        if thread::current().id() == self.owner_thread { Ok(()) } else { Err(DispatchError::WrongThread) }
+        if thread::current().id() == self.owner_thread {
+            Ok(())
+        } else {
+            Err(DispatchError::WrongThread)
+        }
     }
 
-    fn validate_descriptor(&self, descriptor: &HostFunctionDescriptor) -> Result<String, DispatchError> {
+    fn validate_descriptor(
+        &self,
+        descriptor: &HostFunctionDescriptor,
+    ) -> Result<String, DispatchError> {
         if descriptor.struct_size < std::mem::size_of::<HostFunctionDescriptor>() as u32
             || descriptor.descriptor_version != DESCRIPTOR_VERSION
             || descriptor.abi_major != self.abi_version.major
             || descriptor.abi_minor > self.abi_version.minor
-            || descriptor.reserved != 0 || descriptor.reserved_name != 0
-            || descriptor.reserved_effects != 0 || descriptor.function_id == 0
+            || descriptor.reserved != 0
+            || descriptor.reserved_name != 0
+            || descriptor.reserved_effects != 0
+            || descriptor.function_id == 0
             || descriptor.effects & !KNOWN_EFFECTS != 0
             || descriptor.effects & EFFECT_MAY_SUSPEND != 0
             || descriptor.generic_callback.is_none()
-        { return Err(DispatchError::InvalidDescriptor); }
+        {
+            return Err(DispatchError::InvalidDescriptor);
+        }
 
         let name = descriptor.name()?.to_owned();
         let expected = match descriptor.signature {
             HostFunctionSignature::Generic => {
                 if descriptor.primitive_f64_thunk.is_some()
-                    || descriptor.number_handle_f64_thunk.is_some() {
+                    || descriptor.number_handle_f64_thunk.is_some()
+                {
                     return Err(DispatchError::InvalidDescriptor);
                 }
                 SIGNATURE_GENERIC
             }
             HostFunctionSignature::F64Binary => {
                 if descriptor.primitive_f64_thunk.is_none()
-                    || descriptor.number_handle_f64_thunk.is_some() {
+                    || descriptor.number_handle_f64_thunk.is_some()
+                {
                     return Err(DispatchError::InvalidDescriptor);
                 }
                 SIGNATURE_F64_BINARY
             }
             HostFunctionSignature::NumberHandleBinary => {
                 if descriptor.primitive_f64_thunk.is_some()
-                    || descriptor.number_handle_f64_thunk.is_none() {
+                    || descriptor.number_handle_f64_thunk.is_none()
+                {
                     return Err(DispatchError::InvalidDescriptor);
                 }
                 SIGNATURE_NUMBER_HANDLE_BINARY
             }
         };
-        if descriptor.signature_id != expected { return Err(DispatchError::InvalidDescriptor); }
+        if descriptor.signature_id != expected {
+            return Err(DispatchError::InvalidDescriptor);
+        }
         Ok(name)
     }
 
     /// Registers a descriptor and roots its generic OGM-19 mock function for fallback.
     /// The host must keep user_data valid until this registration is unregistered.
-    pub fn register(&self, descriptor: HostFunctionDescriptor) -> Result<HostFunctionSlot, DispatchError> {
+    pub fn register(
+        &self,
+        descriptor: HostFunctionDescriptor,
+    ) -> Result<HostFunctionSlot, DispatchError> {
         self.ensure_owner_thread()?;
         let name = self.validate_descriptor(&descriptor)?;
         let function_id = descriptor.function_id();
 
         let (index, generation) = {
             let state = self.state.borrow();
-            if state.by_id.contains_key(&function_id) { return Err(DispatchError::DuplicateFunctionId); }
-            if state.by_name.contains_key(&name) { return Err(DispatchError::DuplicateName); }
-            match state.slots.iter().position(|slot| slot.registered.is_none()) {
+            if state.by_id.contains_key(&function_id) {
+                return Err(DispatchError::DuplicateFunctionId);
+            }
+            if state.by_name.contains_key(&name) {
+                return Err(DispatchError::DuplicateName);
+            }
+            match state
+                .slots
+                .iter()
+                .position(|slot| slot.registered.is_none())
+            {
                 Some(index) => (index, state.slots[index].generation),
                 None => (state.slots.len(), 1),
             }
         };
 
-        let callback_fn = descriptor.generic_callback.ok_or(DispatchError::InvalidDescriptor)?;
+        let callback_fn = descriptor
+            .generic_callback
+            .ok_or(DispatchError::InvalidDescriptor)?;
         let mut callback = OgmaCallbackHandle::default();
         let status = unsafe {
-            ogma_callback_register(self.runtime, self.context, Some(callback_fn),
-                descriptor.user_data, &mut callback)
+            ogma_callback_register(
+                self.runtime,
+                self.context,
+                Some(callback_fn),
+                descriptor.user_data,
+                &mut callback,
+            )
         };
-        if status != OgmaStatus::OK { return Err(DispatchError::Abi(status)); }
+        if status != OgmaStatus::OK {
+            return Err(DispatchError::Abi(status));
+        }
 
         let mut function = OgmaHandle::default();
         let status = unsafe {
@@ -411,16 +544,26 @@ impl HostFunctionRegistry {
             return Err(DispatchError::Abi(status));
         }
 
-        let registered = RegisteredFunction { descriptor, callback, function, persistent };
+        let registered = RegisteredFunction {
+            descriptor,
+            callback,
+            function,
+            persistent,
+        };
         {
             let mut state = self.state.borrow_mut();
             if index == state.slots.len() {
-                state.slots.push(SlotCell { generation, registered: Some(registered) });
+                state.slots.push(SlotCell {
+                    generation,
+                    registered: Some(registered),
+                });
             } else {
                 let cell = &mut state.slots[index];
                 if cell.registered.is_some() || cell.generation != generation {
-                    let _ = unsafe { ogma_callback_unregister(self.runtime, self.context, callback) };
-                    let _ = unsafe { ogma_persistent_release(self.runtime, self.context, persistent) };
+                    let _ =
+                        unsafe { ogma_callback_unregister(self.runtime, self.context, callback) };
+                    let _ =
+                        unsafe { ogma_persistent_release(self.runtime, self.context, persistent) };
                     return Err(DispatchError::StaleSlot);
                 }
                 cell.registered = Some(registered);
@@ -434,58 +577,90 @@ impl HostFunctionRegistry {
             self.metrics.set(metrics);
         }
         Ok(HostFunctionSlot {
-            registry_id: self.registry_id, slot_index: index as u32,
-            slot_generation: generation, abi_major: self.abi_version.major,
+            registry_id: self.registry_id,
+            slot_index: index as u32,
+            slot_generation: generation,
+            abi_major: self.abi_version.major,
             abi_minor: self.abi_version.minor,
         })
     }
 
     pub fn resolve_name(&self, name: &str) -> Result<HostFunctionSlot, DispatchError> {
         self.ensure_owner_thread()?;
-        let index = self.state.borrow().by_name.get(name).copied().ok_or(DispatchError::StaleSlot)?;
+        let index = self
+            .state
+            .borrow()
+            .by_name
+            .get(name)
+            .copied()
+            .ok_or(DispatchError::StaleSlot)?;
         self.add_metrics(|m| m.name_lookups = m.name_lookups.saturating_add(1));
         self.slot_for_index(index)
     }
 
     pub fn resolve_id(&self, id: HostFunctionId) -> Result<HostFunctionSlot, DispatchError> {
         self.ensure_owner_thread()?;
-        let index = self.state.borrow().by_id.get(&id).copied().ok_or(DispatchError::StaleSlot)?;
+        let index = self
+            .state
+            .borrow()
+            .by_id
+            .get(&id)
+            .copied()
+            .ok_or(DispatchError::StaleSlot)?;
         self.slot_for_index(index)
     }
 
     fn slot_for_index(&self, index: usize) -> Result<HostFunctionSlot, DispatchError> {
         let state = self.state.borrow();
         let cell = state.slots.get(index).ok_or(DispatchError::StaleSlot)?;
-        if cell.registered.is_none() { return Err(DispatchError::StaleSlot); }
+        if cell.registered.is_none() {
+            return Err(DispatchError::StaleSlot);
+        }
         Ok(HostFunctionSlot {
-            registry_id: self.registry_id, slot_index: index as u32,
-            slot_generation: cell.generation, abi_major: self.abi_version.major,
+            registry_id: self.registry_id,
+            slot_index: index as u32,
+            slot_generation: cell.generation,
+            abi_major: self.abi_version.major,
             abi_minor: self.abi_version.minor,
         })
     }
 
     fn snapshot(&self, slot: HostFunctionSlot) -> Result<RegisteredFunction, DispatchError> {
         self.ensure_owner_thread()?;
-        if slot.registry_id != self.registry_id { return Err(DispatchError::WrongRegistry); }
+        if slot.registry_id != self.registry_id {
+            return Err(DispatchError::WrongRegistry);
+        }
         if slot.abi_major != self.abi_version.major || slot.abi_minor > self.abi_version.minor {
             return Err(DispatchError::StaleSlot);
         }
         let state = self.state.borrow();
-        let cell = state.slots.get(slot.slot_index as usize).ok_or(DispatchError::StaleSlot)?;
-        if cell.generation != slot.slot_generation { return Err(DispatchError::StaleSlot); }
+        let cell = state
+            .slots
+            .get(slot.slot_index as usize)
+            .ok_or(DispatchError::StaleSlot)?;
+        if cell.generation != slot.slot_generation {
+            return Err(DispatchError::StaleSlot);
+        }
         cell.registered.ok_or(DispatchError::StaleSlot)
     }
 
     pub fn unregister(&self, slot: HostFunctionSlot) -> Result<(), DispatchError> {
         self.ensure_owner_thread()?;
-        if slot.registry_id != self.registry_id { return Err(DispatchError::WrongRegistry); }
+        if slot.registry_id != self.registry_id {
+            return Err(DispatchError::WrongRegistry);
+        }
         let entry = {
             let mut state = self.state.borrow_mut();
-            let cell = state.slots.get_mut(slot.slot_index as usize).ok_or(DispatchError::StaleSlot)?;
+            let cell = state
+                .slots
+                .get_mut(slot.slot_index as usize)
+                .ok_or(DispatchError::StaleSlot)?;
             if cell.generation != slot.slot_generation || cell.registered.is_none() {
                 return Err(DispatchError::StaleSlot);
             }
-            if cell.generation == u32::MAX { return Err(DispatchError::GenerationExhausted); }
+            if cell.generation == u32::MAX {
+                return Err(DispatchError::GenerationExhausted);
+            }
             let entry = cell.registered.take().ok_or(DispatchError::StaleSlot)?;
             cell.generation += 1;
             let name = entry.descriptor.name()?.to_owned();
@@ -499,11 +674,15 @@ impl HostFunctionRegistry {
             entry
         };
 
-        let callback_status = unsafe { ogma_callback_unregister(self.runtime, self.context, entry.callback) };
-        let root_status = unsafe { ogma_persistent_release(self.runtime, self.context, entry.persistent) };
+        let callback_status =
+            unsafe { ogma_callback_unregister(self.runtime, self.context, entry.callback) };
+        let root_status =
+            unsafe { ogma_persistent_release(self.runtime, self.context, entry.persistent) };
         let collect_status = unsafe { ogma_context_collect_unrooted(self.runtime, self.context) };
         for status in [callback_status, root_status, collect_status] {
-            if status != OgmaStatus::OK { return Err(DispatchError::CleanupFailure(status)); }
+            if status != OgmaStatus::OK {
+                return Err(DispatchError::CleanupFailure(status));
+            }
         }
         Ok(())
     }
@@ -511,8 +690,13 @@ impl HostFunctionRegistry {
     pub fn create_number(&self, value: f64) -> Result<OgmaHandle, DispatchError> {
         self.ensure_owner_thread()?;
         let mut out = OgmaHandle::default();
-        let status = unsafe { ogma_context_create_number(self.runtime, self.context, value, &mut out) };
-        if status == OgmaStatus::OK { Ok(out) } else { Err(DispatchError::Abi(status)) }
+        let status =
+            unsafe { ogma_context_create_number(self.runtime, self.context, value, &mut out) };
+        if status == OgmaStatus::OK {
+            Ok(out)
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
 
     pub fn create_boolean(&self, value: bool) -> Result<OgmaHandle, DispatchError> {
@@ -521,17 +705,28 @@ impl HostFunctionRegistry {
         let status = unsafe {
             ogma_context_create_boolean(self.runtime, self.context, u8::from(value), &mut out)
         };
-        if status == OgmaStatus::OK { Ok(out) } else { Err(DispatchError::Abi(status)) }
+        if status == OgmaStatus::OK {
+            Ok(out)
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
 
     pub fn read_number(&self, handle: OgmaHandle) -> Result<f64, DispatchError> {
         self.ensure_owner_thread()?;
         let mut out = 0.0;
-        let status = unsafe { ogma_context_get_number(self.runtime, self.context, handle, &mut out) };
-        if status == OgmaStatus::OK { Ok(out) } else { Err(DispatchError::Abi(status)) }
+        let status =
+            unsafe { ogma_context_get_number(self.runtime, self.context, handle, &mut out) };
+        if status == OgmaStatus::OK {
+            Ok(out)
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
 
-    pub fn table_version(&self) -> u64 { self.state.borrow().table_version }
+    pub fn table_version(&self) -> u64 {
+        self.state.borrow().table_version
+    }
 
     pub fn metrics(&self) -> DispatchMetrics {
         let mut metrics = self.metrics.get();
@@ -548,7 +743,10 @@ impl HostFunctionRegistry {
     }
 
     pub fn invoke_by_name(
-        &self, scope: &HostExecutionScope<'_>, name: &str, capabilities: u64,
+        &self,
+        scope: &HostExecutionScope<'_>,
+        name: &str,
+        capabilities: u64,
         args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
         let slot = self.resolve_name(name)?;
@@ -556,29 +754,43 @@ impl HostFunctionRegistry {
     }
 
     pub fn invoke_slot(
-        &self, scope: &HostExecutionScope<'_>, slot: HostFunctionSlot,
-        capabilities: u64, args: &[DispatchValue],
+        &self,
+        scope: &HostExecutionScope<'_>,
+        slot: HostFunctionSlot,
+        capabilities: u64,
+        args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
         self.invoke_scoped(scope, slot, capabilities, args, false)
     }
 
     pub fn invoke_generic_slot(
-        &self, scope: &HostExecutionScope<'_>, slot: HostFunctionSlot,
-        capabilities: u64, args: &[DispatchValue],
+        &self,
+        scope: &HostExecutionScope<'_>,
+        slot: HostFunctionSlot,
+        capabilities: u64,
+        args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
         self.invoke_scoped(scope, slot, capabilities, args, true)
     }
 
     fn invoke_scoped(
-        &self, scope: &HostExecutionScope<'_>, slot: HostFunctionSlot,
-        capabilities: u64, args: &[DispatchValue], force_generic: bool,
+        &self,
+        scope: &HostExecutionScope<'_>,
+        slot: HostFunctionSlot,
+        capabilities: u64,
+        args: &[DispatchValue],
+        force_generic: bool,
     ) -> Result<JsCompletion, DispatchError> {
-        scope.run_callback(|| self.invoke_inner(slot, capabilities, args, force_generic))
+        scope
+            .run_callback(|| self.invoke_inner(slot, capabilities, args, force_generic))
             .map_err(DispatchError::HostExecution)?
     }
 
     fn invoke_inner(
-        &self, slot: HostFunctionSlot, capabilities: u64, args: &[DispatchValue],
+        &self,
+        slot: HostFunctionSlot,
+        capabilities: u64,
+        args: &[DispatchValue],
         force_generic: bool,
     ) -> Result<JsCompletion, DispatchError> {
         let entry = self.snapshot(slot)?;
@@ -587,7 +799,9 @@ impl HostFunctionRegistry {
         let missing = entry.descriptor.required_capabilities & !capabilities;
         if missing != 0 {
             self.add_metrics(|m| m.capability_denials = m.capability_denials.saturating_add(1));
-            return Ok(JsCompletion::Throw(JsException::CapabilityDenied { missing }));
+            return Ok(JsCompletion::Throw(JsException::CapabilityDenied {
+                missing,
+            }));
         }
         if entry.descriptor.effects & EFFECT_MAY_SUSPEND != 0 {
             return Ok(JsCompletion::Throw(JsException::AsyncNotSupported));
@@ -599,15 +813,21 @@ impl HostFunctionRegistry {
                 let [DispatchValue::Number(left), DispatchValue::Number(right)] = args else {
                     return self.signature_mismatch();
                 };
-                if typed_allowed { self.call_primitive_typed(entry, *left, *right) }
-                else { self.call_generic(entry, args) }
+                if typed_allowed {
+                    self.call_primitive_typed(entry, *left, *right)
+                } else {
+                    self.call_generic(entry, args)
+                }
             }
             HostFunctionSignature::NumberHandleBinary => {
                 let [DispatchValue::Handle(left), DispatchValue::Handle(right)] = args else {
                     return self.signature_mismatch();
                 };
-                if typed_allowed { self.call_number_handle_typed(entry, *left, *right) }
-                else { self.call_generic(entry, args) }
+                if typed_allowed {
+                    self.call_number_handle_typed(entry, *left, *right)
+                } else {
+                    self.call_generic(entry, args)
+                }
             }
             HostFunctionSignature::Generic => self.call_generic(entry, args),
         }
@@ -619,32 +839,62 @@ impl HostFunctionRegistry {
     }
 
     fn call_primitive_typed(
-        &self, entry: RegisteredFunction, left: f64, right: f64,
+        &self,
+        entry: RegisteredFunction,
+        left: f64,
+        right: f64,
     ) -> Result<JsCompletion, DispatchError> {
-        let thunk = entry.descriptor.primitive_f64_thunk.ok_or(DispatchError::InvalidDescriptor)?;
+        let thunk = entry
+            .descriptor
+            .primitive_f64_thunk
+            .ok_or(DispatchError::InvalidDescriptor)?;
         let mut out = 0.0;
         let status = unsafe {
-            thunk(self.runtime, self.context, left, right, &mut out, entry.descriptor.user_data)
+            thunk(
+                self.runtime,
+                self.context,
+                left,
+                right,
+                &mut out,
+                entry.descriptor.user_data,
+            )
         };
         self.map_typed_status(status, out)
     }
 
     fn call_number_handle_typed(
-        &self, entry: RegisteredFunction, left: OgmaHandle, right: OgmaHandle,
+        &self,
+        entry: RegisteredFunction,
+        left: OgmaHandle,
+        right: OgmaHandle,
     ) -> Result<JsCompletion, DispatchError> {
-        let thunk = entry.descriptor.number_handle_f64_thunk.ok_or(DispatchError::InvalidDescriptor)?;
+        let thunk = entry
+            .descriptor
+            .number_handle_f64_thunk
+            .ok_or(DispatchError::InvalidDescriptor)?;
         let roots = RootScopeGuard::open(self.runtime, self.context)?;
         roots.add(left)?;
         roots.add(right)?;
         let mut out = 0.0;
         let status = unsafe {
-            thunk(self.runtime, self.context, left, right, &mut out, entry.descriptor.user_data)
+            thunk(
+                self.runtime,
+                self.context,
+                left,
+                right,
+                &mut out,
+                entry.descriptor.user_data,
+            )
         };
         roots.close()?;
         self.map_typed_status(status, out)
     }
 
-    fn map_typed_status(&self, status: OgmaStatus, value: f64) -> Result<JsCompletion, DispatchError> {
+    fn map_typed_status(
+        &self,
+        status: OgmaStatus,
+        value: f64,
+    ) -> Result<JsCompletion, DispatchError> {
         if status == OgmaStatus::OK {
             self.add_metrics(|m| m.typed_calls = m.typed_calls.saturating_add(1));
             Ok(JsCompletion::Normal(DispatchValue::Number(value)))
@@ -658,9 +908,13 @@ impl HostFunctionRegistry {
     }
 
     fn call_generic(
-        &self, entry: RegisteredFunction, args: &[DispatchValue],
+        &self,
+        entry: RegisteredFunction,
+        args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
-        if args.len() > MAX_ARGUMENTS { return Err(DispatchError::TooManyArguments); }
+        if args.len() > MAX_ARGUMENTS {
+            return Err(DispatchError::TooManyArguments);
+        }
         self.add_metrics(|m| {
             m.generic_calls = m.generic_calls.saturating_add(1);
             m.generic_fallback_calls = m.generic_fallback_calls.saturating_add(1);
@@ -680,8 +934,14 @@ impl HostFunctionRegistry {
 
         let mut completion = OgmaCompletion::default();
         let status = unsafe {
-            ogma_context_call(self.runtime, self.context, entry.function,
-                handles.as_ptr(), handles.len(), &mut completion)
+            ogma_context_call(
+                self.runtime,
+                self.context,
+                entry.function,
+                handles.as_ptr(),
+                handles.len(),
+                &mut completion,
+            )
         };
         let result = if status == OgmaStatus::TYPE_MISMATCH {
             JsCompletion::Throw(JsException::TypeError)
@@ -707,24 +967,40 @@ impl HostFunctionRegistry {
 
     fn decode_value(&self, handle: OgmaHandle) -> Result<DispatchValue, DispatchError> {
         let mut number = 0.0;
-        let status = unsafe { ogma_context_get_number(self.runtime, self.context, handle, &mut number) };
-        if status == OgmaStatus::OK { return Ok(DispatchValue::Number(number)); }
-        if status != OgmaStatus::TYPE_MISMATCH { return Err(DispatchError::Abi(status)); }
+        let status =
+            unsafe { ogma_context_get_number(self.runtime, self.context, handle, &mut number) };
+        if status == OgmaStatus::OK {
+            return Ok(DispatchValue::Number(number));
+        }
+        if status != OgmaStatus::TYPE_MISMATCH {
+            return Err(DispatchError::Abi(status));
+        }
 
         let mut boolean = 0_u8;
-        let status = unsafe { ogma_context_get_boolean(self.runtime, self.context, handle, &mut boolean) };
-        if status == OgmaStatus::OK { return Ok(DispatchValue::Boolean(boolean != 0)); }
-        if status == OgmaStatus::TYPE_MISMATCH { Err(DispatchError::UnsupportedValue) }
-        else { Err(DispatchError::Abi(status)) }
+        let status =
+            unsafe { ogma_context_get_boolean(self.runtime, self.context, handle, &mut boolean) };
+        if status == OgmaStatus::OK {
+            return Ok(DispatchValue::Boolean(boolean != 0));
+        }
+        if status == OgmaStatus::TYPE_MISMATCH {
+            Err(DispatchError::UnsupportedValue)
+        } else {
+            Err(DispatchError::Abi(status))
+        }
     }
 
     pub fn resolve_call_site(
-        &self, object: &OrdinaryHostObject, property: &str,
+        &self,
+        object: &OrdinaryHostObject,
+        property: &str,
     ) -> Option<CallSiteGuard> {
         match object.get(property)? {
             JsCallable::Host { identity, slot } => Some(CallSiteGuard {
-                object_identity: object.identity, shape_id: object.shape_id,
-                property: property.to_owned(), function_identity: identity, slot,
+                object_identity: object.identity,
+                shape_id: object.shape_id,
+                property: property.to_owned(),
+                function_identity: identity,
+                slot,
             }),
             JsCallable::Script { .. } => None,
         }
@@ -733,16 +1009,29 @@ impl HostFunctionRegistry {
     /// Proxy gets always execute the trap and use generic call dispatch. Ordinary-object
     /// fast paths require both the same layout and the current function-object identity.
     pub fn call_property(
-        &self, scope: &HostExecutionScope<'_>, receiver: PropertyReceiver<'_>,
-        property: &str, guard: Option<&CallSiteGuard>, capabilities: u64,
+        &self,
+        scope: &HostExecutionScope<'_>,
+        receiver: PropertyReceiver<'_>,
+        property: &str,
+        guard: Option<&CallSiteGuard>,
+        capabilities: u64,
         args: &[DispatchValue],
     ) -> Result<JsCompletion, DispatchError> {
         let (callable, object_identity, shape_id, is_proxy) = match receiver {
-            PropertyReceiver::Ordinary(object) =>
-                (object.get(property), object.identity, object.shape_id, false),
+            PropertyReceiver::Ordinary(object) => (
+                object.get(property),
+                object.identity,
+                object.shape_id,
+                false,
+            ),
             PropertyReceiver::Proxy(proxy) => {
                 self.add_metrics(|m| m.proxy_get_traps = m.proxy_get_traps.saturating_add(1));
-                (proxy.get(property), proxy.target.identity, proxy.target.shape_id, true)
+                (
+                    proxy.get(property),
+                    proxy.target.identity,
+                    proxy.target.shape_id,
+                    true,
+                )
             }
         };
         let Some(callable) = callable else {
@@ -751,9 +1040,12 @@ impl HostFunctionRegistry {
 
         if !is_proxy {
             if let (Some(guard), JsCallable::Host { identity, slot }) = (guard, callable) {
-                if guard.object_identity == object_identity && guard.shape_id == shape_id
-                    && guard.property == property && guard.function_identity == identity
-                    && guard.slot == slot {
+                if guard.object_identity == object_identity
+                    && guard.shape_id == shape_id
+                    && guard.property == property
+                    && guard.function_identity == identity
+                    && guard.slot == slot
+                {
                     self.add_metrics(|m| m.cache_hits = m.cache_hits.saturating_add(1));
                     return self.invoke_slot(scope, slot, capabilities, args);
                 }
@@ -764,8 +1056,9 @@ impl HostFunctionRegistry {
         }
 
         match callable {
-            JsCallable::Host { slot, .. } =>
-                self.invoke_generic_slot(scope, slot, capabilities, args),
+            JsCallable::Host { slot, .. } => {
+                self.invoke_generic_slot(scope, slot, capabilities, args)
+            }
             JsCallable::Script { result, .. } => Ok(JsCompletion::Normal(result)),
         }
     }
@@ -773,18 +1066,29 @@ impl HostFunctionRegistry {
 
 impl Drop for HostFunctionRegistry {
     fn drop(&mut self) {
-        if thread::current().id() != self.owner_thread { return; }
+        if thread::current().id() != self.owner_thread {
+            return;
+        }
         let slots = {
             let state = self.state.borrow();
-            state.slots.iter().enumerate().filter_map(|(index, cell)| {
-                cell.registered.as_ref().map(|_| HostFunctionSlot {
-                    registry_id: self.registry_id, slot_index: index as u32,
-                    slot_generation: cell.generation, abi_major: self.abi_version.major,
-                    abi_minor: self.abi_version.minor,
+            state
+                .slots
+                .iter()
+                .enumerate()
+                .filter_map(|(index, cell)| {
+                    cell.registered.as_ref().map(|_| HostFunctionSlot {
+                        registry_id: self.registry_id,
+                        slot_index: index as u32,
+                        slot_generation: cell.generation,
+                        abi_major: self.abi_version.major,
+                        abi_minor: self.abi_version.minor,
+                    })
                 })
-            }).collect::<Vec<_>>()
+                .collect::<Vec<_>>()
         };
-        for slot in slots { let _ = self.unregister(slot); }
+        for slot in slots {
+            let _ = self.unregister(slot);
+        }
         let _ = unsafe { ogma_context_destroy(self.runtime, self.context) };
         let _ = unsafe { ogma_runtime_destroy(&mut self.runtime) };
     }
@@ -792,15 +1096,27 @@ impl Drop for HostFunctionRegistry {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JsCallable {
-    Host { identity: u64, slot: HostFunctionSlot },
-    Script { identity: u64, result: DispatchValue },
+    Host {
+        identity: u64,
+        slot: HostFunctionSlot,
+    },
+    Script {
+        identity: u64,
+        result: DispatchValue,
+    },
 }
 impl JsCallable {
     pub fn host(slot: HostFunctionSlot) -> Self {
-        Self::Host { identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed), slot }
+        Self::Host {
+            identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed),
+            slot,
+        }
     }
     pub fn script(result: DispatchValue) -> Self {
-        Self::Script { identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed), result }
+        Self::Script {
+            identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed),
+            result,
+        }
     }
 }
 
@@ -811,8 +1127,11 @@ pub struct OrdinaryHostObject {
 }
 impl OrdinaryHostObject {
     pub fn new() -> Self {
-        Self { identity: NEXT_OBJECT_ID.fetch_add(1, Ordering::Relaxed), shape_id: 1,
-            properties: HashMap::new() }
+        Self {
+            identity: NEXT_OBJECT_ID.fetch_add(1, Ordering::Relaxed),
+            shape_id: 1,
+            properties: HashMap::new(),
+        }
     }
     pub fn define(&mut self, property: impl Into<String>, callable: JsCallable) {
         let property = property.into();
@@ -824,13 +1143,18 @@ impl OrdinaryHostObject {
     /// Replaces a property value without changing its layout; the function identity guard fails.
     pub fn replace(&mut self, property: &str, callable: JsCallable) -> bool {
         match self.properties.get_mut(property) {
-            Some(current) => { *current = callable; true }
+            Some(current) => {
+                *current = callable;
+                true
+            }
             None => false,
         }
     }
     pub fn delete(&mut self, property: &str) -> bool {
         let removed = self.properties.remove(property).is_some();
-        if removed { self.shape_id = self.shape_id.saturating_add(1); }
+        if removed {
+            self.shape_id = self.shape_id.saturating_add(1);
+        }
         removed
     }
     fn get(&self, property: &str) -> Option<JsCallable> {
@@ -838,7 +1162,9 @@ impl OrdinaryHostObject {
     }
 }
 impl Default for OrdinaryHostObject {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct ProxyHostObject {
@@ -848,15 +1174,25 @@ pub struct ProxyHostObject {
 }
 impl ProxyHostObject {
     pub fn new(target: OrdinaryHostObject) -> Self {
-        Self { target, get_overrides: HashMap::new(), get_trap_calls: Cell::new(0) }
+        Self {
+            target,
+            get_overrides: HashMap::new(),
+            get_trap_calls: Cell::new(0),
+        }
     }
     pub fn set_get_result(&mut self, property: impl Into<String>, callable: JsCallable) {
         self.get_overrides.insert(property.into(), callable);
     }
-    pub fn get_trap_calls(&self) -> u64 { self.get_trap_calls.get() }
+    pub fn get_trap_calls(&self) -> u64 {
+        self.get_trap_calls.get()
+    }
     fn get(&self, property: &str) -> Option<JsCallable> {
-        self.get_trap_calls.set(self.get_trap_calls.get().saturating_add(1));
-        self.get_overrides.get(property).copied().or_else(|| self.target.get(property))
+        self.get_trap_calls
+            .set(self.get_trap_calls.get().saturating_add(1));
+        self.get_overrides
+            .get(property)
+            .copied()
+            .or_else(|| self.target.get(property))
     }
 }
 
@@ -874,7 +1210,9 @@ pub struct CallSiteGuard {
     slot: HostFunctionSlot,
 }
 impl CallSiteGuard {
-    pub fn function_identity(&self) -> u64 { self.function_identity }
+    pub fn function_identity(&self) -> u64 {
+        self.function_identity
+    }
 }
 
 #[cfg(test)]
@@ -884,8 +1222,12 @@ mod tests {
     use std::slice;
 
     unsafe extern "C-unwind" fn generic_add(
-        runtime: *const OgmaRuntime, context: OgmaContextHandle, args: *const OgmaHandle,
-        args_len: usize, completion: *mut OgmaCompletion, _user_data: *mut c_void,
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        args: *const OgmaHandle,
+        args_len: usize,
+        completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
     ) -> OgmaStatus {
         if args_len != 2 || args.is_null() || completion.is_null() {
             return OgmaStatus::INVALID_ARGUMENT;
@@ -894,75 +1236,147 @@ mod tests {
         let mut left = 0.0;
         let mut right = 0.0;
         let status = unsafe { ogma_context_get_number(runtime, context, args[0], &mut left) };
-        if status != OgmaStatus::OK { return status; }
+        if status != OgmaStatus::OK {
+            return status;
+        }
         let status = unsafe { ogma_context_get_number(runtime, context, args[1], &mut right) };
-        if status != OgmaStatus::OK { return status; }
+        if status != OgmaStatus::OK {
+            return status;
+        }
         let mut result = 0.0;
-        let status = unsafe { ogma_rust_abi_proof::ogma_primitive_add_f64(left, right, &mut result) };
-        if status != OgmaStatus::OK { return status; }
+        let status =
+            unsafe { ogma_rust_abi_proof::ogma_primitive_add_f64(left, right, &mut result) };
+        if status != OgmaStatus::OK {
+            return status;
+        }
         let mut handle = OgmaHandle::default();
         let status = unsafe { ogma_context_create_number(runtime, context, result, &mut handle) };
-        if status != OgmaStatus::OK { return status; }
-        unsafe { completion.write(OgmaCompletion { kind: COMPLETION_NORMAL, reserved: 0, value: handle }); }
+        if status != OgmaStatus::OK {
+            return status;
+        }
+        unsafe {
+            completion.write(OgmaCompletion {
+                kind: COMPLETION_NORMAL,
+                reserved: 0,
+                value: handle,
+            });
+        }
         OgmaStatus::OK
     }
 
     unsafe extern "C-unwind" fn generic_throw(
-        _runtime: *const OgmaRuntime, _context: OgmaContextHandle, args: *const OgmaHandle,
-        args_len: usize, completion: *mut OgmaCompletion, _user_data: *mut c_void,
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        args: *const OgmaHandle,
+        args_len: usize,
+        completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
     ) -> OgmaStatus {
-        if args_len == 0 || args.is_null() || completion.is_null() { return OgmaStatus::INVALID_ARGUMENT; }
+        if args_len == 0 || args.is_null() || completion.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
         let args = unsafe { slice::from_raw_parts(args, args_len) };
-        unsafe { completion.write(OgmaCompletion { kind: COMPLETION_THROW, reserved: 0, value: args[0] }); }
+        unsafe {
+            completion.write(OgmaCompletion {
+                kind: COMPLETION_THROW,
+                reserved: 0,
+                value: args[0],
+            });
+        }
         OgmaStatus::OK
     }
 
     unsafe extern "C-unwind" fn generic_failure(
-        _runtime: *const OgmaRuntime, _context: OgmaContextHandle, _args: *const OgmaHandle,
-        _args_len: usize, _completion: *mut OgmaCompletion, _user_data: *mut c_void,
-    ) -> OgmaStatus { OgmaStatus::CALLBACK_ERROR }
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _args: *const OgmaHandle,
+        _args_len: usize,
+        _completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        OgmaStatus::CALLBACK_ERROR
+    }
 
     unsafe extern "C-unwind" fn generic_panic(
-        _runtime: *const OgmaRuntime, _context: OgmaContextHandle, _args: *const OgmaHandle,
-        _args_len: usize, _completion: *mut OgmaCompletion, _user_data: *mut c_void,
-    ) -> OgmaStatus { panic!("deliberate generic callback panic"); }
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _args: *const OgmaHandle,
+        _args_len: usize,
+        _completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        panic!("deliberate generic callback panic");
+    }
 
     unsafe extern "C-unwind" fn typed_add(
-        _runtime: *const OgmaRuntime, _context: OgmaContextHandle, left: f64, right: f64,
-        out: *mut f64, _user_data: *mut c_void,
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        left: f64,
+        right: f64,
+        out: *mut f64,
+        _user_data: *mut c_void,
     ) -> OgmaStatus {
-        if out.is_null() { return OgmaStatus::INVALID_ARGUMENT; }
+        if out.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
         unsafe { out.write(left + right) };
         OgmaStatus::OK
     }
 
     unsafe extern "C-unwind" fn typed_handles(
-        runtime: *const OgmaRuntime, context: OgmaContextHandle, left: OgmaHandle,
-        right: OgmaHandle, out: *mut f64, _user_data: *mut c_void,
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        left: OgmaHandle,
+        right: OgmaHandle,
+        out: *mut f64,
+        _user_data: *mut c_void,
     ) -> OgmaStatus {
-        if out.is_null() { return OgmaStatus::INVALID_ARGUMENT; }
+        if out.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
         let mut l = 0.0;
         let mut r = 0.0;
         let status = unsafe { ogma_context_get_number(runtime, context, left, &mut l) };
-        if status != OgmaStatus::OK { return status; }
+        if status != OgmaStatus::OK {
+            return status;
+        }
         let status = unsafe { ogma_context_get_number(runtime, context, right, &mut r) };
-        if status != OgmaStatus::OK { return status; }
+        if status != OgmaStatus::OK {
+            return status;
+        }
         unsafe { out.write(l + r) };
         OgmaStatus::OK
     }
 
     unsafe extern "C-unwind" fn typed_panic(
-        _runtime: *const OgmaRuntime, _context: OgmaContextHandle, _left: f64,
-        _right: f64, _out: *mut f64, _user_data: *mut c_void,
-    ) -> OgmaStatus { panic!("deliberate typed thunk panic"); }
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _left: f64,
+        _right: f64,
+        _out: *mut f64,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        panic!("deliberate typed thunk panic");
+    }
 
     fn scope_context() -> ogma_host_execution_scope_proof::HostExecutionContext {
         ogma_host_execution_scope_proof::HostExecutionContext::new(LibrarySyncMode::None)
     }
     fn register_add(registry: &HostFunctionRegistry, id: u64, name: &str) -> HostFunctionSlot {
-        registry.register(HostFunctionDescriptor::f64_binary(
-            HostFunctionId(id), name, 0, 0, typed_add, generic_add, ptr::null_mut(),
-        ).unwrap()).unwrap()
+        registry
+            .register(
+                HostFunctionDescriptor::f64_binary(
+                    HostFunctionId(id),
+                    name,
+                    0,
+                    0,
+                    typed_add,
+                    generic_add,
+                    ptr::null_mut(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
     }
 
     #[test]
@@ -984,10 +1398,16 @@ mod tests {
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
         let args = [DispatchValue::Number(2.0), DispatchValue::Number(3.0)];
-        assert_eq!(registry.invoke_slot(&scope, slot, 0, &args).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(5.0)));
-        assert_eq!(registry.invoke_generic_slot(&scope, slot, 0, &args).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(5.0)));
+        assert_eq!(
+            registry.invoke_slot(&scope, slot, 0, &args).unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(5.0))
+        );
+        assert_eq!(
+            registry
+                .invoke_generic_slot(&scope, slot, 0, &args)
+                .unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(5.0))
+        );
         let metrics = registry.metrics();
         assert_eq!(metrics.typed_calls, 1);
         assert_eq!(metrics.generic_calls, 1);
@@ -998,26 +1418,46 @@ mod tests {
     fn typed_object_handles_use_the_opaque_abi_boundary() {
         let registry = HostFunctionRegistry::new().unwrap();
         let descriptor = HostFunctionDescriptor::number_handle_binary(
-            HostFunctionId(1002), "ogma:math/add-handles", 0, 0,
-            typed_handles, generic_add, ptr::null_mut(),
-        ).unwrap();
+            HostFunctionId(1002),
+            "ogma:math/add-handles",
+            0,
+            0,
+            typed_handles,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
         let slot = registry.register(descriptor).unwrap();
         let left = registry.create_number(4.0).unwrap();
         let right = registry.create_number(6.0).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.invoke_slot(&scope, slot, 0,
-            &[DispatchValue::Handle(left), DispatchValue::Handle(right)]).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(10.0)));
+        assert_eq!(
+            registry
+                .invoke_slot(
+                    &scope,
+                    slot,
+                    0,
+                    &[DispatchValue::Handle(left), DispatchValue::Handle(right)]
+                )
+                .unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(10.0))
+        );
     }
 
     #[test]
     fn capability_is_checked_on_every_invocation() {
         let registry = HostFunctionRegistry::new().unwrap();
         let descriptor = HostFunctionDescriptor::f64_binary(
-            HostFunctionId(1001), "ogma:protected/add", 0b0100, 0,
-            typed_add, generic_add, ptr::null_mut(),
-        ).unwrap();
+            HostFunctionId(1001),
+            "ogma:protected/add",
+            0b0100,
+            0,
+            typed_add,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
         let slot = registry.register(descriptor).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
@@ -1025,13 +1465,31 @@ mod tests {
         let mut object = OrdinaryHostObject::new();
         object.define("secureAdd", JsCallable::host(slot));
         let guard = registry.resolve_call_site(&object, "secureAdd").unwrap();
-        let allowed = registry.call_property(&scope, PropertyReceiver::Ordinary(&object),
-            "secureAdd", Some(&guard), 0b0100, &args).unwrap();
+        let allowed = registry
+            .call_property(
+                &scope,
+                PropertyReceiver::Ordinary(&object),
+                "secureAdd",
+                Some(&guard),
+                0b0100,
+                &args,
+            )
+            .unwrap();
         assert_eq!(allowed, JsCompletion::Normal(DispatchValue::Number(3.0)));
-        let denied = registry.call_property(&scope, PropertyReceiver::Ordinary(&object),
-            "secureAdd", Some(&guard), 0, &args).unwrap();
-        assert_eq!(denied, JsCompletion::Throw(
-            JsException::CapabilityDenied { missing: 0b0100 }));
+        let denied = registry
+            .call_property(
+                &scope,
+                PropertyReceiver::Ordinary(&object),
+                "secureAdd",
+                Some(&guard),
+                0,
+                &args,
+            )
+            .unwrap();
+        assert_eq!(
+            denied,
+            JsCompletion::Throw(JsException::CapabilityDenied { missing: 0b0100 })
+        );
         let metrics = registry.metrics();
         assert_eq!(metrics.typed_calls, 1);
         assert_eq!(metrics.capability_denials, 1);
@@ -1045,9 +1503,17 @@ mod tests {
         let boolean = registry.create_boolean(true).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.invoke_slot(&scope, slot, 0,
-            &[DispatchValue::Handle(boolean), DispatchValue::Number(1.0)]).unwrap(),
-            JsCompletion::Throw(JsException::TypeError));
+        assert_eq!(
+            registry
+                .invoke_slot(
+                    &scope,
+                    slot,
+                    0,
+                    &[DispatchValue::Handle(boolean), DispatchValue::Number(1.0)]
+                )
+                .unwrap(),
+            JsCompletion::Throw(JsException::TypeError)
+        );
         assert_eq!(registry.metrics().signature_mismatches, 1);
     }
 
@@ -1063,9 +1529,19 @@ mod tests {
         assert_eq!(object.shape_id, shape);
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.call_property(&scope, PropertyReceiver::Ordinary(&object), "run",
-            Some(&guard), 0, &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(77.0)));
+        assert_eq!(
+            registry
+                .call_property(
+                    &scope,
+                    PropertyReceiver::Ordinary(&object),
+                    "run",
+                    Some(&guard),
+                    0,
+                    &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]
+                )
+                .unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(77.0))
+        );
         assert_eq!(registry.metrics().typed_calls, 0);
         assert_eq!(registry.metrics().guard_misses, 1);
     }
@@ -1080,9 +1556,19 @@ mod tests {
         let proxy = ProxyHostObject::new(target);
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.call_property(&scope, PropertyReceiver::Proxy(&proxy), "run",
-            Some(&guard), 0, &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(5.0)));
+        assert_eq!(
+            registry
+                .call_property(
+                    &scope,
+                    PropertyReceiver::Proxy(&proxy),
+                    "run",
+                    Some(&guard),
+                    0,
+                    &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]
+                )
+                .unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(5.0))
+        );
         assert_eq!(proxy.get_trap_calls(), 1);
         assert_eq!(registry.metrics().proxy_get_traps, 1);
         assert_eq!(registry.metrics().typed_calls, 0);
@@ -1101,75 +1587,168 @@ mod tests {
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
         let args = [DispatchValue::Number(1.0), DispatchValue::Number(2.0)];
-        assert_eq!(registry.invoke_slot(&scope, old, 0, &args), Err(DispatchError::StaleSlot));
-        assert_eq!(registry.invoke_slot(&scope, new, 0, &args).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(3.0)));
+        assert_eq!(
+            registry.invoke_slot(&scope, old, 0, &args),
+            Err(DispatchError::StaleSlot)
+        );
+        assert_eq!(
+            registry.invoke_slot(&scope, new, 0, &args).unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(3.0))
+        );
     }
 
     #[test]
     fn js_throw_completion_is_distinct_from_abi_callback_error() {
         let registry = HostFunctionRegistry::new().unwrap();
-        let throw = HostFunctionDescriptor::generic(HostFunctionId(2001), "ogma:test/throw",
-            0, EFFECT_MAY_THROW, generic_throw, ptr::null_mut()).unwrap();
-        let fail = HostFunctionDescriptor::generic(HostFunctionId(2002), "ogma:test/fail",
-            0, 0, generic_failure, ptr::null_mut()).unwrap();
+        let throw = HostFunctionDescriptor::generic(
+            HostFunctionId(2001),
+            "ogma:test/throw",
+            0,
+            EFFECT_MAY_THROW,
+            generic_throw,
+            ptr::null_mut(),
+        )
+        .unwrap();
+        let fail = HostFunctionDescriptor::generic(
+            HostFunctionId(2002),
+            "ogma:test/fail",
+            0,
+            0,
+            generic_failure,
+            ptr::null_mut(),
+        )
+        .unwrap();
         let throw_slot = registry.register(throw).unwrap();
         let fail_slot = registry.register(fail).unwrap();
         let input = registry.create_number(13.0).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.invoke_slot(&scope, throw_slot, 0, &[DispatchValue::Handle(input)]).unwrap(),
-            JsCompletion::Throw(JsException::Thrown(DispatchValue::Number(13.0))));
-        assert_eq!(registry.invoke_slot(&scope, fail_slot, 0, &[]),
-            Err(DispatchError::Abi(OgmaStatus::CALLBACK_ERROR)));
+        assert_eq!(
+            registry
+                .invoke_slot(&scope, throw_slot, 0, &[DispatchValue::Handle(input)])
+                .unwrap(),
+            JsCompletion::Throw(JsException::Thrown(DispatchValue::Number(13.0)))
+        );
+        assert_eq!(
+            registry.invoke_slot(&scope, fail_slot, 0, &[]),
+            Err(DispatchError::Abi(OgmaStatus::CALLBACK_ERROR))
+        );
     }
 
     #[test]
     fn panic_is_contained_at_typed_and_generic_boundaries() {
         let registry = HostFunctionRegistry::new().unwrap();
-        let generic = HostFunctionDescriptor::generic(HostFunctionId(2001), "ogma:test/panic",
-            0, 0, generic_panic, ptr::null_mut()).unwrap();
-        let typed = HostFunctionDescriptor::f64_binary(HostFunctionId(2002), "ogma:test/typed-panic",
-            0, 0, typed_panic, generic_add, ptr::null_mut()).unwrap();
+        let generic = HostFunctionDescriptor::generic(
+            HostFunctionId(2001),
+            "ogma:test/panic",
+            0,
+            0,
+            generic_panic,
+            ptr::null_mut(),
+        )
+        .unwrap();
+        let typed = HostFunctionDescriptor::f64_binary(
+            HostFunctionId(2002),
+            "ogma:test/typed-panic",
+            0,
+            0,
+            typed_panic,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
         let generic_slot = registry.register(generic).unwrap();
         let typed_slot = registry.register(typed).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.invoke_slot(&scope, generic_slot, 0, &[]),
-            Err(DispatchError::Abi(OgmaStatus::PANIC)));
-        assert_eq!(registry.invoke_slot(&scope, typed_slot, 0,
-            &[DispatchValue::Number(1.0), DispatchValue::Number(2.0)]),
-            Err(DispatchError::HostExecution(HostError::CallbackPanicked)));
+        assert_eq!(
+            registry.invoke_slot(&scope, generic_slot, 0, &[]),
+            Err(DispatchError::Abi(OgmaStatus::PANIC))
+        );
+        assert_eq!(
+            registry.invoke_slot(
+                &scope,
+                typed_slot,
+                0,
+                &[DispatchValue::Number(1.0), DispatchValue::Number(2.0)]
+            ),
+            Err(DispatchError::HostExecution(HostError::CallbackPanicked))
+        );
     }
 
     #[test]
     fn descriptors_reject_wrong_abi_and_unsupported_async_contracts() {
         let registry = HostFunctionRegistry::new().unwrap();
-        let mut wrong = HostFunctionDescriptor::generic(HostFunctionId(3001), "ogma:test/version",
-            0, 0, generic_add, ptr::null_mut()).unwrap();
+        let mut wrong = HostFunctionDescriptor::generic(
+            HostFunctionId(3001),
+            "ogma:test/version",
+            0,
+            0,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
         wrong.abi_major = 99;
-        assert_eq!(registry.register(wrong), Err(DispatchError::InvalidDescriptor));
-        let mut bad_name = HostFunctionDescriptor::generic(HostFunctionId(3002), "ogma:test/name",
-            0, 0, generic_add, ptr::null_mut()).unwrap();
+        assert_eq!(
+            registry.register(wrong),
+            Err(DispatchError::InvalidDescriptor)
+        );
+        let mut bad_name = HostFunctionDescriptor::generic(
+            HostFunctionId(3002),
+            "ogma:test/name",
+            0,
+            0,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
         bad_name.name_len = (MAX_NAME_BYTES + 1) as u16;
-        assert_eq!(registry.register(bad_name), Err(DispatchError::InvalidDescriptor));
-        let async_descriptor = HostFunctionDescriptor::generic(HostFunctionId(3003), "ogma:test/async",
-            0, EFFECT_MAY_SUSPEND, generic_add, ptr::null_mut()).unwrap();
-        assert_eq!(registry.register(async_descriptor), Err(DispatchError::InvalidDescriptor));
+        assert_eq!(
+            registry.register(bad_name),
+            Err(DispatchError::InvalidDescriptor)
+        );
+        let async_descriptor = HostFunctionDescriptor::generic(
+            HostFunctionId(3003),
+            "ogma:test/async",
+            0,
+            EFFECT_MAY_SUSPEND,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry.register(async_descriptor),
+            Err(DispatchError::InvalidDescriptor)
+        );
     }
 
     #[test]
     fn unrelated_table_mutation_does_not_invalidate_live_slot() {
         let registry = HostFunctionRegistry::new().unwrap();
         let first = register_add(&registry, 4001, "ogma:math/first");
-        let second = HostFunctionDescriptor::generic(HostFunctionId(4002), "ogma:math/second",
-            0, 0, generic_throw, ptr::null_mut()).unwrap();
+        let second = HostFunctionDescriptor::generic(
+            HostFunctionId(4002),
+            "ogma:math/second",
+            0,
+            0,
+            generic_throw,
+            ptr::null_mut(),
+        )
+        .unwrap();
         registry.register(second).unwrap();
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
-        assert_eq!(registry.invoke_slot(&scope, first, 0,
-            &[DispatchValue::Number(5.0), DispatchValue::Number(6.0)]).unwrap(),
-            JsCompletion::Normal(DispatchValue::Number(11.0)));
+        assert_eq!(
+            registry
+                .invoke_slot(
+                    &scope,
+                    first,
+                    0,
+                    &[DispatchValue::Number(5.0), DispatchValue::Number(6.0)]
+                )
+                .unwrap(),
+            JsCompletion::Normal(DispatchValue::Number(11.0))
+        );
         assert_eq!(registry.table_version(), 2);
     }
     #[test]
@@ -1184,13 +1763,20 @@ mod tests {
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
 
-        let result = registry.call_property(&scope, PropertyReceiver::Proxy(&proxy), "run",
-            Some(&guard), 0, &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)]).unwrap();
+        let result = registry
+            .call_property(
+                &scope,
+                PropertyReceiver::Proxy(&proxy),
+                "run",
+                Some(&guard),
+                0,
+                &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)],
+            )
+            .unwrap();
 
         assert_eq!(result, JsCompletion::Normal(DispatchValue::Number(91.0)));
         assert_eq!(proxy.get_trap_calls(), 1);
         assert_eq!(registry.metrics().typed_calls, 0);
         assert_eq!(registry.metrics().generic_calls, 0);
     }
-
 }
