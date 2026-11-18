@@ -580,6 +580,20 @@ jobs:
           echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
           echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve proof lockfile with pinned Cargo (temporary diagnostic)
+        run: cargo generate-lockfile --manifest-path benchmarks/frame-snapshot/Cargo.toml
+
+      - name: Capture Cargo-resolved proof lockfile
+        run: |
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          data = Path("benchmarks/frame-snapshot/Cargo.lock").read_bytes()
+          print("OGM23_LOCK_BASE64_BEGIN")
+          print(base64.b64encode(data).decode("ascii"))
+          print("OGM23_LOCK_BASE64_END")
+          PY
+
       - name: Check formatting
         run: cargo fmt --manifest-path benchmarks/frame-snapshot/Cargo.toml --all -- --check
 
