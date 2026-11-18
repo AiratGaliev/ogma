@@ -400,6 +400,9 @@ jobs:
             --cpu "$OGM20_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-20-host-execution-scope-report.json"
 
+      - name: Validate OGM-20 benchmark JSON report
+        run: python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$RUNNER_TEMP/ogm-20-host-execution-scope-report.json"
+
       - name: Upload OGM-20 proof report
         if: always()
         uses: actions/upload-artifact@v4
