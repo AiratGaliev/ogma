@@ -218,7 +218,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn checked(result: Result<JsCompletion, DispatchError>) -> Result<(), String> {
     match result {
-        Ok(JsCompletion::Normal(DispatchValue::Number(value))) if value == 5.0 => Ok(()),
+        Ok(JsCompletion::Normal(DispatchValue::Number(5.0))) => Ok(()),
         Ok(other) => Err(format!("unexpected dispatch result: {other:?}")),
         Err(error) => Err(format!("dispatch failed: {error:?}")),
     }
@@ -468,7 +468,7 @@ fn main() -> Result<(), String> {
         )
         .map_err(|e| format!("handle registration: {e:?}"))?;
 
-    let generic = registry
+    registry
         .register(
             HostFunctionDescriptor::generic(
                 HostFunctionId(0x2103),
