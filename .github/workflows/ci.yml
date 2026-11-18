@@ -518,19 +518,8 @@ jobs:
           echo "rustc_version=$(rustc --version)" >> "$GITHUB_OUTPUT"
           echo "cpu_model=$cpu_model" >> "$GITHUB_OUTPUT"
 
-      - name: Format Rust proof sources (temporary CI formatting pass)
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo fmt --manifest-path benchmarks/buffer-interop/Cargo.toml --all
-          echo "OGM22_FORMATTED_LIB_BEGIN"
-          base64 -w 0 benchmarks/buffer-interop/src/lib.rs
-          echo
-          echo "OGM22_FORMATTED_LIB_END"
-          echo "OGM22_FORMATTED_BENCH_BEGIN"
-          base64 -w 0 benchmarks/buffer-interop/src/bin/benchmark.rs
-          echo
-          echo "OGM22_FORMATTED_BENCH_END"
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/buffer-interop/Cargo.toml --all -- --check
 
       - name: Run Clippy
         run: cargo clippy --manifest-path benchmarks/buffer-interop/Cargo.toml --all-targets --all-features --locked -- -D warnings
