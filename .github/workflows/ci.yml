@@ -1007,6 +1007,7 @@ jobs:
       contents: read
     env:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: ${{ runner.temp }}/ogm30-target
 
     steps:
       - name: Checkout tested PR head

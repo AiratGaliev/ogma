@@ -1267,15 +1267,16 @@ struct BuildArtifactSummary {
 }
 
 fn cargo_target_directory() -> PathBuf {
-    env::current_exe()
-        .ok()
-        .and_then(|executable| {
-            executable
-                .parent()
-                .and_then(Path::parent)
-                .map(Path::to_path_buf)
+    env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::current_exe().ok().and_then(|executable| {
+                executable
+                    .parent()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+            })
         })
-        .or_else(|| env::var_os("CARGO_TARGET_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
 }
 
