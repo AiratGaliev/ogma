@@ -1604,14 +1604,16 @@ mod tests {
         let host = scope_context();
         let scope = host.enter_scope().unwrap();
         assert_eq!(
-            registry.call_property(
-                &scope,
-                PropertyReceiver::Ordinary(&object),
-                "run",
-                Some(&guard),
-                0,
-                &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)],
-            ).unwrap(),
+            registry
+                .call_property(
+                    &scope,
+                    PropertyReceiver::Ordinary(&object),
+                    "run",
+                    Some(&guard),
+                    0,
+                    &[DispatchValue::Number(2.0), DispatchValue::Number(3.0)],
+                )
+                .unwrap(),
             JsCompletion::Normal(DispatchValue::Number(5.0)),
         );
         let metrics = registry.metrics();
