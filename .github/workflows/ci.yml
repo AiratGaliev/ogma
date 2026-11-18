@@ -1039,11 +1039,8 @@ jobs:
           fi
           cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm30-Cargo.lock"
 
-      - name: Format and verify OGM-30 source (temporary extraction)
-        run: |
-          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all
-          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
-          cat benchmarks/backend-codegen/src/main.rs
+      - name: Check formatting
+        run: cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
 
       - name: Run Clippy
         run: cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
