@@ -911,7 +911,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/ogm28-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.ogm28-target
 
     steps:
       - name: Checkout repository
