@@ -1,0 +1,531 @@
+{
+  "$schema": "profile-set.schema.json",
+  "schemaVersion": 1,
+  "ecmaEdition": "ECMAScript-2026",
+  "languageSemantics": {
+    "dynamicCode": "preserved",
+    "featureGating": "host-and-tooling-only"
+  },
+  "mandatoryRuntimeMetadata": [
+    "function-identity",
+    "code-generation-cache-identity",
+    "frame-layout",
+    "environment-capture-descriptors",
+    "suspension-state",
+    "verifier-summary"
+  ],
+  "components": [
+    {
+      "id": "ecmascript-semantics",
+      "kind": "semantic-core",
+      "requires": [],
+      "featureFlag": null,
+      "packaging": "linked-runtime",
+      "semanticEffects": true,
+      "stripPolicy": "never",
+      "purpose": "ECMAScript language semantics; not a selectable tooling or host feature."
+    },
+    {
+      "id": "host-abi",
+      "kind": "runtime",
+      "requires": [],
+      "featureFlag": "runtime.host-abi",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "retain",
+      "purpose": "Versioned Rust embedding and host-call boundary."
+    },
+    {
+      "id": "runtime-core",
+      "kind": "runtime",
+      "requires": [
+        "ecmascript-semantics",
+        "host-abi"
+      ],
+      "featureFlag": "runtime.core",
+      "packaging": "linked-runtime",
+      "semanticEffects": true,
+      "stripPolicy": "retain",
+      "purpose": "Shared values, objects, execution state and runtime services."
+    },
+    {
+      "id": "portable-bytecode",
+      "kind": "execution-format",
+      "requires": [
+        "ecmascript-semantics"
+      ],
+      "featureFlag": "execution.portable-bytecode",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "retain",
+      "purpose": "Portable .ogmb format and instruction payload."
+    },
+    {
+      "id": "bytecode-verifier",
+      "kind": "execution-format",
+      "requires": [
+        "portable-bytecode"
+      ],
+      "featureFlag": "execution.bytecode-verifier",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "retain",
+      "purpose": "Validation required before untrusted portable code is executed."
+    },
+    {
+      "id": "portable-interpreter",
+      "kind": "execution-backend",
+      "requires": [
+        "runtime-core",
+        "portable-bytecode",
+        "bytecode-verifier"
+      ],
+      "featureFlag": "execution.interpreter",
+      "packaging": "linked-runtime",
+      "semanticEffects": true,
+      "stripPolicy": "retain",
+      "purpose": "Portable execution backend and fallback for code that cannot use native AOT."
+    },
+    {
+      "id": "host-module-registry",
+      "kind": "host-integration",
+      "requires": [
+        "runtime-core",
+        "host-abi"
+      ],
+      "featureFlag": "runtime.host-modules",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Declarative host-module registration, function slots and capability metadata from OGM-25."
+    },
+    {
+      "id": "native-root-maps",
+      "kind": "execution-backend",
+      "requires": [
+        "runtime-core",
+        "host-abi"
+      ],
+      "featureFlag": "execution.native-root-maps",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Native shadow roots and safepoint support proved by OGM-27."
+    },
+    {
+      "id": "native-aot-execution",
+      "kind": "execution-backend",
+      "requires": [
+        "runtime-core",
+        "portable-interpreter",
+        "native-root-maps",
+        "host-module-registry"
+      ],
+      "featureFlag": "execution.native-aot",
+      "packaging": "linked-runtime",
+      "semanticEffects": true,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Native AOT execution bridge; portable interpreter remains semantics-preserving fallback."
+    },
+    {
+      "id": "source-debug-metadata",
+      "kind": "metadata",
+      "requires": [
+        "portable-bytecode"
+      ],
+      "featureFlag": "debug.source-metadata",
+      "packaging": "metadata",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Optional source maps, source spans, lexical scopes and variable locations."
+    },
+    {
+      "id": "debugger-api",
+      "kind": "developer-tooling",
+      "requires": [
+        "runtime-core",
+        "source-debug-metadata"
+      ],
+      "featureFlag": "debug.api",
+      "packaging": "runtime-module",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Backend-neutral DebuggerPort from OGM-33."
+    },
+    {
+      "id": "interpreter-debug-hooks",
+      "kind": "developer-tooling",
+      "requires": [
+        "portable-interpreter",
+        "debugger-api"
+      ],
+      "featureFlag": "debug.interpreter-hooks",
+      "packaging": "runtime-module",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Interpreter safepoint hooks used by debugger and development tooling."
+    },
+    {
+      "id": "dap-transport",
+      "kind": "developer-tooling",
+      "requires": [
+        "debugger-api"
+      ],
+      "featureFlag": "tools.dap-transport",
+      "packaging": "tooling-only",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "IDE Debug Adapter Protocol transport adapter."
+    },
+    {
+      "id": "runtime-inspector",
+      "kind": "developer-tooling",
+      "requires": [
+        "debugger-api"
+      ],
+      "featureFlag": "tools.inspector",
+      "packaging": "runtime-module",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Interactive object inspection service; not needed by production execution."
+    },
+    {
+      "id": "inspector-ui",
+      "kind": "developer-tooling",
+      "requires": [
+        "runtime-inspector"
+      ],
+      "featureFlag": "tools.inspector-ui",
+      "packaging": "tooling-only",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Optional inspector presentation/UI."
+    },
+    {
+      "id": "repl",
+      "kind": "developer-tooling",
+      "requires": [
+        "portable-interpreter"
+      ],
+      "featureFlag": "tools.repl",
+      "packaging": "tooling-only",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Interactive development console."
+    },
+    {
+      "id": "profiler-hooks",
+      "kind": "developer-tooling",
+      "requires": [
+        "runtime-core"
+      ],
+      "featureFlag": "tools.profiler-hooks",
+      "packaging": "runtime-module",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Optional runtime profiling instrumentation."
+    },
+    {
+      "id": "hot-reload",
+      "kind": "developer-tooling",
+      "requires": [
+        "host-module-registry",
+        "portable-interpreter",
+        "source-debug-metadata"
+      ],
+      "featureFlag": "tools.hot-reload",
+      "packaging": "runtime-module",
+      "semanticEffects": false,
+      "stripPolicy": "release-default-strip",
+      "purpose": "Development-only module/code generation replacement support."
+    },
+    {
+      "id": "node-module-resolver",
+      "kind": "compatibility",
+      "requires": [
+        "host-module-registry"
+      ],
+      "featureFlag": "compat.node-resolver",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Optional Node package/module resolution adapter."
+    },
+    {
+      "id": "node-compat-api",
+      "kind": "compatibility",
+      "requires": [
+        "node-module-resolver",
+        "host-module-registry"
+      ],
+      "featureFlag": "compat.node-api",
+      "packaging": "linked-runtime",
+      "semanticEffects": false,
+      "stripPolicy": "profile-controlled",
+      "purpose": "Selected Node.js APIs implemented through explicit Ogma host adapters."
+    }
+  ],
+  "profiles": [
+    {
+      "id": "debug-interpreter",
+      "purpose": "Source-level debugging with the portable interpreter; optimized for observability, not throughput.",
+      "buildMode": "debug",
+      "executionBackend": "portable-interpreter",
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "portable-interpreter",
+        "host-module-registry",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl"
+      ],
+      "excludeComponents": [
+        "native-aot-execution",
+        "node-module-resolver",
+        "node-compat-api",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "tooling": {
+        "debuggerApi": true,
+        "interpreterHooks": true,
+        "dapTransport": true,
+        "inspector": true,
+        "inspectorUi": true,
+        "repl": true,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "embedded",
+        "sourceMaps": "embedded",
+        "debugSymbols": "not-applicable",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "debug.api",
+        "debug.interpreter-hooks",
+        "debug.source-metadata",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules",
+        "tools.dap-transport",
+        "tools.inspector",
+        "tools.inspector-ui",
+        "tools.repl"
+      ]
+    },
+    {
+      "id": "development-test",
+      "purpose": "Fast iteration and test diagnostics with metadata, profiler hooks, REPL and Hot Reload.",
+      "buildMode": "development",
+      "executionBackend": "portable-interpreter",
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "portable-interpreter",
+        "host-module-registry",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "excludeComponents": [
+        "native-aot-execution",
+        "node-module-resolver",
+        "node-compat-api"
+      ],
+      "tooling": {
+        "debuggerApi": true,
+        "interpreterHooks": true,
+        "dapTransport": true,
+        "inspector": true,
+        "inspectorUi": true,
+        "repl": true,
+        "profilerHooks": true,
+        "hotReload": true
+      },
+      "metadata": {
+        "sourceDebugMetadata": "embedded",
+        "sourceMaps": "embedded",
+        "debugSymbols": "not-applicable",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "debug.api",
+        "debug.interpreter-hooks",
+        "debug.source-metadata",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules",
+        "tools.dap-transport",
+        "tools.hot-reload",
+        "tools.inspector",
+        "tools.inspector-ui",
+        "tools.profiler-hooks",
+        "tools.repl"
+      ]
+    },
+    {
+      "id": "portable-interpreter-release",
+      "purpose": "Small production package using the portable interpreter and the shared host ABI.",
+      "buildMode": "release",
+      "executionBackend": "portable-interpreter",
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "portable-interpreter",
+        "host-module-registry"
+      ],
+      "excludeComponents": [
+        "native-root-maps",
+        "native-aot-execution",
+        "source-debug-metadata",
+        "debugger-api",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload",
+        "node-module-resolver",
+        "node-compat-api"
+      ],
+      "tooling": {
+        "debuggerApi": false,
+        "interpreterHooks": false,
+        "dapTransport": false,
+        "inspector": false,
+        "inspectorUi": false,
+        "repl": false,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "stripped",
+        "sourceMaps": "omitted",
+        "debugSymbols": "not-applicable",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules"
+      ]
+    },
+    {
+      "id": "hybrid-native-release",
+      "purpose": "Production native AOT with the portable interpreter retained for dynamic or non-lowerable code.",
+      "buildMode": "release",
+      "executionBackend": "hybrid-native",
+      "hostCompatibility": "none",
+      "includeRoots": [
+        "native-aot-execution",
+        "host-module-registry"
+      ],
+      "excludeComponents": [
+        "source-debug-metadata",
+        "debugger-api",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload",
+        "node-module-resolver",
+        "node-compat-api"
+      ],
+      "tooling": {
+        "debuggerApi": false,
+        "interpreterHooks": false,
+        "dapTransport": false,
+        "inspector": false,
+        "inspectorUi": false,
+        "repl": false,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "stripped",
+        "sourceMaps": "external",
+        "debugSymbols": "external",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.native-aot",
+        "execution.native-root-maps",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules"
+      ]
+    },
+    {
+      "id": "node-compatibility-portable-release",
+      "purpose": "Portable interpreter plus the explicitly selected Node.js compatibility adapters; no blanket process or ambient OS access.",
+      "buildMode": "release",
+      "executionBackend": "portable-interpreter",
+      "hostCompatibility": "node",
+      "includeRoots": [
+        "portable-interpreter",
+        "host-module-registry",
+        "node-compat-api"
+      ],
+      "excludeComponents": [
+        "native-root-maps",
+        "native-aot-execution",
+        "source-debug-metadata",
+        "debugger-api",
+        "interpreter-debug-hooks",
+        "dap-transport",
+        "runtime-inspector",
+        "inspector-ui",
+        "repl",
+        "profiler-hooks",
+        "hot-reload"
+      ],
+      "tooling": {
+        "debuggerApi": false,
+        "interpreterHooks": false,
+        "dapTransport": false,
+        "inspector": false,
+        "inspectorUi": false,
+        "repl": false,
+        "profilerHooks": false,
+        "hotReload": false
+      },
+      "metadata": {
+        "sourceDebugMetadata": "stripped",
+        "sourceMaps": "omitted",
+        "debugSymbols": "not-applicable",
+        "crashArtifacts": "external"
+      },
+      "featureFlags": [
+        "compat.node-api",
+        "compat.node-resolver",
+        "execution.bytecode-verifier",
+        "execution.interpreter",
+        "execution.portable-bytecode",
+        "runtime.core",
+        "runtime.host-abi",
+        "runtime.host-modules"
+      ]
+    }
+  ]
+}
