@@ -200,4 +200,121 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
     # must not make a previously latent cycle part of a build plan.
     for component_id in sorted(components):
         _dependency_closure([component_id], components, "component-registry")
-    profiles_by_id: dict[str, dict[str, s
+    profiles_by_id: dict[str, dict[str, str, Any]] = {}
+    plans: dict[str, dict[str, Any]] = {}
+
+    for profile in document["profiles"]:
+        profile_id = profile["id"]
+        if profile_id in profiles_by_id:
+            _fail(f"duplicate profile id: {profile_id}")
+        profiles_by_id[profile_id] = profile
+
+    for profile_id, profile in profiles_by_id.items():
+        unknown_exclusions = sorted(set(profile["excludeComponents"]) - component_ids)
+        if unknown_exclusions:
+            _fail(f"profile {profile_id!r} excludes unknown components: {unknown_exclusions}")
+
+        included = _dependency_closure(profile["includeRoots"], components, profile_id)
+        excluded = set(profile["excludeComponents"])
+        conflicts = sorted(included & excluded)
+        if conflicts:
+            _fail(
+                f"profile {profile_id!r} cannot strip components required by its dependency closure: "
+                + ", ".join(conflicts)
+            )
+
+        required_components = {
+            component_id
+            for component_id, component in components.items()
+            if component["stripPolicy"] in ("never", "retain")
+        }
+        missing_required = sorted(required_components - included)
+        if missing_required:
+            _fail(
+                f"profile {profile_id!r} strips components with a non-strippable policy: "
+                + ", ".join(missing_required)
+            )
+
+        if "ecmascript-semantics" not in included:
+            _fail(f"profile {profile_id!r} does not retain ECMAScript semantics")
+        if "portable-interpreter" not in included:
+            _fail(f"profile {profile_id!r} must retain the portable interpreter")
+        if "host-module-registry" not in included:
+            _fail(f"profile {profile_id!r} must retain the declared host-module registration boundary")
+
+        if profile["executionBackend"] == "portable-interpreter":
+            if "native-aot-execution" in included or "native-root-maps" in included:
+                _fail(f"profile {profile_id!r} selects portable interpretation but includes native AOT components")
+        else:
+            required_native = {"native-aot-execution", "native-root-maps"}
+            missing_native = sorted(required_native - included)
+            if missing_native:
+                _fail(f"profile {profile_id!r} is hybrid-native but misses {missing_native}")
+            if "portable-interpreter" not in included:
+                _fail(f"profile {profile_id!r} must retain interpreter fallback for hybrid execution")
+
+        node_included = NODE_COMPONENTS & included
+        if profile["hostCompatibility"] == "node":
+            if not NODE_COMPONENTS.issubset(included):
+                _fail(f"profile {profile_id!r} selects Node compatibility without both resolver and API adapter")
+        elif node_included:
+            _fail(f"profile {profile_id!r} includes Node components without selecting hostCompatibility=node")
+
+        tooling = profile["tooling"]
+        for field, component_id in TOOLING_COMPONENTS.items():
+            actual = component_id in included
+            if tooling[field] is not actual:
+                _fail(
+                    f"profile {profile_id!r} tooling.{field}={tooling[field]!r} "
+                    f"does not match component {component_id!r} inclusion ({actual})"
+                )
+
+        if profile["buildMode"] in ("debug", "development"):
+            missing_debug = sorted(DEBUG_REQUIRED_COMPONENTS - included)
+            if missing_debug:
+                _fail(f"profile {profile_id!r} must preserve debug API/hooks/source metadata: {missing_debug}")
+            if profile["metadata"]["sourceDebugMetadata"] != "embedded":
+                _fail(f"profile {profile_id!r} must embed source/debug metadata")
+
+        source_metadata_included = "source-debug-metadata" in included
+        if source_metadata_included != (profile["metadata"]["sourceDebugMetadata"] == "embedded"):
+            _fail(f"profile {profile_id!r} source metadata policy disagrees with its component graph")
+        if profile["metadata"]["sourceMaps"] == "embedded" and not source_metadata_included:
+            _fail(f"profile {profile_id!r} cannot embed source maps without source/debug metadata")
+        if profile["executionBackend"] == "portable-interpreter" and profile["metadata"]["debugSymbols"] != "not-applicable":
+            _fail(f"profile {profile_id!r} has native debug-symbol policy without a native backend")
+        if profile["executionBackend"] == "hybrid-native" and profile["metadata"]["debugSymbols"] not in ("external", "omitted"):
+            _fail(f"profile {profile_id!r} must keep native debug symbols external or omit them from the runtime package")
+
+        expected_flags = sorted(
+            component["featureFlag"]
+            for component_id, component in components.items()
+            if component_id in included and component["featureFlag"] is not None
+        )
+        if sorted(profile["featureFlags"]) != expected_flags:
+            missing = sorted(set(expected_flags) - set(profile["featureFlags"]))
+            extra = sorted(set(profile["featureFlags"]) - set(expected_flags))
+            _fail(f"profile {profile_id!r} featureFlags do not match graph closure (missing={missing}, extra={extra})")
+        if any("dynamic-code" in flag or flag in ("language.eval", "language.function-constructor") for flag in profile["featureFlags"]):
+            _fail(f"profile {profile_id!r} must not feature-gate ECMAScript dynamic-code semantics")
+
+        linked = sorted(component_id for component_id in included if components[component_id]["packaging"] == "linked-runtime")
+        runtime_modules = sorted(component_id for component_id in included if components[component_id]["packaging"] == "runtime-module")
+        tooling_only = sorted(component_id for component_id in included if components[component_id]["packaging"] == "tooling-only")
+        metadata = sorted(component_id for component_id in included if components[component_id]["packaging"] == "metadata")
+        stripped = sorted(component_ids - included)
+        plans[profile_id] = {
+            "buildMode": profile["buildMode"],
+            "executionBackend": profile["executionBackend"],
+            "hostCompatibility": profile["hostCompatibility"],
+            "includedComponents": sorted(included),
+            "strippedComponents": stripped,
+            "linkedRuntimeComponents": linked,
+            "runtimeModuleComponents": runtime_modules,
+            "toolingOnlyComponents": tooling_only,
+            "metadataComponents": metadata,
+            "featureFlags": expected_flags,
+            "metadataPolicy": profile["metadata"],
+        }
+
+    return plans
