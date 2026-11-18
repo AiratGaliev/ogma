@@ -32,7 +32,7 @@ compile-time layout test.
 | abi_major, abi_minor | Negotiated OGM ABI version; major must match and requested minor must be supported |
 | function_id | Host-assigned non-zero HostFunctionId, stable within one ABI major; duplicates are rejected |
 | name, name_len | UTF-8 module specifier/export name, copied by registration; at most 128 bytes |
-| signature, signature_id | Stable type mapping and signature identifier; inconsistent pairs are rejected |
+| signature, signature_id | Raw 32-bit signature tag decoded only after validation, plus stable signature identifier; unknown or inconsistent pairs are rejected |
 | effects | Bitset: may allocate, GC, throw, suspend, or re-enter |
 | required_capabilities | Capability bitset checked on every call, not only at resolution time |
 | typed thunk pointers | Optional fixed C-compatible primitive or opaque-handle signature |
@@ -54,8 +54,10 @@ Descriptor v1 negotiates OGM ABI major 1, minimum minor 0. A future incompatible
 or descriptor layout requires a versioned contract change, not an unannounced cast.
 
 user_data lifetime is owned by the host. Unregister removes the callback and
-persistent function root before the host may free that data. The descriptor name is
-copied; its source storage need not outlive registration.
+persistent function root before the host may free that data. Unregister returns
+Busy while any host dispatch is active, preventing a re-entrant callback from
+freeing its own user_data before it unwinds; retry after the active call returns.
+The descriptor name is copied; its source storage need not outlive registration.
 
 ## 3. Function slot and invalidation
 
@@ -72,6 +74,8 @@ Rust object, or function implementation.
 - Resolution by name uses a HashMap once; execution through a retained slot does not
   perform another name lookup.
 - A slot is registry-local and thread-affine. A token from another registry is rejected.
+- Unregister is rejected with Busy while a dispatch is active; the host may retry
+  after the synchronous call stack has unwound.
 - The generic mock function is persistently rooted while registered. Unregister removes
   the callback and root and collects the now-unrooted mock function.
 - Host-owned values which must survive explicit collection use

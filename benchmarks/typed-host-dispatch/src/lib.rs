@@ -12,7 +12,7 @@ use ogma_rust_abi_proof::{
     OgmaCallbackHandle, OgmaCompletion, OgmaContextHandle, OgmaHandle, OgmaHostCallback,
     OgmaPersistentHandle, OgmaRootScopeHandle, OgmaRuntime, OgmaStatus, COMPLETION_NORMAL,
     COMPLETION_THROW, FEATURE_CALLBACKS, FEATURE_COMPLETIONS, FEATURE_OPAQUE_HANDLES,
-    FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES,
+    FEATURE_PERSISTENT_HANDLES, FEATURE_ROOT_SCOPES, FEATURE_MOCK_PROOF,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -39,7 +39,8 @@ const REQUIRED_ABI_FEATURES: u64 = FEATURE_OPAQUE_HANDLES
     | FEATURE_ROOT_SCOPES
     | FEATURE_PERSISTENT_HANDLES
     | FEATURE_CALLBACKS
-    | FEATURE_COMPLETIONS;
+    | FEATURE_COMPLETIONS
+    | FEATURE_MOCK_PROOF;
 
 static NEXT_REGISTRY_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_OBJECT_ID: AtomicU64 = AtomicU64::new(1);
@@ -85,6 +86,17 @@ pub enum HostFunctionSignature {
     NumberHandleBinary = 2,
 }
 
+impl HostFunctionSignature {
+    fn from_abi_tag(value: u32) -> Option<Self> {
+        match value {
+            value if value == Self::Generic as u32 => Some(Self::Generic),
+            value if value == Self::F64Binary as u32 => Some(Self::F64Binary),
+            value if value == Self::NumberHandleBinary as u32 => Some(Self::NumberHandleBinary),
+            _ => None,
+        }
+    }
+}
+
 /// Fixed-layout C descriptor. user_data stays host-owned until unregister completes.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -98,7 +110,7 @@ pub struct HostFunctionDescriptor {
     pub name: [u8; MAX_NAME_BYTES],
     pub name_len: u16,
     pub reserved_name: u16,
-    pub signature: HostFunctionSignature,
+    pub signature: u32,
     pub signature_id: u64,
     pub effects: u32,
     pub reserved_effects: u32,
@@ -141,7 +153,7 @@ impl HostFunctionDescriptor {
             name: name_buffer,
             name_len: bytes.len() as u16,
             reserved_name: 0,
-            signature,
+            signature: signature as u32,
             signature_id,
             effects: config.effects,
             reserved_effects: 0,
@@ -278,6 +290,7 @@ pub enum DispatchError {
     Abi(OgmaStatus),
     HostExecution(HostError),
     WrongThread,
+    Busy,
     InvalidDescriptor,
     DuplicateFunctionId,
     DuplicateName,
@@ -324,6 +337,23 @@ struct RegistryState {
     by_id: HashMap<HostFunctionId, usize>,
     by_name: HashMap<String, usize>,
     table_version: u64,
+}
+
+struct ActiveDispatchGuard<'registry>(&'registry Cell<u32>);
+
+impl ActiveDispatchGuard<'_> {
+    fn enter(active_dispatches: &Cell<u32>) -> Result<ActiveDispatchGuard<'_>, DispatchError> {
+        let active = active_dispatches.get();
+        let next = active.checked_add(1).ok_or(DispatchError::Busy)?;
+        active_dispatches.set(next);
+        Ok(ActiveDispatchGuard(active_dispatches))
+    }
+}
+
+impl Drop for ActiveDispatchGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
 }
 
 struct RootScopeGuard {
@@ -401,6 +431,7 @@ pub struct HostFunctionRegistry {
     context: OgmaContextHandle,
     abi_version: OgmaAbiVersion,
     state: RefCell<RegistryState>,
+    active_dispatches: Cell<u32>,
     metrics: Cell<DispatchMetrics>,
     _not_send_or_sync: PhantomData<Rc<()>>,
 }
@@ -444,6 +475,7 @@ impl HostFunctionRegistry {
                 by_name: HashMap::new(),
                 table_version: 0,
             }),
+            active_dispatches: Cell::new(0),
             metrics: Cell::new(DispatchMetrics::default()),
             _not_send_or_sync: PhantomData,
         })
@@ -477,7 +509,9 @@ impl HostFunctionRegistry {
         }
 
         let name = descriptor.name()?.to_owned();
-        let expected = match descriptor.signature {
+        let signature = HostFunctionSignature::from_abi_tag(descriptor.signature)
+            .ok_or(DispatchError::InvalidDescriptor)?;
+        let expected = match signature {
             HostFunctionSignature::Generic => {
                 if descriptor.primitive_f64_thunk.is_some()
                     || descriptor.number_handle_f64_thunk.is_some()
@@ -677,6 +711,9 @@ impl HostFunctionRegistry {
         if slot.registry_id != self.registry_id {
             return Err(DispatchError::WrongRegistry);
         }
+        if self.active_dispatches.get() != 0 {
+            return Err(DispatchError::Busy);
+        }
         let entry = {
             let mut state = self.state.borrow_mut();
             let cell = state
@@ -854,6 +891,7 @@ impl HostFunctionRegistry {
         args: &[DispatchValue],
         force_generic: bool,
     ) -> Result<JsCompletion, DispatchError> {
+        let _active_dispatch = ActiveDispatchGuard::enter(&self.active_dispatches)?;
         let entry = self.snapshot(slot)?;
         self.add_metrics(|m| m.total_calls = m.total_calls.saturating_add(1));
 
@@ -869,7 +907,9 @@ impl HostFunctionRegistry {
         }
 
         let typed_allowed = !force_generic && entry.descriptor.effects & COMPLEX_EFFECTS == 0;
-        match entry.descriptor.signature {
+        match HostFunctionSignature::from_abi_tag(entry.descriptor.signature)
+            .ok_or(DispatchError::InvalidDescriptor)?
+        {
             HostFunctionSignature::F64Binary => {
                 let [DispatchValue::Number(left), DispatchValue::Number(right)] = args else {
                     return self.signature_mismatch();
@@ -1469,6 +1509,37 @@ mod tests {
             .unwrap()
     }
 
+    struct ReentrantUnregisterData {
+        registry: *const HostFunctionRegistry,
+        slot: Cell<HostFunctionSlot>,
+        rejected_while_active: Cell<bool>,
+    }
+
+    unsafe extern "C-unwind" fn generic_reentrant_unregister(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _args: *const OgmaHandle,
+        _args_len: usize,
+        completion: *mut OgmaCompletion,
+        user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if completion.is_null() || user_data.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        let data = unsafe { &*(user_data as *const ReentrantUnregisterData) };
+        let registry = unsafe { &*data.registry };
+        data.rejected_while_active
+            .set(matches!(registry.unregister(data.slot.get()), Err(DispatchError::Busy)));
+        unsafe {
+            completion.write(OgmaCompletion {
+                kind: COMPLETION_NORMAL,
+                reserved: 0,
+                value: OgmaHandle::default(),
+            });
+        }
+        OgmaStatus::OK
+    }
+
     #[test]
     fn descriptor_layout_and_slot_resolution_are_stable() {
         assert_eq!(std::mem::size_of::<HostFunctionDescriptor>(), 216);
@@ -1479,6 +1550,37 @@ mod tests {
         assert_eq!(registry.resolve_id(HostFunctionId(1001)).unwrap(), slot);
         assert_eq!(registry.table_version(), 1);
         assert_eq!(registry.metrics().active_slots, 1);
+    }
+
+    #[test]
+    fn unregister_is_rejected_while_callback_user_data_is_active() {
+        let registry = HostFunctionRegistry::new().unwrap();
+        let mut data = Box::new(ReentrantUnregisterData {
+            registry: &registry,
+            slot: Cell::new(HostFunctionSlot::default()),
+            rejected_while_active: Cell::new(false),
+        });
+        let descriptor = HostFunctionDescriptor::generic(
+            HostFunctionId(1003),
+            "ogma:test/reentrant-unregister",
+            0,
+            EFFECT_MAY_REENTER,
+            generic_reentrant_unregister,
+            (&mut *data as *mut ReentrantUnregisterData).cast(),
+        )
+        .unwrap();
+        let slot = registry.register(descriptor).unwrap();
+        data.slot.set(slot);
+        let host = scope_context();
+        let scope = host.enter_scope().unwrap();
+
+        assert_eq!(
+            registry.invoke_slot(&scope, slot, 0, &[]).unwrap(),
+            JsCompletion::Normal(DispatchValue::Undefined)
+        );
+        assert!(data.rejected_while_active.get());
+        registry.unregister(slot).unwrap();
+        assert_eq!(registry.metrics().active_slots, 0);
     }
 
     #[test]
@@ -1859,6 +1961,21 @@ mod tests {
         .unwrap();
         assert_eq!(
             registry.register(async_descriptor),
+            Err(DispatchError::InvalidDescriptor)
+        );
+
+        let mut unknown_signature = HostFunctionDescriptor::generic(
+            HostFunctionId(3004),
+            "ogma:test/unknown-signature",
+            0,
+            0,
+            generic_add,
+            ptr::null_mut(),
+        )
+        .unwrap();
+        unknown_signature.signature = 0xffff;
+        assert_eq!(
+            registry.register(unknown_signature),
             Err(DispatchError::InvalidDescriptor)
         );
     }

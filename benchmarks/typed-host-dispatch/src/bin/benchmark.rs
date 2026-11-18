@@ -597,7 +597,11 @@ fn main() -> Result<(), String> {
         &registry,
         || {
             let mut result = 0.0;
-            let status = unsafe { ogma_primitive_add_f64(2.0, 3.0, &mut result) };
+            let left = black_box(2.0);
+            let right = black_box(3.0);
+            let status = unsafe {
+                ogma_primitive_add_f64(black_box(left), black_box(right), &mut result)
+            };
             if status != OgmaStatus::OK || result != 5.0 {
                 return Err(format!("raw ABI baseline failed: {status:?}, {result}"));
             }

@@ -463,6 +463,7 @@ jobs:
           "$RUNNER_TEMP/ogma-typed-host-dispatch-c-layout"
 
       - name: Run reproducible typed host dispatch comparison
+        id: benchmark
         env:
           RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
           OGM21_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
@@ -481,7 +482,7 @@ jobs:
         run: python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$RUNNER_TEMP/ogm-21-typed-host-dispatch-report.json"
 
       - name: Upload OGM-21 proof report
-        if: always()
+        if: always() && steps.benchmark.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ogm-21-typed-host-dispatch-evidence
