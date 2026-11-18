@@ -732,6 +732,7 @@ jobs:
         run: cargo test --manifest-path benchmarks/isolate-allocator/Cargo.toml --all-features --locked
 
       - name: Run isolated allocator and compile-unit arena benchmarks
+        id: benchmark
         env:
           RUSTC_VERSION: ${{ steps.benchmark_environment.outputs.rustc_version }}
           OGM24_CPU_MODEL: ${{ steps.benchmark_environment.outputs.cpu_model }}
@@ -794,7 +795,7 @@ jobs:
           PY
 
       - name: Upload OGM-24 allocator and arena evidence
-        if: always()
+        if: always() && steps.benchmark.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: ogm-24-allocator-arena-evidence
