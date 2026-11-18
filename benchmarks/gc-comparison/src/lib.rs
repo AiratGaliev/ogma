@@ -388,7 +388,7 @@ impl GcHeap {
             return Err(GcError::StaleHostHandle);
         }
         let reference = slot.target.take().ok_or(GcError::StaleHostHandle)?;
-        slot.generation = slot.generation.checked_add(1).unwrap_or(u64::MAX);
+        slot.generation = slot.generation.saturating_add(1);
         let reusable = slot.generation != u64::MAX;
         if reusable {
             self.free_host_slots.push(handle.index);
@@ -630,7 +630,7 @@ impl GcHeap {
 
                 if cell.ref_count == 0 {
                     let reclaimed = slot.cell.take().ok_or(GcError::StaleObjectRef)?;
-                    slot.generation = slot.generation.checked_add(1).unwrap_or(u64::MAX);
+                    slot.generation = slot.generation.saturating_add(1);
                     let reusable = slot.generation != u64::MAX;
                     Some((reclaimed, reusable))
                 } else {
@@ -735,7 +735,7 @@ impl GcHeap {
             if let Some(cell) = slot.cell.take() {
                 reclaimed_objects += 1;
                 reclaimed_bytes += cell.logical_bytes;
-                slot.generation = slot.generation.checked_add(1).unwrap_or(u64::MAX);
+                slot.generation = slot.generation.saturating_add(1);
                 if slot.generation != u64::MAX {
                     self.free_slots.push(index);
                 }
