@@ -115,6 +115,7 @@ pub enum DeallocationErrorKind {
 }
 
 /// A failed deallocation returns ownership of the allocation to the caller.
+#[derive(Debug)]
 pub struct DeallocationError {
     kind: DeallocationErrorKind,
     allocation: Allocation,
@@ -320,10 +321,11 @@ impl IsolateAllocator {
     }
 
     fn ensure_capacity(&mut self, additional: usize) -> Result<(), AllocationError> {
+        let quota_bytes = self.quota_bytes;
         let fits = |reserved: usize| {
             reserved
                 .checked_add(additional)
-                .is_some_and(|total| total <= self.quota_bytes)
+                .is_some_and(|total| total <= quota_bytes)
         };
         while !fits(self.stats.reserved_bytes) {
             let Some(key) = self.free.keys().next().copied() else {

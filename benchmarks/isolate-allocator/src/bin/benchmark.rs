@@ -1,7 +1,7 @@
 use ogma_isolate_allocator_proof::{
     Allocation, AllocatorStrategy, CompileUnitArena, IsolateAllocator,
 };
-use std::alloc::{Layout, System};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::env;
 use std::fs;
 use std::hint::black_box;
