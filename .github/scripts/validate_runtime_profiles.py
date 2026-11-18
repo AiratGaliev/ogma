@@ -318,3 +318,45 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
         }
 
     return plans
+
+def build_report(
+    document: dict[str, Any],
+    schema: dict[str, Any],
+    plans: dict[str, dict[str, Any]],
+    manifest_path: Path,
+    schema_path: Path,
+    proof_binary: Path | None,
+) -> dict[str, Any]:
+    binary_measurement: dict[str, Any]
+    if proof_binary is not None:
+        if not proof_binary.is_file():
+            _fail(f"requested M0 proof binary does not exist: {proof_binary}")
+        binary_bytes = proof_binary.stat().st_size
+        binary_measurement = {
+            "name": proof_binary.name,
+            "bytes": binary_bytes,
+            "sha256": hashlib.sha256(proof_binary.read_bytes()).hexdigest(),
+            "scope": "OGM-25 typed-host-dispatch M0 proof executable; not an Ogma Runtime binary",
+        }
+    else:
+        binary_measurement = {
+            "status": "not-measured",
+            "scope": "OGM-25 typed-host-dispatch M0 proof executable; not an Ogma Runtime binary",
+        }
+
+    return {
+        "task": "OGM-28",
+        "contractVersion": document["schemaVersion"],
+        "result": "PASS",
+        "executionBoundary": "M0 logical component/profile proof; no production Rust Runtime or Cargo workspace exists",
+        "repositoryRevision": os.environ.get("GITHUB_SHA"),
+        "toolchain": {
+            "rustc": os.environ.get("RUSTC_VERSION"),
+            "cargo": os.environ.get("CARGO_VERSION"),
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+        },
+        "contractMeasurements": {
+            "profileSetBytes": manifest_path.stat().st_size,
+            "profileSchemaBytes": schema_path.stat().st_size,
+            "logicalComponentCount": len(document["components"]),
