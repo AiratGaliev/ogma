@@ -148,7 +148,7 @@ where
     }
 
     latencies.sort_by(f64::total_cmp);
-    let percentile = |p| {
+    let percentile = |p: f64| {
         let rank = ((p * latencies.len() as f64).ceil() as usize).max(1);
         latencies[rank.min(latencies.len()) - 1]
     };
