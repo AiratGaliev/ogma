@@ -818,6 +818,40 @@ impl<'a> HostModuleRegistry<'a> {
                 "module is not registered",
             )
         })?;
+
+        for feature in &module.required_features {
+            if !plan.enabled_features.contains(feature) {
+                return Err(ModuleDiagnostic::new(
+                    ModuleDiagnosticCode::MissingFeature,
+                    specifier,
+                    feature,
+                    format!("module requires feature '{feature}'"),
+                ));
+            }
+        }
+
+        let mut missing_module_capabilities = module
+            .required_capabilities
+            .iter()
+            .filter(|required| {
+                plan_capability_bit(plan, &required.name) != Some(required.bit)
+            })
+            .map(|required| required.name.clone())
+            .collect::<Vec<_>>();
+        missing_module_capabilities.sort();
+        missing_module_capabilities.dedup();
+        if !missing_module_capabilities.is_empty() {
+            return Err(ModuleDiagnostic::new(
+                ModuleDiagnosticCode::CapabilityDenied,
+                specifier,
+                "",
+                format!(
+                    "missing module capabilities: {}",
+                    missing_module_capabilities.join(", ")
+                ),
+            ));
+        }
+
         let name = export_name.ok_or_else(|| {
             ModuleDiagnostic::new(
                 ModuleDiagnosticCode::InvalidDescriptor,
@@ -1574,6 +1608,38 @@ mod tests {
             .granted_capabilities
             .push(HostCapabilityRequirement::new("render.read", 3));
         let plan = modules.build_profile(&granted).unwrap();
+
+        let mut tampered_plan = plan.clone();
+        tampered_plan.enabled_features.remove("graphics.v2");
+        let feature_denial = modules
+            .resolve_import(
+                &tampered_plan,
+                "ogma:math",
+                Some("add"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap_err();
+        assert_eq!(feature_denial.code, ModuleDiagnosticCode::MissingFeature);
+        assert_eq!(feature_denial.module, "ogma:math");
+
+        tampered_plan.enabled_features.insert("graphics.v2".to_owned());
+        tampered_plan.granted_capabilities.remove("render.read");
+        let module_capability_denial = modules
+            .resolve_import(
+                &tampered_plan,
+                "ogma:math",
+                Some("add"),
+                ModuleImportKind::StaticNamedEsm,
+            )
+            .unwrap_err();
+        assert_eq!(
+            module_capability_denial.code,
+            ModuleDiagnosticCode::CapabilityDenied
+        );
+        assert!(module_capability_denial
+            .detail
+            .contains("render.read"));
+
         let denied = modules
             .resolve_import(
                 &plan,
