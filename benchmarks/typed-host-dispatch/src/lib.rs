@@ -109,16 +109,20 @@ pub struct HostFunctionDescriptor {
     pub user_data: *mut c_void,
 }
 
+struct DescriptorConfig {
+    required_capabilities: u64,
+    effects: u32,
+    callback: OgmaHostCallback,
+    user_data: *mut c_void,
+}
+
 impl HostFunctionDescriptor {
     fn base(
         id: HostFunctionId,
         name: &str,
         signature: HostFunctionSignature,
         signature_id: u64,
-        required_capabilities: u64,
-        effects: u32,
-        callback: OgmaHostCallback,
-        user_data: *mut c_void,
+        config: DescriptorConfig,
     ) -> Result<Self, DispatchError> {
         let bytes = name.as_bytes();
         if bytes.is_empty() || bytes.len() > MAX_NAME_BYTES || bytes.contains(&0) {
@@ -139,13 +143,13 @@ impl HostFunctionDescriptor {
             reserved_name: 0,
             signature,
             signature_id,
-            effects,
+            effects: config.effects,
             reserved_effects: 0,
-            required_capabilities,
+            required_capabilities: config.required_capabilities,
             primitive_f64_thunk: None,
             number_handle_f64_thunk: None,
-            generic_callback: Some(callback),
-            user_data,
+            generic_callback: Some(config.callback),
+            user_data: config.user_data,
         })
     }
 
@@ -162,10 +166,12 @@ impl HostFunctionDescriptor {
             name,
             HostFunctionSignature::Generic,
             SIGNATURE_GENERIC,
-            required_capabilities,
-            effects,
-            callback,
-            user_data,
+            DescriptorConfig {
+                required_capabilities,
+                effects,
+                callback,
+                user_data,
+            },
         )
     }
 
@@ -183,10 +189,12 @@ impl HostFunctionDescriptor {
             name,
             HostFunctionSignature::F64Binary,
             SIGNATURE_F64_BINARY,
-            required_capabilities,
-            effects,
-            generic_callback,
-            user_data,
+            DescriptorConfig {
+                required_capabilities,
+                effects,
+                callback: generic_callback,
+                user_data,
+            },
         )?;
         descriptor.primitive_f64_thunk = Some(typed_thunk);
         Ok(descriptor)
@@ -206,10 +214,12 @@ impl HostFunctionDescriptor {
             name,
             HostFunctionSignature::NumberHandleBinary,
             SIGNATURE_NUMBER_HANDLE_BINARY,
-            required_capabilities,
-            effects,
-            generic_callback,
-            user_data,
+            DescriptorConfig {
+                required_capabilities,
+                effects,
+                callback: generic_callback,
+                user_data,
+            },
         )?;
         descriptor.number_handle_f64_thunk = Some(typed_thunk);
         Ok(descriptor)
