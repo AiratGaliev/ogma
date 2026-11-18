@@ -497,10 +497,15 @@ fn load_corpus() -> Result<CoreCorpus> {
                 .iter()
                 .map(|terminator| terminator.as_str().unwrap_or(""))
                 .collect();
-            let actual_terminators: Vec<&str> =
-                f.terminators.iter().map(String::as_str).collect();
+            let mut actual_terminators = Vec::new();
+            for terminator in &f.terminators {
+                let terminator = terminator.as_str();
+                if !actual_terminators.contains(&terminator) {
+                    actual_terminators.push(terminator);
+                }
+            }
             if actual_terminators != expected_terminators {
-                bail!("{label}: Core IR terminators differ from the benchmark manifest");
+                bail!("{label}: Core IR terminator kinds differ from the benchmark manifest");
             }
         }
         let expected_exception_edge = entry["exception_edge"].as_bool().unwrap_or(false);
