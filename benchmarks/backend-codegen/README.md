@@ -2,7 +2,8 @@
 
 This is an M0 backend-selection benchmark. It consumes the project's canonical
 `ogma.core-ir/1.0.0` positive fixtures rather than inventing a second IR schema.
-The workload manifest points to exact fixtures under `tests/core-ir/fixtures`.
+The backend recommendation and its re-evaluation criteria are recorded in
+[decision-record.md](decision-record.md). The workload manifest points to exact fixtures under `tests/core-ir/fixtures`.
 Before lowering, the harness validates each fixture's exact block order, instruction
 order and operands, result identifiers, branch/loop edges, exception edge and host
 capability symbol. The lowerers are fixture-profile adapters, not a general-purpose
@@ -61,10 +62,13 @@ cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --relea
 ```
 
 The report records source/tested revisions, Rust/LLVM/Clang and OS versions, CPU model
-and target features, cold first-invocation compile/link latency, three discarded compile/link
-warmups, and 101-sample steady-state compile/link distributions with raw samples,
+and target features, first-invocation compile/link timings (single diagnostic samples;
+the backend order is sequential, so they are not used as steady-state comparisons),
+three discarded compile/link warmups, and 101-sample steady-state compile/link
+distributions with raw samples,
 object/shared-library sizes, per-fixture p50/p95/p99 and throughput, direct helper
-baselines, target lookup, installed size for each selected LLVM toolchain package, Cargo
+baselines, target lookup, installed size for the explicitly listed LLVM/Clang packages
+(not the full transitive apt dependency closure or runtime deployment size), Cargo
 source size and recursively scanned native build artifacts (including the explicitly
 configured Cargo target directory, matched filenames, file counts and byte totals), and
 integration notes. Target lookup is not a cross-link or target ABI
@@ -72,13 +76,17 @@ proof. Peak compiler RSS, cross-target linking and deployment-package measuremen
 are not collected by this M0 harness and must not be inferred from the reported
 metrics. Results are specific to the recorded runner.
 
+## Committed evidence
+
+The raw machine-readable report is committed as
+`results/ogm30-report.json.gz` (gzip-compressed JSON, including all measurement samples).
+Inspect it with `gzip -dc benchmarks/backend-codegen/results/ogm30-report.json.gz`.
+The report's `tested_revision` identifies the exact source revision measured; the later
+commit that adds the evidence file and decision record does not alter that measured code.
+The CI artifact also retains the resolved `Cargo.lock` used for the run.
+
 ## Decision policy
 
-Use the committed M0 report as the project-specific evidence; do not substitute
-external compiler benchmarks. Do not choose a backend from one arithmetic score.
-Weigh steady-state runtime, compile latency, emitted size, target availability,
-helper-call overhead, toolchain/deployment burden, and the cost of integrating with
-the shared Core IR and OGM-27 root/safepoint contract. The M0 decision record must
-state the chosen backend (or explain why the data are inconclusive), the scope of
-that choice, trade-offs, fallback path and explicit re-evaluation triggers. This
-benchmark does not itself implement a production compiler or Runtime.
+The [M0 decision record](decision-record.md) selects the current primary backend,
+records the measured trade-offs and preserves explicit fallback/re-evaluation triggers.
+The benchmark does not itself implement a production compiler or Runtime.
