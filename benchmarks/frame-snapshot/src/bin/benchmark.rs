@@ -524,7 +524,7 @@ mod tests {
         );
     }
 
-    
+
     #[test]
     fn iteration_budget_scales_with_entity_count_and_never_becomes_zero() {
         assert_eq!(super::iterations_for(100, 40), 100);
