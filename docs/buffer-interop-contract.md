@@ -21,7 +21,7 @@ For external-owned storage, host and JS retain independent references to the sam
 
 Runtime.with_scoped_read / with_scoped_mut expose a Rust slice only during a synchronous callback. While the slice is live, JS execution, callback re-entry, nested borrows, GC safe points, resize, detach, await, yield and suspension are prohibited. RAII releases the guard on return, callback error and panic unwind. Every production engine entry point and invalidation path must enforce the same guard; no lower-level bypass is allowed.
 
-Runtime.with_scoped_view creates a revocable lease. Cloned Rust tokens can outlive the callback, but every later operation fails with LeaseExpired. Resize, detach and collection fail while a lease is live. A production Runtime must make equivalent revocation observable to JS; otherwise it must use copy or owned transfer.
+Runtime.with_scoped_view creates a revocable lease. Cloned Rust tokens can outlive the callback, but every later operation fails with LeaseExpired. The active lease count belongs to the shared backing store, not only to the Runtime instance that opened the lease; resize and detach through any Runtime instance are therefore rejected until the lease ends. Creating a lease for a detached store is rejected. Collection is blocked by the owning Runtime while its lease is live. A production Runtime must make equivalent revocation observable to JS; otherwise it must use copy or owned transfer.
 
 TypedArray remains mutable. A normal shared TypedArray is not a read-only snapshot. Production POD adapters must validate concrete representation, element size, alignment, endianness and aliasing; repr(C) alone is not proof. SharedArrayBuffer/Atomics is excluded.
 
