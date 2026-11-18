@@ -1454,11 +1454,7 @@ mod tests {
         assert_eq!(stack.depth(), 0);
         assert_eq!(stack.host_completion(), Some(result));
         stack
-            .release_host_completion_after_promotion(
-                result,
-                None,
-                &PersistentHandles::default(),
-            )
+            .release_host_completion_after_promotion(result, None, &PersistentHandles::default())
             .expect("primitive result released");
     }
 
@@ -1572,11 +1568,7 @@ mod tests {
             .retain(&heap, exception)
             .expect("host promotes managed exception to persistent handle");
         stack
-            .release_host_completion_after_promotion(
-                result,
-                Some(handle),
-                &providers.persistent,
-            )
+            .release_host_completion_after_promotion(result, Some(handle), &providers.persistent)
             .expect("execution root released only after matching host promotion");
 
         providers
@@ -1634,11 +1626,7 @@ mod tests {
         assert_eq!(result, thrown);
         assert_eq!(stack.host_completion(), Some(thrown));
         stack
-            .release_host_completion_after_promotion(
-                thrown,
-                None,
-                &PersistentHandles::default(),
-            )
+            .release_host_completion_after_promotion(thrown, None, &PersistentHandles::default())
             .expect("primitive completion released");
     }
 
@@ -1907,15 +1895,13 @@ mod tests {
             .retain(&heap, exception)
             .expect("exception promoted to persistent handle");
         stack
-            .release_host_completion_after_promotion(
-                thrown,
-                Some(exception_handle),
-                &handles,
-            )
+            .release_host_completion_after_promotion(thrown, Some(exception_handle), &handles)
             .expect("matching persistent handle permits root handoff");
         assert!(stack.roots().is_empty());
 
-        let report = heap.collect(handles.roots()).expect("persistent roots collect");
+        let report = heap
+            .collect(handles.roots())
+            .expect("persistent roots collect");
         assert!(heap.is_alive(exception));
         assert_eq!(report.objects_reclaimed, 0);
     }
