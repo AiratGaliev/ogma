@@ -38,7 +38,7 @@ The runner uses identical deterministic graph construction for both candidates:
 
 Before collection, the runner compares a deterministic graph fingerprint and exact root inventory for both strategies. It also compares post-collection live object counts, total reclaimed object counts and logical live bytes. A mismatch is a hard benchmark failure; the report is not written as a successful result.
 
-The benchmark defaults to 2,048 objects, three warmup rounds and 101 measured samples for each of three workloads and two collector policies. Each raw sample records graph identity, build time, collection pause, root-scan time, edges examined, roots scanned, live/reclaimed objects and logical heap bytes. Percentiles use nearest-rank. There are no machine-independent timing thresholds.
+The benchmark defaults to 2,048 objects, three warmup rounds and 101 measured samples for each of three workloads and two collector policies. Within each workload, the candidates run as paired samples with deterministic alternating order across warmups and measurements, reducing systematic first/second-candidate, scheduler and thermal bias. Each raw sample records graph identity, build time, collection pause, root-scan time, edges examined, roots scanned, live/reclaimed objects and logical heap bytes. Percentiles use nearest-rank. There are no machine-independent timing thresholds.
 
 ## Metrics
 
