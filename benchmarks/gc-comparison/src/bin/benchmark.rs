@@ -386,6 +386,11 @@ fn report(config: &Config, summaries: &[Summary]) -> String {
     let _ = writeln!(
         out,
         "  \"source_revision\": \"{}\",",
+        json_escape(&config.revision)
+    );
+    let _ = writeln!(
+        out,
+        "  \"tested_revision\": \"{}\",",
         json_escape(&config.tested_revision)
     );
     let _ = writeln!(out, "  \"environment\": {{");
