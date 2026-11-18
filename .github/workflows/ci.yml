@@ -1000,7 +1000,7 @@ jobs:
 
   ogm30-native-backend-comparison:
     name: OGM-30 Cranelift ObjectModule vs LLVM benchmark
-    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-30-benchmark-cranelift-llvm')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -1011,6 +1011,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install LLVM and native linker
         run: |

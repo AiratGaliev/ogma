@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context as _, Result};
 use cranelift_codegen::{
     ir::{condcodes::{FloatCC, IntCC}, instructions::BlockArg, types, AbiParam, InstBuilder, Signature, UserFuncName, Value},
-    settings::{self, Configurable}, Context as ClifContext,
+    settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{default_libcall_names, FuncId, Linkage, Module};
@@ -193,10 +193,10 @@ fn compile_cranelift(path:&Path,c:&CoreCorpus)->Result<u64>{
 }
 
 fn llvm_call_i64<'ctx>(b:&inkwell::builder::Builder<'ctx>,f:inkwell::values::FunctionValue<'ctx>,args:&[inkwell::values::BasicMetadataValueEnum<'ctx>],name:&str)->Result<IntValue<'ctx>>{
-    Ok(b.build_call(f,args,name)?.try_as_basic_value().unwrap_basic().context("expected i64 result")?.into_int_value())
+    Ok(b.build_call(f,args,name)?.try_as_basic_value().unwrap_basic().into_int_value())
 }
 fn llvm_call_f64<'ctx>(b:&inkwell::builder::Builder<'ctx>,f:inkwell::values::FunctionValue<'ctx>,args:&[inkwell::values::BasicMetadataValueEnum<'ctx>],name:&str)->Result<FloatValue<'ctx>>{
-    Ok(b.build_call(f,args,name)?.try_as_basic_value().left().context("expected f64 result")?.into_float_value())
+    Ok(b.build_call(f,args,name)?.try_as_basic_value().unwrap_basic().into_float_value())
 }
 fn compile_llvm(path:&Path,c:&CoreCorpus)->Result<u64>{
     let start=Instant::now();Target::initialize_all(&InitializationConfig::default());
