@@ -50,6 +50,22 @@ DEBUG_REQUIRED_COMPONENTS = {
     "source-debug-metadata",
 }
 
+DEVELOPMENT_REQUIRED_COMPONENTS = {
+    "dap-transport",
+    "profiler-hooks",
+    "hot-reload",
+}
+REQUIRED_PROFILE_DIMENSIONS = {
+    ("debug", "portable-interpreter", "none"),
+    ("debug", "hybrid-native", "none"),
+    ("development", "portable-interpreter", "none"),
+    ("development", "hybrid-native", "none"),
+    ("release", "portable-interpreter", "none"),
+    ("release", "hybrid-native", "none"),
+    ("release", "portable-interpreter", "node"),
+    ("release", "hybrid-native", "node"),
+}
+
 
 class ProfileValidationError(ValueError):
     """A stable, actionable profile or dependency-graph validation failure."""
@@ -187,6 +203,55 @@ def _dependency_closure(
     return included
 
 
+def _validate_rust_build_settings(profile_id: str, profile: dict[str, Any]) -> None:
+    """Keep Rust compiler optimisation/debug/stripping flags explicit and mode-consistent."""
+    mode = profile["buildMode"]
+    backend = profile["executionBackend"]
+    build = profile["rustBuild"]
+
+    expected: dict[str, Any] = {
+        "panic": "unwind",
+    }
+    if mode == "debug":
+        expected.update({
+            "optLevel": "0",
+            "debug": True,
+            "debugAssertions": True,
+            "overflowChecks": True,
+            "lto": "off",
+            "codegenUnits": 256,
+            "strip": "none",
+        })
+    elif mode == "development":
+        expected.update({
+            "optLevel": "1",
+            "debug": True,
+            "debugAssertions": True,
+            "overflowChecks": True,
+            "lto": "off",
+            "codegenUnits": 16,
+            "strip": "none",
+        })
+    else:
+        expected.update({
+            "optLevel": "3",
+            "debug": backend == "hybrid-native",
+            "debugAssertions": False,
+            "overflowChecks": False,
+            "lto": "thin",
+            "codegenUnits": 1,
+            "strip": "debuginfo" if backend == "hybrid-native" else "symbols",
+        })
+
+    mismatches = {
+        key: (build[key], value)
+        for key, value in expected.items()
+        if build[key] != value
+    }
+    if mismatches:
+        _fail(f"profile {profile_id!r} rustBuild settings conflict with {mode}/{backend}: {mismatches}")
+
+
 def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     validate_schema_instance(document, schema)
     if document["languageSemantics"] != EXPECTED_LANGUAGE_SEMANTICS:
@@ -200,7 +265,7 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
     # must not make a previously latent cycle part of a build plan.
     for component_id in sorted(components):
         _dependency_closure([component_id], components, "component-registry")
-    profiles_by_id: dict[str, dict[str, str, Any]] = {}
+    profiles_by_id: dict[str, dict[str, Any]] = {}
     plans: dict[str, dict[str, Any]] = {}
 
     for profile in document["profiles"]:
@@ -210,6 +275,7 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
         profiles_by_id[profile_id] = profile
 
     for profile_id, profile in profiles_by_id.items():
+        _validate_rust_build_settings(profile_id, profile)
         unknown_exclusions = sorted(set(profile["excludeComponents"]) - component_ids)
         if unknown_exclusions:
             _fail(f"profile {profile_id!r} excludes unknown components: {unknown_exclusions}")
@@ -275,6 +341,12 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
                 _fail(f"profile {profile_id!r} must preserve debug API/hooks/source metadata: {missing_debug}")
             if profile["metadata"]["sourceDebugMetadata"] != "embedded":
                 _fail(f"profile {profile_id!r} must embed source/debug metadata")
+            if profile["metadata"]["sourceMaps"] != "embedded":
+                _fail(f"profile {profile_id!r} must embed source maps in Debug/Development")
+        if profile["buildMode"] == "development":
+            missing_development = sorted(DEVELOPMENT_REQUIRED_COMPONENTS - included)
+            if missing_development:
+                _fail(f"profile {profile_id!r} must include DAP, profiler hooks and Hot Reload: {missing_development}")
 
         source_metadata_included = "source-debug-metadata" in included
         if source_metadata_included != (profile["metadata"]["sourceDebugMetadata"] == "embedded"):
@@ -283,8 +355,10 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
             _fail(f"profile {profile_id!r} cannot embed source maps without source/debug metadata")
         if profile["executionBackend"] == "portable-interpreter" and profile["metadata"]["debugSymbols"] != "not-applicable":
             _fail(f"profile {profile_id!r} has native debug-symbol policy without a native backend")
-        if profile["executionBackend"] == "hybrid-native" and profile["metadata"]["debugSymbols"] not in ("external", "omitted"):
-            _fail(f"profile {profile_id!r} must keep native debug symbols external or omit them from the runtime package")
+        if profile["executionBackend"] == "hybrid-native":
+            expected_symbols = "embedded" if profile["buildMode"] in ("debug", "development") else "external"
+            if profile["metadata"]["debugSymbols"] != expected_symbols:
+                _fail(f"profile {profile_id!r} must use {expected_symbols} native debug symbols for {profile['buildMode']} mode")
 
         expected_flags = sorted(
             component["featureFlag"]
@@ -307,6 +381,7 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
             "buildMode": profile["buildMode"],
             "executionBackend": profile["executionBackend"],
             "hostCompatibility": profile["hostCompatibility"],
+            "rustBuild": profile["rustBuild"],
             "includedComponents": sorted(included),
             "strippedComponents": stripped,
             "linkedRuntimeComponents": linked,
@@ -317,7 +392,19 @@ def build_profile_plans(document: dict[str, Any], schema: dict[str, Any]) -> dic
             "metadataPolicy": profile["metadata"],
         }
 
+    actual_dimensions = {
+        (profile["buildMode"], profile["executionBackend"], profile["hostCompatibility"])
+        for profile in profiles_by_id.values()
+    }
+    missing_dimensions = sorted(REQUIRED_PROFILE_DIMENSIONS - actual_dimensions)
+    if missing_dimensions:
+        _fail(f"runtime profile matrix is missing required build/backend/host combinations: {missing_dimensions}")
+
+    if len(actual_dimensions) != len(profiles_by_id):
+        _fail("runtime profile matrix contains duplicate buildMode/executionBackend/hostCompatibility combinations")
+
     return plans
+
 
 def build_report(
     document: dict[str, Any],
