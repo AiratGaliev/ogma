@@ -524,7 +524,6 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let f64t = cx.f64_type();
     let unary = i64t.fn_type(&[i64t.into()], false);
     let binary = i64t.fn_type(&[i64t.into(), i64t.into()], false);
-    let binary_f = f64t.fn_type(&[f64t.into(), f64t.into()], false);
     let ternary_f = f64t.fn_type(&[f64t.into(), f64t.into(), f64t.into()], false);
     let branch_type = f64t.fn_type(&[f64t.into(), f64t.into()], false);
     let call_type = i64t.fn_type(
