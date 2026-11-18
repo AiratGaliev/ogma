@@ -300,6 +300,11 @@ fn distribution(mut s: Vec<f64>) -> Distribution {
     Distribution { p50_ns_per_call: median, p95_ns_per_call: p(0.95), p99_ns_per_call: p(0.99),
         throughput_calls_per_second: 1e9 / median, raw_ns_per_call_samples: s }
 }
+fn symbol_name(name: &str) -> Vec<u8> {
+    let mut bytes = name.as_bytes().to_vec();
+    bytes.push(0);
+    bytes
+}
 fn bench_unary(lib: &Library, name: &[u8], x: i64, o: &Options) -> Result<Distribution> {
     let f: Unary = unsafe { *lib.get(name)? };
     for _ in 0..o.warmups { for n in 0..o.iterations { black_box(unsafe { f(black_box(x + n as i64 % 31)) }); } }
@@ -344,14 +349,14 @@ fn run_backend(name: &str, o: &Options, root: &Path, manifest: &Manifest) -> Res
     let link_time_ns = link(&object, &shared, &helper)?;
     let lib = unsafe { Library::new(&shared)? };
     let workloads = serde_json::json!({
-        "arithmetic": bench_unary(&lib,workload_name(manifest, "arithmetic")?.as_bytes(),13,o)?,
-        "control_flow": bench_unary(&lib,workload_name(manifest, "control_flow")?.as_bytes(),-13,o)?,
-        "internal_call": bench_unary(&lib,workload_name(manifest, "internal_call")?.as_bytes(),13,o)?,
-        "dynamic_operation_helper": bench_binary(&lib,workload_name(manifest, "dynamic_add")?.as_bytes(),o)?,
-        "dynamic_helper_direct": bench_binary(&lib,b"ogma_dynamic_add_helper",o)?,
-        "exception_completion_helper": bench_unary(&lib,workload_name(manifest, "completion")?.as_bytes(),-13,o)?,
-        "host_call_helper": bench_unary(&lib,workload_name(manifest, "host_call")?.as_bytes(),13,o)?,
-        "host_helper_direct": bench_unary(&lib,b"ogma_host_call_helper",13,o)?
+        "arithmetic": bench_unary(&lib,&symbol_name(workload_name(manifest, "arithmetic")?),13,o)?,
+        "control_flow": bench_unary(&lib,&symbol_name(workload_name(manifest, "control_flow")?),-13,o)?,
+        "internal_call": bench_unary(&lib,&symbol_name(workload_name(manifest, "internal_call")?),13,o)?,
+        "dynamic_operation_helper": bench_binary(&lib,&symbol_name(workload_name(manifest, "dynamic_add")?),o)?,
+        "dynamic_helper_direct": bench_binary(&lib,b"ogma_dynamic_add_helper\0",o)?,
+        "exception_completion_helper": bench_unary(&lib,&symbol_name(workload_name(manifest, "completion")?),-13,o)?,
+        "host_call_helper": bench_unary(&lib,&symbol_name(workload_name(manifest, "host_call")?),13,o)?,
+        "host_helper_direct": bench_unary(&lib,b"ogma_host_call_helper\0",13,o)?
     });
     let arithmetic: Unary = unsafe { *lib.get(workload_name(manifest, "arithmetic")?.as_bytes())? };
     let branch: Unary = unsafe { *lib.get(workload_name(manifest, "control_flow")?.as_bytes())? };
@@ -374,9 +379,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, manifest: &Manifest) -> Res
 #[derive(Serialize)]
 struct Report {
     schema_version: u32, task: &'static str, source_revision: String, tested_revision: String,
-    rustc: String, llvm: String, host_arch: &'static str, host_os: &'static str,
+    rustc: String, llvm: String, clang: String, host_arch: &'static str, host_os: &'static str,
     iterations_per_sample: u64, warmup_rounds: usize, measurement_samples: usize,
     target_lookup: serde_json::Value, llvm_package_footprint_kib: Option<u64>,
+    cranelift_crate_source_bytes: u64, llvm_binding_source_bytes: u64, cranelift_build_artifact_bytes: u64, llvm_binding_build_artifact_bytes: u64,
     integration_notes: serde_json::Value, cranelift: BackendReport, llvm_backend: BackendReport,
 }
 fn cmd(program: &str, args: &[&str]) -> String {
@@ -397,6 +403,41 @@ fn target_lookup() -> serde_json::Value {
     }).collect())
 }
 
+fn directory_size(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else { return 0; };
+    entries.flatten().map(|entry| {
+        let path = entry.path();
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            directory_size(&path)
+        } else {
+            entry.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+        }
+    }).sum()
+}
+fn cargo_source_size(prefixes: &[&str]) -> u64 {
+    let home = env::var_os("CARGO_HOME").map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+    let Some(home) = home else { return 0; };
+    let root = home.join("registry").join("src");
+    let Ok(indices) = fs::read_dir(root) else { return 0; };
+    indices.flatten().map(|index| {
+        let Ok(crates) = fs::read_dir(index.path()) else { return 0; };
+        crates.flatten().filter_map(|package| {
+            let name = package.file_name().to_string_lossy().into_owned();
+            prefixes.iter().any(|prefix| name.starts_with(prefix))
+                .then(|| directory_size(&package.path()))
+        }).sum::<u64>()
+    }).sum()
+}
+fn cargo_artifact_size(prefix: &str) -> u64 {
+    let root = env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("target"));
+    let Ok(entries) = fs::read_dir(root.join("release").join("deps")) else { return 0; };
+    entries.flatten().filter_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        name.starts_with(prefix).then(|| entry.metadata().map(|m| m.len()).unwrap_or(0))
+    }).sum()
+}
+
 fn main() -> Result<()> {
     let o = options()?;
     let root = env::temp_dir().join(format!("ogm30-{}", std::process::id()));
@@ -411,10 +452,14 @@ fn main() -> Result<()> {
     let report = Report {
         schema_version:1, task:"OGM-30", source_revision:o.revision.clone(),
         tested_revision:env::var("GITHUB_SHA").unwrap_or_else(|_|o.revision.clone()),
-        rustc:cmd("rustc",&["--version"]), llvm:cmd("llvm-config-18",&["--version"]),
+        rustc:cmd("rustc",&["--version"]), llvm:cmd("llvm-config-18",&["--version"]), clang:cmd("clang-18",&["--version"]),
         host_arch:env::consts::ARCH, host_os:env::consts::OS,
         iterations_per_sample:o.iterations, warmup_rounds:o.warmups, measurement_samples:o.samples,
         target_lookup:target_lookup(), llvm_package_footprint_kib:footprint,
+        cranelift_crate_source_bytes:cargo_source_size(&["cranelift-"]),
+        llvm_binding_source_bytes:cargo_source_size(&["inkwell-","llvm-sys-181"]),
+        cranelift_build_artifact_bytes:cargo_artifact_size("libcranelift_"),
+        llvm_binding_build_artifact_bytes:cargo_artifact_size("libinkwell-") + cargo_artifact_size("libllvm_sys_181-"),
         integration_notes:serde_json::json!({
             "cranelift":"Rust crates; in-process ObjectModule lowering; no LLVM installation",
             "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
