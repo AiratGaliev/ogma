@@ -524,7 +524,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn iteration_budget_scales_with_entity_count_and_never_becomes_zero() {
         assert_eq!(super::iterations_for(100, 40), 100);
@@ -536,8 +535,14 @@ mod tests {
     #[test]
     fn cli_argument_parsing_preserves_defaults_and_rejects_invalid_values() {
         let explicit = vec![String::from("--samples"), String::from("5")];
-        assert_eq!(super::parse_argument(&explicit, "--samples", 101).unwrap(), 5);
-        assert_eq!(super::parse_argument(&explicit, "--iterations", 1000).unwrap(), 1000);
+        assert_eq!(
+            super::parse_argument(&explicit, "--samples", 101).unwrap(),
+            5
+        );
+        assert_eq!(
+            super::parse_argument(&explicit, "--iterations", 1000).unwrap(),
+            1000
+        );
 
         let invalid = vec![String::from("--samples"), String::from("many")];
         assert!(super::parse_argument(&invalid, "--samples", 101).is_err());
