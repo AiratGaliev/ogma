@@ -475,6 +475,12 @@ impl CompileUnitArena {
 
         for index in self.current_chunk..self.chunks.len() {
             let chunk = &mut self.chunks[index];
+            // The offset can only preserve alignment guaranteed by the chunk's
+            // base allocation. A chunk created for a smaller alignment must
+            // never satisfy a later request with a stronger alignment.
+            if chunk.layout.align() < align {
+                continue;
+            }
             let offset = align_up(chunk.used, align).ok_or(AllocationError::InvalidLayout)?;
             let end = offset
                 .checked_add(size)
@@ -719,6 +725,71 @@ mod tests {
         assert_eq!(first, reused);
         assert_eq!(arena.stats().reserved_bytes, reserved);
         assert_eq!(arena.stats().resets, 1);
+    }
+
+    #[test]
+    fn compile_unit_arena_does_not_reuse_a_chunk_with_insufficient_base_alignment() {
+        let mut arena = CompileUnitArena::new(ARENA_CHUNK_BYTES * 2);
+        arena
+            .allocate(layout(8, 8))
+            .expect("create a chunk with the minimum alignment");
+        assert_eq!(arena.stats().chunks, 1);
+
+        let aligned = arena
+            .allocate(layout(64, 128))
+            .expect("allocate with stronger alignment in a new chunk");
+        assert_eq!(aligned.as_ptr() as usize % 128, 0);
+        assert_eq!(
+            arena.stats().chunks,
+            2,
+            "a 64-byte-aligned chunk must not be reused for a 128-byte request"
+        );
+    }
+
+    #[test]
+    fn size_class_pool_caps_cached_blocks_per_bucket() {
+        const BLOCKS: usize = MAX_CACHED_BLOCKS_PER_BUCKET + 1;
+        const BLOCK_BYTES: usize = 16;
+        let mut allocator =
+            IsolateAllocator::new(AllocatorStrategy::SizeClassPool, BLOCKS * BLOCK_BYTES);
+        let allocations = (0..BLOCKS)
+            .map(|_| {
+                allocator
+                    .allocate(layout(BLOCK_BYTES, 16))
+                    .expect("allocate block within quota")
+            })
+            .collect::<Vec<_>>();
+
+        for allocation in allocations {
+            allocator
+                .deallocate(allocation)
+                .expect("release allocation into cache or System");
+        }
+
+        assert_eq!(
+            allocator.stats().free_cached_bytes,
+            MAX_CACHED_BLOCKS_PER_BUCKET * BLOCK_BYTES
+        );
+        assert_eq!(
+            allocator.stats().reserved_bytes,
+            MAX_CACHED_BLOCKS_PER_BUCKET * BLOCK_BYTES
+        );
+        assert!(allocator.stats().peak_reserved_bytes <= allocator.quota_bytes());
+    }
+
+    #[test]
+    fn size_class_fallback_preserves_large_layout_alignment_and_quota() {
+        let mut allocator = IsolateAllocator::new(AllocatorStrategy::SizeClassPool, 8192);
+        let allocation = allocator
+            .allocate(layout(8192, 64))
+            .expect("large and over-aligned request uses the System path");
+        assert_eq!(allocation.backing_size(), 8192);
+        assert_eq!(allocation.as_non_null().as_ptr() as usize % 64, 0);
+        assert_eq!(allocator.stats().reserved_bytes, 8192);
+        allocator
+            .deallocate(allocation)
+            .expect("release direct System allocation");
+        assert_eq!(allocator.stats().reserved_bytes, 0);
     }
 
     #[test]
