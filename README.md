@@ -83,6 +83,7 @@ These protections enforce repository workflow, but they do not imply that Ogma r
 - [Rust embedding & host-performance evidence (OGM-7)](docs/rust-embedding-host-performance-evidence.md) — consolidated index of the M0 ABI, dispatch, buffer, frame, allocator and static host-module proofs, measurements and limitations.
 - [Development Workflow](docs/development-workflow.md) — branches, PR rules, CI/testing, Linear statuses and definitions of done.
 - [Compatibility Profile](docs/compatibility-profile.md) — versioned ECMAScript, TypeScript, Node.js API, module-resolution and consumer compatibility contract.
+- [Runtime feature profiles and production stripping (OGM-28)](docs/runtime-feature-profiles.md) — dependency-aware build profiles, language-semantic invariants, tooling/metadata lifecycle and M0 footprint evidence.
 - [Test runner and corpus architecture](docs/test-runner-and-corpus.md) — pinned conformance sources, adapter protocol, feature profile, result classes and deterministic shard aggregation.
 - [AGENTS.md](AGENTS.md) — repository-wide instructions for coding agents.
 - [LICENSE](LICENSE) — project license.
