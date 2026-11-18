@@ -553,7 +553,11 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     b.position_at_end(no);
     b.build_return(Some(&right))?;
 
-    let add_number = module.add_function("ogma_js_add_number", binary_f, None);
+    let add_number = module.add_function(
+        "ogma_js_add_number",
+        i64t.fn_type(&[f64t.into(), f64t.into()], false),
+        None,
+    );
     let to_number = module.add_function(
         "ogma_js_to_number",
         i64t.fn_type(&[i64t.into()], false),
