@@ -173,6 +173,10 @@
     {
       "path": "tests/core-ir/fixtures/positive-loop-carried-values.json",
       "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-host-call.json",
+      "expect": "accepted"
     }
   ]
 }

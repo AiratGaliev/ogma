@@ -1,28 +1,47 @@
 # OGM-30 — Cranelift ObjectModule vs LLVM
 
-This is an M0 backend-selection benchmark, not a production Ogma compiler or Runtime.
-Both lowerers read the same versioned benchmark Core IR subset manifest in
-`fixtures/workloads.json`. The manifest supplies the function names, parameter arity and semantic effect annotations to both lowerers; each backend maps the same workload kinds to its own IR instructions. The subset is deliberately explicit: it covers integer
-arithmetic, a real CFG branch, an internal function call, dynamic-operation helper
-dispatch, completion/exception helper dispatch, and a host-call boundary. Dynamic
-operations and completions are represented by explicit helpers; the proof does not
-claim full ECMAScript value semantics.
+This is an M0 backend-selection benchmark. It consumes the project's canonical
+`ogma.core-ir/1.0.0` positive fixtures rather than inventing a second IR schema.
+The workload manifest points to exact fixtures under `tests/core-ir/fixtures`;
+the Rust harness parses and checks their contract version, operations, CFG shape,
+parameter representations, exception edge and host capability symbol. Both backend
+lowerers receive the same parsed corpus and use the fixture identity to name their
+generated functions.
 
-## Backends
+## Canonical Core IR workloads
+
+| Workload | Canonical fixture | Measured behavior |
+|---|---|---|
+| SSA branch | `positive-ssa-branch.json` | `js.strict_equal`, branch and return |
+| Loop-carried values | `positive-loop-carried-values.json` | loop CFG, `js.strict_equal`, `js.add`, `js.to_number` |
+| Dynamic exception | `positive-dynamic-exception.json` | `js.add`, explicit exception edge and `js.throw` completion |
+| Call boundary | `positive-call-boundary.json` | `js.strict_equal`, `js.add`, `js.call` |
+| Host capability | `positive-host-call.json` | `host.call` with stable symbol `benchmark.host.echo` |
+
+The host-call fixture is also added to the canonical Core IR fixture manifest and is
+validated by the project's existing Core IR Fast checks.
+
+## Backend prototypes
 
 - **Cranelift:** `cranelift-object::ObjectModule`, native host ISA, speed optimization.
-- **LLVM:** LLVM 18.1 through Inkwell, native target machine, default optimization level.
-- Both emit native object files with the same exported C ABI signatures. A small C
-  shim supplies deterministic helper implementations and is linked into each shared
-  object. No Rust default ABI or Ogma Runtime layout is exposed.
-- Runtime measurements load the emitted shared object and execute the generated
-  functions. Compilation, linking, object/shared-library size and helper-call
-  throughput are reported separately.
+- **LLVM:** LLVM 18.1 through Inkwell, native target machine, default optimization.
+- Both emit PIC object files using the same exported C ABI signatures and link the
+  same helper shim. Generated functions are loaded and exercised through their native
+  symbols; semantic checks run before timing.
+- The loop fixture lowers `js.add` to a boxed numeric helper result followed by
+  `js.to_number`. The dynamic-exception fixture lowers the exception edge to an
+  explicit tagged completion and exercises the `js.throw` propagation helper.
+- Helpers are deterministic benchmark stubs, not the production Ogma Runtime. They
+  exercise helper dispatch and call overhead but do not implement full ECMAScript
+  coercion, allocation, GC roots, stack maps, safepoints, re-entrancy or host ABI
+  ownership. In particular, the string/number `js.add` path is only a narrow
+  specialization. OGM-27's root/safepoint contract and OGM-32's AOT host-call proof
+  remain separate production integration requirements.
 
 ## Reproduction
 
-The CI job pins Rust 1.100.0, Cranelift 0.137.1, Inkwell 0.11.0 and LLVM 18.1 (Inkwell dynamic LLVM linking).
-On Ubuntu 24.04 with `llvm-18-dev`, `clang-18` and `cc` installed:
+The focused CI job pins Rust 1.100.0, Cranelift 0.137.1, Inkwell 0.11.0 and LLVM 18.1.
+On Ubuntu 24.04 with `llvm-18-dev`, `clang-18` and `build-essential`:
 
 ```sh
 cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
@@ -33,31 +52,18 @@ cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --relea
   --revision "$(git rev-parse HEAD)" --output /tmp/ogm30-report.json
 ```
 
-The CI evidence contains the raw JSON report, generated object files, dependency
-lockfile, toolchain versions and exact source/tested revisions. Results are
-measurements from the named runner and must not be generalized to other targets.
-
-## Metrics and interpretation
-
-The harness records compile-time distributions, link time, object and linked image
-sizes, per-workload p50/p95/p99 and throughput, helper-boundary call costs, target
-lookup coverage, LLVM package footprint, and dependency/integration notes. Target
-lookup is not a cross-link or ABI compatibility proof. Toolchain footprint is
-reported as installed LLVM package size; Cranelift is a Rust dependency set and its
-Cargo registry/build footprint is reported separately. Integration complexity is
-qualitative and tied to the actual prototype rather than a synthetic score.
-
-The C helpers model a narrow ABI boundary only. They do not prove production Ogma
-host-call semantics, GC root maps, stack maps, callbacks, or interpreter/AOT
-equivalence. Those remain governed by OGM-27 and OGM-32. External compiler benchmarks
-are contextual references only; the backend decision is based on these Ogma-specific
-measurements.
+The report records source/tested revisions, Rust/LLVM/Clang and OS versions, CPU,
+compile/link latency distributions and raw samples, object/shared-library sizes,
+per-fixture p50/p95/p99 and throughput, direct helper baselines, target lookup,
+LLVM package footprint, Cargo source/build artifact footprints and integration notes.
+Target lookup is not a cross-link or target ABI proof. Measurements are specific to
+the recorded runner and must not be generalized to other targets.
 
 ## Decision policy
 
-Do not select a primary backend from a single arithmetic score. The decision must
-weigh steady-state runtime, compilation latency, emitted size, target availability,
-toolchain/deployment burden, helper-call overhead, and the cost of integrating the
-backend with the shared Core IR and OGM-27 root/safepoint contract. Keep fallback or
-re-evaluation triggers explicit. A benchmark result is not a production Runtime
-implementation.
+Do not choose a primary backend from one arithmetic score. Weigh steady-state runtime,
+compile latency, emitted size, target availability, helper-call overhead,
+toolchain/deployment burden, and the cost of integrating with the shared Core IR and
+OGM-27 root/safepoint contract. Record the measured trade-offs and explicit
+re-evaluation triggers. This benchmark does not itself select or integrate a
+production backend.
