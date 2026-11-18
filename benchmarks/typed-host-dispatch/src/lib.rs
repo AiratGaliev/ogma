@@ -1096,16 +1096,17 @@ impl HostFunctionRegistry {
         property: &str,
     ) -> Option<CallSiteGuard> {
         let property_slot = object.property_slot(property)?;
-        match object.get_by_slot(property_slot)? {
-            JsCallable::Host { identity, slot } => Some(CallSiteGuard {
+        let callable = object.get_by_slot(property_slot)?;
+        match callable.kind {
+            JsCallableKind::Host { slot } => Some(CallSiteGuard {
                 object_identity: object.identity,
                 shape_id: object.shape_id,
                 property: property.to_owned(),
                 property_slot,
-                function_identity: identity,
+                function_identity: callable.identity,
                 slot,
             }),
-            JsCallable::Script { .. } => None,
+            JsCallableKind::Script { .. } => None,
         }
     }
 
@@ -1134,12 +1135,14 @@ impl HostFunctionRegistry {
                             metrics.guarded_property_loads.saturating_add(1);
                     });
                     let current = object.get_by_slot(guard.property_slot);
-                    if let Some(JsCallable::Host { identity, slot }) = current {
-                        if identity == guard.function_identity && slot == guard.slot {
-                            self.add_metrics(|metrics| {
-                                metrics.cache_hits = metrics.cache_hits.saturating_add(1);
-                            });
-                            return self.invoke_slot(scope, slot, capabilities, args);
+                    if let Some(callable) = current {
+                        if let JsCallableKind::Host { slot } = callable.kind {
+                            if callable.identity == guard.function_identity && slot == guard.slot {
+                                self.add_metrics(|metrics| {
+                                    metrics.cache_hits = metrics.cache_hits.saturating_add(1);
+                                });
+                                return self.invoke_slot(scope, slot, capabilities, args);
+                            }
                         }
                     }
                     self.add_metrics(|metrics| {
@@ -1171,11 +1174,11 @@ impl HostFunctionRegistry {
             return Ok(JsCompletion::Throw(JsException::ReferenceError));
         };
 
-        match callable {
-            JsCallable::Host { slot, .. } => {
+        match callable.kind {
+            JsCallableKind::Host { slot } => {
                 self.invoke_generic_slot(scope, slot, capabilities, args)
             }
-            JsCallable::Script { result, .. } => Ok(JsCompletion::Normal(result)),
+            JsCallableKind::Script { result } => Ok(JsCompletion::Normal(result)),
         }
     }
 }
@@ -1211,27 +1214,29 @@ impl Drop for HostFunctionRegistry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum JsCallable {
-    Host {
-        identity: u64,
-        slot: HostFunctionSlot,
-    },
-    Script {
-        identity: u64,
-        result: DispatchValue,
-    },
+pub struct JsCallable {
+    identity: u64,
+    kind: JsCallableKind,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum JsCallableKind {
+    Host { slot: HostFunctionSlot },
+    Script { result: DispatchValue },
+}
+
 impl JsCallable {
     pub fn host(slot: HostFunctionSlot) -> Self {
-        Self::Host {
+        Self {
             identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed),
-            slot,
+            kind: JsCallableKind::Host { slot },
         }
     }
+
     pub fn script(result: DispatchValue) -> Self {
-        Self::Script {
+        Self {
             identity: NEXT_FUNCTION_ID.fetch_add(1, Ordering::Relaxed),
-            result,
+            kind: JsCallableKind::Script { result },
         }
     }
 }
