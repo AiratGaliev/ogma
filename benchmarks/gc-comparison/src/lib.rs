@@ -932,6 +932,18 @@ mod tests {
             assert_ne!(original.generation, replacement.generation);
             assert!(!heap.is_alive(original));
             assert!(heap.is_alive(replacement));
+
+            let replacement_host = heap.retain_host_handle(replacement).unwrap();
+            assert_eq!(host.index, replacement_host.index);
+            assert_ne!(host.generation, replacement_host.generation);
+            assert_eq!(
+                heap.resolve_host_handle(host),
+                Err(GcError::StaleHostHandle)
+            );
+            assert_eq!(
+                heap.resolve_host_handle(replacement_host),
+                Ok(replacement)
+            );
         }
     }
 
