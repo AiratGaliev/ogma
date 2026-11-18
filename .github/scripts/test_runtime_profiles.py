@@ -79,4 +79,63 @@ class RuntimeProfileContractTests(unittest.TestCase):
 
     def test_release_profiles_strip_debugger_transport_by_default(self) -> None:
         plans = self.validate()
-        for profile_id in (
+        for profile_id in ("portable-interpreter-release", "hybrid-native-release", "node-compatibility-portable-release"):
+            plan = plans[profile_id]
+            self.assertNotIn("dap-transport", plan["includedComponents"])
+            self.assertNotIn("inspector-ui", plan["includedComponents"])
+            self.assertEqual(plan["metadataPolicy"]["sourceDebugMetadata"], "stripped")
+
+    def test_release_can_explicitly_opt_in_to_debugger_transport_and_metadata(self) -> None:
+        configured = copy.deepcopy(self.document)
+        profile = next(item for item in configured["profiles"] if item["id"] == "portable-interpreter-release")
+        profile["excludeComponents"] = [
+            item for item in profile["excludeComponents"]
+            if item not in {"source-debug-metadata", "debugger-api", "dap-transport"}
+        ]
+        profile["includeRoots"].append("dap-transport")
+        profile["tooling"]["debuggerApi"] = True
+        profile["tooling"]["dapTransport"] = True
+        profile["metadata"]["sourceDebugMetadata"] = "embedded"
+        profile["metadata"]["sourceMaps"] = "embedded"
+        profile["featureFlags"].extend(["debug.api", "debug.source-metadata", "tools.dap-transport"])
+        profile["featureFlags"].sort()
+        plan = self.validate(configured)["portable-interpreter-release"]
+        self.assertIn("dap-transport", plan["includedComponents"])
+        self.assertIn("debugger-api", plan["includedComponents"])
+        self.assertIn("source-debug-metadata", plan["includedComponents"])
+
+    def test_node_compatibility_requires_explicit_resolver_and_adapter(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "portable-interpreter-release")
+        profile["hostCompatibility"] = "node"
+        with self.assertRaisesRegex(ProfileValidationError, "without both resolver and API adapter"):
+            self.validate(invalid)
+
+    def test_node_components_are_rejected_without_node_profile(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "portable-interpreter-release")
+        profile["excludeComponents"] = [
+            item for item in profile["excludeComponents"]
+            if item not in {"node-module-resolver", "node-compat-api"}
+        ]
+        profile["includeRoots"].append("node-compat-api")
+        with self.assertRaisesRegex(ProfileValidationError, "without selecting hostCompatibility=node"):
+            self.validate(invalid)
+
+    def test_debug_and_development_profiles_retain_source_metadata(self) -> None:
+        invalid = copy.deepcopy(self.document)
+        profile = next(item for item in invalid["profiles"] if item["id"] == "development-test")
+        profile["metadata"]["sourceDebugMetadata"] = "stripped"
+        with self.assertRaisesRegex(ProfileValidationError, "must embed source/debug metadata"):
+            self.validate(invalid)
+
+    def test_debugger_transport_and_ui_are_orthogonal_to_runtime_semantics(self) -> None:
+        plans = self.validate()
+        debug = plans["debug-interpreter"]["includedComponents"]
+        release = plans["portable-interpreter-release"]["includedComponents"]
+        self.assertIn("dap-transport", debug)
+        self.assertIn("inspector-ui", debug)
+        self.assertNotIn("dap-transport", release)
+        self.assertNotIn("inspector-ui", release)
+        self.assertEqual(self.document["languageSemantics"]["dynamicCode"], "preserved")
+        self.assertEqual(self.document["ecmaEdition"], "ECMAScript-2026")
