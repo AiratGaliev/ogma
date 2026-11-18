@@ -183,6 +183,20 @@ pub struct ScopeMetrics {
 
 /// Owner-thread state. The type is intentionally !Send + !Sync: its mutable host
 /// state is accessed on one owner thread through short, checked RefCell borrows.
+///
+/// It must not be moved to or shared with another thread:
+///
+/// ```compile_fail
+/// use ogma_host_execution_scope_proof::HostExecutionContext;
+/// fn require_send<T: Send>() {}
+/// require_send::<HostExecutionContext>();
+/// ```
+///
+/// ```compile_fail
+/// use ogma_host_execution_scope_proof::HostExecutionContext;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<HostExecutionContext>();
+/// ```
 pub struct HostExecutionContext {
     owner_thread: ThreadId,
     state: RefCell<HostState>,
@@ -612,6 +626,29 @@ mod tests {
     }
 
     #[test]
+    fn top_level_scope_is_non_reentrant_and_nested_depth_is_bounded() {
+        let context = HostExecutionContext::new(LibrarySyncMode::None);
+        let root = context.enter_scope().unwrap();
+        assert_eq!(
+            context.enter_scope().err(),
+            Some(HostError::ScopeAlreadyActive)
+        );
+
+        let nested = (0..MAX_SCOPE_DEPTH - 1)
+            .map(|_| root.nested_scope().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            root.nested_scope().err(),
+            Some(HostError::ScopeDepthExceeded)
+        );
+        assert_eq!(context.metrics().active_scopes, MAX_SCOPE_DEPTH);
+
+        drop(nested);
+        drop(root);
+        assert_eq!(context.metrics().active_scopes, 0);
+    }
+
+    #[test]
     fn callback_panic_is_contained_and_scope_guards_unwind() {
         let shared = SharedLockHost::new(LibrarySyncMode::None);
         assert_eq!(
@@ -680,21 +717,48 @@ mod tests {
     #[test]
     fn concurrent_shared_lock_contention_is_counted() {
         let host = Arc::new(SharedLockHost::new(LibrarySyncMode::None));
-        let barrier = Arc::new(Barrier::new(2));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
         let holder = Arc::clone(&host);
-        let holder_barrier = Arc::clone(&barrier);
-        let thread = thread::spawn(move || {
+        let holder_thread = thread::spawn(move || {
             holder.with_callback(|_| {
-                holder_barrier.wait();
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
             });
         });
-        barrier.wait();
-        let _ = host.typed_add(1.0);
-        thread.join().unwrap();
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+
+        let caller = Arc::clone(&host);
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let caller_thread = thread::spawn(move || {
+            attempt_tx.send(()).unwrap();
+            caller.typed_add(1.0)
+        });
+        attempt_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let contention_observed = loop {
+            if host.application_lock_metrics().contentions > 0 {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            thread::yield_now();
+        };
+
+        release_tx.send(()).unwrap();
+        holder_thread.join().unwrap();
+        assert_eq!(caller_thread.join().unwrap(), 1.0);
+
         let metrics = host.application_lock_metrics();
+        assert!(contention_observed, "the caller did not observe a held mutex");
         assert_eq!(metrics.acquisitions, 2);
-        assert!(metrics.contentions >= 1);
+        assert_eq!(metrics.contentions, 1);
         assert!(metrics.wait_ns > 0);
     }
 }
