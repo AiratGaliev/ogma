@@ -315,6 +315,7 @@ def validate_runtime_integration(
 
     return {
         "ogm19_abi_v1_negotiated": True,
+        "ogm19_version": abi_version,
         "ogm19_completions": completions,
         "ogm19_callback_trace": model["callback_trace"],
         "ogm19_callbacks": int(model["callback_invocations"]),

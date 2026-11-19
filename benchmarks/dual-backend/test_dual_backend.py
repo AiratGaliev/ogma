@@ -84,7 +84,9 @@ class DualBackendProofTests(unittest.TestCase):
                 },
             },
         }
-        self.assertTrue(proof.validate_runtime_integration("cranelift", integration)["ogm19_abi_v1_negotiated"])
+        validated = proof.validate_runtime_integration("cranelift", integration)
+        self.assertTrue(validated["ogm19_abi_v1_negotiated"])
+        self.assertEqual(features, validated["ogm19_version"]["features"])
 
         invalid = json.loads(json.dumps(integration))
         del invalid["ogm27_native_safepoints"]["loop_back_edge"]
