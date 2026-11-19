@@ -54,5 +54,15 @@
       ],
       "host_symbol": "benchmark.host.echo"
     }
+  ],
+  "native_exports": [
+    {
+      "id": "aot_host_call_f64",
+      "symbol": "ogma_aot_host_call_f64"
+    },
+    {
+      "id": "aot_host_call_handles",
+      "symbol": "ogma_aot_host_call_handles"
+    }
   ]
 }

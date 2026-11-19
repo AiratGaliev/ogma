@@ -659,6 +659,7 @@ struct CoreFixture {
 }
 struct CoreCorpus {
     fixtures: Vec<CoreFixture>,
+    native_exports: BTreeMap<String, String>,
 }
 impl CoreCorpus {
     fn get(&self, label: &str) -> Result<&CoreFixture> {
@@ -668,8 +669,13 @@ impl CoreCorpus {
             .ok_or_else(|| anyhow!("missing Core IR workload {label}"))
     }
     fn symbol(&self, label: &str) -> Result<String> {
-        let f = self.get(label)?;
-        Ok(format!("ogma_{}_{}", f.label, f.id))
+        if let Some(fixture) = self.fixtures.iter().find(|f| f.label == label) {
+            return Ok(format!("ogma_{}_{}", fixture.label, fixture.id));
+        }
+        self.native_exports
+            .get(label)
+            .cloned()
+            .ok_or_else(|| anyhow!("missing native export {label}"))
     }
 }
 fn parse_fixture(label: &'static str, raw: &str) -> Result<CoreFixture> {
@@ -1001,6 +1007,9 @@ fn load_corpus() -> Result<CoreCorpus> {
     let entries = manifest["workloads"]
         .as_array()
         .context("workloads missing")?;
+    let native_exports = manifest["native_exports"]
+        .as_array()
+        .context("native exports missing")?;
     let sources = [
         (
             "branch",
@@ -1091,7 +1100,41 @@ fn load_corpus() -> Result<CoreCorpus> {
         }
         fixtures.push(f);
     }
-    let c = CoreCorpus { fixtures };
+    let mut native_export_symbols = BTreeMap::new();
+    for export in native_exports {
+        let id = export["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("native export ID missing")?;
+        let symbol = export["symbol"]
+            .as_str()
+            .filter(|symbol| !symbol.is_empty())
+            .context("native export symbol missing")?;
+        if symbol != format!("ogma_{id}") {
+            bail!("native export {id}: symbol must be ogma_{id}");
+        }
+        if native_export_symbols
+            .insert(id.to_owned(), symbol.to_owned())
+            .is_some()
+        {
+            bail!("duplicate native export {id}");
+        }
+    }
+    let expected_native_exports = [
+        ("aot_host_call_f64", "ogma_aot_host_call_f64"),
+        ("aot_host_call_handles", "ogma_aot_host_call_handles"),
+    ];
+    if native_export_symbols.len() != expected_native_exports.len()
+        || expected_native_exports.iter().any(|(id, symbol)| {
+            native_export_symbols.get(*id).map(String::as_str) != Some(*symbol)
+        })
+    {
+        bail!("workload manifest must declare each OGM-32 generated native export exactly once");
+    }
+    let c = CoreCorpus {
+        fixtures,
+        native_exports: native_export_symbols,
+    };
     expect_signature(&c, "branch", &["f64", "f64"], "f64")?;
     expect_signature(&c, "loop", &["f64", "f64", "f64"], "f64")?;
     expect_signature(&c, "dynamic_exception", &["boxed", "boxed"], "boxed")?;

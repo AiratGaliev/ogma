@@ -30,6 +30,17 @@ class DualBackendProofTests(unittest.TestCase):
             ROOT / "benchmarks/backend-codegen/fixtures/workloads.json"
         )
         native_paths = {item["fixture"] for item in native_manifest["workloads"]}
+        native_exports = {
+            item["id"]: item["symbol"]
+            for item in native_manifest["native_exports"]
+        }
+        self.assertEqual(
+            {
+                "aot_host_call_f64": "ogma_aot_host_call_f64",
+                "aot_host_call_handles": "ogma_aot_host_call_handles",
+            },
+            native_exports,
+        )
         proof_manifest = proof.read_json(ROOT / "benchmarks/dual-backend/manifest.json")
         self.assertEqual(
             native_paths,
