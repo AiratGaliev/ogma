@@ -1300,7 +1300,7 @@ jobs:
         run: |
           python3 .github/scripts/validate_runtime_profiles.py --report "$RUNNER_TEMP/ogm29-runtime-profile-contract.json"
           python3 .github/scripts/verify_core_ir.py \
-            --manifest benchmarks/dual-backend/manifest.json \
+            --manifest tests/core-ir/manifest.json \
             --report "$RUNNER_TEMP/ogm29-core-ir-report.json"
 
       - name: Check formatting and C ABI layout for native proof dependencies
