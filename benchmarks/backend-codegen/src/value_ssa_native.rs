@@ -177,6 +177,20 @@ struct NativeSemanticValidation {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeCodeMetrics {
+    disassembler: &'static str,
+    symbol: &'static str,
+    instruction_count: usize,
+    function_code_bytes: usize,
+    integer_registers: Vec<String>,
+    vector_registers: Vec<String>,
+    stack_relative_memory_instructions: usize,
+    stack_relative_loads: usize,
+    stack_relative_stores: usize,
+    direct_call_instructions: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct CandidateEvidence {
     name: String,
     runtime_value_bytes: usize,
@@ -194,6 +208,7 @@ struct CandidateEvidence {
     completed_loop_iterations: u64,
     result_matches: bool,
     native_semantic_validation: NativeSemanticValidation,
+    native_code: NativeCodeMetrics,
     register_pressure: RegisterPressure,
     gc: GcEvidence,
 }
@@ -1326,6 +1341,156 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     })
 }
 
+
+fn is_hex_byte(token: &str) -> bool {
+    token.len() == 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_general_purpose_register(token: &str) -> bool {
+    matches!(
+        token,
+        "rax" | "eax" | "ax" | "al" | "ah"
+            | "rbx" | "ebx" | "bx" | "bl" | "bh"
+            | "rcx" | "ecx" | "cx" | "cl" | "ch"
+            | "rdx" | "edx" | "dx" | "dl" | "dh"
+            | "rsi" | "esi" | "si" | "sil"
+            | "rdi" | "edi" | "di" | "dil"
+            | "rbp" | "ebp" | "bp" | "bpl"
+            | "rsp" | "esp" | "sp" | "spl"
+    ) || (token
+        .strip_prefix('r')
+        .and_then(|tail| {
+            let digits = tail.trim_end_matches(['b', 'w', 'd']);
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                None
+            } else {
+                digits.parse::<u8>().ok()
+            }
+        })
+        .is_some_and(|register| (8..=15).contains(&register)))
+}
+
+fn is_vector_register(token: &str) -> bool {
+    ["xmm", "ymm", "zmm", "mm"]
+        .iter()
+        .any(|prefix| {
+            token
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
+fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
+    let mut in_function = false;
+    let mut found_symbol = false;
+    let mut instruction_count = 0_usize;
+    let mut function_code_bytes = 0_usize;
+    let mut integer_registers = BTreeSet::new();
+    let mut vector_registers = BTreeSet::new();
+    let mut stack_relative_memory_instructions = 0_usize;
+    let mut stack_relative_loads = 0_usize;
+    let mut stack_relative_stores = 0_usize;
+    let mut direct_call_instructions = 0_usize;
+
+    for line in disassembly.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains("<ogma_value_loop>:") {
+            found_symbol = true;
+            in_function = true;
+            continue;
+        }
+        if !in_function || trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains('<') && trimmed.ends_with(">:") {
+            break;
+        }
+        let Some((_address, bytes_and_instruction)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let tokens: Vec<&str> = bytes_and_instruction.split_whitespace().collect();
+        let mut byte_count = 0_usize;
+        while byte_count < tokens.len() && is_hex_byte(tokens[byte_count]) {
+            byte_count += 1;
+        }
+        if byte_count == 0 || byte_count == tokens.len() {
+            continue;
+        }
+
+        let assembly = tokens[byte_count..].join(" ").to_ascii_lowercase();
+        let mut words = assembly.split_whitespace();
+        let mnemonic = words.next().unwrap_or_default();
+        let operands = words.collect::<Vec<_>>().join(" ");
+        instruction_count += 1;
+        function_code_bytes += byte_count;
+
+        if mnemonic.starts_with("call") {
+            direct_call_instructions += 1;
+        }
+        let stack_access = operands.contains("[rsp")
+            || operands.contains("[rbp")
+            || mnemonic == "push"
+            || mnemonic == "pop";
+        if stack_access {
+            stack_relative_memory_instructions += 1;
+            let first_operand = operands.split(',').next().unwrap_or_default().trim();
+            if first_operand.starts_with('[') || mnemonic == "push" {
+                stack_relative_stores += 1;
+            } else {
+                stack_relative_loads += 1;
+            }
+        }
+
+        for word in assembly.split(|character: char| {
+            !character.is_ascii_alphanumeric()
+        }) {
+            if is_general_purpose_register(word) {
+                integer_registers.insert(word.to_owned());
+            } else if is_vector_register(word) {
+                vector_registers.insert(word.to_owned());
+            }
+        }
+    }
+
+    if !found_symbol || instruction_count == 0 {
+        bail!("objdump did not produce instructions for ogma_value_loop");
+    }
+
+    Ok(NativeCodeMetrics {
+        disassembler: "GNU objdump -d -M intel",
+        symbol: "ogma_value_loop",
+        instruction_count,
+        function_code_bytes,
+        integer_registers: integer_registers.into_iter().collect(),
+        vector_registers: vector_registers.into_iter().collect(),
+        stack_relative_memory_instructions,
+        stack_relative_loads,
+        stack_relative_stores,
+        direct_call_instructions,
+    })
+}
+
+fn native_code_metrics(object_path: &Path) -> Result<NativeCodeMetrics> {
+    if env::consts::ARCH != "x86_64" {
+        bail!("OGM-38 native register disassembly currently requires an x86_64 target");
+    }
+    let output = Command::new("objdump")
+        .args(["-d", "-M", "intel", "--disassemble=ogma_value_loop"])
+        .arg(object_path)
+        .output()
+        .context("launch objdump for generated OGM-38 native function")?;
+    if !output.status.success() {
+        bail!(
+            "objdump failed for {}: {}",
+            object_path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let disassembly = String::from_utf8(output.stdout)
+        .context("objdump returned non-UTF-8 disassembly")?;
+    parse_native_disassembly(&disassembly)
+}
+
 fn run(
     output: &Path,
     revision: &str,
@@ -1353,6 +1518,7 @@ fn run(
             .with_context(|| format!("load generated native object for {}", candidate.name()))?;
         let (throughput_ns_per_call, result_matches, native_semantic_validation) =
             run_native_candidate(candidate, &library, iterations, warmups, samples, expected)?;
+        let native_code = native_code_metrics(&object_path)?;
         let register_pressure = register_pressure(candidate)?;
         let gc = gc_evidence(candidate)?;
         candidates.push(CandidateEvidence {
@@ -1381,6 +1547,7 @@ fn run(
             completed_loop_iterations: expected as u64,
             result_matches,
             native_semantic_validation,
+            native_code,
             register_pressure,
             gc,
         });
@@ -1473,6 +1640,38 @@ pub fn parse_args_and_run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn objdump_parser_counts_actual_instruction_bytes_and_register_classes() {
+        let disassembly = r#"
+0000000000000000 <ogma_value_loop>:
+   0: 48 8b 07                mov rax,QWORD PTR [rdi]
+   3: f2 0f 10 44 24 08       movsd xmm0,QWORD PTR [rsp+0x8]
+   9: 48 89 44 24 10          mov QWORD PTR [rsp+0x10],rax
+   e: c3                      ret
+"#;
+        let metrics = parse_native_disassembly(disassembly).expect("parse x86_64 objdump output");
+        assert_eq!(metrics.instruction_count, 4);
+        assert_eq!(metrics.function_code_bytes, 14);
+        assert!(metrics.integer_registers.contains(&"rax".to_owned()));
+        assert!(metrics.integer_registers.contains(&"rdi".to_owned()));
+        assert!(metrics.vector_registers.contains(&"xmm0".to_owned()));
+        assert_eq!(metrics.stack_relative_memory_instructions, 2);
+        assert_eq!(metrics.stack_relative_loads, 1);
+        assert_eq!(metrics.stack_relative_stores, 1);
+    }
+
+    #[test]
+    fn x86_register_classifier_handles_extended_registers() {
+        assert!(is_general_purpose_register("r15"));
+        assert!(is_general_purpose_register("r10d"));
+        assert!(is_general_purpose_register("r8b"));
+        assert!(!is_general_purpose_register("xmm15"));
+        assert!(is_vector_register("xmm15"));
+        assert!(is_vector_register("ymm3"));
+        assert!(is_vector_register("zmm31"));
+    }
 
     #[test]
     fn candidate_matrix_contains_all_four_independent_combinations() {
