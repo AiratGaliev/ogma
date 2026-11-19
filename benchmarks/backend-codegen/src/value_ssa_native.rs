@@ -128,7 +128,7 @@ struct RegisterPressure {
     integer_registers_used: usize,
     float_registers_used: usize,
     register_allocations: usize,
-    stack_allocations: usize,
+    stack_operand_allocations: usize,
     spill_slots: usize,
     spill_bytes: usize,
 }
@@ -906,8 +906,11 @@ impl RegallocFunction for PressureProgram {
     fn num_vregs(&self) -> usize {
         self.next_vreg
     }
-    fn spillslot_size(&self, _class: RegClass) -> usize {
-        1
+    fn spillslot_size(&self, class: RegClass) -> usize {
+        match class {
+            RegClass::Int | RegClass::Float => 8,
+            RegClass::Vector => 16,
+        }
     }
 }
 
@@ -1010,7 +1013,7 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     let mut integer_registers = PRegSet::empty();
     let mut float_registers = PRegSet::empty();
     let mut register_allocations = 0;
-    let mut stack_allocations = 0;
+    let mut stack_operand_allocations = 0;
     for allocation in &output.allocs {
         if let Some(register) = allocation.as_reg() {
             register_allocations += 1;
@@ -1020,7 +1023,7 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
                 RegClass::Vector => {}
             }
         } else if allocation.is_stack() {
-            stack_allocations += 1;
+            stack_operand_allocations += 1;
         }
     }
     Ok(RegisterPressure {
@@ -1030,7 +1033,7 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         integer_registers_used: integer_registers.len() as usize,
         float_registers_used: float_registers.len() as usize,
         register_allocations,
-        stack_allocations,
+        stack_operand_allocations,
         spill_slots: output.num_spillslots,
         spill_bytes: output.num_spillslots * 8,
     })
@@ -1297,7 +1300,7 @@ mod tests {
             let evidence = register_pressure(candidate).expect("register allocation");
             assert!(evidence.register_allocations > 0);
             assert!(evidence.integer_registers_used > 0);
-            assert!(evidence.spill_bytes >= evidence.spill_slots * 8);
+            assert_eq!(evidence.spill_bytes, evidence.spill_slots * 8);
             reports.insert(candidate.name(), evidence);
         }
         let tagged_boxed = reports
