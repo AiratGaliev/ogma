@@ -2,8 +2,8 @@
   "schema": "ogma.runtime-footprint-summary",
   "version": "1.0.0",
   "task": "OGM-29",
-  "measured_source_revision": "1f93001c5b849b5e56410938ba28ad809650ed77",
-  "tested_revision": "1f93001c5b849b5e56410938ba28ad809650ed77",
+  "measured_source_revision": "a23fce801a71e910f3fce0c3804e75e1f70655f3",
+  "tested_revision": "a23fce801a71e910f3fce0c3804e75e1f70655f3",
   "measurement_environment": {
     "os": "Ubuntu 24.04",
     "kernel": "Linux 7.0.0-1017-azure",
@@ -71,29 +71,29 @@
     "portable_interpreter": {
       "implementation": "Python M0 bytecode proof interpreter; not production Rust VM",
       "worker_ready_latency_ns": 56649184,
-      "worker_end_to_end_wall_ns": 4665907943,
-      "process_peak_rss_bytes": 24387584,
+      "worker_end_to_end_wall_ns": 3112820762,
+      "process_peak_rss_bytes": 24535040,
       "bytecode_compile_wall_ns": {
-        "p50": 1984334,
-        "p95": 2447391,
+        "p50": 1370699,
+        "p95": 1881262,
         "samples": 15
       },
       "bytecode_codegen_ns": {
-        "p50": 590535,
-        "p95": 785575,
+        "p50": 403614,
+        "p95": 769671,
         "samples": 15
       },
       "bytecode_decode_ns": {
-        "p50": 142520,
-        "p95": 179895,
+        "p50": 102324,
+        "p95": 272208,
         "samples": 15
       },
       "bytecode_standalone_verification_ns": {
-        "p50": 1282453,
-        "p95": 1485193,
+        "p50": 1275396,
+        "p95": 1735523,
         "samples": 15
       },
-      "bytecode_compile_tracemalloc_peak_bytes": 162461,
+      "bytecode_compile_tracemalloc_peak_bytes": 162008,
       "source_read_peak_bytes": 8930,
       "source_fixture_serialized_bytes": 576,
       "ast_peak_bytes": null,
@@ -109,58 +109,76 @@
         "loop": 1962
       },
       "host_call": {
-        "dispatch_p50_ns": 2864.21,
-        "dispatch_p95_ns": 2995.655,
-        "direct_python_callback_p50_ns": 44.336,
-        "estimated_overhead_ns": 2819.874,
-        "estimated_overhead_ratio": 64.60235474557922,
+        "dispatch_p50_ns": 1968.031,
+        "dispatch_p95_ns": 1998.37,
+        "direct_python_callback_p50_ns": 25.879,
+        "estimated_overhead_ns": 1942.152,
+        "estimated_overhead_ratio": 76.04741296031531,
         "status": "Python proof interpreter only; not Rust ABI or production Runtime"
       },
-      "stack_register_observations_equal": true
+      "stack_register_observations_equal": true,
+      "startup_probe": {
+        "status": "measured_proof_tool_startup",
+        "warmup_processes": 3,
+        "measurement_processes": 101,
+        "p50_ns": 61731955,
+        "p95_ns": 75584873,
+        "p99_ns": 85320148,
+        "raw_samples_retained_in_full_report": true
+      }
     },
     "hybrid_native": {
       "implementation": "Cranelift/LLVM exact-fixture adapters with M0 mock ABI and modeled Runtime boundary; not production hybrid Runtime",
-      "benchmark_process_wall_ns": 14953995317,
-      "benchmark_process_peak_rss_bytes": 80306176,
+      "benchmark_process_wall_ns": 14455042299,
+      "benchmark_process_peak_rss_bytes": 80384000,
       "benchmark_process_rss_scope": "Both native compilers, object linking, mock Runtime setup and timed fixture workloads",
-      "tooling_executable_bytes": 10020128,
+      "tooling_executable_bytes": 10022656,
       "native_backends": {
         "cranelift": {
           "compile_ns": {
-            "p50": 437749,
-            "p95": 473022,
+            "p50": 288261,
+            "p95": 470023,
             "samples": 101
           },
           "link_ns": {
-            "p50": 55634377,
-            "p95": 57024506,
+            "p50": 53364158,
+            "p95": 62528217,
             "samples": 101
           },
           "object_bytes": 2944,
           "shared_library_bytes": 26488,
           "host_call": {
-            "estimated_overhead_ns": 247.36799999999994,
-            "estimated_overhead_ratio": 1.2089020330469356
+            "estimated_overhead_ns": 163.33399999999995,
+            "estimated_overhead_ratio": 1.1737976620408301
           }
         },
         "llvm": {
           "compile_ns": {
-            "p50": 5012316,
-            "p95": 5241586,
+            "p50": 3738555,
+            "p95": 4395306,
             "samples": 101
           },
           "link_ns": {
-            "p50": 55818341,
-            "p95": 57516729,
+            "p50": 53860098,
+            "p95": 65363621,
             "samples": 101
           },
           "object_bytes": 3112,
           "shared_library_bytes": 26576,
           "host_call": {
-            "estimated_overhead_ns": 234.62800000000016,
-            "estimated_overhead_ratio": 1.1950430398477085
+            "estimated_overhead_ns": 184.3449999999999,
+            "estimated_overhead_ratio": 1.191106342393896
           }
         }
+      },
+      "startup_probe": {
+        "status": "measured_proof_tool_startup",
+        "warmup_processes": 3,
+        "measurement_processes": 101,
+        "p50_ns": 10179227,
+        "p95_ns": 13789712,
+        "p99_ns": 15878910,
+        "raw_samples_retained_in_full_report": true
       }
     }
   },
@@ -202,13 +220,15 @@
     "No cross-language throughput comparison or performance target is inferred."
   ],
   "raw_ci_evidence": {
-    "workflow_run": "https://github.com/AiratGaliev/ogma/actions/runs/44530165803",
-    "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44530165803/artifacts/14532414945",
-    "artifact_id": 14532414945,
+    "workflow_run": "https://github.com/AiratGaliev/ogma/actions/runs/44538873406",
+    "workflow_run_id": 44538873406,
+    "workflow_run_number": 478,
+    "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44538873406/artifacts/14537516721",
+    "artifact_id": 14537516721,
     "artifact_name": "ogm29-interpreter-hybrid-footprint",
-    "raw_report_json_bytes": 183335,
-    "raw_report_json_sha256": "e3a3b4ccae2858ebc1d3490fc97c907fddd2a89ab32dfe44d669cce41936240e",
-    "raw_report_gzip_bytes": 29691,
-    "raw_report_gzip_sha256": "cf0e192c7f1fb6bb5743bbdc8233f458fee61172afbf8b67d5ad5d2b7c16c239"
+    "artifact_zip_bytes": 3195095,
+    "artifact_zip_sha256": "1a7634e1696b43020715f21e60887fe60af86a5fa6ad59bc2fdf50c0f6d8234a",
+    "raw_report_json_bytes": 193919,
+    "raw_report_json_sha256": "a1e2521af8b3ecffd15c68aef09152015c5aca4e91a26c528cf7df102864c760"
   }
 }
