@@ -940,9 +940,6 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         .as_array()
         .context("fixture instructions missing")?;
     for instruction in instructions {
-        let op = instruction["op"]
-            .as_str()
-            .context("instruction op missing")?;
         let operands = instruction["operands"]
             .as_array()
             .context("instruction operands missing")?;
@@ -958,24 +955,17 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         if !used.is_empty() {
             program.use_values(&used);
         }
-        if let Some(result) = instruction["result"].as_object() {
-            if let Some(id) = result.get("id").and_then(JsonValue::as_str) {
-                let representation = result
-                    .get("representation")
-                    .and_then(JsonValue::as_str)
-                    .context("result representation missing")?;
-                if op == "js.strict_equal" {
-                    values.insert(
-                        id.to_owned(),
-                        program.define_value(candidate.runtime, candidate.ssa, representation),
-                    );
-                } else {
-                    values.insert(
-                        id.to_owned(),
-                        program.define_value(candidate.runtime, candidate.ssa, representation),
-                    );
-                }
-            }
+        if let Some(result) = instruction["result"].as_object()
+            && let Some(id) = result.get("id").and_then(JsonValue::as_str)
+        {
+            let representation = result
+                .get("representation")
+                .and_then(JsonValue::as_str)
+                .context("result representation missing")?;
+            values.insert(
+                id.to_owned(),
+                program.define_value(candidate.runtime, candidate.ssa, representation),
+            );
         }
     }
     let terminator = &blocks[0]["terminator"];
@@ -1057,7 +1047,7 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     let persistent = heap.retain_host_handle(child)?;
     // The NaN-box payload is an opaque token into this runtime-owned registry;
     // the registry stores the real OGM-26 generation-checked HostHandle.
-    let opaque_handle_registry = vec![persistent];
+    let opaque_handle_registry = [persistent];
 
     let before = heap.stats();
     let object_token = 1_u64;
