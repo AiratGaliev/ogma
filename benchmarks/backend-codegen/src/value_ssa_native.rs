@@ -155,6 +155,11 @@ struct GcSample {
     cleanup_collection_ns: u128,
     roots_scanned: usize,
     edges_examined: u64,
+    graph_edges: usize,
+    interpreter_frame_roots: usize,
+    native_frame_roots: usize,
+    persistent_host_handles: usize,
+    temporary_scope_roots: usize,
     logical_heap_bytes_before_collection: u64,
     peak_logical_heap_bytes: u64,
     actual_value_storage_capacity_bytes: usize,
@@ -1367,6 +1372,11 @@ fn run_gc_sample(
     }
 
     let graph = heap.graph_shape()?;
+    let graph_edges = graph.edges;
+    let interpreter_frame_roots = graph.roots.interpreter_frame_roots;
+    let native_frame_roots = graph.roots.native_frame_roots;
+    let persistent_host_handles = graph.roots.persistent_host_handles;
+    let temporary_scope_roots = graph.roots.temporary_scope_roots;
     let before = heap.stats();
     let build_ns = build_start.elapsed().as_nanos();
     let retained = heap.collect()?;
@@ -1441,6 +1451,11 @@ fn run_gc_sample(
         cleanup_collection_ns: released.collection_ns,
         roots_scanned: retained.roots_scanned,
         edges_examined: retained.edges_examined,
+        graph_edges,
+        interpreter_frame_roots,
+        native_frame_roots,
+        persistent_host_handles,
+        temporary_scope_roots,
         logical_heap_bytes_before_collection: before.live_bytes,
         peak_logical_heap_bytes: stats.peak_heap_bytes,
         actual_value_storage_capacity_bytes,
@@ -1477,11 +1492,11 @@ fn gc_collector_evidence(
     Ok(GcCollectorEvidence {
         collector: collector.name(),
         object_count,
-        edge_count: object_count + (object_count / 28).div_ceil(1),
-        interpreter_frame_roots: (object_count / 4).div_ceil(3),
-        native_frame_roots: object_count / 4 / 3,
-        persistent_host_handles: object_count / 4 / 3,
-        temporary_scope_roots: (object_count / 4).div_ceil(16),
+        edge_count: first.graph_edges,
+        interpreter_frame_roots: first.interpreter_frame_roots,
+        native_frame_roots: first.native_frame_roots,
+        persistent_host_handles: first.persistent_host_handles,
+        temporary_scope_roots: first.temporary_scope_roots,
         build_ns: gc_distribution(&raw_samples, |sample| sample.build_ns),
         collection_ns: gc_distribution(&raw_samples, |sample| sample.collection_ns),
         root_scan_ns: gc_distribution(&raw_samples, |sample| sample.root_scan_ns),
@@ -1504,7 +1519,10 @@ fn gc_evidence(
             gc_collector_evidence(candidate, collector, warmups, samples, object_count)
         })
         .collect::<Result<Vec<_>>>()?;
-    let graph_edges = object_count + (object_count / 28).div_ceil(1);
+    let graph_edges = collector_comparisons
+        .first()
+        .context("GC collector evidence missing")?
+        .edge_count;
     let value_storage_bytes =
         object_count * GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
     Ok(GcEvidence {
@@ -1933,6 +1951,11 @@ mod tests {
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
                 assert!(collector.raw_samples[0].roots_scanned > 0);
+                assert_eq!(collector.edge_count, 67);
+                assert_eq!(collector.interpreter_frame_roots, 6);
+                assert_eq!(collector.native_frame_roots, 5);
+                assert_eq!(collector.persistent_host_handles, 5);
+                assert_eq!(collector.temporary_scope_roots, 1);
                 assert_eq!(collector.raw_samples[0].live_objects_after_release, 0);
                 assert_eq!(collector.raw_samples[0].reclaimed_after_root_release, 64);
             }
