@@ -79,7 +79,7 @@ compilation and standalone verification each used 15 rounds.
 |---|---:|---:|
 | Startup (proof tools) | Python: p50 61.732 ms / p95 75.585 ms / p99 85.320 ms; 101 launches | Native benchmark executable: p50 10.179 ms / p95 13.790 ms / p99 15.879 ms; 101 launches |
 | Peak process RSS | Python proof worker: 24,535,040 B (23.40 MiB) | Native compile/link/proof process: 80,384,000 B (76.66 MiB) |
-| Compile memory | Bytecode compilation tracemalloc peak: 162,461 B | Covered by combined native process RSS; isolated per-backend peak not available |
+| Compile memory | Bytecode compilation tracemalloc peak: 162,008 B | Covered by combined native process RSS; isolated per-backend peak not available |
 | Core IR input memory | JSON fixture materialization peak: 95,635 B | Same canonical fixtures; no native frontend parser |
 | Compile latency | Core IR fixture to register .ogmb, wall p50 1.371 ms / p95 1.881 ms (15 rounds) | Cranelift p50 0.288 ms / p95 0.470 ms; LLVM p50 3.739 ms / p95 4.395 ms (101 samples each) |
 | Link latency | Not applicable to portable bytecode | Cranelift p50 53.364 ms / p95 62.528 ms; LLVM p50 53.860 ms / p95 65.364 ms (101 samples each) |
