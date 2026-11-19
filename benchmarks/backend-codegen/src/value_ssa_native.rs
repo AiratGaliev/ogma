@@ -1232,7 +1232,7 @@ fn run_native_handle_dispatch_validation(
         .map(|handle| heap.encode_host_handle_token(*handle))
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let callback_address = resolve_native_handle_callback as usize as u64;
+    let callback_address = resolve_native_handle_callback as *const () as usize as u64;
     let mut tag_evidence = Vec::with_capacity(NATIVE_HANDLE_TAG_FAMILIES.len());
     for (index, family) in NATIVE_HANDLE_TAG_FAMILIES.iter().enumerate() {
         let tag = match candidate.runtime {
@@ -2775,7 +2775,7 @@ mod tests {
             heap.release_host_handle(handle).expect("release reference handle");
         }
         heap.collect().expect("collect released reference Values");
-        assert_eq!(heap.live_objects(), 0);
+        assert_eq!(heap.stats().live_objects, 0);
     }
 
     #[test]
