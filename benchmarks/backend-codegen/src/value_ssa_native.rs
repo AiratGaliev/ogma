@@ -14,7 +14,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use libloading::Library;
 use ogma_gc_comparison_proof::{CollectorKind, FrameKind, GcHeap};
 use regalloc2::{
-    Algorithm, Block, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand, PReg,
+    Edit, Algorithm, Block, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand, PReg,
     PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
 };
 use serde::Serialize;
@@ -128,7 +128,8 @@ struct RegisterPressure {
     integer_registers_used: usize,
     float_registers_used: usize,
     register_allocations: usize,
-    stack_operand_allocations: usize,
+    spill_store_edits: usize,
+    spill_reload_edits: usize,
     spill_slots: usize,
     spill_bytes: usize,
 }
@@ -1013,7 +1014,6 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     let mut integer_registers = PRegSet::empty();
     let mut float_registers = PRegSet::empty();
     let mut register_allocations = 0;
-    let mut stack_operand_allocations = 0;
     for allocation in &output.allocs {
         if let Some(register) = allocation.as_reg() {
             register_allocations += 1;
@@ -1022,8 +1022,20 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
                 RegClass::Float => float_registers.add(register),
                 RegClass::Vector => {}
             }
-        } else if allocation.is_stack() {
-            stack_operand_allocations += 1;
+        }
+    }
+    let mut spill_store_edits = 0;
+    let mut spill_reload_edits = 0;
+    for (_, edit) in &output.edits {
+        match edit {
+            Edit::Move { from, to } => {
+                if to.is_stack() {
+                    spill_store_edits += 1;
+                }
+                if from.is_stack() {
+                    spill_reload_edits += 1;
+                }
+            }
         }
     }
     Ok(RegisterPressure {
@@ -1033,7 +1045,8 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         integer_registers_used: integer_registers.len() as usize,
         float_registers_used: float_registers.len() as usize,
         register_allocations,
-        stack_operand_allocations,
+        spill_store_edits,
+        spill_reload_edits,
         spill_slots: output.num_spillslots,
         spill_bytes: output.num_spillslots * 8,
     })
@@ -1204,7 +1217,7 @@ fn run(
             ),
             (
                 "register_pressure",
-                "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a fixed register budget; not Cranelift's private allocation dump or host ISA register map",
+                "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a fixed register budget; spill stores/reloads count Output.edits stack moves; not Cranelift's private allocation dump or host ISA register map",
             ),
             (
                 "gc_and_heap",
@@ -1301,6 +1314,10 @@ mod tests {
             assert!(evidence.register_allocations > 0);
             assert!(evidence.integer_registers_used > 0);
             assert_eq!(evidence.spill_bytes, evidence.spill_slots * 8);
+            assert_eq!(
+                evidence.spill_slots > 0,
+                evidence.spill_store_edits > 0 && evidence.spill_reload_edits > 0
+            );
             reports.insert(candidate.name(), evidence);
         }
         let tagged_boxed = reports
@@ -1310,6 +1327,10 @@ mod tests {
             .get("nanbox-8-boxed")
             .expect("NaN-box boxed candidate");
         assert!(tagged_boxed.spill_slots > nanbox_boxed.spill_slots);
+        assert!(tagged_boxed.spill_store_edits > 0);
+        assert!(tagged_boxed.spill_reload_edits > 0);
+        assert_eq!(nanbox_boxed.spill_store_edits, 0);
+        assert_eq!(nanbox_boxed.spill_reload_edits, 0);
     }
 
     #[test]
