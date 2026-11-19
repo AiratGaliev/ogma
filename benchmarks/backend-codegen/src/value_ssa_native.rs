@@ -867,7 +867,7 @@ fn run_native_candidate(
     warmups: usize,
     samples: usize,
     expected: f64,
-) -> Result<(Distribution, bool)> {
+) -> Result<(Distribution, bool, NativeSemanticValidation)> {
     let function = unsafe {
         *library
             .get::<NativeLoop>(b"ogma_value_loop\0")
@@ -938,114 +938,115 @@ fn run_native_candidate(
     }
 
     let mut semantic_cases = Vec::new();
-    let mut run_case = |name: &'static str,
-                        case_start: f64,
-                        case_limit: f64,
-                        case_step: f64,
-                        max_iterations: u64,
-                        expected_status: i32,
-                        expected_result: Option<f64>|
-     -> Result<()> {
-        let mut case_tagged_start = TaggedValue {
-            tag: NUMBER_TAG,
-            payload: canonical_number_bits(case_start),
-        };
-        let mut case_tagged_limit = TaggedValue {
-            tag: NUMBER_TAG,
-            payload: canonical_number_bits(case_limit),
-        };
-        let mut case_tagged_step = TaggedValue {
-            tag: NUMBER_TAG,
-            payload: canonical_number_bits(case_step),
-        };
-        let mut case_tagged_output = TaggedValue::default();
-        let mut case_nanbox_output = 0_u64;
-        let (case_a, case_b, case_c, case_output) = match candidate.runtime {
-            RuntimeLayout::Tagged16 => (
-                (&mut case_tagged_start as *mut TaggedValue) as usize as u64,
-                (&mut case_tagged_limit as *mut TaggedValue) as usize as u64,
-                (&mut case_tagged_step as *mut TaggedValue) as usize as u64,
-                (&mut case_tagged_output as *mut TaggedValue) as usize as u64,
-            ),
-            RuntimeLayout::NanBox8 => (
-                canonical_number_bits(case_start),
-                canonical_number_bits(case_limit),
-                canonical_number_bits(case_step),
-                (&mut case_nanbox_output as *mut u64) as usize as u64,
-            ),
-        };
-        // SAFETY: the generated function uses the same C ABI and input/output
-        // layout that was used for the primary native benchmark invocation.
-        let status = unsafe { function(case_a, case_b, case_c, case_output, max_iterations) };
-        let actual_bits = if status == 0 {
-            Some(match candidate.runtime {
-                RuntimeLayout::Tagged16 => {
-                    if case_tagged_output.tag != NUMBER_TAG {
-                        bail!("{name}: tagged output did not contain a Number");
-                    }
-                    case_tagged_output.payload
-                }
-                RuntimeLayout::NanBox8 => case_nanbox_output,
-            })
-        } else {
-            None
-        };
-        let expected_bits = expected_result.map(canonical_number_bits);
-        let matches = status == expected_status
-            && match (expected_bits, actual_bits) {
-                (Some(expected), Some(actual)) => expected == actual,
-                (None, None) => true,
-                _ => false,
+    {
+        let mut run_case = |name: &'static str,
+                            case_start: f64,
+                            case_limit: f64,
+                            case_step: f64,
+                            max_iterations: u64,
+                            expected_status: i32,
+                            expected_result: Option<f64>|
+         -> Result<()> {
+            let mut case_tagged_start = TaggedValue {
+                tag: NUMBER_TAG,
+                payload: canonical_number_bits(case_start),
             };
-        semantic_cases.push(NativeSemanticCase {
-            name,
-            expected_status,
-            actual_status: status,
-            expected_result_bits: expected_bits,
-            actual_result_bits: actual_bits,
-            matches,
-        });
-        if !matches {
-            bail!(
-                "{} native semantic case {name} mismatch: status {status}, expected {expected_status}, result {actual_bits:?}, expected bits {expected_bits:?}",
-                candidate.name()
-            );
-        }
-        Ok(())
-    };
+            let mut case_tagged_limit = TaggedValue {
+                tag: NUMBER_TAG,
+                payload: canonical_number_bits(case_limit),
+            };
+            let mut case_tagged_step = TaggedValue {
+                tag: NUMBER_TAG,
+                payload: canonical_number_bits(case_step),
+            };
+            let mut case_tagged_output = TaggedValue::default();
+            let mut case_nanbox_output = 0_u64;
+            let (case_a, case_b, case_c, case_output) = match candidate.runtime {
+                RuntimeLayout::Tagged16 => (
+                    (&mut case_tagged_start as *mut TaggedValue) as usize as u64,
+                    (&mut case_tagged_limit as *mut TaggedValue) as usize as u64,
+                    (&mut case_tagged_step as *mut TaggedValue) as usize as u64,
+                    (&mut case_tagged_output as *mut TaggedValue) as usize as u64,
+                ),
+                RuntimeLayout::NanBox8 => (
+                    canonical_number_bits(case_start),
+                    canonical_number_bits(case_limit),
+                    canonical_number_bits(case_step),
+                    (&mut case_nanbox_output as *mut u64) as usize as u64,
+                ),
+            };
+            // SAFETY: the generated function uses the same C ABI and input/output
+            // layout that was used for the primary native benchmark invocation.
+            let status = unsafe { function(case_a, case_b, case_c, case_output, max_iterations) };
+            let actual_bits = if status == 0 {
+                Some(match candidate.runtime {
+                    RuntimeLayout::Tagged16 => {
+                        if case_tagged_output.tag != NUMBER_TAG {
+                            bail!("{name}: tagged output did not contain a Number");
+                        }
+                        case_tagged_output.payload
+                    }
+                    RuntimeLayout::NanBox8 => case_nanbox_output,
+                })
+            } else {
+                None
+            };
+            let expected_bits = expected_result.map(canonical_number_bits);
+            let matches = status == expected_status
+                && match (expected_bits, actual_bits) {
+                    (Some(expected), Some(actual)) => expected == actual,
+                    (None, None) => true,
+                    _ => false,
+                };
+            semantic_cases.push(NativeSemanticCase {
+                name,
+                expected_status,
+                actual_status: status,
+                expected_result_bits: expected_bits,
+                actual_result_bits: actual_bits,
+                matches,
+            });
+            if !matches {
+                bail!(
+                    "{} native semantic case {name} mismatch: status {status}, expected {expected_status}, result {actual_bits:?}, expected bits {expected_bits:?}",
+                    candidate.name()
+                );
+            }
+            Ok(())
+        };
 
-    // Exercise the loop semantics at values where strict equality, IEEE-754
-    // edge cases, and loop-carried conversions can change observable behavior.
-    run_case("fractional-loop", 0.25, 1.0, 0.25, 8, 0, Some(1.0))?;
-    run_case("negative-step-loop", 3.0, 0.0, -1.0, 8, 0, Some(0.0))?;
-    run_case(
-        "signed-zero-strict-equality",
-        -0.0,
-        0.0,
-        1.0,
-        8,
-        0,
-        Some(-0.0),
-    )?;
-    run_case(
-        "positive-infinity-equality",
-        f64::INFINITY,
-        f64::INFINITY,
-        1.0,
-        8,
-        0,
-        Some(f64::INFINITY),
-    )?;
-    run_case(
-        "nan-is-not-strictly-equal-to-itself",
-        f64::NAN,
-        f64::NAN,
-        1.0,
-        3,
-        2,
-        None,
-    )?;
-    drop(run_case);
+        // Exercise the loop semantics at values where strict equality, IEEE-754
+        // edge cases, and loop-carried conversions can change observable behavior.
+        run_case("fractional-loop", 0.25, 1.0, 0.25, 8, 0, Some(1.0))?;
+        run_case("negative-step-loop", 3.0, 0.0, -1.0, 8, 0, Some(0.0))?;
+        run_case(
+            "signed-zero-strict-equality",
+            -0.0,
+            0.0,
+            1.0,
+            8,
+            0,
+            Some(-0.0),
+        )?;
+        run_case(
+            "positive-infinity-equality",
+            f64::INFINITY,
+            f64::INFINITY,
+            1.0,
+            8,
+            0,
+            Some(f64::INFINITY),
+        )?;
+        run_case(
+            "nan-is-not-strictly-equal-to-itself",
+            f64::NAN,
+            f64::NAN,
+            1.0,
+            3,
+            2,
+            None,
+        )?;
+    }
 
     let invalid_tag_rejected = match candidate.runtime {
         RuntimeLayout::Tagged16 => {
@@ -1096,7 +1097,7 @@ fn run_native_candidate(
                     max_iterations,
                 )
             };
-            positive_status == 1 && negative_status == 1
+            Some(positive_status == 1 && negative_status == 1)
         }
     };
     if noncanonical_nanbox_words_rejected == Some(false) {
