@@ -1248,3 +1248,158 @@ jobs:
             ${{ runner.temp }}/ogm31-typed-host-dispatch-Cargo.lock
           if-no-files-found: warn
           retention-days: 90
+
+
+  ogm29-interpreter-hybrid-footprint:
+    name: OGM-29 interpreter and hybrid-native footprint baseline
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-29-interpreter-hybrid-footprint')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: target-ogm29-ci
+
+    steps:
+      - name: Checkout tested PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install LLVM 18 and native linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev llvm-18 clang-18 build-essential time
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Capture benchmark revision and toolchain
+        id: environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "source_sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          rustc --version
+          cargo --version
+          python --version
+          llvm-config-18 --version
+          clang-18 --version
+          cc --version
+          uname -a
+          lscpu
+
+      - name: Validate OGM-29 profile and fixture contracts
+        run: |
+          python3 .github/scripts/validate_runtime_profiles.py --report "$RUNNER_TEMP/ogm29-runtime-profile-contract.json"
+          python3 .github/scripts/verify_core_ir.py \
+            --manifest benchmarks/dual-backend/manifest.json \
+            --report "$RUNNER_TEMP/ogm29-core-ir-report.json"
+
+      - name: Check formatting and C ABI layout for native proof dependencies
+        run: |
+          cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/host-execution-scope/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+          cc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+            -I benchmarks/rust-abi/include \
+            -I benchmarks/typed-host-dispatch/include \
+            -I benchmarks/backend-codegen/include \
+            benchmarks/backend-codegen/tests/aot_abi_layout.c
+
+      - name: Run Clippy for native proof dependencies
+        run: |
+          cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run native proof contract tests
+        run: |
+          cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+
+      - name: Run portable bytecode and dual-backend regressions
+        run: |
+          python tests/ogmb/build_fixtures.py
+          python -m unittest discover -s .github/scripts -p "test_ogmb.py" -v
+          python -m unittest discover -s .github/scripts -p "test_portable_bytecode.py" -v
+          python -m unittest discover -s benchmarks/dual-backend -p "test_*.py" -v
+
+      - name: Run OGM-29 footprint harness tests
+        run: python -m unittest discover -s benchmarks/runtime-footprint -p "test_*.py" -v
+
+      - name: Run OGM-29 interpreter and hybrid-AOT measurements
+        env:
+          OGM29_SOURCE_REVISION: ${{ steps.environment.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python benchmarks/runtime-footprint/run.py \
+            --iterations 1000 \
+            --warmups 3 \
+            --samples 101 \
+            --revision "$OGM29_SOURCE_REVISION" \
+            --output "$RUNNER_TEMP/ogm29-footprint-report.json" \
+            --artifact-dir "$RUNNER_TEMP/ogm29-footprint-artifacts"
+
+      - name: Validate OGM-29 machine-readable footprint evidence
+        run: |
+          python3 - "$RUNNER_TEMP/ogm29-footprint-report.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              report = json.load(stream)
+
+          assert report["schema"] == "ogma.runtime-footprint-report"
+          assert report["version"] == "1.0.0"
+          assert report["task"] == "OGM-29"
+          assert report["environment"]["target"] == "x86_64-unknown-linux-gnu"
+          assert report["workload"]["same_workload_for_portable_and_native"]
+          assert len(report["workload"]["fixture_set"]) == 5
+          assert all(report["acceptance"].values())
+          assert report["proof_measurements"]["portable_interpreter_profile"]["portable_differential"]["same_stack_and_register_observations"]
+          assert set(report["proof_measurements"]["hybrid_native_profile"]["backends"]) == {"cranelift", "llvm"}
+          for backend in report["proof_measurements"]["hybrid_native_profile"]["backends"].values():
+              assert backend["compile_time"]["sample_count"] == 101
+              assert backend["link_time"]["sample_count"] == 101
+              assert backend["object_bytes"] > 0
+              assert backend["copied_native_object"]["bytes"] > 0
+          assert report["startup_and_memory"]["portable_proof_worker_peak_rss_bytes"] > 0
+          assert report["startup_and_memory"]["native_compiler_and_proof_process_peak_rss_bytes"] > 0
+          assert report["production_metric_status"]["runtime_startup"] == "not_implemented"
+          assert report["production_metric_status"]["production_runtime_binary_size"] == "not_implemented"
+          assert report["production_metric_status"]["production_runtime_peak_rss"] == "not_implemented"
+          print("Validated OGM-29 shared-workload footprint report, bytecode/AOT compile samples, artifacts, RSS boundaries and explicit M0 production limitations.")
+          PY
+
+      - name: Upload OGM-29 footprint report and raw artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm29-interpreter-hybrid-footprint
+          path: |
+            ${{ runner.temp }}/ogm29-footprint-report.json
+            ${{ runner.temp }}/ogm29-runtime-profile-contract.json
+            ${{ runner.temp }}/ogm29-core-ir-report.json
+            ${{ runner.temp }}/ogm29-footprint-artifacts/ogm30-native-backend-report.json
+            ${{ runner.temp }}/ogm29-footprint-artifacts/native-process-time.txt
+            ${{ runner.temp }}/ogm29-footprint-artifacts/native/*.o
+            ${{ runner.temp }}/ogm29-footprint-artifacts/portable/**/*.ogmb
+            ${{ runner.temp }}/ogm29-footprint-artifacts/cargo-target/release/ogma-backend-codegen-benchmark
+            benchmarks/backend-codegen/Cargo.lock
+          if-no-files-found: warn
+          retention-days: 90
