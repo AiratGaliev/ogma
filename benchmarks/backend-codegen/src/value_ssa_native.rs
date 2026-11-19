@@ -956,6 +956,7 @@ fn run_native_candidate(
     run_case("signed-zero-strict-equality", -0.0, 0.0, 1.0, 8, 0, Some(-0.0))?;
     run_case("positive-infinity-equality", f64::INFINITY, f64::INFINITY, 1.0, 8, 0, Some(f64::INFINITY))?;
     run_case("nan-is-not-strictly-equal-to-itself", f64::NAN, f64::NAN, 1.0, 3, 2, None)?;
+    drop(run_case);
 
     let invalid_tag_rejected = match candidate.runtime {
         RuntimeLayout::Tagged16 => {
