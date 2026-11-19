@@ -1092,9 +1092,9 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     let resolved_handle = opaque_handle_registry
         .get(usize::try_from(object_token - 1)?)
         .context("NaN-box payload does not resolve to an OGM-26 persistent handle")?;
-    let survived = heap.is_alive(parent)
-        && heap.is_alive(child)
-        && heap.resolve_host_handle(*resolved_handle).is_ok();
+    let resolved_object = heap.resolve_host_handle(*resolved_handle)?;
+    let survived =
+        heap.is_alive(parent) && heap.is_alive(child) && resolved_object == child;
     if !survived || retained.reclaimed_objects != 0 {
         bail!("real GC heap reclaimed an object retained by native/persistent roots");
     }
