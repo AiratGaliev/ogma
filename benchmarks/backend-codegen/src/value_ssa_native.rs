@@ -412,6 +412,27 @@ struct NativeSemanticValidation {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeHandleTagEvidence {
+    label: &'static str,
+    tagged_value_tag: u64,
+    nanbox_value_tag: u64,
+    callback_status: i32,
+    callback_invocations: u64,
+    forced_collections: u64,
+    handle_resolved_to_expected_object: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NativeHandleDispatchEvidence {
+    helper_calls_per_sample: u64,
+    warmup_rounds: usize,
+    throughput_ns_per_call: Distribution,
+    supported_reference_tags: Vec<NativeHandleTagEvidence>,
+    native_code: NativeCodeMetrics,
+    all_callbacks_resolved_expected_handles: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeCodeMetrics {
     disassembler: &'static str,
     symbol: &'static str,
@@ -444,6 +465,7 @@ struct CandidateEvidence {
     result_matches: bool,
     native_semantic_validation: NativeSemanticValidation,
     native_code: NativeCodeMetrics,
+    native_handle_dispatch: NativeHandleDispatchEvidence,
     register_pressure: RegisterPressure,
     gc: GcEvidence,
 }
@@ -701,6 +723,28 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     );
     signature.returns.push(AbiParam::new(types::I32));
     let function = module.declare_function("ogma_value_loop", Linkage::Export, &signature)?;
+
+    let mut dispatch_signature = module.make_signature();
+    dispatch_signature.params.extend(
+        [types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    dispatch_signature.returns.push(AbiParam::new(types::I32));
+    let dispatch_function = module.declare_function(
+        "ogma_value_handle_dispatch",
+        Linkage::Export,
+        &dispatch_signature,
+    )?;
+
+    let mut callback_signature = module.make_signature();
+    callback_signature.params.extend(
+        [types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    callback_signature.returns.push(AbiParam::new(types::I32));
+
     let mut context = module.make_context();
     context.func.signature = signature;
     let mut builder_context = FunctionBuilderContext::new();
@@ -1015,6 +1059,78 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     }
 
     module.define_function(function, &mut context)?;
+    module.clear_context(&mut context);
+
+    // The second export is a real native helper boundary for candidate Values.
+    // It extracts a tagged pointer or NaN-box word, then makes an indirect C ABI
+    // callback with (context, tag, 48-bit handle token).
+    context.func.signature = dispatch_signature;
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let parameters = b.block_params(entry).to_vec();
+        b.switch_to_block(entry);
+
+        let (tag, payload) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => (
+                b.ins().load(types::I64, MemFlagsData::new(), parameters[0], 0),
+                b.ins().load(types::I64, MemFlagsData::new(), parameters[0], 8),
+            ),
+            RuntimeLayout::NanBox8 => (
+                b.ins().ushr_imm(parameters[0], NAN_TAG_SHIFT as u8),
+                b.ins().band_imm(parameters[0], MAX_PAYLOAD as i64),
+            ),
+        };
+
+        let allowed_tags = match candidate.runtime {
+            RuntimeLayout::Tagged16 => &NATIVE_HANDLE_TAGS,
+            RuntimeLayout::NanBox8 => &NANBOX_HANDLE_TAGS,
+        };
+        let mut is_supported_reference = b.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            tag,
+            b.ins().iconst(types::I64, allowed_tags[0] as i64),
+        );
+        for allowed_tag in allowed_tags.iter().copied().skip(1) {
+            let expected_tag = b.ins().iconst(types::I64, allowed_tag as i64);
+            let matches = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::Equal,
+                tag,
+                expected_tag,
+            );
+            is_supported_reference = b.ins().bor(is_supported_reference, matches);
+        }
+
+        let dispatch_block = b.create_block();
+        let invalid_block = b.create_block();
+        b.ins().brif(
+            is_supported_reference,
+            dispatch_block,
+            &[],
+            invalid_block,
+            &[],
+        );
+
+        b.switch_to_block(dispatch_block);
+        let callback_sig = b.import_signature(callback_signature.clone());
+        let invoked = b.ins().call_indirect(
+            callback_sig,
+            parameters[1],
+            &[parameters[2], tag, payload],
+        );
+        let callback_status = b.inst_results(invoked)[0];
+        b.ins().return_(&[callback_status]);
+
+        b.switch_to_block(invalid_block);
+        let invalid_status = b.ins().iconst(types::I32, 1);
+        b.ins().return_(&[invalid_status]);
+
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+
+    module.define_function(dispatch_function, &mut context)?;
     module.clear_context(&mut context);
     let product = module.finish();
     fs::write(object_path, product.emit()?)?;
@@ -2013,7 +2129,10 @@ fn is_vector_register(token: &str) -> bool {
     })
 }
 
-fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
+fn parse_native_disassembly(
+    disassembly: &str,
+    symbol: &'static str,
+) -> Result<NativeCodeMetrics> {
     let mut in_function = false;
     let mut found_symbol = false;
     let mut instruction_count = 0_usize;
@@ -2027,7 +2146,7 @@ fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
 
     for line in disassembly.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("<ogma_value_loop>:") {
+        if trimmed.contains(&format!("<{symbol}>:")) {
             found_symbol = true;
             in_function = true;
             continue;
@@ -2084,12 +2203,12 @@ fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
     }
 
     if !found_symbol || instruction_count == 0 {
-        bail!("objdump did not produce instructions for ogma_value_loop");
+        bail!("objdump did not produce instructions for {symbol}");
     }
 
     Ok(NativeCodeMetrics {
         disassembler: "GNU objdump -d -M intel",
-        symbol: "ogma_value_loop",
+        symbol,
         instruction_count,
         function_code_bytes,
         integer_registers: integer_registers.into_iter().collect(),
@@ -2101,12 +2220,17 @@ fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
     })
 }
 
-fn native_code_metrics(object_path: &Path) -> Result<NativeCodeMetrics> {
+fn native_code_metrics(
+    object_path: &Path,
+    symbol: &'static str,
+) -> Result<NativeCodeMetrics> {
     if env::consts::ARCH != "x86_64" {
         bail!("OGM-38 native register disassembly currently requires an x86_64 target");
     }
+    let symbol_argument = format!("--disassemble={symbol}");
     let output = Command::new("objdump")
-        .args(["-d", "-M", "intel", "--disassemble=ogma_value_loop"])
+        .args(["-d", "-M", "intel"])
+        .arg(symbol_argument)
         .arg(object_path)
         .output()
         .context("launch objdump for generated OGM-38 native function")?;
@@ -2119,7 +2243,7 @@ fn native_code_metrics(object_path: &Path) -> Result<NativeCodeMetrics> {
     }
     let disassembly =
         String::from_utf8(output.stdout).context("objdump returned non-UTF-8 disassembly")?;
-    parse_native_disassembly(&disassembly)
+    parse_native_disassembly(&disassembly, symbol)
 }
 
 fn run(
@@ -2281,7 +2405,8 @@ mod tests {
    9: 48 89 44 24 10          mov QWORD PTR [rsp+0x10],rax
    e: c3                      ret
 "#;
-        let metrics = parse_native_disassembly(disassembly).expect("parse x86_64 objdump output");
+        let metrics =
+            parse_native_disassembly(disassembly, "ogma_value_loop").expect("parse objdump");
         assert_eq!(metrics.instruction_count, 4);
         assert_eq!(metrics.function_code_bytes, 15);
         assert!(metrics.integer_registers.contains(&"rax".to_owned()));
@@ -2290,6 +2415,21 @@ mod tests {
         assert_eq!(metrics.stack_relative_memory_instructions, 2);
         assert_eq!(metrics.stack_relative_loads, 1);
         assert_eq!(metrics.stack_relative_stores, 1);
+    }
+
+    #[test]
+    fn objdump_parser_accepts_indirect_native_helper_symbol() {
+        let disassembly = r#"
+0000000000000000 <ogma_value_handle_dispatch>:
+   0: 48 89 f8                mov rax,rdi
+   3: ff d0                   call rax
+   5: c3                      ret
+"#;
+        let metrics = parse_native_disassembly(disassembly, "ogma_value_handle_dispatch")
+            .expect("parse indirect callback helper");
+        assert_eq!(metrics.symbol, "ogma_value_handle_dispatch");
+        assert_eq!(metrics.instruction_count, 3);
+        assert_eq!(metrics.direct_call_instructions, 1);
     }
 
     #[test]
