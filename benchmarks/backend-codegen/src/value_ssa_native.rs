@@ -37,6 +37,8 @@ const NANBOX_RESERVED_TAG_MIN: u64 = 0x7ff9_0000_0000_0000;
 const NANBOX_RESERVED_TAG_MAX: u64 = 0x7fff_ffff_ffff_ffff;
 const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000;
+const GC_OBJECT_COUNT: usize = 2_048;
+const GC_VALUE_SLOTS_PER_OBJECT: usize = 16;
 
 fn canonical_number_bits(value: f64) -> u64 {
     if value.is_nan() {
@@ -146,18 +148,48 @@ struct RegisterPressure {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct GcEvidence {
-    collector: &'static str,
-    object_count_before_collection: u64,
+struct GcSample {
+    build_ns: u128,
+    collection_ns: u128,
+    root_scan_ns: u128,
+    cleanup_collection_ns: u128,
+    roots_scanned: usize,
+    edges_examined: u64,
     logical_heap_bytes_before_collection: u64,
-    root_frame_roots: usize,
-    persistent_handles: usize,
-    rooted_objects_survived_collection: bool,
+    peak_logical_heap_bytes: u64,
+    actual_value_storage_capacity_bytes: usize,
     reclaimed_after_root_release: usize,
     live_objects_after_release: u64,
-    peak_logical_heap_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct GcCollectorEvidence {
+    collector: &'static str,
+    object_count: usize,
+    edge_count: usize,
+    interpreter_frame_roots: usize,
+    native_frame_roots: usize,
+    persistent_host_handles: usize,
+    temporary_scope_roots: usize,
+    build_ns: Distribution,
+    collection_ns: Distribution,
+    root_scan_ns: Distribution,
+    cleanup_collection_ns: Distribution,
+    peak_logical_heap_bytes_max: u64,
+    actual_value_storage_capacity_bytes: usize,
+    raw_samples: Vec<GcSample>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct GcEvidence {
+    collector_implementation: &'static str,
+    object_count: usize,
+    graph_edges: usize,
+    value_slots_per_object: usize,
+    value_storage_bytes: usize,
     value_layout_bytes: usize,
     handle_payload_bits: u32,
+    collector_comparisons: Vec<GcCollectorEvidence>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1273,71 +1305,217 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     })
 }
 
-fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
-    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
-    let parent = heap.allocate(32);
-    let child = heap.allocate(64);
-    heap.add_edge(parent, child)?;
-    heap.add_edge(child, parent)?;
-    let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
-    heap.add_frame_root(native_frame, parent)?;
-    let persistent = heap.retain_host_handle(child)?;
-    // The NaN-box payload is an opaque token into this runtime-owned registry;
-    // the registry stores the real OGM-26 generation-checked HostHandle.
-    let opaque_handle_registry = [persistent];
+fn run_gc_sample(
+    candidate: Candidate,
+    collector: CollectorKind,
+    object_count: usize,
+) -> Result<GcSample> {
+    if object_count < 4 || object_count % 4 != 0 {
+        bail!("GC workload object count must be >=4 and divisible by four");
+    }
 
-    let before = heap.stats();
-    let object_token = 1_u64;
-    let encoded_handle = match candidate.runtime {
-        RuntimeLayout::Tagged16 => TaggedValue {
-            tag: OBJECT_TAG,
-            payload: object_token,
-        },
-        RuntimeLayout::NanBox8 => {
-            let tagged_word = (0x7ffe_u64 << NAN_TAG_SHIFT) | object_token;
-            let decoded_tag = tagged_word >> NAN_TAG_SHIFT;
-            if decoded_tag != 0x7ffe {
-                bail!("NaN-box object tag was not preserved");
-            }
-            TaggedValue {
-                tag: decoded_tag,
-                payload: tagged_word & MAX_PAYLOAD,
+    let build_start = Instant::now();
+    let value_words_per_object =
+        GC_VALUE_SLOTS_PER_OBJECT * (candidate.runtime.value_bytes() / size_of::<u64>());
+    let storage_words = object_count
+        .checked_mul(value_words_per_object)
+        .context("candidate Value storage size overflow")?;
+    let mut value_storage = Vec::with_capacity(storage_words);
+    value_storage.resize(storage_words, 0_u64);
+    for (index, word) in value_storage.iter_mut().enumerate() {
+        *word = (index as u64).rotate_left((candidate.runtime.value_bytes() % 64) as u32);
+    }
+    black_box(value_storage.as_slice());
+
+    let mut heap = GcHeap::new(collector);
+    let payload_bytes = GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
+    let objects: Vec<_> = (0..object_count)
+        .map(|_| heap.allocate(payload_bytes))
+        .collect();
+
+    // Match OGM-26's cyclic graph shape and add deterministic cross-component edges.
+    for base in (0..object_count).step_by(4) {
+        heap.add_edge(objects[base], objects[base + 1])?;
+        heap.add_edge(objects[base + 1], objects[base + 2])?;
+        heap.add_edge(objects[base + 2], objects[base + 3])?;
+        heap.add_edge(objects[base + 3], objects[base])?;
+        let component = base / 4;
+        if component % 7 == 0 && base + 4 < object_count {
+            heap.add_edge(objects[base], objects[base + 5])?;
+        }
+    }
+
+    let interpreter_frame = heap.begin_frame(FrameKind::Interpreter)?;
+    let scope = heap.open_scope()?;
+    let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
+    let components = object_count / 4;
+    let mut persistent_handles = Vec::new();
+
+    for component in 0..components {
+        let base = component * 4;
+        match component % 3 {
+            0 => heap.add_frame_root(interpreter_frame, objects[base])?,
+            1 => heap.add_frame_root(native_frame, objects[base + 1])?,
+            _ => {
+                let handle = heap.retain_host_handle(objects[base + 2])?;
+                persistent_handles.push((handle, objects[base + 2]));
             }
         }
-    };
-    if encoded_handle.payload != object_token {
-        bail!("encoded managed handle payload changed");
+        if component % 16 == 0 {
+            heap.scope_add(scope, objects[base + 3])?;
+        }
     }
 
+    let graph = heap.graph_shape()?;
+    let before = heap.stats();
+    let build_ns = build_start.elapsed().as_nanos();
     let retained = heap.collect()?;
-    let resolved_handle = opaque_handle_registry
-        .get(usize::try_from(object_token - 1)?)
-        .context("NaN-box payload does not resolve to an OGM-26 persistent handle")?;
-    let resolved_object = heap.resolve_host_handle(*resolved_handle)?;
-    let survived = heap.is_alive(parent) && heap.is_alive(child) && resolved_object == child;
-    if !survived || retained.reclaimed_objects != 0 {
-        bail!("real GC heap reclaimed an object retained by native/persistent roots");
+    if retained.reclaimed_objects != 0 || retained.live_objects_after != object_count as u64 {
+        bail!(
+            "{} {} GC proof reclaimed rooted objects: {}/{}",
+            candidate.name(),
+            collector.name(),
+            retained.reclaimed_objects,
+            object_count
+        );
+    }
+    if objects.iter().any(|object| !heap.is_alive(*object)) {
+        bail!("{} GC proof lost an object retained by one of the root mechanisms", candidate.name());
     }
 
+    // Validate every opaque NaN-box handle token against the actual generation-checked
+    // OGM-26 HostHandle registry entry, not against a synthetic object table.
+    for (index, (handle, expected_object)) in persistent_handles.iter().enumerate() {
+        let token = (index + 1) as u64;
+        let decoded_token = match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let value = TaggedValue {
+                    tag: OBJECT_TAG,
+                    payload: token,
+                };
+                if value.tag != OBJECT_TAG {
+                    bail!("tagged object Value tag changed");
+                }
+                value.payload
+            }
+            RuntimeLayout::NanBox8 => {
+                let word = (0x7ffe_u64 << NAN_TAG_SHIFT) | token;
+                if word >> NAN_TAG_SHIFT != 0x7ffe {
+                    bail!("NaN-box object Value tag changed");
+                }
+                word & MAX_PAYLOAD
+            }
+        };
+        if decoded_token != token || heap.resolve_host_handle(*handle)? != *expected_object {
+            bail!(
+                "{} handle token {token} did not resolve to its exact rooted object",
+                candidate.name()
+            );
+        }
+    }
+
+    heap.close_scope(scope)?;
     heap.end_frame(native_frame)?;
-    heap.release_host_handle(persistent)?;
+    for (handle, _) in persistent_handles.iter().copied() {
+        heap.release_host_handle(handle)?;
+    }
+    heap.end_frame(interpreter_frame)?;
     let released = heap.collect()?;
-    if heap.is_alive(parent) || heap.is_alive(child) {
-        bail!("unrooted cycle survived mark-sweep collection");
+    if released.live_objects_after != 0 || released.reclaimed_objects != object_count {
+        bail!(
+            "{} {} GC proof did not reclaim the unrooted object graph: {} live / {} reclaimed",
+            candidate.name(),
+            collector.name(),
+            released.live_objects_after,
+            released.reclaimed_objects
+        );
     }
 
-    Ok(GcEvidence {
-        collector: "OGM-26 GcHeap::MarkSweep",
-        object_count_before_collection: before.live_objects,
+    let actual_value_storage_capacity_bytes =
+        value_storage.capacity() * size_of::<u64>();
+    let stats = heap.stats();
+    Ok(GcSample {
+        build_ns,
+        collection_ns: retained.collection_ns,
+        root_scan_ns: retained.root_scan_ns,
+        cleanup_collection_ns: released.collection_ns,
+        roots_scanned: retained.roots_scanned,
+        edges_examined: retained.edges_examined,
         logical_heap_bytes_before_collection: before.live_bytes,
-        root_frame_roots: 1,
-        persistent_handles: 1,
-        rooted_objects_survived_collection: survived,
+        peak_logical_heap_bytes: stats.peak_heap_bytes,
+        actual_value_storage_capacity_bytes,
         reclaimed_after_root_release: released.reclaimed_objects,
-        live_objects_after_release: heap.stats().live_objects,
-        peak_logical_heap_bytes: heap.stats().peak_heap_bytes,
+        live_objects_after_release: stats.live_objects,
+    })
+}
+
+fn gc_distribution(samples: &[GcSample], select: impl Fn(&GcSample) -> u128) -> Distribution {
+    distribution(samples.iter().map(|sample| select(sample) as f64).collect())
+}
+
+fn gc_collector_evidence(
+    candidate: Candidate,
+    collector: CollectorKind,
+    warmups: usize,
+    samples: usize,
+    object_count: usize,
+) -> Result<GcCollectorEvidence> {
+    for _ in 0..warmups {
+        black_box(run_gc_sample(candidate, collector, object_count)?);
+    }
+
+    let mut raw_samples = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        raw_samples.push(run_gc_sample(candidate, collector, object_count)?);
+    }
+    let first = raw_samples.first().context("GC measurement samples missing")?;
+    let peak_logical_heap_bytes_max = raw_samples
+        .iter()
+        .map(|sample| sample.peak_logical_heap_bytes)
+        .max()
+        .unwrap_or_default();
+    Ok(GcCollectorEvidence {
+        collector: collector.name(),
+        object_count,
+        edge_count: object_count + (object_count / 28).div_ceil(1),
+        interpreter_frame_roots: (object_count / 4).div_ceil(3),
+        native_frame_roots: object_count / 4 / 3,
+        persistent_host_handles: object_count / 4 / 3,
+        temporary_scope_roots: (object_count / 4).div_ceil(16),
+        build_ns: gc_distribution(&raw_samples, |sample| sample.build_ns),
+        collection_ns: gc_distribution(&raw_samples, |sample| sample.collection_ns),
+        root_scan_ns: gc_distribution(&raw_samples, |sample| sample.root_scan_ns),
+        cleanup_collection_ns: gc_distribution(&raw_samples, |sample| sample.cleanup_collection_ns),
+        peak_logical_heap_bytes_max,
+        actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
+        raw_samples,
+    })
+}
+
+fn gc_evidence(
+    candidate: Candidate,
+    warmups: usize,
+    samples: usize,
+    object_count: usize,
+) -> Result<GcEvidence> {
+    let collector_comparisons = CollectorKind::ALL
+        .into_iter()
+        .map(|collector| {
+            gc_collector_evidence(candidate, collector, warmups, samples, object_count)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let graph_edges = object_count + (object_count / 28).div_ceil(1);
+    let value_storage_bytes =
+        object_count * GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
+    Ok(GcEvidence {
+        collector_implementation: "OGM-26 RcCycleRemoval and MarkSweep",
+        object_count,
+        graph_edges,
+        value_slots_per_object: GC_VALUE_SLOTS_PER_OBJECT,
+        value_storage_bytes,
         value_layout_bytes: candidate.runtime.value_bytes(),
         handle_payload_bits: NAN_TAG_SHIFT,
+        collector_comparisons,
     })
 }
 
@@ -1520,7 +1698,7 @@ fn run(
             run_native_candidate(candidate, &library, iterations, warmups, samples, expected)?;
         let native_code = native_code_metrics(&object_path)?;
         let register_pressure = register_pressure(candidate)?;
-        let gc = gc_evidence(candidate)?;
+        let gc = gc_evidence(candidate, warmups, samples, GC_OBJECT_COUNT)?;
         candidates.push(CandidateEvidence {
             name: candidate.name(),
             runtime_value_bytes: candidate.runtime.value_bytes(),
@@ -1739,12 +1917,25 @@ mod tests {
     }
 
     #[test]
-    fn real_gc_heap_preserves_and_then_reclaims_rooted_cycle() {
+    fn candidate_layouts_survive_and_release_equivalent_ogm26_gc_graphs() {
         for candidate in Candidate::ALL {
-            let evidence = gc_evidence(candidate).expect("real OGM-26 heap integration");
-            assert!(evidence.rooted_objects_survived_collection);
-            assert_eq!(evidence.live_objects_after_release, 0);
-            assert!(evidence.reclaimed_after_root_release >= 2);
+            let evidence =
+                gc_evidence(candidate, 0, 1, 64).expect("OGM-26 allocation/root/GC workload");
+            assert_eq!(evidence.object_count, 64);
+            assert_eq!(
+                evidence.value_storage_bytes,
+                64 * GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes()
+            );
+            assert_eq!(evidence.collector_comparisons.len(), CollectorKind::ALL.len());
+            for collector in evidence.collector_comparisons {
+                assert_eq!(collector.object_count, 64);
+                assert_eq!(collector.actual_value_storage_capacity_bytes, evidence.value_storage_bytes);
+                assert!(collector.collection_ns.p50_ns > 0.0);
+                assert!(collector.root_scan_ns.p50_ns > 0.0);
+                assert!(collector.raw_samples[0].roots_scanned > 0);
+                assert_eq!(collector.raw_samples[0].live_objects_after_release, 0);
+                assert_eq!(collector.raw_samples[0].reclaimed_after_root_release, 64);
+            }
         }
     }
 }
