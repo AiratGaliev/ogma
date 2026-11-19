@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import unittest
 
 import run as footprint
@@ -81,6 +82,18 @@ class RuntimeFootprintTests(unittest.TestCase):
             result = footprint._parse_time_report(path)
         self.assertEqual(1234 * 1024, result["peak_rss_bytes"])
         self.assertEqual("0:01.23", result["elapsed_wall_clock"])
+
+    def test_startup_probe_measures_repeated_process_launches(self) -> None:
+        result = footprint._measure_startup_probe(
+            [sys.executable, "-c", "print('TEST_STARTUP_READY', flush=True)"],
+            "TEST_STARTUP_READY",
+            warmups=1,
+            samples=3,
+        )
+        self.assertEqual("measured_proof_tool_startup", result["status"])
+        self.assertEqual(3, result["latency"]["sample_count"])
+        self.assertGreater(result["latency"]["p50_ns_per_call"], 0)
+        self.assertEqual(1, result["warmup_processes"])
 
     def test_native_runtime_metrics_are_not_fabricated_by_profile_contract(self) -> None:
         document = footprint._read_json(
