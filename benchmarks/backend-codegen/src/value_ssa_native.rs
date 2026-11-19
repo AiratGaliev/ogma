@@ -909,8 +909,8 @@ impl RegallocFunction for PressureProgram {
     }
     fn spillslot_size(&self, class: RegClass) -> usize {
         match class {
-            RegClass::Int | RegClass::Float => 8,
-            RegClass::Vector => 16,
+            RegClass::Int | RegClass::Float => 1,
+            RegClass::Vector => 2,
         }
     }
 }
