@@ -666,10 +666,7 @@ unsafe extern "C" fn aot_generic_thunk(
         return OgmaStatus::INVALID_ARGUMENT;
     }
     unsafe { out_completion.write(AotCompletionV1::default()) };
-    if user_data.is_null()
-        || args_len > AOT_MAX_ARGUMENTS
-        || (args_len > 0 && args.is_null())
-    {
+    if user_data.is_null() || args_len > AOT_MAX_ARGUMENTS || (args_len > 0 && args.is_null()) {
         return OgmaStatus::INVALID_ARGUMENT;
     }
     let result = catch_unwind(AssertUnwindSafe(|| {

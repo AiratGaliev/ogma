@@ -2937,7 +2937,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         || aot_dispatch_counts["generic_calls"].as_u64() != Some(4)
         || aot_dispatch_counts["handle_calls"].as_u64() != Some(3)
     {
-        bail!("{name}: OGM-32 dispatch counters differ from the interpreter/native fixture contract");
+        bail!(
+            "{name}: OGM-32 dispatch counters differ from the interpreter/native fixture contract"
+        );
     }
     let aot_evidence = serde_json::json!({
         "abi_version": {
