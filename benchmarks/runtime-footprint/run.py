@@ -195,10 +195,17 @@ def _measure_startup_probe(
     for _ in range(warmups):
         measure_one()
     raw = [measure_one() for _ in range(samples)]
+    distribution = _distribution(raw)
     return {
         "status": "measured_proof_tool_startup",
         "marker": marker,
-        "latency": _distribution(raw),
+        "latency": {
+            "sample_count": distribution["sample_count"],
+            "p50_ns": distribution["p50_ns_per_call"],
+            "p95_ns": distribution["p95_ns_per_call"],
+            "p99_ns": distribution["p99_ns_per_call"],
+            "raw_samples_ns": distribution["raw_ns_per_call_samples"],
+        },
         "warmup_processes": warmups,
         "measurement_processes": samples,
         "measurement_scope": (
