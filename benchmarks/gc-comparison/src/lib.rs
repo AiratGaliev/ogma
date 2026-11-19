@@ -390,6 +390,44 @@ impl GcHeap {
         Ok(reference)
     }
 
+    /// Encodes a live generation-checked host handle into the 48-bit payload
+    /// available to an M0 NaN-box Value. The low 32 bits store the 1-based slot
+    /// index (zero is invalid); the high 16 bits store the slot generation.
+    ///
+    /// This bounded M0 ABI fails closed instead of truncating a slot index or
+    /// generation that cannot be represented.
+    pub fn encode_host_handle_token(&self, handle: HostHandle) -> Result<u64, GcError> {
+        self.resolve_host_handle(handle)?;
+        let slot_index = handle
+            .index
+            .checked_add(1)
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or(GcError::TokenSpaceExhausted)?;
+        let generation =
+            u16::try_from(handle.generation).map_err(|_| GcError::TokenSpaceExhausted)?;
+        let token = (u64::from(generation) << 32) | u64::from(slot_index);
+        debug_assert!(token > 0 && token <= ((1_u64 << 48) - 1));
+        Ok(token)
+    }
+
+    /// Resolves the 48-bit candidate Value payload through the real
+    /// generation-checked host-handle registry.
+    pub fn resolve_host_handle_token(&self, token: u64) -> Result<GcRef, GcError> {
+        if token == 0 || token > ((1_u64 << 48) - 1) {
+            return Err(GcError::StaleHostHandle);
+        }
+        let slot_index = (token & u64::from(u32::MAX)) as u32;
+        let generation = (token >> 32) as u16;
+        if slot_index == 0 || generation == 0 {
+            return Err(GcError::StaleHostHandle);
+        }
+        let index = usize::try_from(slot_index - 1).map_err(|_| GcError::TokenSpaceExhausted)?;
+        self.resolve_host_handle(HostHandle {
+            index,
+            generation: u64::from(generation),
+        })
+    }
+
     pub fn release_host_handle(&mut self, handle: HostHandle) -> Result<(), GcError> {
         let slot = self
             .host_slots
@@ -968,6 +1006,59 @@ mod tests {
             heap.end_frame(inner_frame).unwrap();
             heap.end_frame(outer_frame).unwrap();
         }
+    }
+
+    #[test]
+    fn encoded_host_handle_tokens_roundtrip_and_reject_released_generations() {
+        for collector in candidates() {
+            let mut heap = GcHeap::new(collector);
+            let original = heap.allocate(16);
+            let original_handle = heap.retain_host_handle(original).unwrap();
+            let original_token = heap.encode_host_handle_token(original_handle).unwrap();
+
+            assert!(original_token > 0);
+            assert!(original_token <= ((1_u64 << 48) - 1));
+            assert_eq!((original_token & u64::from(u32::MAX)) as u32, 1);
+            assert_eq!((original_token >> 32) as u16, 1);
+            assert_eq!(heap.resolve_host_handle_token(original_token), Ok(original));
+
+            heap.release_host_handle(original_handle).unwrap();
+            assert_eq!(
+                heap.resolve_host_handle_token(original_token),
+                Err(GcError::StaleHostHandle)
+            );
+            heap.collect().unwrap();
+
+            let replacement = heap.allocate(16);
+            let replacement_handle = heap.retain_host_handle(replacement).unwrap();
+            let replacement_token = heap.encode_host_handle_token(replacement_handle).unwrap();
+            assert_ne!(original_token, replacement_token);
+            assert_eq!(
+                heap.resolve_host_handle_token(original_token),
+                Err(GcError::StaleHostHandle)
+            );
+            assert_eq!(
+                heap.resolve_host_handle_token(replacement_token),
+                Ok(replacement)
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_host_handle_tokens_reject_generations_that_exceed_the_payload() {
+        let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+        let object = heap.allocate(8);
+        let handle = heap.retain_host_handle(object).unwrap();
+        let generation = u16::MAX as u64 + 1;
+        heap.host_slots[handle.index].generation = generation;
+        let oversized_handle = HostHandle {
+            index: handle.index,
+            generation,
+        };
+        assert_eq!(
+            heap.encode_host_handle_token(oversized_handle),
+            Err(GcError::TokenSpaceExhausted)
+        );
     }
 
     #[test]
