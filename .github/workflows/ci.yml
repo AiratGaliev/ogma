@@ -5,7 +5,7 @@ on:
     branches: [dev, test, main]
     types: [opened, synchronize, reopened, ready_for_review]
   push:
-    branches: [dev, test, main, feat/ogm-30-benchmark-cranelift-llvm, 'feat/ogm-38-*']
+    branches: [dev, test, main, feat/ogm-30-benchmark-cranelift-llvm]
   workflow_dispatch:
 
 permissions:
@@ -214,7 +214,7 @@ jobs:
 
   native-value-ssa-benchmark:
     name: OGM-38 native Value and SSA representation evidence
-    if: (github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-38-')) || (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feat/ogm-38-'))
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-38-')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
@@ -227,7 +227,7 @@ jobs:
       - name: Checkout tested PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Install LLVM and native linker
@@ -289,7 +289,7 @@ jobs:
           clang-18 --version
           cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release --bin ogm38-value-ssa -- \
             --iterations 1000 --warmups 3 --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --output "$RUNNER_TEMP/ogm38-native-value-ssa-report.json"
           cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm38-Cargo.lock"
 
@@ -355,7 +355,7 @@ jobs:
         run: python -m unittest discover -s benchmarks/object-shapes-inline-cache -p "test_*.py" -v
 
       - name: Run OGM-18 throughput and memory proof
-        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha || github.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
+        run: python benchmarks/object-shapes-inline-cache/run.py --revision "${{ github.event.pull_request.head.sha }}" --tested-revision "$GITHUB_SHA" --output "$RUNNER_TEMP/ogm-18-object-shapes-ic-report.json"
 
       - name: Upload OGM-18 proof report
         if: always()
@@ -426,7 +426,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/ogm-19-rust-abi-report.json"
 
@@ -488,7 +488,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM20_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-20-host-execution-scope-report.json"
@@ -567,7 +567,7 @@ jobs:
             --iterations 10000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --output "$RUNNER_TEMP/ogm-21-typed-host-dispatch-report.json"
 
@@ -630,7 +630,7 @@ jobs:
           set -euo pipefail
           cargo run --manifest-path benchmarks/buffer-interop/Cargo.toml --locked --release --bin ogma-buffer-interop-bench -- \
             --iterations 2000 --warmups 3 --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" --cpu "$OGM22_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-22-buffer-interop-report.json"
 
@@ -694,7 +694,7 @@ jobs:
             --iterations 1000 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM23_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-23-frame-snapshot-report.json"
@@ -836,7 +836,7 @@ jobs:
             --iterations 100 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM24_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-24-allocator-arena-report.json"
@@ -981,7 +981,7 @@ jobs:
             --objects 2048 \
             --warmups 3 \
             --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --tested-revision "$GITHUB_SHA" \
             --cpu "$OGM26_CPU_MODEL" \
             --output "$RUNNER_TEMP/ogm-26-gc-comparison-report.json"
@@ -1149,7 +1149,7 @@ jobs:
           set -euo pipefail
           cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release -- \
             --iterations 50000 --warmups 3 --samples 101 \
-            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --revision "${{ github.event.pull_request.head.sha }}" \
             --output "$RUNNER_TEMP/ogm30-backend-report.json"
 
       - name: Upload OGM-30 raw measurements and dependency lock
