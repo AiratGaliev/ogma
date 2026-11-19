@@ -232,15 +232,12 @@ fn resolve_candidate_object_value(
     runtime: RuntimeLayout,
     storage: &[u64],
     slot_index: usize,
-    gc_refs: &[ogma_gc_comparison_proof::GcRef],
+    heap: &ogma_gc_comparison_proof::GcHeap,
 ) -> Result<ogma_gc_comparison_proof::GcRef> {
     let token = decode_candidate_object_value(runtime, storage, slot_index)?
         .context("candidate Value slot does not contain an object reference")?;
-    let index = usize::try_from(token - 1).context("candidate Value token does not fit usize")?;
-    gc_refs
-        .get(index)
-        .copied()
-        .context("candidate Value token does not resolve to a GcRef entry")
+    heap.resolve_host_handle_token(token)
+        .context("candidate Value payload did not resolve through OGM-26 HostHandle registry")
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1542,9 +1539,11 @@ fn run_gc_sample(
         }
     }
 
-    // The native Value payload is an index into an indirection table backed by
-    // actual OGM-26 GcRef entries. It is not the synthetic OGM-17 object table.
-    let gc_ref_table = objects.clone();
+    // Candidate Values carry real OGM-26 HostHandle tokens. At this M0
+    // safepoint boundary, an encoded Value is decoded through the heap's
+    // generation-checked registry and its root is transferred to the matching
+    // interpreter/native/scope provider. Persistent host Values retain their
+    // token and HostHandle through collection.
     let value_slot_count = object_count * GC_VALUE_SLOTS_PER_OBJECT;
     for slot_index in 0..value_slot_count {
         encode_candidate_number_value(
@@ -1560,10 +1559,9 @@ fn run_gc_sample(
     let components = object_count / 4;
     let mut persistent_handles = Vec::new();
     let mut deferred_native_roots = Vec::new();
+    let mut deferred_native_handles = Vec::new();
     let mut encoded_object_values_resolved = 0_usize;
 
-    // Decode each candidate Value before installing its root in the real
-    // interpreter/native/scope/HostHandle API.
     for component in 0..components {
         let base = component * 4;
         let root_object_index = match component % 3 {
@@ -1572,17 +1570,19 @@ fn run_gc_sample(
             _ => base + 2,
         };
         let root_value_slot = root_object_index * GC_VALUE_SLOTS_PER_OBJECT;
+        let handle = heap.retain_host_handle(objects[root_object_index])?;
+        let token = heap.encode_host_handle_token(handle)?;
         encode_candidate_object_value(
             candidate.runtime,
             &mut value_storage,
             root_value_slot,
-            (root_object_index + 1) as u64,
+            token,
         )?;
         let root = resolve_candidate_object_value(
             candidate.runtime,
             &value_storage,
             root_value_slot,
-            &gc_ref_table,
+            &heap,
         )?;
         if root != objects[root_object_index] {
             bail!("candidate Value decoded to a different OGM-26 GcRef");
@@ -1590,41 +1590,70 @@ fn run_gc_sample(
         encoded_object_values_resolved += 1;
 
         match component % 3 {
-            0 => heap.add_frame_root(interpreter_frame, root)?,
-            1 => deferred_native_roots.push(root),
-            _ => {
-                let handle = heap.retain_host_handle(root)?;
-                persistent_handles.push((handle, root));
+            0 => {
+                heap.add_frame_root(interpreter_frame, root)?;
+                encode_candidate_number_value(
+                    candidate.runtime,
+                    &mut value_storage,
+                    root_value_slot,
+                    0.0,
+                )?;
+                heap.release_host_handle(handle)?;
             }
+            1 => {
+                deferred_native_roots.push((root, root_value_slot));
+                deferred_native_handles.push(handle);
+            }
+            _ => persistent_handles.push((handle, root, root_value_slot)),
         }
 
         if component % 16 == 0 {
             let scope_object_index = base + 3;
             let scope_value_slot = scope_object_index * GC_VALUE_SLOTS_PER_OBJECT + 1;
+            let scope_handle = heap.retain_host_handle(objects[scope_object_index])?;
+            let scope_token = heap.encode_host_handle_token(scope_handle)?;
             encode_candidate_object_value(
                 candidate.runtime,
                 &mut value_storage,
                 scope_value_slot,
-                (scope_object_index + 1) as u64,
+                scope_token,
             )?;
             let scope_root = resolve_candidate_object_value(
                 candidate.runtime,
                 &value_storage,
                 scope_value_slot,
-                &gc_ref_table,
+                &heap,
             )?;
             if scope_root != objects[scope_object_index] {
                 bail!("temporary-scope Value decoded to a different OGM-26 GcRef");
             }
             heap.scope_add(scope, scope_root)?;
+            encode_candidate_number_value(
+                candidate.runtime,
+                &mut value_storage,
+                scope_value_slot,
+                0.0,
+            )?;
+            heap.release_host_handle(scope_handle)?;
             encoded_object_values_resolved += 1;
         }
     }
 
-    // Frame roots must be added in strict LIFO order.
+    // Frame roots must be added in strict LIFO order. A temporary host handle
+    // is released only after the object root has moved into the native frame.
     let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
-    for root in deferred_native_roots {
+    for ((root, value_slot), handle) in deferred_native_roots
+        .into_iter()
+        .zip(deferred_native_handles.into_iter())
+    {
         heap.add_frame_root(native_frame, root)?;
+        encode_candidate_number_value(
+            candidate.runtime,
+            &mut value_storage,
+            value_slot,
+            0.0,
+        )?;
+        heap.release_host_handle(handle)?;
     }
     black_box(value_storage.as_slice());
 
@@ -1653,12 +1682,21 @@ fn run_gc_sample(
         );
     }
 
-    // Persistent host roots must still resolve through the generation-checked
-    // OGM-26 registry after collection while the candidate Values are live.
-    for (handle, expected_object) in persistent_handles.iter() {
-        if heap.resolve_host_handle(*handle)? != *expected_object {
+    // Persistent candidate Values keep the exact packed OGM-26 handle token
+    // alive across collection; decode the Value again after the safepoint.
+    for (handle, expected_object, value_slot) in persistent_handles.iter() {
+        let token = heap.encode_host_handle_token(*handle)?;
+        if decode_candidate_object_value(candidate.runtime, &value_storage, *value_slot)?
+            != Some(token)
+            || resolve_candidate_object_value(
+                candidate.runtime,
+                &value_storage,
+                *value_slot,
+                &heap,
+            )? != *expected_object
+        {
             bail!(
-                "{} persistent HostHandle did not resolve to its original GcRef",
+                "{} persistent candidate Value did not resolve to its original GcRef",
                 candidate.name()
             );
         }
@@ -2258,24 +2296,36 @@ mod tests {
     }
 
     #[test]
-    fn tagged_and_nanbox_object_values_roundtrip_the_same_heap_token() {
-        let token = 42_u64;
+    fn tagged_and_nanbox_object_values_resolve_real_host_handle_tokens() {
+        let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+        let object = heap.allocate(32);
+        let handle = heap.retain_host_handle(object).expect("retain object handle");
+        let token = heap
+            .encode_host_handle_token(handle)
+            .expect("encode OGM-26 handle token");
+
         let mut tagged = vec![0_u64; 2];
         encode_candidate_object_value(RuntimeLayout::Tagged16, &mut tagged, 0, token)
             .expect("encode tagged object Value");
         assert_eq!(
-            decode_candidate_object_value(RuntimeLayout::Tagged16, &tagged, 0)
-                .expect("decode tagged object Value"),
-            Some(token)
+            resolve_candidate_object_value(RuntimeLayout::Tagged16, &tagged, 0, &heap)
+                .expect("resolve tagged object Value"),
+            object
         );
 
         let mut nanbox = vec![0_u64; 1];
         encode_candidate_object_value(RuntimeLayout::NanBox8, &mut nanbox, 0, token)
             .expect("encode NaN-box object Value");
         assert_eq!(
-            decode_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0)
-                .expect("decode NaN-box object Value"),
-            Some(token)
+            resolve_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0, &heap)
+                .expect("resolve NaN-box object Value"),
+            object
+        );
+
+        heap.release_host_handle(handle).expect("release object handle");
+        assert!(
+            resolve_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0, &heap).is_err(),
+            "released candidate Value must not resolve through a stale handle token"
         );
     }
 
