@@ -1087,10 +1087,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             RuntimeLayout::Tagged16 => &NATIVE_HANDLE_TAGS,
             RuntimeLayout::NanBox8 => &NANBOX_HANDLE_TAGS,
         };
+        let first_tag = b.ins().iconst(types::I64, allowed_tags[0] as i64);
         let mut is_supported_reference = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             tag,
-            b.ins().iconst(types::I64, allowed_tags[0] as i64),
+            first_tag,
         );
         for allowed_tag in allowed_tags.iter().copied().skip(1) {
             let expected_tag = b.ins().iconst(types::I64, allowed_tag as i64);
@@ -1214,7 +1215,7 @@ fn run_native_handle_dispatch_validation(
 ) -> Result<NativeHandleDispatchEvidence> {
     let dispatch = unsafe {
         *library
-            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
             .context("generated native Value handle-dispatch entry point missing")?
     };
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
@@ -2480,7 +2481,15 @@ fn run(
             .with_context(|| format!("load generated native object for {}", candidate.name()))?;
         let (throughput_ns_per_call, result_matches, native_semantic_validation) =
             run_native_candidate(candidate, &library, iterations, warmups, samples, expected)?;
-        let native_code = native_code_metrics(&object_path)?;
+        let native_code = native_code_metrics(&object_path, "ogma_value_loop")?;
+        let native_handle_dispatch = run_native_handle_dispatch_validation(
+            candidate,
+            &library,
+            &object_path,
+            iterations,
+            warmups,
+            samples,
+        )?;
         let register_pressure = register_pressure(candidate)?;
         let gc = gc_evidence(candidate, warmups, samples, GC_OBJECT_COUNT)?;
         candidates.push(CandidateEvidence {
@@ -2510,6 +2519,7 @@ fn run(
             result_matches,
             native_semantic_validation,
             native_code,
+            native_handle_dispatch,
             register_pressure,
             gc,
         });
@@ -2716,40 +2726,56 @@ mod tests {
     }
 
     #[test]
-    fn tagged_and_nanbox_object_values_resolve_real_host_handle_tokens() {
+    fn tagged_and_nanbox_reference_values_resolve_all_ogm17_handle_tag_families() {
         let mut heap = GcHeap::new(CollectorKind::MarkSweep);
-        let object = heap.allocate(32);
-        let handle = heap
-            .retain_host_handle(object)
-            .expect("retain object handle");
-        let token = heap
-            .encode_host_handle_token(handle)
-            .expect("encode OGM-26 handle token");
+        let objects: Vec<_> = NATIVE_HANDLE_TAG_FAMILIES
+            .iter()
+            .map(|_| heap.allocate(32))
+            .collect();
+        let handles = objects
+            .iter()
+            .map(|object| heap.retain_host_handle(*object).expect("retain reference"))
+            .collect::<Vec<_>>();
+        let tokens = handles
+            .iter()
+            .map(|handle| heap.encode_host_handle_token(*handle).expect("encode handle"))
+            .collect::<Vec<_>>();
 
-        let mut tagged = vec![0_u64; 2];
-        encode_candidate_object_value(RuntimeLayout::Tagged16, &mut tagged, 0, token)
-            .expect("encode tagged object Value");
-        assert_eq!(
-            resolve_candidate_object_value(RuntimeLayout::Tagged16, &tagged, 0, &heap)
-                .expect("resolve tagged object Value"),
-            object
-        );
+        for candidate in Candidate::ALL {
+            for (index, family) in NATIVE_HANDLE_TAG_FAMILIES.iter().enumerate() {
+                let mut storage = match candidate.runtime {
+                    RuntimeLayout::Tagged16 => vec![0_u64; 2],
+                    RuntimeLayout::NanBox8 => vec![0_u64; 1],
+                };
+                encode_candidate_reference_value(
+                    candidate.runtime,
+                    &mut storage,
+                    0,
+                    family.tagged_tag,
+                    tokens[index],
+                )
+                .expect("encode candidate reference Value");
+                assert_eq!(
+                    resolve_candidate_object_value(
+                        candidate.runtime,
+                        &storage,
+                        0,
+                        &heap,
+                    )
+                    .expect("resolve candidate reference Value"),
+                    objects[index],
+                    "{} {}",
+                    candidate.name(),
+                    family.label
+                );
+            }
+        }
 
-        let mut nanbox = vec![0_u64; 1];
-        encode_candidate_object_value(RuntimeLayout::NanBox8, &mut nanbox, 0, token)
-            .expect("encode NaN-box object Value");
-        assert_eq!(
-            resolve_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0, &heap)
-                .expect("resolve NaN-box object Value"),
-            object
-        );
-
-        heap.release_host_handle(handle)
-            .expect("release object handle");
-        assert!(
-            resolve_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0, &heap).is_err(),
-            "released candidate Value must not resolve through a stale handle token"
-        );
+        for handle in handles {
+            heap.release_host_handle(handle).expect("release reference handle");
+        }
+        heap.collect().expect("collect released reference Values");
+        assert_eq!(heap.live_objects(), 0);
     }
 
     #[test]
