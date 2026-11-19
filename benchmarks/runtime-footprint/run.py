@@ -584,7 +584,11 @@ def _parse_time_report(path: Path) -> dict[str, Any]:
         if "Maximum resident set size (kbytes):" in line:
             rss_value = int(line.rsplit(":", 1)[1].strip()) * 1024
         if "Elapsed (wall clock) time" in line:
-            elapsed = line.rsplit(":", 1)[1].strip()
+            # The label itself contains colons in "(h:mm:ss or m:ss)";
+            # split after the closing parenthesis, not at the final colon.
+            _label, separator, value = line.partition("):")
+            if separator:
+                elapsed = value.strip()
     if rss_value is None:
         raise RuntimeError(f"GNU time report has no peak RSS metric: {text}")
     return {
