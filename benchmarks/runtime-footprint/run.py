@@ -629,8 +629,17 @@ def _build_and_measure_native(
         "--artifact-dir", str(native_artifact_dir),
     ]
     wrapped_command = [str(time_executable), "-v", "-o", str(time_report_path), *command]
+    native_environment = os.environ.copy()
+    native_environment["CARGO_TARGET_DIR"] = str(target_dir)
     process_started = time.perf_counter_ns()
-    completed = subprocess.run(wrapped_command, cwd=ROOT, text=True, capture_output=True, check=False)
+    completed = subprocess.run(
+        wrapped_command,
+        cwd=ROOT,
+        env=native_environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     process_elapsed_ns = time.perf_counter_ns() - process_started
     if completed.returncode != 0:
         raise RuntimeError(
