@@ -3,9 +3,9 @@
 //! The generated function is a numeric lowering of the canonical
 //! positive-loop-carried-values Core IR fixture. It is deliberately not a
 //! production ECMAScript Runtime or a general Core IR compiler.
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
-    ir::{types, AbiParam, BlockArg, InstBuilder, MemFlags},
+    ir::{AbiParam, BlockArg, InstBuilder, MemFlags, types},
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -14,15 +14,14 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use libloading::Library;
 use ogma_gc_comparison_proof::{CollectorKind, FrameKind, GcHeap};
 use regalloc2::{
-    run as run_regalloc, Algorithm, Block, Function as RegallocFunction, Inst, InstRange,
-    MachineEnv, Operand, PReg, PRegSet, RegClass, RegallocOptions, VReg,
+    Algorithm, Block, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand, PReg,
+    PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
     collections::BTreeMap,
-    env,
-    fs,
+    env, fs,
     hint::black_box,
     mem::size_of,
     path::{Path, PathBuf},
@@ -90,10 +89,22 @@ struct Candidate {
 
 impl Candidate {
     const ALL: [Self; 4] = [
-        Self { runtime: RuntimeLayout::Tagged16, ssa: SsaPolicy::Boxed },
-        Self { runtime: RuntimeLayout::Tagged16, ssa: SsaPolicy::RepresentationAware },
-        Self { runtime: RuntimeLayout::NanBox8, ssa: SsaPolicy::Boxed },
-        Self { runtime: RuntimeLayout::NanBox8, ssa: SsaPolicy::RepresentationAware },
+        Self {
+            runtime: RuntimeLayout::Tagged16,
+            ssa: SsaPolicy::Boxed,
+        },
+        Self {
+            runtime: RuntimeLayout::Tagged16,
+            ssa: SsaPolicy::RepresentationAware,
+        },
+        Self {
+            runtime: RuntimeLayout::NanBox8,
+            ssa: SsaPolicy::Boxed,
+        },
+        Self {
+            runtime: RuntimeLayout::NanBox8,
+            ssa: SsaPolicy::RepresentationAware,
+        },
     ];
 
     fn name(self) -> String {
@@ -213,8 +224,11 @@ fn cpu_model() -> String {
         .ok()
         .and_then(|contents| {
             contents.lines().find_map(|line| {
-                line.strip_prefix("model name")
-                    .and_then(|value| value.split_once(':').map(|(_, name)| name.trim().to_owned()))
+                line.strip_prefix("model name").and_then(|value| {
+                    value
+                        .split_once(':')
+                        .map(|(_, name)| name.trim().to_owned())
+                })
             })
         })
         .unwrap_or_else(|| "unavailable".to_owned())
@@ -239,13 +253,19 @@ fn canonical_call_boundary_parameters() -> Result<Vec<String>> {
                 .context("Core IR parameter id missing")
         })
         .collect::<Result<_>>()?;
-    let expected = ["callee", "receiver", "text", "object_left", "object_right", "numeric"];
+    let expected = [
+        "callee",
+        "receiver",
+        "text",
+        "object_left",
+        "object_right",
+        "numeric",
+    ];
     if names.iter().map(String::as_str).collect::<Vec<_>>() != expected {
         bail!("canonical call-boundary fixture parameter profile changed");
     }
     Ok(names)
 }
-
 
 fn verify_canonical_loop_fixture() -> Result<()> {
     let fixture: JsonValue = serde_json::from_str(include_str!(
@@ -259,13 +279,19 @@ fn verify_canonical_loop_fixture() -> Result<()> {
         bail!("OGM-38 native lowering expects canonical Core IR loop fixture fn_loop_carried");
     }
 
-    let parameters = fixture["function"]["parameters"].as_array().context("loop parameters missing")?;
+    let parameters = fixture["function"]["parameters"]
+        .as_array()
+        .context("loop parameters missing")?;
     let parameter_profile: Vec<(&str, &str)> = parameters
         .iter()
         .map(|parameter| {
             Ok((
-                parameter["id"].as_str().context("loop parameter id missing")?,
-                parameter["representation"].as_str().context("loop parameter representation missing")?,
+                parameter["id"]
+                    .as_str()
+                    .context("loop parameter id missing")?,
+                parameter["representation"]
+                    .as_str()
+                    .context("loop parameter representation missing")?,
             ))
         })
         .collect::<Result<_>>()?;
@@ -273,7 +299,9 @@ fn verify_canonical_loop_fixture() -> Result<()> {
         bail!("canonical loop input representation profile changed");
     }
 
-    let blocks = fixture["function"]["blocks"].as_array().context("loop blocks missing")?;
+    let blocks = fixture["function"]["blocks"]
+        .as_array()
+        .context("loop blocks missing")?;
     let block_ids: Vec<&str> = blocks
         .iter()
         .map(|block| block["id"].as_str().unwrap_or(""))
@@ -283,7 +311,9 @@ fn verify_canonical_loop_fixture() -> Result<()> {
     }
 
     let loop_block = &blocks[1];
-    let loop_instructions = loop_block["instructions"].as_array().context("loop instructions missing")?;
+    let loop_instructions = loop_block["instructions"]
+        .as_array()
+        .context("loop instructions missing")?;
     if loop_instructions.len() != 1
         || loop_instructions[0]["op"] != "js.strict_equal"
         || loop_instructions[0]["operands"] != serde_json::json!(["current", "loop_limit"])
@@ -296,7 +326,9 @@ fn verify_canonical_loop_fixture() -> Result<()> {
     }
 
     let body = &blocks[2];
-    let body_instructions = body["instructions"].as_array().context("loop body instructions missing")?;
+    let body_instructions = body["instructions"]
+        .as_array()
+        .context("loop body instructions missing")?;
     if body_instructions.len() != 2
         || body_instructions[0]["op"] != "js.add"
         || body_instructions[0]["operands"] != serde_json::json!(["body_current", "step"])
@@ -361,9 +393,16 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let check_third_tag = b.create_block();
         let initial_state = b.create_block();
 
-        let state_types: Vec<cranelift_codegen::ir::Type> = match (candidate.runtime, candidate.ssa) {
+        let state_types: Vec<cranelift_codegen::ir::Type> = match (candidate.runtime, candidate.ssa)
+        {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => vec![
-                types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
+                types::I64,
             ],
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
                 vec![types::I64, types::I64, types::I64, types::I64]
@@ -373,11 +412,12 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             }
         };
 
-        let append_state_params = |builder: &mut FunctionBuilder<'_>, block: cranelift_codegen::ir::Block| {
-            for ty in &state_types {
-                builder.append_block_param(block, *ty);
-            }
-        };
+        let append_state_params =
+            |builder: &mut FunctionBuilder, block: cranelift_codegen::ir::Block| {
+                for ty in &state_types {
+                    builder.append_block_param(block, *ty);
+                }
+            };
         for block in [loop_block, body_block, add_block, done_block] {
             append_state_params(&mut b, block);
         }
@@ -389,14 +429,29 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             let start_tag = b.ins().load(types::I64, MemFlags::new(), parameters[0], 0);
             let limit_tag = b.ins().load(types::I64, MemFlags::new(), parameters[1], 0);
             let step_tag = b.ins().load(types::I64, MemFlags::new(), parameters[2], 0);
-            let start_is_number = b.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, start_tag, number_tag);
-            b.ins().brif(start_is_number, check_second_tag, &[], invalid_block, &[]);
+            let start_is_number = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::Equal,
+                start_tag,
+                number_tag,
+            );
+            b.ins()
+                .brif(start_is_number, check_second_tag, &[], invalid_block, &[]);
             b.switch_to_block(check_second_tag);
-            let limit_is_number = b.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, limit_tag, number_tag);
-            b.ins().brif(limit_is_number, check_third_tag, &[], invalid_block, &[]);
+            let limit_is_number = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::Equal,
+                limit_tag,
+                number_tag,
+            );
+            b.ins()
+                .brif(limit_is_number, check_third_tag, &[], invalid_block, &[]);
             b.switch_to_block(check_third_tag);
-            let step_is_number = b.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, step_tag, number_tag);
-            b.ins().brif(step_is_number, initial_state, &[], invalid_block, &[]);
+            let step_is_number = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::Equal,
+                step_tag,
+                number_tag,
+            );
+            b.ins()
+                .brif(step_is_number, initial_state, &[], invalid_block, &[]);
         } else {
             b.ins().jump(initial_state, &[]);
         }
@@ -411,7 +466,15 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let step_tag = b.ins().load(types::I64, MemFlags::new(), parameters[2], 0);
                 let step_payload = b.ins().load(types::I64, MemFlags::new(), parameters[2], 8);
                 let zero = b.ins().iconst(types::I64, 0);
-                vec![start_tag, start_payload, limit_tag, limit_payload, step_tag, step_payload, zero]
+                vec![
+                    start_tag,
+                    start_payload,
+                    limit_tag,
+                    limit_payload,
+                    step_tag,
+                    step_payload,
+                    zero,
+                ]
             }
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
                 let start_bits = b.ins().load(types::I64, MemFlags::new(), parameters[0], 8);
@@ -435,7 +498,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 vec![start, limit, step, zero]
             }
         };
-        let initial_args: Vec<BlockArg> = initial_values.iter().copied().map(BlockArg::Value).collect();
+        let initial_args: Vec<BlockArg> = initial_values
+            .iter()
+            .copied()
+            .map(BlockArg::Value)
+            .collect();
         b.ins().jump(loop_block, &initial_args);
 
         b.switch_to_block(loop_block);
@@ -455,10 +522,15 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 (loop_state[0], loop_state[1], loop_state[2], loop_state[3])
             }
         };
-        let equal = b.ins().fcmp(cranelift_codegen::ir::condcodes::FloatCC::Equal, current, limit);
+        let equal = b.ins().fcmp(
+            cranelift_codegen::ir::condcodes::FloatCC::Equal,
+            current,
+            limit,
+        );
         let done_args: Vec<BlockArg> = loop_state.iter().copied().map(BlockArg::Value).collect();
         let body_args: Vec<BlockArg> = loop_state.iter().copied().map(BlockArg::Value).collect();
-        b.ins().brif(equal, done_block, &done_args, body_block, &body_args);
+        b.ins()
+            .brif(equal, done_block, &done_args, body_block, &body_args);
 
         b.switch_to_block(body_block);
         let body_state = b.block_params(body_block).to_vec();
@@ -474,7 +546,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             max_iterations,
         );
         let add_args: Vec<BlockArg> = body_state.iter().copied().map(BlockArg::Value).collect();
-        b.ins().brif(within_budget, add_block, &add_args, exhausted_block, &[]);
+        b.ins()
+            .brif(within_budget, add_block, &add_args, exhausted_block, &[]);
 
         b.switch_to_block(add_block);
         let add_state = b.block_params(add_block).to_vec();
@@ -494,7 +567,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let sum = b.ins().fadd(add_current, add_step);
         let next_bits = b.ins().bitcast(types::I64, MemFlags::new(), sum);
         let next_count = b.ins().iadd_imm(add_count, 1);
-        let mut next_state: Vec<BlockArg> = add_state.iter().copied().map(BlockArg::Value).collect();
+        let mut next_state: Vec<BlockArg> =
+            add_state.iter().copied().map(BlockArg::Value).collect();
         match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
                 next_state[1] = BlockArg::Value(next_bits);
@@ -515,8 +589,10 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let done_state = b.block_params(done_block).to_vec();
         match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
-                b.ins().store(MemFlags::new(), done_state[0], parameters[3], 0);
-                b.ins().store(MemFlags::new(), done_state[1], parameters[3], 8);
+                b.ins()
+                    .store(MemFlags::new(), done_state[0], parameters[3], 0);
+                b.ins()
+                    .store(MemFlags::new(), done_state[1], parameters[3], 8);
             }
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
                 let tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
@@ -525,7 +601,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 b.ins().store(MemFlags::new(), bits, parameters[3], 8);
             }
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
-                b.ins().store(MemFlags::new(), done_state[0], parameters[3], 0);
+                b.ins()
+                    .store(MemFlags::new(), done_state[0], parameters[3], 0);
             }
             (RuntimeLayout::NanBox8, SsaPolicy::RepresentationAware) => {
                 let bits = b.ins().bitcast(types::I64, MemFlags::new(), done_state[0]);
@@ -573,7 +650,12 @@ fn link_shared_library(object_path: &Path, library_path: &Path) -> Result<u64> {
     Ok(start.elapsed().as_nanos() as u64)
 }
 
-fn compile_distribution(candidate: Candidate, object_path: &Path, warmups: usize, samples: usize) -> Result<(u64, Distribution)> {
+fn compile_distribution(
+    candidate: Candidate,
+    object_path: &Path,
+    warmups: usize,
+    samples: usize,
+) -> Result<(u64, Distribution)> {
     let first = make_candidate_function(candidate, object_path)?;
     for _ in 0..warmups {
         make_candidate_function(candidate, object_path)?;
@@ -604,9 +686,18 @@ fn run_native_candidate(
     let step = 1.0_f64;
     let max_iterations = DEFAULT_MAX_ITERATIONS;
 
-    let mut tagged_start = TaggedValue { tag: NUMBER_TAG, payload: start.to_bits() };
-    let mut tagged_limit = TaggedValue { tag: NUMBER_TAG, payload: limit.to_bits() };
-    let mut tagged_step = TaggedValue { tag: NUMBER_TAG, payload: step.to_bits() };
+    let mut tagged_start = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: start.to_bits(),
+    };
+    let mut tagged_limit = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: limit.to_bits(),
+    };
+    let mut tagged_step = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: step.to_bits(),
+    };
     let mut tagged_output = TaggedValue::default();
     let mut nanbox_output = 0_u64;
 
@@ -628,7 +719,10 @@ fn run_native_candidate(
     let invoke = || -> Result<f64> {
         let status = unsafe { function(a, b, c, output_pointer, max_iterations) };
         if status != 0 {
-            bail!("native {} execution returned status {status}", candidate.name());
+            bail!(
+                "native {} execution returned status {status}",
+                candidate.name()
+            );
         }
         let bits = match candidate.runtime {
             RuntimeLayout::Tagged16 => {
@@ -644,7 +738,10 @@ fn run_native_candidate(
 
     let first_result = invoke()?;
     if first_result != expected {
-        bail!("{} returned {first_result}, expected {expected}", candidate.name());
+        bail!(
+            "{} returned {first_result}, expected {expected}",
+            candidate.name()
+        );
     }
 
     for _ in 0..warmups {
@@ -679,14 +776,34 @@ impl PressureProgram {
         result
     }
 
-    fn define_value(&mut self, layout: RuntimeLayout, policy: SsaPolicy, representation: &str) -> Vec<VReg> {
+    fn define_value(
+        &mut self,
+        layout: RuntimeLayout,
+        policy: SsaPolicy,
+        representation: &str,
+    ) -> Vec<VReg> {
         let classes = match policy {
-            SsaPolicy::Boxed => vec![RegClass::Int; if layout == RuntimeLayout::Tagged16 { 2 } else { 1 }],
+            SsaPolicy::Boxed => vec![
+                RegClass::Int;
+                if layout == RuntimeLayout::Tagged16 {
+                    2
+                } else {
+                    1
+                }
+            ],
             SsaPolicy::RepresentationAware => match representation {
                 "f64" => vec![RegClass::Float],
                 "i1" | "i32" | "u32" => vec![RegClass::Int],
-                "boxed" => vec![RegClass::Int; if layout == RuntimeLayout::Tagged16 { 2 } else { 1 }],
-                "string_ref" | "symbol_ref" | "bigint_ref" | "object_ref" | "array_ref" | "function_ref" | "exception_ref" => vec![RegClass::Int],
+                "boxed" => vec![
+                    RegClass::Int;
+                    if layout == RuntimeLayout::Tagged16 {
+                        2
+                    } else {
+                        1
+                    }
+                ],
+                "string_ref" | "symbol_ref" | "bigint_ref" | "object_ref" | "array_ref"
+                | "function_ref" | "exception_ref" => vec![RegClass::Int],
                 other => panic!("unexpected Core IR representation in allocator probe: {other}"),
             },
         };
@@ -698,25 +815,54 @@ impl PressureProgram {
     }
 
     fn use_values(&mut self, values: &[VReg]) {
-        self.instructions.push(values.iter().copied().map(Operand::reg_use).collect());
+        self.instructions
+            .push(values.iter().copied().map(Operand::reg_use).collect());
     }
 }
 
 impl RegallocFunction for PressureProgram {
-    fn num_insts(&self) -> usize { self.instructions.len() }
-    fn num_blocks(&self) -> usize { 1 }
-    fn entry_block(&self) -> Block { Block::new(0) }
-    fn block_insns(&self, _block: Block) -> InstRange { InstRange::new(Inst::new(0), Inst::new(self.instructions.len())) }
-    fn block_succs(&self, _block: Block) -> &[Block] { &[] }
-    fn block_preds(&self, _block: Block) -> &[Block] { &[] }
-    fn block_params(&self, _block: Block) -> &[VReg] { &[] }
-    fn is_ret(&self, instruction: Inst) -> bool { instruction.index() + 1 == self.instructions.len() }
-    fn is_branch(&self, _instruction: Inst) -> bool { false }
-    fn branch_blockparams(&self, _block: Block, _instruction: Inst, _successor: usize) -> &[VReg] { &[] }
-    fn inst_operands(&self, instruction: Inst) -> &[Operand] { &self.instructions[instruction.index()] }
-    fn inst_clobbers(&self, _instruction: Inst) -> PRegSet { PRegSet::empty() }
-    fn num_vregs(&self) -> usize { self.next_vreg }
-    fn spillslot_size(&self, _class: RegClass) -> usize { 1 }
+    fn num_insts(&self) -> usize {
+        self.instructions.len()
+    }
+    fn num_blocks(&self) -> usize {
+        1
+    }
+    fn entry_block(&self) -> Block {
+        Block::new(0)
+    }
+    fn block_insns(&self, _block: Block) -> InstRange {
+        InstRange::new(Inst::new(0), Inst::new(self.instructions.len()))
+    }
+    fn block_succs(&self, _block: Block) -> &[Block] {
+        &[]
+    }
+    fn block_preds(&self, _block: Block) -> &[Block] {
+        &[]
+    }
+    fn block_params(&self, _block: Block) -> &[VReg] {
+        &[]
+    }
+    fn is_ret(&self, instruction: Inst) -> bool {
+        instruction.index() + 1 == self.instructions.len()
+    }
+    fn is_branch(&self, _instruction: Inst) -> bool {
+        false
+    }
+    fn branch_blockparams(&self, _block: Block, _instruction: Inst, _successor: usize) -> &[VReg] {
+        &[]
+    }
+    fn inst_operands(&self, instruction: Inst) -> &[Operand] {
+        &self.instructions[instruction.index()]
+    }
+    fn inst_clobbers(&self, _instruction: Inst) -> PRegSet {
+        PRegSet::empty()
+    }
+    fn num_vregs(&self) -> usize {
+        self.next_vreg
+    }
+    fn spillslot_size(&self, _class: RegClass) -> usize {
+        1
+    }
 }
 
 fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
@@ -724,44 +870,76 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         "../../../tests/core-ir/fixtures/positive-call-boundary.json"
     ))?;
     let function = &fixture["function"];
-    let params = function["parameters"].as_array().context("fixture parameters missing")?;
+    let params = function["parameters"]
+        .as_array()
+        .context("fixture parameters missing")?;
     let mut program = PressureProgram::default();
     let mut values = BTreeMap::<String, Vec<VReg>>::new();
 
     for parameter in params {
         let id = parameter["id"].as_str().context("parameter id missing")?;
-        let representation = parameter["representation"].as_str().context("parameter representation missing")?;
-        values.insert(id.to_owned(), program.define_value(candidate.runtime, candidate.ssa, representation));
+        let representation = parameter["representation"]
+            .as_str()
+            .context("parameter representation missing")?;
+        values.insert(
+            id.to_owned(),
+            program.define_value(candidate.runtime, candidate.ssa, representation),
+        );
     }
 
-    let blocks = function["blocks"].as_array().context("fixture blocks missing")?;
-    let instructions = blocks[0]["instructions"].as_array().context("fixture instructions missing")?;
+    let blocks = function["blocks"]
+        .as_array()
+        .context("fixture blocks missing")?;
+    let instructions = blocks[0]["instructions"]
+        .as_array()
+        .context("fixture instructions missing")?;
     for instruction in instructions {
-        let op = instruction["op"].as_str().context("instruction op missing")?;
-        let operands = instruction["operands"].as_array().context("instruction operands missing")?;
+        let op = instruction["op"]
+            .as_str()
+            .context("instruction op missing")?;
+        let operands = instruction["operands"]
+            .as_array()
+            .context("instruction operands missing")?;
         let mut used = Vec::new();
         for operand in operands {
             let id = operand.as_str().context("operand id missing")?;
-            used.extend(values.get(id).with_context(|| format!("undefined pressure-probe value {id}"))?);
+            used.extend(
+                values
+                    .get(id)
+                    .with_context(|| format!("undefined pressure-probe value {id}"))?,
+            );
         }
         if !used.is_empty() {
             program.use_values(&used);
         }
         if let Some(result) = instruction["result"].as_object() {
             if let Some(id) = result.get("id").and_then(JsonValue::as_str) {
-                let representation = result.get("representation").and_then(JsonValue::as_str).context("result representation missing")?;
+                let representation = result
+                    .get("representation")
+                    .and_then(JsonValue::as_str)
+                    .context("result representation missing")?;
                 if op == "js.strict_equal" {
-                    values.insert(id.to_owned(), program.define_value(candidate.runtime, candidate.ssa, representation));
+                    values.insert(
+                        id.to_owned(),
+                        program.define_value(candidate.runtime, candidate.ssa, representation),
+                    );
                 } else {
-                    values.insert(id.to_owned(), program.define_value(candidate.runtime, candidate.ssa, representation));
+                    values.insert(
+                        id.to_owned(),
+                        program.define_value(candidate.runtime, candidate.ssa, representation),
+                    );
                 }
             }
         }
     }
     let terminator = &blocks[0]["terminator"];
     if terminator["kind"] == "return" {
-        let id = terminator["value"].as_str().context("return value missing")?;
-        let result = values.get(id).with_context(|| format!("return value {id} undefined"))?;
+        let id = terminator["value"]
+            .as_str()
+            .context("return value missing")?;
+        let result = values
+            .get(id)
+            .with_context(|| format!("return value {id} undefined"))?;
         program.use_values(result);
     } else {
         bail!("allocator pressure probe only supports canonical call-boundary return");
@@ -838,14 +1016,20 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     let before = heap.stats();
     let object_token = 1_u64;
     let encoded_handle = match candidate.runtime {
-        RuntimeLayout::Tagged16 => TaggedValue { tag: OBJECT_TAG, payload: object_token },
+        RuntimeLayout::Tagged16 => TaggedValue {
+            tag: OBJECT_TAG,
+            payload: object_token,
+        },
         RuntimeLayout::NanBox8 => {
             let tagged_word = (0x7ffe_u64 << NAN_TAG_SHIFT) | object_token;
             let decoded_tag = tagged_word >> NAN_TAG_SHIFT;
             if decoded_tag != 0x7ffe {
                 bail!("NaN-box object tag was not preserved");
             }
-            TaggedValue { tag: decoded_tag, payload: tagged_word & MAX_PAYLOAD }
+            TaggedValue {
+                tag: decoded_tag,
+                payload: tagged_word & MAX_PAYLOAD,
+            }
         }
     };
     if encoded_handle.payload != object_token {
@@ -856,7 +1040,8 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     let resolved_handle = opaque_handle_registry
         .get(usize::try_from(object_token - 1)?)
         .context("NaN-box payload does not resolve to an OGM-26 persistent handle")?;
-    let survived = heap.is_alive(parent) && heap.is_alive(child)
+    let survived = heap.is_alive(parent)
+        && heap.is_alive(child)
         && heap.resolve_host_handle(*resolved_handle).is_ok();
     if !survived || retained.reclaimed_objects != 0 {
         bail!("real GC heap reclaimed an object retained by native/persistent roots");
@@ -916,8 +1101,17 @@ pub fn run(
         candidates.push(CandidateEvidence {
             name: candidate.name(),
             runtime_value_bytes: candidate.runtime.value_bytes(),
-            native_ir_value_conversion_ops_per_loop_iteration: if candidate.ssa == SsaPolicy::Boxed { 5 } else { 0 },
-            native_ir_value_conversion_ops_per_invocation: if candidate.ssa == SsaPolicy::Boxed { 0 } else { 4 },
+            native_ir_value_conversion_ops_per_loop_iteration: if candidate.ssa == SsaPolicy::Boxed
+            {
+                5
+            } else {
+                0
+            },
+            native_ir_value_conversion_ops_per_invocation: if candidate.ssa == SsaPolicy::Boxed {
+                0
+            } else {
+                4
+            },
             native_helper_calls_per_loop_iteration: 0,
             compile_first_ns,
             compile_ns,
@@ -957,11 +1151,26 @@ pub fn run(
         max_loop_iterations: DEFAULT_MAX_ITERATIONS,
         candidates,
         measurement_boundaries: BTreeMap::from([
-            ("native_code", "Cranelift 0.137.2 ObjectModule emits and links host-native code for a numeric loop fixture adapter; not a production Ogma AOT compiler"),
-            ("throughput", "host calls into loaded generated native functions; includes the C ABI call and value encode/decode boundary, but excludes source parsing and production Runtime dispatch"),
-            ("compile_time", "Cranelift ObjectModule candidate function compile samples; excludes whole-program linking, LLVM, and production compiler frontend"),
-            ("register_pressure", "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a fixed register budget; not Cranelift's private allocation dump or host ISA register map"),
-            ("gc_and_heap", "OGM-26 MarkSweep heap with real generation-checked GcRef, native frame roots and persistent HostHandle lifecycle; logical heap accounting is not process RSS"),
+            (
+                "native_code",
+                "Cranelift 0.137.2 ObjectModule emits and links host-native code for a numeric loop fixture adapter; not a production Ogma AOT compiler",
+            ),
+            (
+                "throughput",
+                "host calls into loaded generated native functions; includes the C ABI call and value encode/decode boundary, but excludes source parsing and production Runtime dispatch",
+            ),
+            (
+                "compile_time",
+                "Cranelift ObjectModule candidate function compile samples; excludes whole-program linking, LLVM, and production compiler frontend",
+            ),
+            (
+                "register_pressure",
+                "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a fixed register budget; not Cranelift's private allocation dump or host ISA register map",
+            ),
+            (
+                "gc_and_heap",
+                "OGM-26 MarkSweep heap with real generation-checked GcRef, native frame roots and persistent HostHandle lifecycle; logical heap accounting is not process RSS",
+            ),
         ]),
         unsupported_native_semantics: vec![
             "NaN payload normalization, signed-zero and infinity codec roundtrips are tested by OGM-17's semantic fixture suite but are not part of the native loop workload",
@@ -991,7 +1200,9 @@ pub fn parse_args_and_run() -> Result<()> {
         match argument.as_str() {
             "--output" => output = PathBuf::from(args.next().context("missing output path")?),
             "--revision" => revision = args.next().context("missing revision")?,
-            "--iterations" => iterations = args.next().context("missing iteration count")?.parse()?,
+            "--iterations" => {
+                iterations = args.next().context("missing iteration count")?.parse()?
+            }
             "--warmups" => warmups = args.next().context("missing warmup count")?.parse()?,
             "--samples" => samples = args.next().context("missing sample count")?.parse()?,
             other => bail!("unknown argument: {other}"),
@@ -1008,18 +1219,31 @@ mod tests {
     #[test]
     fn candidate_matrix_contains_all_four_independent_combinations() {
         let names: Vec<String> = Candidate::ALL.into_iter().map(Candidate::name).collect();
-        assert_eq!(names, [
-            "tagged-16-boxed",
-            "tagged-16-representation-aware",
-            "nanbox-8-boxed",
-            "nanbox-8-representation-aware",
-        ]);
+        assert_eq!(
+            names,
+            [
+                "tagged-16-boxed",
+                "tagged-16-representation-aware",
+                "nanbox-8-boxed",
+                "nanbox-8-representation-aware",
+            ]
+        );
     }
 
     #[test]
     fn canonical_call_boundary_fixture_is_used_for_pressure_profile() {
         let params = canonical_call_boundary_parameters().expect("canonical Core IR fixture");
-        assert_eq!(params, ["callee", "receiver", "text", "object_left", "object_right", "numeric"]);
+        assert_eq!(
+            params,
+            [
+                "callee",
+                "receiver",
+                "text",
+                "object_left",
+                "object_right",
+                "numeric"
+            ]
+        );
     }
 
     #[test]
