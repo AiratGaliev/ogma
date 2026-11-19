@@ -9,7 +9,7 @@ The harness is deliberately explicit about proof versus production measurements.
 | Area | Portable interpreter proof | Hybrid/native proof |
 |---|---|---|
 | Workload | Five shared Core IR fixtures; register bytecode plus stack/register differential check | Same five fixture paths from the OGM-30 native workload manifest |
-| Startup | Parent-to-ready latency of the isolated Python proof worker | Native benchmark process total wall time; isolated startup latency is explicitly unavailable |
+| Startup | 101-process start-to-ready distribution for the Python proof worker | 101-process start-to-ready distribution for the native benchmark executable |
 | Binary/object size | Per-fixture .ogmb container and encoded code bytes | Benchmark tool executable, Cranelift/LLVM object and linked fixture-library sizes |
 | Peak memory | Python worker ru_maxrss; source read, Core IR JSON parse and bytecode compilation tracemalloc peaks | GNU time process high-water RSS for both compiler backends and proof workloads |
 | Compile cost | Core IR fixture to register .ogmb: wall, codegen, decode and separate verifier samples | First and repeated Cranelift/LLVM object compile and link distributions |
@@ -49,7 +49,7 @@ python benchmarks/runtime-footprint/run.py \
   --artifact-dir /tmp/ogm29-footprint-artifacts
 ~~~
 
-The run builds the pinned OGM-30 backend proof executable with cargo build --release --locked, starts the isolated portable proof worker, executes the native benchmark binary under GNU time, and emits a JSON report plus .ogmb and native-object evidence. The CI job uploads the complete report, Cargo target output summary, timing report and proof artifacts. The tested source revision, full toolchain versions, CPU and target are recorded.
+The run first measures portable Python and native executable process startup with the same flushed-readiness-marker protocol (3 warmups and 101 launches for each tool). It then builds the pinned OGM-30 backend proof executable with cargo build --release --locked, starts the isolated portable proof worker, executes the native benchmark binary under GNU time, and emits a JSON report plus .ogmb and native-object evidence. The CI job uploads the complete report, Cargo target output summary, timing report and proof artifacts. The tested source revision, full toolchain versions, CPU and target are recorded.
 
 The native OGM-30 benchmark requires at least 101 measurement samples, so the unified runner enforces that minimum for both paths. Use a reduced iteration count for a faster local smoke run; accepted baseline evidence should retain the same workload/target and at least 101 samples. The report retains raw samples, p50/p95/p99, warm-up/sample counts and the exact revision.
 
@@ -57,12 +57,12 @@ The native OGM-30 benchmark requires at least 101 measurement samples, so the un
 
 - .ogmb bytes are portable proof-container sizes. Native .o and .so bytes are target-specific fixture proof artifacts. Neither is the size of a production runtime executable.
 - The native process RSS includes Cranelift and LLVM compilation/linking, mock Runtime setup and timed fixture workloads. It is not isolated AOT compiler peak memory or steady-state application RSS.
-- The Python worker ru_maxrss and tracemalloc are tool/prototype memory metrics, not Ogma VM heap or production RSS.
+- The Python and native process startup distributions are readiness-marker measurements of proof tools, not production Ogma Runtime startup. Python worker ru_maxrss and tracemalloc are tool/prototype memory metrics, not Ogma VM heap or production RSS.
 - Native AOT measurements use the existing exact-fixture adapters, mock C ABI and modeled Runtime boundary. They do not imply a full ECMAScript backend or production host ABI.
 - LLVM package installed sizes cover only the explicitly listed packages, not the complete transitive operating-system deployment closure.
 - No performance objective is selected by this task. The report establishes a reproducible baseline for later milestones and labels all unavailable production metrics.
 
-The machine-readable evidence is emitted as ogma.runtime-footprint-report/1.0.0; the CI artifact is retained with the PR run. The report is also intended to be committed under benchmarks/runtime-footprint/results/ after the CI measurement completes for the exact reviewed source revision.
+The full ogma.runtime-footprint-report/1.0.0 JSON and raw proof outputs are retained as the downloadable CI artifact for the exact measured source revision. A compact, machine-readable benchmark summary is committed under results/ogm29-footprint-summary.json; the complete raw report is not duplicated in Git.
 
 
 ## Measured M0 baseline — 2026-11-19
