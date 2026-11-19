@@ -1352,22 +1352,28 @@ fn run_gc_sample(
 
     let interpreter_frame = heap.begin_frame(FrameKind::Interpreter)?;
     let scope = heap.open_scope()?;
-    let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
     let components = object_count / 4;
     let mut persistent_handles = Vec::new();
 
+    // Populate the lower interpreter frame before pushing the native frame;
+    // OGM-26 enforces strict LIFO frame-root mutations.
     for component in 0..components {
         let base = component * 4;
-        match component % 3 {
-            0 => heap.add_frame_root(interpreter_frame, objects[base])?,
-            1 => heap.add_frame_root(native_frame, objects[base + 1])?,
-            _ => {
-                let handle = heap.retain_host_handle(objects[base + 2])?;
-                persistent_handles.push((handle, objects[base + 2]));
-            }
+        if component % 3 == 0 {
+            heap.add_frame_root(interpreter_frame, objects[base])?;
+        } else if component % 3 == 2 {
+            let handle = heap.retain_host_handle(objects[base + 2])?;
+            persistent_handles.push((handle, objects[base + 2]));
         }
         if component % 16 == 0 {
             heap.scope_add(scope, objects[base + 3])?;
+        }
+    }
+
+    let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
+    for component in 0..components {
+        if component % 3 == 1 {
+            heap.add_frame_root(native_frame, objects[component * 4 + 1])?;
         }
     }
 
