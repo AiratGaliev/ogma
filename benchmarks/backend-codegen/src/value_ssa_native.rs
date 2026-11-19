@@ -130,7 +130,7 @@ struct GcEvidence {
     root_frame_roots: usize,
     persistent_handles: usize,
     rooted_objects_survived_collection: bool,
-    reclaimed_after_root_release: u64,
+    reclaimed_after_root_release: usize,
     live_objects_after_release: u64,
     peak_logical_heap_bytes: u64,
     value_layout_bytes: usize,
@@ -373,7 +373,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             }
         };
 
-        let append_state_params = |builder: &mut FunctionBuilder, block: cranelift_codegen::ir::Block| {
+        let append_state_params = |builder: &mut FunctionBuilder<'_>, block: cranelift_codegen::ir::Block| {
             for ty in &state_types {
                 builder.append_block_param(block, *ty);
             }
@@ -1032,12 +1032,17 @@ mod tests {
 
     #[test]
     fn regalloc_reports_physical_register_and_spill_metrics_for_all_candidates() {
+        let mut reports = BTreeMap::new();
         for candidate in Candidate::ALL {
             let evidence = register_pressure(candidate).expect("register allocation");
             assert!(evidence.register_allocations > 0);
             assert!(evidence.integer_registers_used > 0);
             assert!(evidence.spill_bytes >= evidence.spill_slots * 8);
+            reports.insert(candidate.name(), evidence);
         }
+        let tagged_boxed = reports.get("tagged-16-boxed").expect("tagged boxed candidate");
+        let nanbox_boxed = reports.get("nanbox-8-boxed").expect("NaN-box boxed candidate");
+        assert!(tagged_boxed.spill_slots > nanbox_boxed.spill_slots);
     }
 
     #[test]
