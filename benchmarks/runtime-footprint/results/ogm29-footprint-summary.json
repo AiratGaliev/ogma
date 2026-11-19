@@ -1,0 +1,214 @@
+{
+  "schema": "ogma.runtime-footprint-summary",
+  "version": "1.0.0",
+  "task": "OGM-29",
+  "measured_source_revision": "1f93001c5b849b5e56410938ba28ad809650ed77",
+  "tested_revision": "1f93001c5b849b5e56410938ba28ad809650ed77",
+  "measurement_environment": {
+    "os": "Ubuntu 24.04",
+    "kernel": "Linux 7.0.0-1017-azure",
+    "target": "x86_64-unknown-linux-gnu",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "python": "3.12.16",
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "cargo": "1.100.0 (3acc79c0c 2026-11-05)",
+    "llvm": "18.1.3",
+    "clang": "18.1.3"
+  },
+  "workload": {
+    "core_ir_contract": "ogma.core-ir/1.0.0",
+    "fixtures": [
+      "branch",
+      "loop",
+      "dynamic_exception",
+      "call_boundary",
+      "host_call"
+    ],
+    "fixture_manifest": "benchmarks/dual-backend/manifest.json",
+    "native_manifest": "benchmarks/backend-codegen/fixtures/workloads.json",
+    "same_fixtures_for_portable_and_native": true,
+    "source_reference_files_are_not_parser_inputs": true
+  },
+  "protocol": {
+    "iterations_per_workload_sample": 1000,
+    "warmup_rounds": 3,
+    "native_measurement_samples": 101,
+    "portable_compile_rounds": 15,
+    "portable_standalone_verification_rounds": 15,
+    "comparison_policy": "Only compare equivalent workload, target and declared measurement boundary. Python proof interpreter timings are not compared as production Rust Runtime throughput against native code."
+  },
+  "logical_runtime_profiles": {
+    "portable-interpreter-release": {
+      "resolved_component_count": 7,
+      "resolved_components": [
+        "bytecode-verifier",
+        "ecmascript-semantics",
+        "host-abi",
+        "host-module-registry",
+        "portable-bytecode",
+        "portable-interpreter",
+        "runtime-core"
+      ],
+      "graph_status": "logical-profile-contract-only"
+    },
+    "hybrid-native-release": {
+      "resolved_component_count": 9,
+      "resolved_components": [
+        "bytecode-verifier",
+        "ecmascript-semantics",
+        "host-abi",
+        "host-module-registry",
+        "native-aot-execution",
+        "native-root-maps",
+        "portable-bytecode",
+        "portable-interpreter",
+        "runtime-core"
+      ],
+      "graph_status": "logical-profile-contract-only"
+    }
+  },
+  "measured_proof_results": {
+    "portable_interpreter": {
+      "implementation": "Python M0 bytecode proof interpreter; not production Rust VM",
+      "worker_ready_latency_ns": 56649184,
+      "worker_end_to_end_wall_ns": 4665907943,
+      "process_peak_rss_bytes": 24387584,
+      "bytecode_compile_wall_ns": {
+        "p50": 1984334,
+        "p95": 2447391,
+        "samples": 15
+      },
+      "bytecode_codegen_ns": {
+        "p50": 590535,
+        "p95": 785575,
+        "samples": 15
+      },
+      "bytecode_decode_ns": {
+        "p50": 142520,
+        "p95": 179895,
+        "samples": 15
+      },
+      "bytecode_standalone_verification_ns": {
+        "p50": 1282453,
+        "p95": 1485193,
+        "samples": 15
+      },
+      "bytecode_compile_tracemalloc_peak_bytes": 162461,
+      "source_read_peak_bytes": 8930,
+      "source_fixture_serialized_bytes": 576,
+      "ast_peak_bytes": null,
+      "ast_memory_status": "not_implemented",
+      "core_ir_json_fixture_bytes": 25855,
+      "core_ir_json_parse_peak_bytes": 95635,
+      "core_ir_json_parse_status": "measured-fixture-json-parse-proxy",
+      "bytecode_containers": {
+        "branch": 1642,
+        "call_boundary": 2426,
+        "dynamic_exception": 1610,
+        "host_call": 1482,
+        "loop": 1962
+      },
+      "host_call": {
+        "dispatch_p50_ns": 2864.21,
+        "dispatch_p95_ns": 2995.655,
+        "direct_python_callback_p50_ns": 44.336,
+        "estimated_overhead_ns": 2819.874,
+        "estimated_overhead_ratio": 64.60235474557922,
+        "status": "Python proof interpreter only; not Rust ABI or production Runtime"
+      },
+      "stack_register_observations_equal": true
+    },
+    "hybrid_native": {
+      "implementation": "Cranelift/LLVM exact-fixture adapters with M0 mock ABI and modeled Runtime boundary; not production hybrid Runtime",
+      "benchmark_process_wall_ns": 14953995317,
+      "benchmark_process_peak_rss_bytes": 80306176,
+      "benchmark_process_rss_scope": "Both native compilers, object linking, mock Runtime setup and timed fixture workloads",
+      "tooling_executable_bytes": 10020128,
+      "native_backends": {
+        "cranelift": {
+          "compile_ns": {
+            "p50": 437749,
+            "p95": 473022,
+            "samples": 101
+          },
+          "link_ns": {
+            "p50": 55634377,
+            "p95": 57024506,
+            "samples": 101
+          },
+          "object_bytes": 2944,
+          "shared_library_bytes": 26488,
+          "host_call": {
+            "estimated_overhead_ns": 247.36799999999994,
+            "estimated_overhead_ratio": 1.2089020330469356
+          }
+        },
+        "llvm": {
+          "compile_ns": {
+            "p50": 5012316,
+            "p95": 5241586,
+            "samples": 101
+          },
+          "link_ns": {
+            "p50": 55818341,
+            "p95": 57516729,
+            "samples": 101
+          },
+          "object_bytes": 3112,
+          "shared_library_bytes": 26576,
+          "host_call": {
+            "estimated_overhead_ns": 234.62800000000016,
+            "estimated_overhead_ratio": 1.1950430398477085
+          }
+        }
+      }
+    }
+  },
+  "dependency_graphs": {
+    "benchmark_compile_time_graph": {
+      "root_package": "ogma-backend-codegen-benchmark",
+      "resolved_package_count": 70,
+      "source": "cargo metadata --locked for benchmarks/backend-codegen/Cargo.toml",
+      "lockfile_sha256": "See raw report for exact Cargo.lock digest; summary intentionally omits a duplicate claim."
+    },
+    "shipped_runtime_dependency_graph": {
+      "status": "not_implemented",
+      "reason": "No production Cargo workspace/crates or profile-linked Runtime binaries exist."
+    }
+  },
+  "production_metric_status": {
+    "production_runtime_startup": "not_implemented",
+    "production_runtime_binary_size": "not_implemented",
+    "production_runtime_peak_rss": "not_implemented",
+    "javascript_ast_peak_memory": "not_implemented",
+    "production_core_ir_frontend_memory": "not_implemented",
+    "shipped_runtime_cargo_dependency_graph": "not_implemented"
+  },
+  "acceptance": {
+    "same_representative_core_ir_workload_and_target": true,
+    "startup_binary_memory_and_compile_costs_reported_separately": true,
+    "source_core_ir_bytecode_and_native_compile_memory_boundaries_reported": true,
+    "compile_time_and_logical_runtime_dependency_graphs_separated": true,
+    "reproduction_environment_and_machine_readable_results": true,
+    "no_unjustified_performance_target_invented": true
+  },
+  "limitations": [
+    "M0 proof-footprint baseline only; no production Ogma Runtime is present.",
+    "Portable interpreter measurements are from a Python bytecode proof implementation.",
+    "Native measurements use exact-fixture adapters, a mock ABI and a modeled Runtime boundary.",
+    "Native process RSS includes both compilers, linking and proof workloads; it is not isolated AOT compiler peak or steady-state Runtime RSS.",
+    "AST allocation and production source-to-Core-IR frontend memory are unavailable because no production parser/frontend exists.",
+    "The benchmark Cargo graph and OGM-28 logical profile closures are not the final shipped Runtime dependency graph.",
+    "No cross-language throughput comparison or performance target is inferred."
+  ],
+  "raw_ci_evidence": {
+    "workflow_run": "https://github.com/AiratGaliev/ogma/actions/runs/44530165803",
+    "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44530165803/artifacts/14532414945",
+    "artifact_id": 14532414945,
+    "artifact_name": "ogm29-interpreter-hybrid-footprint",
+    "raw_report_json_bytes": 183335,
+    "raw_report_json_sha256": "e3a3b4ccae2858ebc1d3490fc97c907fddd2a89ab32dfe44d669cce41936240e",
+    "raw_report_gzip_bytes": 29691,
+    "raw_report_gzip_sha256": "cf0e192c7f1fb6bb5743bbdc8233f458fee61172afbf8b67d5ad5d2b7c16c239"
+  }
+}
