@@ -70,7 +70,6 @@
   "measured_proof_results": {
     "portable_interpreter": {
       "implementation": "Python M0 bytecode proof interpreter; not production Rust VM",
-      "worker_ready_latency_ns": 56649184,
       "worker_end_to_end_wall_ns": 3112820762,
       "process_peak_rss_bytes": 24535040,
       "bytecode_compile_wall_ns": {
