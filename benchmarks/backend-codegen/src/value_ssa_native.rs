@@ -30,7 +30,21 @@ use std::{
 };
 
 const NUMBER_TAG: u64 = 3;
+const STRING_TAG: u64 = 4;
+const BIGINT_TAG: u64 = 5;
 const OBJECT_TAG: u64 = 6;
+const SYMBOL_TAG: u64 = 7;
+const NANBOX_STRING_TAG: u64 = 0x7ffc;
+const NANBOX_BIGINT_TAG: u64 = 0x7ffd;
+const NANBOX_OBJECT_TAG: u64 = 0x7ffe;
+const NANBOX_SYMBOL_TAG: u64 = 0x7fff;
+const NATIVE_HANDLE_TAGS: [u64; 4] = [STRING_TAG, BIGINT_TAG, OBJECT_TAG, SYMBOL_TAG];
+const NANBOX_HANDLE_TAGS: [u64; 4] = [
+    NANBOX_STRING_TAG,
+    NANBOX_BIGINT_TAG,
+    NANBOX_OBJECT_TAG,
+    NANBOX_SYMBOL_TAG,
+];
 const NAN_TAG_SHIFT: u32 = 48;
 const MAX_PAYLOAD: u64 = (1_u64 << NAN_TAG_SHIFT) - 1;
 const NANBOX_RESERVED_TAG_MIN: u64 = 0x7ff9_0000_0000_0000;
@@ -50,6 +64,47 @@ fn canonical_number_bits(value: f64) -> u64 {
 }
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
+type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
+
+struct NativeHandleCallbackContext {
+    heap: *mut GcHeap,
+    expected_object: ogma_gc_comparison_proof::GcRef,
+    expected_tag: u64,
+    calls: u64,
+    collections: u64,
+    force_collection: bool,
+}
+
+// SAFETY: the function pointer is called only by this synchronous native
+// benchmark with a live, uniquely borrowed context on the same thread.
+unsafe extern "C" fn resolve_native_handle_callback(
+    context_pointer: u64,
+    tag: u64,
+    token: u64,
+) -> i32 {
+    if context_pointer == 0 || token == 0 {
+        return 1;
+    }
+    // SAFETY: the caller passes a pointer to NativeHandleCallbackContext for
+    // the entire synchronous native call; no concurrent access is performed.
+    let context = unsafe { &mut *(context_pointer as *mut NativeHandleCallbackContext) };
+    context.calls += 1;
+    if tag != context.expected_tag || context.heap.is_null() {
+        return 2;
+    }
+    // SAFETY: context.heap points at the live GcHeap owned by the benchmark.
+    let heap = unsafe { &mut *context.heap };
+    if context.force_collection {
+        if heap.collect().is_err() {
+            return 3;
+        }
+        context.collections += 1;
+    }
+    match heap.resolve_host_handle_token(token) {
+        Ok(reference) if reference == context.expected_object => 0,
+        _ => 4,
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,10 +208,11 @@ fn encode_candidate_number_value(
     Ok(())
 }
 
-fn encode_candidate_object_value(
+fn encode_candidate_reference_value(
     runtime: RuntimeLayout,
     storage: &mut [u64],
     slot_index: usize,
+    tag: u64,
     token: u64,
 ) -> Result<()> {
     if token == 0 || token > MAX_PAYLOAD {
@@ -170,17 +226,37 @@ fn encode_candidate_object_value(
             let words = storage
                 .get_mut(word_index..word_index + 2)
                 .context("tagged Value storage slot out of bounds")?;
-            words[0] = OBJECT_TAG;
+            if !NATIVE_HANDLE_TAGS.contains(&tag) {
+                bail!("unsupported tagged reference Value tag {tag}");
+            }
+            words[0] = tag;
             words[1] = token;
         }
         RuntimeLayout::NanBox8 => {
+            let nanbox_tag = match tag {
+                STRING_TAG => NANBOX_STRING_TAG,
+                BIGINT_TAG => NANBOX_BIGINT_TAG,
+                OBJECT_TAG => NANBOX_OBJECT_TAG,
+                SYMBOL_TAG => NANBOX_SYMBOL_TAG,
+                _ => bail!("unsupported NaN-box reference Value tag {tag}"),
+            };
             *storage
                 .get_mut(slot_index)
                 .context("NaN-box Value storage slot out of bounds")? =
-                (NANBOX_OBJECT_TAG << NAN_TAG_SHIFT) | token;
+                (nanbox_tag << NAN_TAG_SHIFT) | token;
         }
     }
     Ok(())
+}
+
+
+fn encode_candidate_object_value(
+    runtime: RuntimeLayout,
+    storage: &mut [u64],
+    slot_index: usize,
+    token: u64,
+) -> Result<()> {
+    encode_candidate_reference_value(runtime, storage, slot_index, OBJECT_TAG, token)
 }
 
 fn decode_candidate_object_value(
@@ -198,8 +274,11 @@ fn decode_candidate_object_value(
                 .context("tagged Value storage slot out of bounds")?;
             match words[0] {
                 NUMBER_TAG => Ok(None),
-                OBJECT_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => Ok(Some(words[1])),
-                OBJECT_TAG => bail!("tagged object Value has an invalid handle token"),
+                STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG
+                    if words[1] != 0 && words[1] <= MAX_PAYLOAD => Ok(Some(words[1])),
+                STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG => {
+                    bail!("tagged reference Value has an invalid handle token")
+                }
                 tag => bail!("unsupported tagged Value tag {tag} in GC root scan"),
             }
         }
@@ -208,10 +287,10 @@ fn decode_candidate_object_value(
                 .get(slot_index)
                 .context("NaN-box Value storage slot out of bounds")?;
             let tag = word >> NAN_TAG_SHIFT;
-            if tag == NANBOX_OBJECT_TAG {
+            if NANBOX_HANDLE_TAGS.contains(&tag) {
                 let token = word & MAX_PAYLOAD;
                 if token == 0 {
-                    bail!("NaN-box object Value has an invalid handle token");
+                    bail!("NaN-box reference Value has an invalid handle token");
                 }
                 return Ok(Some(token));
             }
