@@ -5,7 +5,7 @@
 //! production ECMAScript Runtime or a general Core IR compiler.
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
-    ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, types},
+    ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Value, types},
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -211,6 +211,7 @@ struct NativeSemanticCase {
 struct NativeSemanticValidation {
     numeric_edge_cases: Vec<NativeSemanticCase>,
     invalid_tag_rejected: bool,
+    noncanonical_nanbox_words_rejected: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -436,6 +437,53 @@ fn candidate_output_path(root: &Path, candidate: Candidate, extension: &str) -> 
     root.join(format!("{}.{}", candidate.name(), extension))
 }
 
+fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> Value {
+    let reserved_min = builder
+        .ins()
+        .iconst(types::I64, NANBOX_RESERVED_TAG_MIN as i64);
+    let reserved_max = builder
+        .ins()
+        .iconst(types::I64, NANBOX_RESERVED_TAG_MAX as i64);
+    let reserved_ge = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        word,
+        reserved_min,
+    );
+    let reserved_le = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        word,
+        reserved_max,
+    );
+    let reserved_tag = builder.ins().band(reserved_ge, reserved_le);
+
+    let exponent_mask = builder.ins().iconst(types::I64, 0x7ff0_0000_0000_0000_u64 as i64);
+    let fraction_mask = builder.ins().iconst(types::I64, 0x000f_ffff_ffff_ffff_u64 as i64);
+    let exponent = builder.ins().band(word, exponent_mask);
+    let fraction = builder.ins().band(word, fraction_mask);
+    let exponent_all_ones = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::Equal,
+        exponent,
+        exponent_mask,
+    );
+    let zero = builder.ins().iconst(types::I64, 0);
+    let fraction_nonzero = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+        fraction,
+        zero,
+    );
+    let is_nan = builder.ins().band(exponent_all_ones, fraction_nonzero);
+    let canonical_nan = builder
+        .ins()
+        .iconst(types::I64, CANONICAL_NAN_BITS as i64);
+    let is_not_canonical_nan = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+        word,
+        canonical_nan,
+    );
+    let noncanonical_nan = builder.ins().band(is_nan, is_not_canonical_nan);
+    builder.ins().bor(reserved_tag, noncanonical_nan)
+}
+
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -540,57 +588,23 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             b.ins()
                 .brif(step_is_number, initial_state, &[], invalid_block, &[]);
         } else {
-            // NaN-boxed Values reserve the 0x7ff9..=0x7fff high-word range
-            // for non-number tags. A native numeric fast path must not silently
-            // reinterpret an object/string/symbol handle as an IEEE-754 NaN.
-            let reserved_min =
-                b.ins().iconst(types::I64, NANBOX_RESERVED_TAG_MIN as i64);
-            let reserved_max =
-                b.ins().iconst(types::I64, NANBOX_RESERVED_TAG_MAX as i64);
-
-            let start_ge = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                parameters[0],
-                reserved_min,
-            );
-            let start_le = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-                parameters[0],
-                reserved_max,
-            );
-            let start_reserved = b.ins().band(start_ge, start_le);
+            // OGM-17's NaN-box format reserves 0x7ff9..=0x7fff for non-number
+            // tags and accepts only the canonical positive NaN bit pattern.
+            // Reject both tagged handles and non-canonical IEEE NaNs before
+            // entering a numeric fast path.
+            let start_non_number = nanbox_word_is_non_number(&mut b, parameters[0]);
             b.ins()
-                .brif(start_reserved, invalid_block, &[], check_second_tag, &[]);
+                .brif(start_non_number, invalid_block, &[], check_second_tag, &[]);
 
             b.switch_to_block(check_second_tag);
-            let limit_ge = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                parameters[1],
-                reserved_min,
-            );
-            let limit_le = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-                parameters[1],
-                reserved_max,
-            );
-            let limit_reserved = b.ins().band(limit_ge, limit_le);
+            let limit_non_number = nanbox_word_is_non_number(&mut b, parameters[1]);
             b.ins()
-                .brif(limit_reserved, invalid_block, &[], check_third_tag, &[]);
+                .brif(limit_non_number, invalid_block, &[], check_third_tag, &[]);
 
             b.switch_to_block(check_third_tag);
-            let step_ge = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                parameters[2],
-                reserved_min,
-            );
-            let step_le = b.ins().icmp(
-                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-                parameters[2],
-                reserved_max,
-            );
-            let step_reserved = b.ins().band(step_ge, step_le);
+            let step_non_number = nanbox_word_is_non_number(&mut b, parameters[2]);
             b.ins()
-                .brif(step_reserved, invalid_block, &[], initial_state, &[]);
+                .brif(step_non_number, invalid_block, &[], initial_state, &[]);
         }
 
         b.switch_to_block(initial_state);
@@ -1040,9 +1054,45 @@ fn run_native_candidate(
             candidate.name()
         );
     }
+    let noncanonical_nanbox_words_rejected = match candidate.runtime {
+        RuntimeLayout::Tagged16 => None,
+        RuntimeLayout::NanBox8 => {
+            let positive_noncanonical_nan = 0x7ff8_0000_0000_0001_u64;
+            let negative_noncanonical_nan = 0xfff8_0000_0000_0001_u64;
+            // SAFETY: NaN-box arguments are passed as raw words under the
+            // generated candidate's fixed native entry ABI.
+            let positive_status = unsafe {
+                function(
+                    positive_noncanonical_nan,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
+            // SAFETY: same native ABI; negative NaNs must also be rejected.
+            let negative_status = unsafe {
+                function(
+                    negative_noncanonical_nan,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
+            positive_status == 1 && negative_status == 1
+        }
+    };
+    if noncanonical_nanbox_words_rejected == Some(false) {
+        bail!(
+            "{} accepted a non-canonical NaN-box numeric word",
+            candidate.name()
+        );
+    }
     let semantic_validation = NativeSemanticValidation {
         numeric_edge_cases: semantic_cases,
         invalid_tag_rejected,
+        noncanonical_nanbox_words_rejected,
     };
 
     for _ in 0..warmups {
