@@ -1381,8 +1381,8 @@ fn run_gc_sample(
     collector: CollectorKind,
     object_count: usize,
 ) -> Result<GcSample> {
-    if object_count < 4 || object_count % 4 != 0 {
-        bail!("GC workload object count must be >=4 and divisible by four");
+    if object_count < 12 || object_count % 4 != 0 {
+        bail!("GC workload object count must be >=12 and divisible by four");
     }
 
     let build_start = Instant::now();
@@ -1393,10 +1393,6 @@ fn run_gc_sample(
         .context("candidate Value storage size overflow")?;
     let mut value_storage = Vec::with_capacity(storage_words);
     value_storage.resize(storage_words, 0_u64);
-    for (index, word) in value_storage.iter_mut().enumerate() {
-        *word = (index as u64).rotate_left((candidate.runtime.value_bytes() % 64) as u32);
-    }
-    black_box(value_storage.as_slice());
 
     let mut heap = GcHeap::new(collector);
     let payload_bytes = GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
@@ -1442,6 +1438,28 @@ fn run_gc_sample(
             heap.add_frame_root(native_frame, objects[component * 4 + 1])?;
         }
     }
+
+    // Populate the candidate Value slots with real object-tag encodings.
+    // Each payload token indexes the OGM-26 HostHandle table built above;
+    // Tagged16 stores tag+payload words, while NaNBox stores the packed word.
+    if persistent_handles.is_empty() {
+        bail!("GC benchmark did not establish any persistent handle tokens");
+    }
+    let value_slot_count = object_count * GC_VALUE_SLOTS_PER_OBJECT;
+    for slot_index in 0..value_slot_count {
+        let token = (slot_index % persistent_handles.len() + 1) as u64;
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let word_index = slot_index * 2;
+                value_storage[word_index] = OBJECT_TAG;
+                value_storage[word_index + 1] = token;
+            }
+            RuntimeLayout::NanBox8 => {
+                value_storage[slot_index] = (0x7ffe_u64 << NAN_TAG_SHIFT) | token;
+            }
+        }
+    }
+    black_box(value_storage.as_slice());
 
     let graph = heap.graph_shape()?;
     let graph_edges = graph.edges;

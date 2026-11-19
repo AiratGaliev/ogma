@@ -470,7 +470,7 @@ def run_native_backends(
     command = [
         "cargo", "run",
         "--manifest-path", str(BACKEND_DIR / "Cargo.toml"),
-        "--locked", "--release", "--", 
+        "--locked", "--release", "--bin", "ogma-backend-codegen-benchmark", "--",
         "--iterations", str(iterations),
         "--warmups", "3",
         "--samples", "101",
