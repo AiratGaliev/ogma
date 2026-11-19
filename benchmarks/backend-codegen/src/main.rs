@@ -2121,7 +2121,7 @@ int64_t ogma_aot_dispatch_f64(
   aot_last_status = aot_validate_table(table, slot, &entry);
   if (aot_last_status != OGMA_STATUS_OK) return INT64_MIN;
   if (entry->signature != OGMA_HOST_SIGNATURE_F64_BINARY
-      || entry->signature_id != UINT64_C(0x1001)
+      || entry->signature_id != OGMA_AOT_SIGNATURE_ID_F64_BINARY
       || entry->primitive_f64_thunk == NULL) {
     aot_last_status = OGMA_STATUS_TYPE_MISMATCH;
     return INT64_MIN;
@@ -2158,7 +2158,7 @@ int64_t ogma_aot_dispatch_handles(
   aot_last_status = aot_validate_table(table, slot, &entry);
   if (aot_last_status != OGMA_STATUS_OK) return INT64_MIN;
   if (entry->signature != OGMA_HOST_SIGNATURE_NUMBER_HANDLE_BINARY
-      || entry->signature_id != UINT64_C(0x1002)
+      || entry->signature_id != OGMA_AOT_SIGNATURE_ID_NUMBER_HANDLE_BINARY
       || entry->number_handle_f64_thunk == NULL) {
     aot_last_status = OGMA_STATUS_TYPE_MISMATCH;
     return INT64_MIN;
