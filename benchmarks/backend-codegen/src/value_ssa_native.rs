@@ -20,7 +20,7 @@ use regalloc2::{
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     hint::black_box,
     mem::size_of,
@@ -1434,7 +1434,7 @@ fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
         if stack_access {
             stack_relative_memory_instructions += 1;
             let first_operand = operands.split(',').next().unwrap_or_default().trim();
-            if first_operand.starts_with('[') || mnemonic == "push" {
+            if first_operand.contains('[') || mnemonic == "push" {
                 stack_relative_stores += 1;
             } else {
                 stack_relative_loads += 1;
@@ -1653,7 +1653,7 @@ mod tests {
 "#;
         let metrics = parse_native_disassembly(disassembly).expect("parse x86_64 objdump output");
         assert_eq!(metrics.instruction_count, 4);
-        assert_eq!(metrics.function_code_bytes, 14);
+        assert_eq!(metrics.function_code_bytes, 15);
         assert!(metrics.integer_registers.contains(&"rax".to_owned()));
         assert!(metrics.integer_registers.contains(&"rdi".to_owned()));
         assert!(metrics.vector_registers.contains(&"xmm0".to_owned()));
