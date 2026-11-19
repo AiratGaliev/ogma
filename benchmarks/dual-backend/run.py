@@ -219,6 +219,138 @@ def verify_invalid_bytecode(compiled: Any) -> dict[str, Any]:
     }
 
 
+def validate_aot_host_calls(
+    backend_name: str, evidence: dict[str, Any]
+) -> dict[str, Any]:
+    if evidence.get("abi_version") != {"major": 1, "minor": 0}:
+        raise RuntimeError(f"{backend_name}: OGM-32 AOT ABI version mismatch")
+    if int(evidence.get("table_version", 0)) <= 0 or evidence.get("entry_count") != 4:
+        raise RuntimeError(f"{backend_name}: OGM-32 versioned host function table is malformed")
+
+    interpreter = evidence.get("interpreter_reference", {})
+    if interpreter.get("typed") != {"kind": "normal", "value": 42}:
+        raise RuntimeError(f"{backend_name}: OGM-32 typed AOT result differs from interpreter dispatch")
+    if interpreter.get("generic") != {"kind": "normal", "value": 42}:
+        raise RuntimeError(f"{backend_name}: OGM-32 generic AOT result differs from interpreter dispatch")
+    if interpreter.get("throw") != {"kind": "throw", "value": -7}:
+        raise RuntimeError(f"{backend_name}: OGM-32 Throw completion differs from interpreter dispatch")
+    if interpreter.get("typed_handle") != {"kind": "normal", "value": 42}:
+        raise RuntimeError(f"{backend_name}: OGM-32 typed-handle result differs from interpreter dispatch")
+    if interpreter.get("generic_handle") != {"kind": "normal", "value": 42}:
+        raise RuntimeError(f"{backend_name}: OGM-32 generic-handle result differs from interpreter dispatch")
+
+    typed = evidence.get("typed_primitive", {})
+    if (
+        typed.get("result") != interpreter["typed"]["value"]
+        or typed.get("completion_kind") != 0
+        or typed.get("error_kind") != 0
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 primitive typed thunk did not preserve interpreter semantics")
+
+    generic = evidence.get("generic_reentrant", {})
+    if (
+        generic.get("result") != interpreter["generic"]["value"]
+        or generic.get("completion_kind") != 0
+        or int(generic.get("nested_callbacks", 0)) < 1
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 generic fallback or reentrant callback failed")
+
+    thrown = evidence.get("generic_throw", {})
+    if (
+        thrown.get("result") != -(1 << 63)
+        or thrown.get("completion_kind") != 1
+        or thrown.get("error_kind") != 4
+        or thrown.get("value") != interpreter["throw"]["value"]
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 thrown completion did not cross the AOT ABI")
+
+    typed_handle = evidence.get("typed_handle", {})
+    generic_handle = evidence.get("generic_handle_fallback", {})
+    if (
+        typed_handle.get("result") != interpreter["typed_handle"]["value"]
+        or typed_handle.get("completion_kind") != 0
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 typed opaque-handle call failed")
+    if (
+        generic_handle.get("result") != interpreter["generic_handle"]["value"]
+        or generic_handle.get("completion_kind") != 0
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 opaque-handle generic fallback failed")
+
+    mismatch = evidence.get("signature_mismatch", {})
+    if (
+        mismatch.get("result") != -(1 << 63)
+        or mismatch.get("completion_kind") != 1
+        or mismatch.get("error_kind") != 1
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 signature mismatch did not become TypeError")
+
+    denied = evidence.get("capability_denied", {})
+    if (
+        denied.get("result") != -(1 << 63)
+        or denied.get("completion_kind") != 1
+        or denied.get("error_kind") != 3
+        or denied.get("missing_capabilities") != 1
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 capability denial was not enforced")
+
+    abi_mismatch = evidence.get("abi_version_mismatch", {})
+    if (
+        abi_mismatch.get("result") != -(1 << 63)
+        or abi_mismatch.get("status") != 2
+        or abi_mismatch.get("expected_status") != 2
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 incompatible ABI major was not rejected")
+
+    cancellation = evidence.get("cancellation", {})
+    if (
+        cancellation.get("result") != -(1 << 63)
+        or cancellation.get("status") != 0
+        or cancellation.get("completion_kind") != 1
+        or cancellation.get("error_kind") != 5
+        or not cancellation.get("budget_token_cancelled")
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 cancellation was not propagated through the AOT completion")
+
+    callbacks = int(evidence.get("generic_callback_invocations", 0))
+    nested_callbacks = int(evidence.get("nested_callback_invocations", 0))
+    counts = evidence.get("dispatch_counts", {})
+    roots = evidence.get("opaque_roots", {})
+    if (
+        callbacks < 4
+        or nested_callbacks < 1
+        or int(counts.get("typed_calls", 0)) < 1
+        or int(counts.get("generic_calls", 0)) < 1
+        or int(counts.get("handle_calls", 0)) < 2
+        or int(roots.get("safepoint_checks", 0)) < 2
+        or not roots.get("number_handles_survived_collection")
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-32 callback, dispatch or opaque-root evidence is incomplete")
+
+    if evidence.get("all_checks_passed") is not True:
+        raise RuntimeError(f"{backend_name}: OGM-32 native host-call acceptance flag was not set")
+
+    return {
+        "aot_abi_v1_validated": True,
+        "table_version": int(evidence["table_version"]),
+        "entry_count": int(evidence["entry_count"]),
+        "interpreter_reference": interpreter,
+        "typed_primitive_result": typed["result"],
+        "generic_fallback_result": generic["result"],
+        "generic_throw_error_kind": thrown["error_kind"],
+        "typed_handle_result": typed_handle["result"],
+        "generic_handle_result": generic_handle["result"],
+        "signature_mismatch_error_kind": mismatch["error_kind"],
+        "capability_denial_details": denied["missing_capabilities"],
+        "abi_mismatch_status": abi_mismatch["status"],
+        "cancellation_error_kind": cancellation["error_kind"],
+        "generic_callbacks": callbacks,
+        "nested_callbacks": nested_callbacks,
+        "dispatch_counts": counts,
+        "opaque_roots": roots,
+    }
+
+
 def validate_runtime_integration(
     backend_name: str, integration: dict[str, Any]
 ) -> dict[str, Any]:
@@ -313,6 +445,9 @@ def validate_runtime_integration(
     ):
         raise RuntimeError(f"{backend_name}: OGM-27 budget polling was not exercised")
 
+    aot_evidence = validate_aot_host_calls(
+        backend_name, integration.get("ogm32_aot_host_calls", {})
+    )
     return {
         "ogm19_abi_v1_negotiated": True,
         "ogm19_version": abi_version,
@@ -321,6 +456,7 @@ def validate_runtime_integration(
         "ogm19_callbacks": int(model["callback_invocations"]),
         "ogm27_native_safepoints": safepoints,
         "ogm27_model": model,
+        "ogm32_aot_host_calls": aot_evidence,
     }
 def run_native_backends(
     *,
@@ -472,6 +608,11 @@ def build_report(
         "ogm27_generated_safepoints_roots_transitions_and_budget": all(
             backend["runtime_integration"]["ogm27_native_safepoints"]
             and backend["runtime_integration"]["ogm27_model"]["native_shadow_frame"]["live_managed_root_survived_every_collection"]
+            for backend in native["backends"].values()
+        ),
+        "ogm32_versioned_aot_host_calls_typed_generic_roots_and_cancellation": all(
+            backend["runtime_integration"]["ogm32_aot_host_calls"]["aot_abi_v1_validated"]
+            and backend["runtime_integration"]["ogm32_aot_host_calls"]["opaque_roots"]["number_handles_survived_collection"]
             for backend in native["backends"].values()
         ),
         "reproducible_documented_linux_x86_64_target": True,

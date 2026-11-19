@@ -1071,15 +1071,15 @@ jobs:
           retention-days: 90
 
   ogm31-dual-backend-execution-proof:
-    name: OGM-31 shared Core IR portable and native execution proof
-    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-31-dual-backend-execution-proof')
+    name: OGM-31/32 shared Core IR and AOT host-call execution proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'feat/ogm-31-dual-backend-execution-proof') || startsWith(github.head_ref, 'feat/ogm-32-aot-host-calls'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: read
     env:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
-      CARGO_TARGET_DIR: target-ogm31
+      CARGO_TARGET_DIR: target-ogm31-ogm32
 
     steps:
       - name: Checkout tested PR head
@@ -1113,7 +1113,7 @@ jobs:
           llvm-config-18 --version
           clang-18 --version
           cc --version
-          for crate in rust-abi native-runtime-boundary backend-codegen; do
+          for crate in rust-abi host-execution-scope typed-host-dispatch native-runtime-boundary backend-codegen; do
             manifest="benchmarks/$crate/Cargo.toml"
             lockfile="benchmarks/$crate/Cargo.lock"
             if [ ! -f "$lockfile" ]; then
@@ -1122,21 +1122,28 @@ jobs:
             cp "$lockfile" "$RUNNER_TEMP/ogm31-$crate-Cargo.lock"
           done
 
-      - name: Check OGM-19 ABI, OGM-27 boundary and native backend formatting
+      - name: Check OGM-19/20/21/27/32 Rust formatting and C ABI layout
         run: |
           cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/host-execution-scope/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all -- --check
           cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
           cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+          cc -std=c11 -Wall -Wextra -Werror -fsyntax-only -I benchmarks/rust-abi/include -I benchmarks/typed-host-dispatch/include -I benchmarks/backend-codegen/include benchmarks/backend-codegen/tests/aot_abi_layout.c
 
-      - name: Run OGM-19 ABI, OGM-27 boundary and native backend Clippy
+      - name: Run OGM-19/20/21/27/32 Clippy
         run: |
           cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
           cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
-      - name: Run OGM-19 ABI, OGM-27 boundary and native backend contract tests
+      - name: Run OGM-19/20/21/27/32 contract tests
         run: |
           cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/host-execution-scope/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/typed-host-dispatch/Cargo.toml --all-features --locked
           cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
           cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
 
@@ -1162,7 +1169,7 @@ jobs:
             --output "$RUNNER_TEMP/ogm31-dual-backend-report.json" \
             --artifact-dir "$RUNNER_TEMP/ogm31-artifacts"
 
-      - name: Validate OGM-31 proof report acceptance
+      - name: Validate OGM-31/32 proof report acceptance
         run: |
           python3 - "$RUNNER_TEMP/ogm31-dual-backend-report.json" <<'PY'
           import json
@@ -1203,20 +1210,33 @@ jobs:
               assert model["native_shadow_frame"]["live_managed_root_survived_every_collection"]
               assert model["execution_budget"]["polls"] >= 5
               assert ["Native", "Interpreter", "HostCallback"] in model["completion_transition_paths"]
+              aot = integration["ogm32_aot_host_calls"]
+              assert aot["aot_abi_v1_validated"]
+              assert aot["interpreter_reference"]["typed"] == {"kind": "normal", "value": 42}
+              assert aot["interpreter_reference"]["generic"] == {"kind": "normal", "value": 42}
+              assert aot["interpreter_reference"]["throw"] == {"kind": "throw", "value": -7}
+              assert aot["generic_throw_error_kind"] == 4
+              assert aot["signature_mismatch_error_kind"] == 1
+              assert aot["capability_denial_details"] == 1
+              assert aot["abi_mismatch_status"] == 2
+              assert aot["cancellation_error_kind"] == 5
+              assert aot["opaque_roots"]["number_handles_survived_collection"]
           assert len(report["portable_bytecode"]["register_artifacts"]) == 5
-          print("Validated OGM-31 portable/native differential behaviour, OGM-19 ABI completions, OGM-27 roots/safepoints/budget, invalid bytecode and fallbacks.")
+          print("Validated OGM-31 portable/native differential, OGM-19 ABI completions, OGM-27 roots/safepoints/budget and OGM-32 versioned AOT host dispatch.")
           PY
 
       - name: Upload OGM-31 proof report and compiled evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ogm31-dual-backend-execution-proof
+          name: ogm31-ogm32-dual-backend-execution-proof
           path: |
             ${{ runner.temp }}/ogm31-dual-backend-report.json
             ${{ runner.temp }}/ogm31-artifacts/**
             ${{ runner.temp }}/ogm31-rust-abi-Cargo.lock
             ${{ runner.temp }}/ogm31-native-runtime-boundary-Cargo.lock
             ${{ runner.temp }}/ogm31-backend-codegen-Cargo.lock
+            ${{ runner.temp }}/ogm31-host-execution-scope-Cargo.lock
+            ${{ runner.temp }}/ogm31-typed-host-dispatch-Cargo.lock
           if-no-files-found: warn
           retention-days: 90
