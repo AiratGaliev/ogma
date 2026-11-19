@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 import platform
 import resource
-import shutil
 import subprocess
 import sys
 import time
@@ -270,7 +269,6 @@ def _portable_worker(
         return {name: compile_function(document, "register") for name, document in fixtures.items()}
 
     # Time compilation without tracemalloc overhead, then sample memory in a separate pass.
-    compile_all()
     compile_wall_samples: list[float] = []
     compile_codegen_samples: list[float] = []
     decode_samples: list[float] = []
