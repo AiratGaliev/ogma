@@ -43,6 +43,7 @@ pub const AOT_ERROR_THROWN: u32 = 4;
 pub const AOT_ERROR_CANCELLED: u32 = 5;
 pub const AOT_ERROR_ASYNC_UNSUPPORTED: u32 = 6;
 pub const AOT_ERROR_REFERENCE: u32 = 7;
+pub const AOT_MAX_ARGUMENTS: usize = 4096;
 
 pub const AOT_CAPABILITY_MATH: u64 = 1;
 
@@ -566,7 +567,11 @@ fn invoke_binding(
     force_generic: bool,
     out_completion: *mut AotCompletionV1,
 ) -> OgmaStatus {
-    if binding.is_null() || out_completion.is_null() {
+    if out_completion.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    unsafe { out_completion.write(AotCompletionV1::default()) };
+    if binding.is_null() {
         return OgmaStatus::INVALID_ARGUMENT;
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -657,7 +662,14 @@ unsafe extern "C" fn aot_generic_thunk(
     args_len: usize,
     out_completion: *mut AotCompletionV1,
 ) -> OgmaStatus {
-    if args_len > 4096 || (args_len > 0 && args.is_null()) {
+    if out_completion.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    unsafe { out_completion.write(AotCompletionV1::default()) };
+    if user_data.is_null()
+        || args_len > AOT_MAX_ARGUMENTS
+        || (args_len > 0 && args.is_null())
+    {
         return OgmaStatus::INVALID_ARGUMENT;
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1005,6 +1017,34 @@ mod tests {
                 DispatchValue::Number(-7.0)
             )))
         );
+    }
+
+    #[test]
+    fn generic_thunk_initializes_completion_when_rejecting_invalid_arguments() {
+        let table = AotHostFunctionTable::new(CancellationToken::default()).unwrap();
+        let entry = &table.entries[1];
+        let thunk = entry.generic_thunk.expect("generic fallback thunk");
+        let mut completion = AotCompletionV1 {
+            kind: AOT_COMPLETION_THROW,
+            error_kind: AOT_ERROR_TYPE,
+            details: u64::MAX,
+            value: AotValueV1::number(-1.0),
+        };
+        let status = unsafe {
+            thunk(
+                entry.user_data,
+                AOT_CAPABILITY_MATH,
+                std::ptr::null(),
+                AOT_MAX_ARGUMENTS + 1,
+                &mut completion,
+            )
+        };
+        assert_eq!(status, OgmaStatus::INVALID_ARGUMENT);
+        assert_eq!(completion.kind, AOT_COMPLETION_NORMAL);
+        assert_eq!(completion.error_kind, AOT_ERROR_NONE);
+        assert_eq!(completion.details, 0);
+        assert_eq!(completion.value.tag, AOT_VALUE_UNDEFINED);
+        assert_eq!(completion.value.reserved, 0);
     }
 
     #[test]

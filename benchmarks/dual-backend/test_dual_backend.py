@@ -120,12 +120,12 @@ class DualBackendProofTests(unittest.TestCase):
                 "generic_callback_invocations": 7,
                 "nested_callback_invocations": 2,
                 "dispatch_counts": {
-                    "typed_calls": 2,
+                    "typed_calls": 4,
                     "generic_calls": 4,
                     "handle_calls": 3,
                 },
                 "opaque_roots": {
-                    "safepoint_checks": 8,
+                    "safepoint_checks": 18,
                     "number_handles_survived_collection": True,
                 },
                 "all_checks_passed": True,

@@ -1071,7 +1071,7 @@ jobs:
           retention-days: 90
 
   ogm31-dual-backend-execution-proof:
-    name: OGM-31/32 shared Core IR and AOT host-call execution proof
+    name: OGM-31 shared Core IR portable and native execution proof
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'feat/ogm-31-dual-backend-execution-proof') || startsWith(github.head_ref, 'feat/ogm-32-aot-host-calls'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -1079,7 +1079,7 @@ jobs:
       contents: read
     env:
       LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
-      CARGO_TARGET_DIR: target-ogm31-ogm32
+      CARGO_TARGET_DIR: target-ogm31
 
     steps:
       - name: Checkout tested PR head
@@ -1220,6 +1220,14 @@ jobs:
               assert aot["capability_denial_details"] == 1
               assert aot["abi_mismatch_status"] == 2
               assert aot["cancellation_error_kind"] == 5
+              assert aot["generic_callbacks"] == 7
+              assert aot["nested_callbacks"] == 2
+              assert aot["dispatch_counts"] == {
+                  "typed_calls": 4,
+                  "generic_calls": 4,
+                  "handle_calls": 3,
+              }
+              assert aot["opaque_roots"]["safepoint_checks"] == 18
               assert aot["opaque_roots"]["number_handles_survived_collection"]
           assert len(report["portable_bytecode"]["register_artifacts"]) == 5
           print("Validated OGM-31 portable/native differential, OGM-19 ABI completions, OGM-27 roots/safepoints/budget and OGM-32 versioned AOT host dispatch.")
@@ -1229,7 +1237,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ogm31-ogm32-dual-backend-execution-proof
+          name: ogm31-dual-backend-execution-proof
           path: |
             ${{ runner.temp }}/ogm31-dual-backend-report.json
             ${{ runner.temp }}/ogm31-artifacts/**

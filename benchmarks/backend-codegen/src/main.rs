@@ -2795,12 +2795,12 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     }
     let (aot_generic_callback_invocations, aot_nested_callback_invocations) =
         aot_table.callback_stats();
-    if aot_generic_callback_invocations < 5 || aot_nested_callback_invocations < 2 {
-        bail!("{name}: OGM-32 typed registry callback/reentrancy evidence is incomplete");
+    if aot_generic_callback_invocations != 6 || aot_nested_callback_invocations != 2 {
+        bail!("{name}: OGM-32 interpreter/native callback or reentrancy counts differ");
     }
     let aot_pre_cancel_root_checks = proof_state.aot_root_checks;
-    if aot_pre_cancel_root_checks == 0 {
-        bail!("{name}: OGM-32 native calls did not validate opaque roots at safepoints");
+    if aot_pre_cancel_root_checks != 16 {
+        bail!("{name}: OGM-32 native host handles were not checked at every pre-cancel safepoint");
     }
     proof_state.set_aot_root_checks_enabled(false);
 
@@ -2902,6 +2902,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         || aot_cancel_kind != 1
         || aot_cancel_error != AOT_ERROR_CANCELLED
         || !aot_cancelled
+        || proof_state.aot_root_checks != 18
     {
         bail!(
             "{name}: OGM-32 cancellation did not propagate through native completion and OGM-27 budget"
@@ -2925,6 +2926,19 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         "host_call_boundary": unsafe { safepoint_count(5) }
     });
     let (aot_generic_callbacks, aot_nested_callbacks) = aot_table.callback_stats();
+    let aot_dispatch_counts = serde_json::json!({
+        "typed_calls": unsafe { aot_typed_calls() },
+        "generic_calls": unsafe { aot_generic_calls() },
+        "handle_calls": unsafe { aot_handle_calls() }
+    });
+    if aot_generic_callbacks != 7
+        || aot_nested_callbacks != 2
+        || aot_dispatch_counts["typed_calls"].as_u64() != Some(4)
+        || aot_dispatch_counts["generic_calls"].as_u64() != Some(4)
+        || aot_dispatch_counts["handle_calls"].as_u64() != Some(3)
+    {
+        bail!("{name}: OGM-32 dispatch counters differ from the interpreter/native fixture contract");
+    }
     let aot_evidence = serde_json::json!({
         "abi_version": {
             "major": aot_table.as_abi().abi_major,
@@ -3003,11 +3017,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         },
         "generic_callback_invocations": aot_generic_callbacks,
         "nested_callback_invocations": aot_nested_callbacks,
-        "dispatch_counts": {
-            "typed_calls": unsafe { aot_typed_calls() },
-            "generic_calls": unsafe { aot_generic_calls() },
-            "handle_calls": unsafe { aot_handle_calls() }
-        },
+        "dispatch_counts": aot_dispatch_counts,
         "opaque_roots": {
             "safepoint_checks": proof_state.aot_root_checks,
             "number_handles_survived_collection": aot_registry.read_number(aot_left).map_err(|error| anyhow!("{name}: read rooted left handle: {error:?}"))? == 19.0

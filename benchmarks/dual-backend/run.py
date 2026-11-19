@@ -317,12 +317,12 @@ def validate_aot_host_calls(
     counts = evidence.get("dispatch_counts", {})
     roots = evidence.get("opaque_roots", {})
     if (
-        callbacks < 4
-        or nested_callbacks < 1
-        or int(counts.get("typed_calls", 0)) < 1
-        or int(counts.get("generic_calls", 0)) < 1
-        or int(counts.get("handle_calls", 0)) < 2
-        or int(roots.get("safepoint_checks", 0)) < 2
+        callbacks != 7
+        or nested_callbacks != 2
+        or int(counts.get("typed_calls", 0)) != 4
+        or int(counts.get("generic_calls", 0)) != 4
+        or int(counts.get("handle_calls", 0)) != 3
+        or int(roots.get("safepoint_checks", 0)) != 18
         or not roots.get("number_handles_survived_collection")
     ):
         raise RuntimeError(f"{backend_name}: OGM-32 callback, dispatch or opaque-root evidence is incomplete")

@@ -1,6 +1,10 @@
 #include <stddef.h>
 #include "ogma_aot_host_calls.h"
 
+_Static_assert(OGMA_AOT_SIGNATURE_ID_F64_BINARY == UINT64_C(0x1001),
+               "AOT f64 signature ID changed");
+_Static_assert(OGMA_AOT_SIGNATURE_ID_NUMBER_HANDLE_BINARY == UINT64_C(0x1002),
+               "AOT handle signature ID changed");
 _Static_assert(sizeof(OgmaAotValuePayloadV1) == 40, "AOT payload ABI-v1 layout changed");
 _Static_assert(sizeof(OgmaAotValueV1) == 48, "AOT value ABI-v1 layout changed");
 _Static_assert(offsetof(OgmaAotValueV1, payload) == 8, "AOT value payload offset changed");
