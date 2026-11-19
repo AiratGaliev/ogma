@@ -32,7 +32,7 @@ The native backend remains an exact-fixture adapter, not a general Core IR compi
 
 ### Unsupported operations and fallback
 
-The native profile manifest deliberately does not include dynamic property access. The OGM-16 property-access workload uses js.get_property and js.set_property; the proof routes it to the verified portable register interpreter and checks that its property mutation and record.create host trace match the expected result. No native code is emitted for that workload.
+The native profile manifest deliberately does not include dynamic property access. The OGM-16 property-access workload uses js.get_property and js.set_property; the proof routes it to the verified portable register interpreter and checks that its property mutation and record.create host trace match the expected result. No native code is emitted for that workload. Literal js.constant nodes are compile-time constant-pool materialization, not runtime operations; they are excluded from the unsupported-operation calculation just as they are from the OGM-30 native operation lists. The proof validates their side-effect-free literal shape before classifying the remaining runtime operations.
 
 The negative proof mutates a byte in a valid .ogmb code section and requires the container reader to reject it by the code digest. AOT support is closed over the native workload manifest; adding an unsupported operation to a profile does not make it silently executable.
 

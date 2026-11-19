@@ -143,6 +143,36 @@ def run_portable_observations(
     return observations, bytecode_metadata
 
 
+def unsupported_aot_operations(
+    function: dict[str, Any], supported_operations: set[str]
+) -> list[str]:
+    """Return runtime operations not covered by the native fixture profiles.
+
+    Core IR js.constant nodes materialize literal-pool values at compile time;
+    they are not runtime operations and intentionally do not appear in the
+    OGM-30 native workload operation lists.
+    """
+    operations: set[str] = set()
+    for block in function["blocks"]:
+        for instruction in block["instructions"]:
+            operation = instruction["op"]
+            if operation == "js.constant":
+                attributes = instruction.get("attributes", {})
+                effects = instruction.get("effects", {})
+                if (
+                    instruction.get("operands") != []
+                    or not isinstance(instruction.get("result"), dict)
+                    or instruction["result"].get("kind") != "value"
+                    or not isinstance(attributes, dict)
+                    or set(attributes) != {"literal", "value"}
+                    or any(bool(value) for value in effects.values())
+                ):
+                    raise AssertionError("js.constant must remain a side-effect-free literal-pool value")
+                continue
+            operations.add(operation)
+    return sorted(operations - supported_operations)
+
+
 def run_property_fallback() -> dict[str, Any]:
     workload = next(item for item in build_workloads() if item["id"] == "property-access")
     candidates = {
@@ -298,12 +328,10 @@ def build_report(
         for workload in aot_manifest["workloads"]
         for operation in workload["operations"]
     }
-    property_operations = {
-        instruction["op"]
-        for block in property_workload["functions"][0]["function"]["blocks"]
-        for instruction in block["instructions"]
-    }
-    unsupported_operations = sorted(property_operations - supported_operations)
+    unsupported_operations = unsupported_aot_operations(
+        property_workload["functions"][0]["function"],
+        supported_operations,
+    )
     if unsupported_operations != ["js.get_property", "js.set_property"]:
         raise AssertionError(f"unexpected AOT unsupported-operation set: {unsupported_operations}")
     fallback = run_property_fallback()

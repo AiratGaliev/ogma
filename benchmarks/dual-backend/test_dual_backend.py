@@ -84,6 +84,23 @@ class DualBackendProofTests(unittest.TestCase):
         result = proof.verify_invalid_bytecode(candidate)
         self.assertTrue(result["rejected"])
 
+    def test_literal_constants_are_not_runtime_aot_operations(self) -> None:
+        workload = next(
+            item for item in proof.build_workloads() if item["id"] == "property-access"
+        )
+        supported = {
+            operation
+            for item in proof.read_json(
+                ROOT / "benchmarks/backend-codegen/fixtures/workloads.json"
+            )["workloads"]
+            for operation in item["operations"]
+        }
+        unsupported = proof.unsupported_aot_operations(
+            workload["functions"][0]["function"],
+            supported,
+        )
+        self.assertEqual(["js.get_property", "js.set_property"], unsupported)
+
     def test_property_operations_use_verified_portable_fallback(self) -> None:
         result = proof.run_property_fallback()
         self.assertEqual(
