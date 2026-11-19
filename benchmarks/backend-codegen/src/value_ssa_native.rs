@@ -537,7 +537,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         b.switch_to_block(loop_block);
         let loop_state = b.block_params(loop_block).to_vec();
-        let (current, limit, step, count) = match (candidate.runtime, candidate.ssa) {
+        let (current, limit, _step, _count) = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
                 let current_bits = b
                     .ins()
@@ -608,7 +608,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         };
         let sum = b.ins().fadd(add_current, add_step);
         let next_bits = b.ins().bitcast(types::I64, MemFlagsData::new(), sum);
-        let next_count = b.ins().iadd_imm(add_count, 1);
+        let next_count = b.ins().iadd_imm_s(add_count, 1);
         let mut next_state: Vec<BlockArg> =
             add_state.iter().copied().map(BlockArg::Value).collect();
         match (candidate.runtime, candidate.ssa) {
@@ -1108,7 +1108,7 @@ fn gc_evidence(candidate: Candidate) -> Result<GcEvidence> {
     })
 }
 
-pub fn run(
+fn run(
     output: &Path,
     revision: &str,
     iterations: u64,
