@@ -37,6 +37,7 @@ use std::{
     ffi::{CString, c_void},
     fs,
     hint::black_box,
+    io::Write as _,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     process::Command,
@@ -614,6 +615,7 @@ struct Options {
     revision: String,
     output: PathBuf,
     artifact_dir: Option<PathBuf>,
+    startup_probe: bool,
 }
 fn options() -> Result<Options> {
     let mut args = env::args().skip(1);
@@ -624,6 +626,7 @@ fn options() -> Result<Options> {
         revision: env::var("GITHUB_SHA").unwrap_or_else(|_| "working-tree".into()),
         output: PathBuf::from("ogm30-report.json"),
         artifact_dir: None,
+        startup_probe: false,
     };
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -637,6 +640,7 @@ fn options() -> Result<Options> {
                     args.next().context("missing artifact directory")?,
                 ));
             }
+            "--startup-probe" => o.startup_probe = true,
             _ => bail!("unknown argument: {a}"),
         }
     }
@@ -3295,6 +3299,13 @@ fn cargo_artifact_summary(target_directory: &Path, crate_names: &[&str]) -> Buil
 }
 fn main() -> Result<()> {
     let o = options()?;
+    if o.startup_probe {
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        writeln!(output, "OGMA_NATIVE_STARTUP_READY")?;
+        output.flush()?;
+        return Ok(());
+    }
     let c = load_corpus()?;
     let root = env::temp_dir().join(format!("ogm30-{}", std::process::id()));
     fs::create_dir_all(&root)?;

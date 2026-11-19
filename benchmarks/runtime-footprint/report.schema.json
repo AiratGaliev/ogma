@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ogma.dev/benchmarks/runtime-footprint/report.schema.json",
+  "title": "Ogma M0 Runtime Footprint Report",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "version",
+    "task",
+    "source_revision",
+    "tested_revision",
+    "environment",
+    "workload",
+    "protocol",
+    "logical_runtime_profiles",
+    "proof_measurements",
+    "host_call_overhead",
+    "binary_and_object_footprint",
+    "startup_and_memory",
+    "compile_costs",
+    "dependency_graphs",
+    "acceptance",
+    "production_metric_status",
+    "limitations"
+  ],
+  "properties": {
+    "schema": { "const": "ogma.runtime-footprint-report" },
+    "version": { "const": "1.0.0" },
+    "task": { "const": "OGM-29" },
+    "source_revision": { "type": "string", "minLength": 1 },
+    "tested_revision": { "type": "string", "minLength": 1 },
+    "environment": {
+      "type": "object",
+      "required": ["platform", "system", "machine", "python", "rustc", "cargo", "llvm", "clang", "target"]
+    },
+    "workload": {
+      "type": "object",
+      "required": ["contract", "manifest", "native_manifest", "fixture_set", "same_workload_for_portable_and_native"]
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["iterations_per_workload_sample", "warmup_rounds", "measurement_samples", "target", "comparison_policy"]
+    },
+    "logical_runtime_profiles": {
+      "type": "object",
+      "required": ["portable-interpreter-release", "hybrid-native-release"]
+    },
+    "proof_measurements": {
+      "type": "object",
+      "required": ["portable_interpreter_profile", "hybrid_native_profile"]
+    },
+    "host_call_overhead": {
+      "type": "object",
+      "required": ["portable_proof_interpreter", "cranelift_aot_proof", "llvm_aot_comparison"]
+    },
+    "binary_and_object_footprint": {
+      "type": "object",
+      "required": ["production_portable_runtime_executable", "production_hybrid_runtime_executable", "portable_bytecode_containers", "native_tooling_executable"]
+    },
+    "startup_and_memory": {
+      "type": "object",
+      "required": ["production_interpreter_runtime_startup_ns", "production_hybrid_runtime_startup_ns", "portable_proof_worker_startup", "native_proof_tool_startup"]
+    },
+    "compile_costs": {
+      "type": "object",
+      "required": ["portable_core_ir_to_bytecode", "native_aot", "javascript_source_to_ast", "ast_to_core_ir"]
+    },
+    "dependency_graphs": {
+      "type": "object",
+      "required": ["benchmark_compile_time_graph", "logical_shipped_runtime_graphs", "actual_shipped_runtime_package_graph"]
+    },
+    "acceptance": {
+      "type": "object",
+      "required": [
+        "same_representative_core_ir_workload_and_target",
+        "startup_binary_memory_and_compile_costs_reported_separately",
+        "source_core_ir_bytecode_and_native_compile_memory_boundaries_reported",
+        "compile_time_and_logical_runtime_dependency_graphs_separated",
+        "reproduction_environment_and_machine_readable_results",
+        "no_unjustified_performance_target_invented"
+      ],
+      "additionalProperties": { "type": "boolean" }
+    },
+    "production_metric_status": {
+      "type": "object",
+      "additionalProperties": { "enum": ["not_implemented", "measured"] }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+  }
+}
