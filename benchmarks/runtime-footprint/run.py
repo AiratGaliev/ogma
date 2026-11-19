@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import platform
 import resource
+import selectors
 import subprocess
 import sys
 import time
@@ -131,7 +132,84 @@ def _timed_indexed_call(
     return _distribution(raw)
 
 
-def _peak_tracemalloc(callback: Any) -> tuple[Any, int]:
+def _measure_startup_probe(
+    command: list[str],
+    marker: str,
+    *,
+    warmups: int,
+    samples: int,
+) -> dict[str, Any]:
+    if warmups < 0 or samples < 1:
+        raise ValueError("startup probe requires non-negative warmups and at least one sample")
+
+    marker_bytes = marker.encode("utf-8")
+
+    def measure_one() -> float:
+        started = time.perf_counter_ns()
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert process.stdout is not None
+        assert process.stderr is not None
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                ready = selector.select(timeout=15)
+            if not ready:
+                process.kill()
+                stdout, stderr = process.communicate()
+                raise RuntimeError(
+                    "startup probe did not emit its readiness marker within 15 seconds; "
+                    f"stdout={stdout[-2000:]!r}, stderr={stderr[-4000:]!r}"
+                )
+            line = process.stdout.readline().rstrip(b"\\r\\n")
+            ready_ns = time.perf_counter_ns()
+            remaining_stdout, stderr = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired as error:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                "startup probe process did not exit after its readiness marker; "
+                f"stdout={stdout[-2000:]!r}, stderr={stderr[-4000:]!r}"
+            ) from error
+
+        if line != marker_bytes:
+            raise RuntimeError(
+                f"startup probe expected marker {marker!r}, received {line!r}; "
+                f"stdout={remaining_stdout[-2000:]!r}, stderr={stderr[-4000:]!r}"
+            )
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"startup probe exited with status {process.returncode}; "
+                f"stderr={stderr[-4000:]!r}"
+            )
+        if remaining_stdout:
+            raise RuntimeError(
+                f"startup probe emitted unexpected output after its marker: {remaining_stdout[-2000:]!r}"
+            )
+        return float(ready_ns - started)
+
+    for _ in range(warmups):
+        measure_one()
+    raw = [measure_one() for _ in range(samples)]
+    return {
+        "status": "measured_proof_tool_startup",
+        "marker": marker,
+        "latency": _distribution(raw),
+        "warmup_processes": warmups,
+        "measurement_processes": samples,
+        "measurement_scope": (
+            "Parent process launch to a flushed readiness marker after interpreter/binary "
+            "startup and command-line parsing, before fixture loading, compiler setup or "
+            "workload execution. This is proof-tool startup, not production Ogma Runtime startup."
+        ),
+    }
+
+
+def _peak_tracemalloc(callback: Any) -> tuple[Any, int):
     gc.collect()
     tracemalloc.start()
     try:
@@ -270,7 +348,6 @@ def _portable_worker(
     samples: int,
     artifact_dir: Path,
 ) -> dict[str, Any]:
-    ready_timestamp_ns = time.monotonic_ns()
     fixtures, source_hashes, provenance = _load_inputs()
     input_memory = _input_memory(fixtures, provenance["manifest"])
 
@@ -411,7 +488,6 @@ def _portable_worker(
     }
 
     return {
-        "ready_timestamp_ns": ready_timestamp_ns,
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -625,6 +701,12 @@ def _build_and_measure_native(
     binary = target_dir / "release" / ("ogma-backend-codegen-benchmark.exe" if os.name == "nt" else "ogma-backend-codegen-benchmark")
     if not binary.is_file():
         raise RuntimeError(f"Cargo did not produce expected native proof executable: {binary}")
+    native_startup = _measure_startup_probe(
+        [str(binary), "--startup-probe"],
+        "OGMA_NATIVE_STARTUP_READY",
+        warmups=warmups,
+        samples=samples,
+    )
     time_executable = Path("/usr/bin/time")
     if not time_executable.is_file():
         raise RuntimeError("GNU /usr/bin/time is required for the documented Linux RSS measurement")
@@ -699,6 +781,7 @@ def _build_and_measure_native(
 
     resource_report = _parse_time_report(time_report_path)
     return {
+        "startup_probe": native_startup,
         "binary": {
             "path": str(binary.relative_to(ROOT)) if binary.is_relative_to(ROOT) else str(binary),
             "bytes": binary.stat().st_size,
@@ -769,6 +852,12 @@ def _report(
 ) -> dict[str, Any]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     _fixtures, source_hashes, provenance = _load_inputs()
+    portable_startup = _measure_startup_probe(
+        [sys.executable, str(Path(__file__).resolve()), "--startup-probe"],
+        "OGMA_PORTABLE_STARTUP_READY",
+        warmups=warmups,
+        samples=samples,
+    )
     portable_command = [
         sys.executable, str(Path(__file__).resolve()),
         "--worker", "portable",
@@ -777,7 +866,7 @@ def _report(
         "--samples", str(samples),
         "--artifact-dir", str(artifact_dir / "portable"),
     ]
-    portable_process_started = time.monotonic_ns()
+    portable_process_started = time.perf_counter_ns()
     portable_completed = subprocess.run(
         portable_command, cwd=ROOT, text=True, capture_output=True, check=False
     )
@@ -791,11 +880,10 @@ def _report(
         portable = json.loads(portable_completed.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError(f"portable worker did not emit valid JSON: {portable_completed.stdout[-4000:]}") from error
-    portable_ready_ns = int(portable.pop("ready_timestamp_ns"))
     portable["process"] = {
-        "ready_latency_ns_from_parent_spawn": portable_ready_ns - portable_process_started,
+        "startup_probe": portable_startup,
         "end_to_end_wall_ns": portable_process_wall_ns,
-        "startup_metric_scope": "Python proof-worker process startup through module import and entry into the benchmark worker; not Ogma Runtime startup.",
+        "end_to_end_metric_scope": "Full Python proof-worker process wall time including fixture loading, bytecode work and interpreted workloads; not Ogma Runtime execution wall time.",
     }
 
     native = _build_and_measure_native(
@@ -888,12 +976,8 @@ def _report(
         "startup_and_memory": {
             "production_interpreter_runtime_startup_ns": runtime_not_available,
             "production_hybrid_runtime_startup_ns": runtime_not_available,
-            "portable_proof_worker_startup": portable["process"],
-            "native_proof_tool_startup": {
-                "status": "not_separately_measured",
-                "startup_latency_ns": None,
-                "reason": "The existing OGM-30 binary has no startup marker before compiler/runtime setup; adding one would change the OGM-30 proof executable outside this task's scope.",
-            },
+            "portable_proof_worker_startup": portable["process"]["startup_probe"],
+            "native_proof_tool_startup": native["startup_probe"],
             "portable_proof_worker_peak_rss_bytes": portable["peak_rss_bytes"],
             "native_compiler_and_proof_process_peak_rss_bytes": native["benchmark_process"]["peak_rss_bytes"],
             "production_interpreter_runtime_peak_rss_bytes": runtime_not_available,
@@ -964,6 +1048,7 @@ def _report(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", choices=("portable",), help=argparse.SUPPRESS)
+    parser.add_argument("--startup-probe", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
     parser.add_argument("--warmups", type=int, default=DEFAULT_WARMUPS)
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
@@ -971,6 +1056,10 @@ def main() -> int:
     parser.add_argument("--artifact-dir", type=Path, default=Path("/tmp/ogm29-footprint-artifacts"))
     parser.add_argument("--revision", default=os.environ.get("OGM29_SOURCE_REVISION") or os.environ.get("GITHUB_SHA") or "local-working-tree")
     args = parser.parse_args()
+
+    if args.startup_probe:
+        print("OGMA_PORTABLE_STARTUP_READY", flush=True)
+        return 0
 
     if args.iterations < 1 or args.warmups < 0 or args.samples < 101:
         parser.error("iterations must be positive, warmups non-negative and samples at least 101")
