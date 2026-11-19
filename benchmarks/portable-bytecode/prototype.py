@@ -288,7 +288,7 @@ def core_ir_plan(
 
     # Allocate one stable frame location per SSA definition. Environment stores alias
     # their assigned value, while the lexical binding itself has its own mutable slot.
-    for block in blocks:
+    for block in active_blocks:
         for ir_instruction in block["instructions"]:
             result = ir_instruction["result"]
             if result is None:
@@ -391,7 +391,7 @@ def core_ir_plan(
              f"edge:{source_block}->{target_id}:{suffix}:jump", term_source)
         return bridge_id
 
-    for block in blocks:
+    for block in active_blocks:
         block_id = block["id"]
         block_plans[block_id] = []
         for ir_instruction in block["instructions"]:
@@ -606,7 +606,7 @@ def core_ir_plan(
         else:
             raise ValueError(f"{fn['id']}: unsupported Core IR terminator {kind!r}")
 
-    ordered_block_ids = [block["id"] for block in blocks] + synthetic_blocks
+    ordered_block_ids = [block["id"] for block in active_blocks] + synthetic_blocks
     local_count = next_location if model == "stack" else 0
     register_count = next_location if model == "register" else 0
     if max(local_count, register_count) > MAX_FRAME:
