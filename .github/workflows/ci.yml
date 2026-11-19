@@ -1127,6 +1127,9 @@ jobs:
       - name: Run native backend contract tests
         run: cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
 
+      - name: Generate portable bytecode verifier fixtures
+        run: python tests/ogmb/build_fixtures.py
+
       - name: Run portable bytecode verifier and interpreter regressions
         run: |
           python -m unittest discover -s .github/scripts -p "test_ogmb.py" -v
