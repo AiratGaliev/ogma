@@ -2761,7 +2761,7 @@ mod tests {
                 .expect("encode candidate reference Value");
                 assert_eq!(
                     resolve_candidate_object_value(candidate.runtime, &storage, 0, &heap,)
-                    .expect("resolve candidate reference Value"),
+                        .expect("resolve candidate reference Value"),
                     objects[index],
                     "{} {}",
                     candidate.name(),
