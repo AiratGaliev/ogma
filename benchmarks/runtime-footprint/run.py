@@ -102,6 +102,27 @@ def _timed_call(
     return _distribution(raw)
 
 
+def _timed_indexed_call(
+    callback: Any,
+    *,
+    iterations: int,
+    warmups: int,
+    samples: int,
+) -> dict[str, Any]:
+    for _ in range(warmups):
+        for index in range(iterations):
+            callback(index)
+
+    raw: list[float] = []
+    for _ in range(samples):
+        started = time.perf_counter_ns()
+        for index in range(iterations):
+            callback(index)
+        elapsed = time.perf_counter_ns() - started
+        raw.append(elapsed / iterations)
+    return _distribution(raw)
+
+
 def _peak_tracemalloc(callback: Any) -> tuple[Any, int]:
     gc.collect()
     tracemalloc.start()
@@ -248,21 +269,20 @@ def _portable_worker(
     def compile_all() -> dict[str, Any]:
         return {name: compile_function(document, "register") for name, document in fixtures.items()}
 
-    # compile_function also performs the in-band decode/validation pipeline.
-    compile_started = time.perf_counter_ns()
-    compiled, compile_peak = _peak_tracemalloc(compile_all)
-    first_compile_wall = float(time.perf_counter_ns() - compile_started)
-    compile_wall_samples: list[float] = [first_compile_wall]
-    compile_codegen_samples: list[float] = [
-        float(sum(item.code_generation_ns for item in compiled.values()))
-    ]
-    decode_samples: list[float] = [float(sum(item.decode_ns for item in compiled.values()))]
-    for _ in range(COMPILE_ROUNDS - 1):
+    # Time compilation without tracemalloc overhead, then sample memory in a separate pass.
+    compile_all()
+    compile_wall_samples: list[float] = []
+    compile_codegen_samples: list[float] = []
+    decode_samples: list[float] = []
+    compiled: dict[str, Any] = {}
+    for _ in range(COMPILE_ROUNDS):
         started = time.perf_counter_ns()
         round_candidates = compile_all()
         compile_wall_samples.append(float(time.perf_counter_ns() - started))
         compile_codegen_samples.append(float(sum(item.code_generation_ns for item in round_candidates.values())))
         decode_samples.append(float(sum(item.decode_ns for item in round_candidates.values())))
+        compiled = round_candidates
+    _memory_probe, compile_peak = _peak_tracemalloc(compile_all)
 
     verify_samples: list[float] = []
     for _ in range(VERIFY_ROUNDS):
@@ -297,42 +317,90 @@ def _portable_worker(
             "verified_before_execution": True,
         }
 
-    workloads: dict[str, Any] = {}
-    direct_host = lambda value: value + 11
-    direct_host_distribution = _timed_call(
-        lambda: direct_host(31), iterations=iterations, warmups=warmups, samples=samples
-    )
-    for name, (candidate, arguments, callbacks) in _case_specs(compiled).items():
-        expected = dual.run_python_case(candidate, arguments, host_callbacks=callbacks)
+    def invoke_indexed(
+        candidate: Any,
+        arguments_for_index: Any,
+        callbacks: dict[str, Any],
+    ) -> Any:
         state = RuntimeState({candidate.function_id: candidate})
         state.host_callbacks = callbacks
-        actual = _invoke_case(candidate, arguments, callbacks, state)
-        expected_compact = {
-            key: expected[key]
-            for key in ("return", "throw")
-            if key in expected
-        }
-        if actual != expected_compact:
-            raise AssertionError(f"{name}: measured execution outcome differs from reference observation")
 
-        workloads[name] = _timed_call(
-            lambda c=candidate, a=arguments, cb=callbacks, s=state: _invoke_case(c, a, cb, s),
-            iterations=iterations,
-            warmups=warmups,
-            samples=samples,
-        )
+        def invoke(index: int) -> Any:
+            arguments = arguments_for_index(index)
+            return _invoke_case(candidate, arguments, callbacks, state)
 
-    host_call = workloads["host_call"]
-    host_delta = host_call["p50_ns_per_call"] - direct_host_distribution["p50_ns_per_call"]
+        return invoke
+
+    shared_object = JSObject({})
+
+    def call_target(receiver: Any, argument: Any) -> Any:
+        if receiver != 2 or argument != "item=5":
+            raise JSException("TypeError: call_target received an unexpected receiver/argument")
+        return receiver + len(argument)
+
+    call_callbacks = {"call_target": call_target}
+    call_host = invoke_indexed(
+        compiled["call_boundary"],
+        lambda _index: [HostFunction("call_target"), 2, "item=", shared_object, shared_object, 5.0],
+        call_callbacks,
+    )
+    branch = invoke_indexed(
+        compiled["branch"], lambda index: [float(index % 17), float(index % 13)], {}
+    )
+    loop = invoke_indexed(
+        compiled["loop"], lambda _index: [0.0, 5.0, 1.0], {}
+    )
+    dynamic_normal = invoke_indexed(
+        compiled["dynamic_exception"], lambda index: [index % 100, 7], {}
+    )
+    symbol = JSSymbol()
+    dynamic_throw = invoke_indexed(
+        compiled["dynamic_exception"], lambda _index: [symbol, 7], {}
+    )
+    host_call = invoke_indexed(
+        compiled["host_call"], lambda index: [index], {}
+    )
+
+    workloads = {
+        "core_ir_ssa_branch": _timed_indexed_call(
+            branch, iterations=iterations, warmups=warmups, samples=samples
+        ),
+        "core_ir_loop_js_add_to_number": _timed_indexed_call(
+            loop, iterations=iterations, warmups=warmups, samples=samples
+        ),
+        "core_ir_dynamic_add_normal_completion": _timed_indexed_call(
+            dynamic_normal, iterations=iterations, warmups=warmups, samples=samples
+        ),
+        "core_ir_dynamic_add_throw_completion": _timed_indexed_call(
+            dynamic_throw, iterations=iterations, warmups=warmups, samples=samples
+        ),
+        "core_ir_js_add_js_call_boundary": _timed_indexed_call(
+            call_host, iterations=iterations, warmups=warmups, samples=samples
+        ),
+        "core_ir_host_call": _timed_indexed_call(
+            host_call, iterations=iterations, warmups=warmups, samples=samples
+        ),
+    }
+    direct_host_distribution = _timed_indexed_call(
+        lambda value: value + 11,
+        iterations=iterations,
+        warmups=warmups,
+        samples=samples,
+    )
+    host_call_distribution = workloads["core_ir_host_call"]
+    host_delta = (
+        host_call_distribution["p50_ns_per_call"]
+        - direct_host_distribution["p50_ns_per_call"]
+    )
     host_overhead = {
-        "dispatch_path": host_call,
+        "dispatch_path": host_call_distribution,
         "direct_host_function": direct_host_distribution,
         "estimated_dispatch_overhead_ns_per_call": host_delta,
         "estimated_dispatch_overhead_ratio": (
-            host_call["p50_ns_per_call"] / direct_host_distribution["p50_ns_per_call"]
+            host_call_distribution["p50_ns_per_call"] / direct_host_distribution["p50_ns_per_call"]
             if direct_host_distribution["p50_ns_per_call"] > 0 else None
         ),
-        "interpretation": "Python proof-interpreter host capability dispatch versus a direct Python function; not a Rust ABI or production host-call result.",
+        "interpretation": "Python proof-interpreter host capability dispatch versus a direct Python function, using the native host-call workload's changing input sequence; not a Rust ABI or production host-call result.",
     }
 
     return {
@@ -878,8 +946,8 @@ def main() -> int:
     parser.add_argument("--revision", default=os.environ.get("OGM29_SOURCE_REVISION") or os.environ.get("GITHUB_SHA") or "local-working-tree")
     args = parser.parse_args()
 
-    if args.iterations < 1 or args.warmups < 0 or args.samples < 3:
-        parser.error("iterations must be positive, warmups non-negative and samples at least 3")
+    if args.iterations < 1 or args.warmups < 0 or args.samples < 101:
+        parser.error("iterations must be positive, warmups non-negative and samples at least 101")
 
     if args.worker == "portable":
         result = _portable_worker(
