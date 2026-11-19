@@ -39,6 +39,7 @@ const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000;
 const GC_OBJECT_COUNT: usize = 2_048;
 const GC_VALUE_SLOTS_PER_OBJECT: usize = 16;
+const NANBOX_OBJECT_TAG: u64 = 0x7ffe;
 
 fn canonical_number_bits(value: f64) -> u64 {
     if value.is_nan() {
@@ -125,6 +126,126 @@ impl Candidate {
     }
 }
 
+fn encode_candidate_number_value(
+    runtime: RuntimeLayout,
+    storage: &mut [u64],
+    slot_index: usize,
+    value: f64,
+) -> Result<()> {
+    let bits = canonical_number_bits(value);
+    match runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("tagged Value slot index overflow")?;
+            let words = storage
+                .get_mut(word_index..word_index + 2)
+                .context("tagged Value storage slot out of bounds")?;
+            words[0] = NUMBER_TAG;
+            words[1] = bits;
+        }
+        RuntimeLayout::NanBox8 => {
+            *storage
+                .get_mut(slot_index)
+                .context("NaN-box Value storage slot out of bounds")? = bits;
+        }
+    }
+    Ok(())
+}
+
+fn encode_candidate_object_value(
+    runtime: RuntimeLayout,
+    storage: &mut [u64],
+    slot_index: usize,
+    token: u64,
+) -> Result<()> {
+    if token == 0 || token > MAX_PAYLOAD {
+        bail!("candidate object Value token is outside the 48-bit payload range");
+    }
+    match runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("tagged Value slot index overflow")?;
+            let words = storage
+                .get_mut(word_index..word_index + 2)
+                .context("tagged Value storage slot out of bounds")?;
+            words[0] = OBJECT_TAG;
+            words[1] = token;
+        }
+        RuntimeLayout::NanBox8 => {
+            *storage
+                .get_mut(slot_index)
+                .context("NaN-box Value storage slot out of bounds")? =
+                (NANBOX_OBJECT_TAG << NAN_TAG_SHIFT) | token;
+        }
+    }
+    Ok(())
+}
+
+fn decode_candidate_object_value(
+    runtime: RuntimeLayout,
+    storage: &[u64],
+    slot_index: usize,
+) -> Result<Option<u64>> {
+    match runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("tagged Value slot index overflow")?;
+            let words = storage
+                .get(word_index..word_index + 2)
+                .context("tagged Value storage slot out of bounds")?;
+            match words[0] {
+                NUMBER_TAG => Ok(None),
+                OBJECT_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => Ok(Some(words[1])),
+                OBJECT_TAG => bail!("tagged object Value has an invalid handle token"),
+                tag => bail!("unsupported tagged Value tag {tag} in GC root scan"),
+            }
+        }
+        RuntimeLayout::NanBox8 => {
+            let word = *storage
+                .get(slot_index)
+                .context("NaN-box Value storage slot out of bounds")?;
+            let tag = word >> NAN_TAG_SHIFT;
+            if tag == NANBOX_OBJECT_TAG {
+                let token = word & MAX_PAYLOAD;
+                if token == 0 {
+                    bail!("NaN-box object Value has an invalid handle token");
+                }
+                return Ok(Some(token));
+            }
+            let exponent = word & 0x7ff0_0000_0000_0000;
+            let fraction = word & 0x000f_ffff_ffff_ffff;
+            if exponent == 0x7ff0_0000_0000_0000
+                && fraction != 0
+                && word != CANONICAL_NAN_BITS
+            {
+                bail!("non-canonical NaN encountered while scanning candidate Values");
+            }
+            if (NANBOX_RESERVED_TAG_MIN..=NANBOX_RESERVED_TAG_MAX).contains(&word) {
+                bail!("unsupported NaN-box tag {tag:#06x} in GC root scan");
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn resolve_candidate_object_value(
+    runtime: RuntimeLayout,
+    storage: &[u64],
+    slot_index: usize,
+    gc_refs: &[ogma_gc_comparison_proof::GcRef],
+) -> Result<ogma_gc_comparison_proof::GcRef> {
+    let token = decode_candidate_object_value(runtime, storage, slot_index)?
+        .context("candidate Value slot does not contain an object reference")?;
+    let index = usize::try_from(token - 1).context("candidate Value token does not fit usize")?;
+    gc_refs
+        .get(index)
+        .copied()
+        .context("candidate Value token does not resolve to a GcRef entry")
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct Distribution {
     p50_ns: f64,
@@ -163,6 +284,7 @@ struct GcSample {
     logical_heap_bytes_before_collection: u64,
     peak_logical_heap_bytes: u64,
     actual_value_storage_capacity_bytes: usize,
+    encoded_object_values_resolved: usize,
     reclaimed_after_root_release: usize,
     live_objects_after_release: u64,
 }
@@ -182,6 +304,7 @@ struct GcCollectorEvidence {
     cleanup_collection_ns: Distribution,
     peak_logical_heap_bytes_max: u64,
     actual_value_storage_capacity_bytes: usize,
+    encoded_object_values_resolved: usize,
     raw_samples: Vec<GcSample>,
 }
 
@@ -194,6 +317,7 @@ struct GcEvidence {
     value_storage_bytes: usize,
     value_layout_bytes: usize,
     handle_payload_bits: u32,
+    encoded_object_values_resolved: usize,
     collector_comparisons: Vec<GcCollectorEvidence>,
 }
 
@@ -1050,11 +1174,20 @@ fn run_native_candidate(
 
     let invalid_tag_rejected = match candidate.runtime {
         RuntimeLayout::Tagged16 => {
-            let original_tag = tagged_start.tag;
-            tagged_start.tag = OBJECT_TAG;
-            // SAFETY: the first tagged input pointer refers to a live input struct.
-            let status = unsafe { function(a, b, c, output_pointer, max_iterations) };
-            tagged_start.tag = original_tag;
+            let mut invalid_tagged_start = tagged_start;
+            invalid_tagged_start.tag = OBJECT_TAG;
+            let invalid_tagged_start_ptr =
+                (&mut invalid_tagged_start as *mut TaggedValue) as usize as u64;
+            // SAFETY: the pointer refers to a live, correctly laid out TaggedValue.
+            let status = unsafe {
+                function(
+                    invalid_tagged_start_ptr,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
             status == 1
         }
         RuntimeLayout::NanBox8 => {
@@ -1382,7 +1515,7 @@ fn run_gc_sample(
     collector: CollectorKind,
     object_count: usize,
 ) -> Result<GcSample> {
-    if object_count < 12 || object_count % 4 != 0 {
+    if object_count < 12 || !object_count.is_multiple_of(4) {
         bail!("GC workload object count must be >=12 and divisible by four");
     }
 
@@ -1392,8 +1525,7 @@ fn run_gc_sample(
     let storage_words = object_count
         .checked_mul(value_words_per_object)
         .context("candidate Value storage size overflow")?;
-    let mut value_storage = Vec::with_capacity(storage_words);
-    value_storage.resize(storage_words, 0_u64);
+    let mut value_storage = vec![0_u64; storage_words];
 
     let mut heap = GcHeap::new(collector);
     let payload_bytes = GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
@@ -1413,52 +1545,90 @@ fn run_gc_sample(
         }
     }
 
+    // The native Value payload is an index into an indirection table backed by
+    // actual OGM-26 GcRef entries. It is not the synthetic OGM-17 object table.
+    let gc_ref_table = objects.clone();
+    let value_slot_count = object_count * GC_VALUE_SLOTS_PER_OBJECT;
+    for slot_index in 0..value_slot_count {
+        encode_candidate_number_value(
+            candidate.runtime,
+            &mut value_storage,
+            slot_index,
+            (slot_index + 1) as f64,
+        )?;
+    }
+
     let interpreter_frame = heap.begin_frame(FrameKind::Interpreter)?;
     let scope = heap.open_scope()?;
     let components = object_count / 4;
     let mut persistent_handles = Vec::new();
+    let mut deferred_native_roots = Vec::new();
+    let mut encoded_object_values_resolved = 0_usize;
 
-    // Populate the lower interpreter frame before pushing the native frame;
-    // OGM-26 enforces strict LIFO frame-root mutations.
+    // Decode each candidate Value before installing its root in the real
+    // interpreter/native/scope/HostHandle API.
     for component in 0..components {
         let base = component * 4;
-        if component % 3 == 0 {
-            heap.add_frame_root(interpreter_frame, objects[base])?;
-        } else if component % 3 == 2 {
-            let handle = heap.retain_host_handle(objects[base + 2])?;
-            persistent_handles.push((handle, objects[base + 2]));
+        let root_object_index = match component % 3 {
+            0 => base,
+            1 => base + 1,
+            _ => base + 2,
+        };
+        let root_value_slot = root_object_index * GC_VALUE_SLOTS_PER_OBJECT;
+        encode_candidate_object_value(
+            candidate.runtime,
+            &mut value_storage,
+            root_value_slot,
+            (root_object_index + 1) as u64,
+        )?;
+        let root = resolve_candidate_object_value(
+            candidate.runtime,
+            &value_storage,
+            root_value_slot,
+            &gc_ref_table,
+        )?;
+        if root != objects[root_object_index] {
+            bail!("candidate Value decoded to a different OGM-26 GcRef");
         }
+        encoded_object_values_resolved += 1;
+
+        match component % 3 {
+            0 => heap.add_frame_root(interpreter_frame, root)?,
+            1 => deferred_native_roots.push(root),
+            _ => {
+                let handle = heap.retain_host_handle(root)?;
+                persistent_handles.push((handle, root));
+            }
+        }
+
         if component % 16 == 0 {
-            heap.scope_add(scope, objects[base + 3])?;
+            let scope_object_index = base + 3;
+            let scope_value_slot =
+                scope_object_index * GC_VALUE_SLOTS_PER_OBJECT + 1;
+            encode_candidate_object_value(
+                candidate.runtime,
+                &mut value_storage,
+                scope_value_slot,
+                (scope_object_index + 1) as u64,
+            )?;
+            let scope_root = resolve_candidate_object_value(
+                candidate.runtime,
+                &value_storage,
+                scope_value_slot,
+                &gc_ref_table,
+            )?;
+            if scope_root != objects[scope_object_index] {
+                bail!("temporary-scope Value decoded to a different OGM-26 GcRef");
+            }
+            heap.scope_add(scope, scope_root)?;
+            encoded_object_values_resolved += 1;
         }
     }
 
+    // Frame roots must be added in strict LIFO order.
     let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
-    for component in 0..components {
-        if component % 3 == 1 {
-            heap.add_frame_root(native_frame, objects[component * 4 + 1])?;
-        }
-    }
-
-    // Populate the candidate Value slots with real object-tag encodings.
-    // Each payload token indexes the OGM-26 HostHandle table built above;
-    // Tagged16 stores tag+payload words, while NaNBox stores the packed word.
-    if persistent_handles.is_empty() {
-        bail!("GC benchmark did not establish any persistent handle tokens");
-    }
-    let value_slot_count = object_count * GC_VALUE_SLOTS_PER_OBJECT;
-    for slot_index in 0..value_slot_count {
-        let token = (slot_index % persistent_handles.len() + 1) as u64;
-        match candidate.runtime {
-            RuntimeLayout::Tagged16 => {
-                let word_index = slot_index * 2;
-                value_storage[word_index] = OBJECT_TAG;
-                value_storage[word_index + 1] = token;
-            }
-            RuntimeLayout::NanBox8 => {
-                value_storage[slot_index] = (0x7ffe_u64 << NAN_TAG_SHIFT) | token;
-            }
-        }
+    for root in deferred_native_roots {
+        heap.add_frame_root(native_frame, root)?;
     }
     black_box(value_storage.as_slice());
 
@@ -1487,36 +1657,19 @@ fn run_gc_sample(
         );
     }
 
-    // Validate every opaque NaN-box handle token against the actual generation-checked
-    // OGM-26 HostHandle registry entry, not against a synthetic object table.
-    for (index, (handle, expected_object)) in persistent_handles.iter().enumerate() {
-        let token = (index + 1) as u64;
-        let decoded_token = match candidate.runtime {
-            RuntimeLayout::Tagged16 => {
-                let value = TaggedValue {
-                    tag: OBJECT_TAG,
-                    payload: token,
-                };
-                if value.tag != OBJECT_TAG {
-                    bail!("tagged object Value tag changed");
-                }
-                value.payload
-            }
-            RuntimeLayout::NanBox8 => {
-                let word = (0x7ffe_u64 << NAN_TAG_SHIFT) | token;
-                if word >> NAN_TAG_SHIFT != 0x7ffe {
-                    bail!("NaN-box object Value tag changed");
-                }
-                word & MAX_PAYLOAD
-            }
-        };
-        if decoded_token != token || heap.resolve_host_handle(*handle)? != *expected_object {
+    // Persistent host roots must still resolve through the generation-checked
+    // OGM-26 registry after collection while the candidate Values are live.
+    for (handle, expected_object) in persistent_handles.iter() {
+        if heap.resolve_host_handle(*handle)? != *expected_object {
             bail!(
-                "{} handle token {token} did not resolve to its exact rooted object",
+                "{} persistent HostHandle did not resolve to its original GcRef",
                 candidate.name()
             );
         }
     }
+    let actual_value_storage_capacity_bytes = value_storage.capacity() * size_of::<u64>();
+    drop(value_storage);
+    drop(gc_ref_table);
 
     heap.close_scope(scope)?;
     heap.end_frame(native_frame)?;
@@ -1535,7 +1688,6 @@ fn run_gc_sample(
         );
     }
 
-    let actual_value_storage_capacity_bytes = value_storage.capacity() * size_of::<u64>();
     let stats = heap.stats();
     Ok(GcSample {
         build_ns,
@@ -1552,6 +1704,7 @@ fn run_gc_sample(
         logical_heap_bytes_before_collection: before.live_bytes,
         peak_logical_heap_bytes: stats.peak_heap_bytes,
         actual_value_storage_capacity_bytes,
+        encoded_object_values_resolved,
         reclaimed_after_root_release: released.reclaimed_objects,
         live_objects_after_release: stats.live_objects,
     })
@@ -1577,6 +1730,7 @@ fn summarize_gc_collector(
             || sample.temporary_scope_roots != first.temporary_scope_roots
             || sample.actual_value_storage_capacity_bytes
                 != first.actual_value_storage_capacity_bytes
+            || sample.encoded_object_values_resolved != first.encoded_object_values_resolved
     }) {
         bail!(
             "{} GC benchmark topology/storage changed between samples",
@@ -1602,6 +1756,7 @@ fn summarize_gc_collector(
         cleanup_collection_ns: gc_distribution(&raw_samples, |sample| sample.cleanup_collection_ns),
         peak_logical_heap_bytes_max,
         actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
+        encoded_object_values_resolved: first.encoded_object_values_resolved,
         raw_samples,
     })
 }
@@ -1646,6 +1801,7 @@ fn gc_evidence(
                 != second.logical_heap_bytes_before_collection
             || first.actual_value_storage_capacity_bytes
                 != second.actual_value_storage_capacity_bytes
+            || first.encoded_object_values_resolved != second.encoded_object_values_resolved
             || first.reclaimed_after_root_release != second.reclaimed_after_root_release
             || first.live_objects_after_release != second.live_objects_after_release
         {
@@ -1681,6 +1837,8 @@ fn gc_evidence(
         value_storage_bytes,
         value_layout_bytes: candidate.runtime.value_bytes(),
         handle_payload_bits: NAN_TAG_SHIFT,
+        encoded_object_values_resolved: collector_comparisons[0]
+            .encoded_object_values_resolved,
         collector_comparisons,
     })
 }
@@ -2105,6 +2263,28 @@ mod tests {
     }
 
     #[test]
+    fn tagged_and_nanbox_object_values_roundtrip_the_same_heap_token() {
+        let token = 42_u64;
+        let mut tagged = vec![0_u64; 2];
+        encode_candidate_object_value(RuntimeLayout::Tagged16, &mut tagged, 0, token)
+            .expect("encode tagged object Value");
+        assert_eq!(
+            decode_candidate_object_value(RuntimeLayout::Tagged16, &tagged, 0)
+                .expect("decode tagged object Value"),
+            Some(token)
+        );
+
+        let mut nanbox = vec![0_u64; 1];
+        encode_candidate_object_value(RuntimeLayout::NanBox8, &mut nanbox, 0, token)
+            .expect("encode NaN-box object Value");
+        assert_eq!(
+            decode_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0)
+                .expect("decode NaN-box object Value"),
+            Some(token)
+        );
+    }
+
+    #[test]
     fn candidate_layouts_survive_and_release_equivalent_ogm26_gc_graphs() {
         for candidate in Candidate::ALL {
             let evidence =
@@ -2118,8 +2298,10 @@ mod tests {
                 evidence.collector_comparisons.len(),
                 CollectorKind::ALL.len()
             );
+            assert_eq!(evidence.encoded_object_values_resolved, 17);
             for collector in evidence.collector_comparisons {
                 assert_eq!(collector.object_count, 64);
+                assert_eq!(collector.encoded_object_values_resolved, 17);
                 assert!(
                     collector.actual_value_storage_capacity_bytes >= evidence.value_storage_bytes
                 );
