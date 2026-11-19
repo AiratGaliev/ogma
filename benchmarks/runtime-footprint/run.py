@@ -673,9 +673,15 @@ def _build_and_measure_native(
             raise RuntimeError(f"{key}: native object file is missing or empty")
         backends[key] = {
             "first_compile_ns": result["first_compile_ns"],
-            "compile_time": result["compile_time_ns"],
+            "compile_time": {
+                **result["compile_time_ns"],
+                "sample_count": len(result["compile_time_ns"]["raw_samples_ns"]),
+            },
             "first_link_ns": result["first_link_ns"],
-            "link_time": result["link_time_ns"],
+            "link_time": {
+                **result["link_time_ns"],
+                "sample_count": len(result["link_time_ns"]["raw_samples_ns"]),
+            },
             "object_bytes": result["object_bytes"],
             "shared_library_bytes": result["shared_library_bytes"],
             "copied_native_object": {
