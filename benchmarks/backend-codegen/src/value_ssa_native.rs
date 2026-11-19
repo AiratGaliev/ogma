@@ -1703,11 +1703,10 @@ fn run_gc_sample(
     }
     let actual_value_storage_capacity_bytes = value_storage.capacity() * size_of::<u64>();
     drop(value_storage);
-    drop(gc_ref_table);
 
     heap.close_scope(scope)?;
     heap.end_frame(native_frame)?;
-    for (handle, _) in persistent_handles.iter().copied() {
+    for (handle, _, _) in persistent_handles.iter().copied() {
         heap.release_host_handle(handle)?;
     }
     heap.end_frame(interpreter_frame)?;
