@@ -5,24 +5,22 @@
 //! function pointers; Rust registry/runtime state is reachable only through
 //! host-owned opaque user_data pointers and is never interpreted by native code.
 
-use ogma_host_execution_scope_proof::{
-    HostExecutionContext, HostExecutionScope, LibrarySyncMode,
-};
+use ogma_host_execution_scope_proof::{HostExecutionContext, HostExecutionScope, LibrarySyncMode};
 use ogma_native_runtime_boundary_proof::CancellationToken;
 use ogma_rust_abi_proof::{
-    ogma_context_collect_unrooted, ogma_context_create_number, ogma_context_get_number,
-    OgmaCompletion, OgmaContextHandle, OgmaHandle, OgmaRuntime, OgmaStatus,
-    COMPLETION_NORMAL, COMPLETION_THROW,
+    COMPLETION_NORMAL, COMPLETION_THROW, OgmaCompletion, OgmaContextHandle, OgmaHandle,
+    OgmaRuntime, OgmaStatus, ogma_context_collect_unrooted, ogma_context_create_number,
+    ogma_context_get_number,
 };
 use ogma_typed_host_dispatch_proof::{
-    DispatchError, DispatchValue, HostFunctionDescriptor, HostFunctionId, HostFunctionRegistry,
-    HostFunctionSlot, JsCompletion, JsException, EFFECT_MAY_REENTER, SIGNATURE_F64_BINARY,
+    DispatchError, DispatchValue, EFFECT_MAY_REENTER, HostFunctionDescriptor, HostFunctionId,
+    HostFunctionRegistry, HostFunctionSlot, JsCompletion, JsException, SIGNATURE_F64_BINARY,
     SIGNATURE_NUMBER_HANDLE_BINARY,
 };
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
 
 pub const AOT_ABI_MAJOR: u16 = 1;
@@ -341,9 +339,7 @@ impl AotHostFunctionTable {
             slot,
         });
         let signature = descriptor.signature;
-        let binding_ptr = (&*binding as *const AotBinding)
-            .cast_mut()
-            .cast::<c_void>();
+        let binding_ptr = (&*binding as *const AotBinding).cast_mut().cast::<c_void>();
         self.bindings.push(binding);
         self.entries.push(AotHostFunctionEntryV1 {
             struct_size: size_of::<AotHostFunctionEntryV1>() as u32,
@@ -479,14 +475,13 @@ fn map_dispatch_error(error: DispatchError) -> OgmaStatus {
         DispatchError::Abi(status) | DispatchError::CleanupFailure(status) => status,
         DispatchError::HostExecution(ogma_host_execution_scope_proof::HostError::WrongThread)
         | DispatchError::WrongThread => OgmaStatus::WRONG_THREAD,
-        DispatchError::HostExecution(ogma_host_execution_scope_proof::HostError::ScopeDepthExceeded)
-        | DispatchError::Busy => OgmaStatus::BUSY,
+        DispatchError::HostExecution(
+            ogma_host_execution_scope_proof::HostError::ScopeDepthExceeded,
+        ) | DispatchError::Busy => OgmaStatus::BUSY,
         DispatchError::HostExecution(
             ogma_host_execution_scope_proof::HostError::ScopeAlreadyActive,
         )
-        | DispatchError::HostExecution(
-            ogma_host_execution_scope_proof::HostError::NoActiveScope,
-        )
+        | DispatchError::HostExecution(ogma_host_execution_scope_proof::HostError::NoActiveScope)
         | DispatchError::HostExecution(
             ogma_host_execution_scope_proof::HostError::BorrowConflict,
         )
@@ -530,9 +525,7 @@ fn encode_completion(completion: JsCompletion) -> AotCompletionV1 {
                 JsException::CapabilityDenied { missing } => {
                     (AOT_ERROR_CAPABILITY, missing, AotValueV1::default())
                 }
-                JsException::Thrown(value) => {
-                    (AOT_ERROR_THROWN, 0, encode_value(value))
-                }
+                JsException::Thrown(value) => (AOT_ERROR_THROWN, 0, encode_value(value)),
                 JsException::AsyncNotSupported => {
                     (AOT_ERROR_ASYNC_UNSUPPORTED, 0, AotValueV1::default())
                 }
@@ -734,7 +727,10 @@ unsafe extern "C-unwind" fn generic_add_callback(
     completion: *mut OgmaCompletion,
     user_data: *mut c_void,
 ) -> OgmaStatus {
-    if runtime.is_null() || args.is_null() || completion.is_null() || user_data.is_null()
+    if runtime.is_null()
+        || args.is_null()
+        || completion.is_null()
+        || user_data.is_null()
         || args_len != 2
     {
         return OgmaStatus::INVALID_ARGUMENT;
@@ -776,7 +772,9 @@ unsafe extern "C-unwind" fn generic_add_callback(
                 status
             };
         }
-        state.generic_calls.set(state.generic_calls.get().saturating_add(1));
+        state
+            .generic_calls
+            .set(state.generic_calls.get().saturating_add(1));
 
         if left == 99.0 {
             state.cancellation.cancel();
@@ -814,7 +812,9 @@ unsafe extern "C-unwind" fn generic_add_callback(
                 Ok(JsCompletion::Normal(DispatchValue::Number(value))) => value,
                 _ => return OgmaStatus::INTERNAL_ERROR,
             };
-            state.nested_calls.set(state.nested_calls.get().saturating_add(1));
+            state
+                .nested_calls
+                .set(state.nested_calls.get().saturating_add(1));
             nested
         } else {
             left + right
@@ -859,15 +859,7 @@ mod tests {
     ) -> (OgmaStatus, AotCompletionV1) {
         let mut completion = AotCompletionV1::default();
         let thunk = entry.primitive_f64_thunk.expect("typed f64 thunk");
-        let status = unsafe {
-            thunk(
-                entry.user_data,
-                capabilities,
-                left,
-                right,
-                &mut completion,
-            )
-        };
+        let status = unsafe { thunk(entry.user_data, capabilities, left, right, &mut completion) };
         (status, completion)
     }
 
@@ -878,18 +870,8 @@ mod tests {
         right: OgmaHandle,
     ) -> (OgmaStatus, AotCompletionV1) {
         let mut completion = AotCompletionV1::default();
-        let thunk = entry
-            .number_handle_f64_thunk
-            .expect("typed handle thunk");
-        let status = unsafe {
-            thunk(
-                entry.user_data,
-                capabilities,
-                left,
-                right,
-                &mut completion,
-            )
-        };
+        let thunk = entry.number_handle_f64_thunk.expect("typed handle thunk");
+        let status = unsafe { thunk(entry.user_data, capabilities, left, right, &mut completion) };
         (status, completion)
     }
 
@@ -904,7 +886,11 @@ mod tests {
             thunk(
                 entry.user_data,
                 capabilities,
-                if args.is_empty() { std::ptr::null() } else { args.as_ptr() },
+                if args.is_empty() {
+                    std::ptr::null()
+                } else {
+                    args.as_ptr()
+                },
                 args.len(),
                 &mut completion,
             )
@@ -927,8 +913,14 @@ mod tests {
         assert_eq!(std::mem::size_of::<AotCompletionV1>(), 64);
         assert_eq!(std::mem::offset_of!(AotCompletionV1, value), 16);
         assert_eq!(std::mem::size_of::<AotHostFunctionEntryV1>(), 80);
-        assert_eq!(std::mem::offset_of!(AotHostFunctionEntryV1, function_id), 16);
-        assert_eq!(std::mem::offset_of!(AotHostFunctionEntryV1, signature_id), 32);
+        assert_eq!(
+            std::mem::offset_of!(AotHostFunctionEntryV1, function_id),
+            16
+        );
+        assert_eq!(
+            std::mem::offset_of!(AotHostFunctionEntryV1, signature_id),
+            32
+        );
         assert_eq!(
             std::mem::offset_of!(AotHostFunctionEntryV1, primitive_f64_thunk),
             48
@@ -936,7 +928,10 @@ mod tests {
         assert_eq!(std::mem::offset_of!(AotHostFunctionEntryV1, user_data), 72);
         assert_eq!(std::mem::size_of::<AotHostFunctionTableV1>(), 48);
         assert_eq!(std::mem::offset_of!(AotHostFunctionTableV1, entries), 16);
-        assert_eq!(std::mem::offset_of!(AotHostFunctionTableV1, table_version), 32);
+        assert_eq!(
+            std::mem::offset_of!(AotHostFunctionTableV1, table_version),
+            32
+        );
     }
 
     #[test]
@@ -949,7 +944,10 @@ mod tests {
         assert_eq!(table.registry().table_version(), 5);
         assert_eq!(table.entries[0].signature_id, SIGNATURE_F64_BINARY);
         assert_eq!(table.entries[1].effects, EFFECT_MAY_REENTER);
-        assert_eq!(table.entries[2].signature_id, SIGNATURE_NUMBER_HANDLE_BINARY);
+        assert_eq!(
+            table.entries[2].signature_id,
+            SIGNATURE_NUMBER_HANDLE_BINARY
+        );
 
         let mut wrong_version = *table.as_abi();
         wrong_version.abi_major = AOT_ABI_MAJOR + 1;
@@ -967,7 +965,10 @@ mod tests {
 
         let mut entry = table.entries[0];
         entry.signature_id += 1;
-        assert_eq!(validate_entry(&entry), Err(DispatchError::InvalidDescriptor));
+        assert_eq!(
+            validate_entry(&entry),
+            Err(DispatchError::InvalidDescriptor)
+        );
     }
 
     #[test]
@@ -1008,8 +1009,7 @@ mod tests {
     #[test]
     fn native_primitive_and_opaque_handle_thunks_preserve_results_and_roots() {
         let table = AotHostFunctionTable::new(CancellationToken::default()).unwrap();
-        let (status, primitive) =
-            invoke_f64(&table.entries[0], AOT_CAPABILITY_MATH, 19.0, 23.0);
+        let (status, primitive) = invoke_f64(&table.entries[0], AOT_CAPABILITY_MATH, 19.0, 23.0);
         assert_eq!(status, OgmaStatus::OK);
         assert_eq!(number(primitive), 42.0);
 
@@ -1021,8 +1021,7 @@ mod tests {
         assert_eq!(table.registry().read_number(left).unwrap(), 19.0);
         assert_eq!(table.registry().read_number(right).unwrap(), 23.0);
 
-        let (status, handles) =
-            invoke_handles(&table.entries[2], AOT_CAPABILITY_MATH, left, right);
+        let (status, handles) = invoke_handles(&table.entries[2], AOT_CAPABILITY_MATH, left, right);
         assert_eq!(status, OgmaStatus::OK);
         assert_eq!(number(handles), 42.0);
     }

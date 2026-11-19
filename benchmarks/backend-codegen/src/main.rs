@@ -26,8 +26,8 @@ use ogma_typed_host_dispatch_proof::HostFunctionRegistry;
 
 mod aot_host_abi;
 use aot_host_abi::{
-    AotHostFunctionTable, AotHostFunctionTableV1, AOT_ABI_MAJOR, AOT_CAPABILITY_MATH,
-    AOT_ERROR_CANCELLED, AOT_ERROR_CAPABILITY, AOT_ERROR_THROWN, AOT_ERROR_TYPE,
+    AOT_ABI_MAJOR, AOT_CAPABILITY_MATH, AOT_ERROR_CANCELLED, AOT_ERROR_CAPABILITY,
+    AOT_ERROR_THROWN, AOT_ERROR_TYPE, AotHostFunctionTable, AotHostFunctionTableV1,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -226,13 +226,13 @@ impl NativeProofState {
         }
         if self.aot_root_checks_enabled && !self.aot_registry.is_null() {
             let registry = unsafe { &*self.aot_registry };
-            registry
-                .collect_unrooted()
-                .map_err(|error| anyhow!("OGM-32 host handle collection at safepoint {site}: {error:?}"))?;
+            registry.collect_unrooted().map_err(|error| {
+                anyhow!("OGM-32 host handle collection at safepoint {site}: {error:?}")
+            })?;
             for (handle, expected) in &self.aot_roots {
-                let actual = registry
-                    .read_number(*handle)
-                    .map_err(|error| anyhow!("OGM-32 host root was invalid at safepoint {site}: {error:?}"))?;
+                let actual = registry.read_number(*handle).map_err(|error| {
+                    anyhow!("OGM-32 host root was invalid at safepoint {site}: {error:?}")
+                })?;
                 if actual.to_bits() != expected.to_bits() {
                     bail!("OGM-32 opaque host handle changed across safepoint {site}");
                 }
@@ -1207,28 +1207,16 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let host_sig = unary_i64_sig(&mut m);
     let mut aot_f64_sig = m.make_signature();
     aot_f64_sig.params.extend(
-        [
-            types::I64,
-            types::I32,
-            types::F64,
-            types::F64,
-            types::I64,
-        ]
-        .into_iter()
-        .map(AbiParam::new),
+        [types::I64, types::I32, types::F64, types::F64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
     );
     aot_f64_sig.returns.push(AbiParam::new(types::I64));
     let mut aot_handles_sig = m.make_signature();
     aot_handles_sig.params.extend(
-        [
-            types::I64,
-            types::I32,
-            types::I64,
-            types::I64,
-            types::I64,
-        ]
-        .into_iter()
-        .map(AbiParam::new),
+        [types::I64, types::I32, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
     );
     aot_handles_sig.returns.push(AbiParam::new(types::I64));
     let mut call_sig = m.make_signature();
@@ -1266,8 +1254,11 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     )?;
     let aot_dispatch_f64 =
         m.declare_function("ogma_aot_dispatch_f64", Linkage::Import, &aot_f64_sig)?;
-    let aot_dispatch_handles =
-        m.declare_function("ogma_aot_dispatch_handles", Linkage::Import, &aot_handles_sig)?;
+    let aot_dispatch_handles = m.declare_function(
+        "ogma_aot_dispatch_handles",
+        Linkage::Import,
+        &aot_handles_sig,
+    )?;
     let mut add_num_sig = m.make_signature();
     add_num_sig
         .params
@@ -1666,13 +1657,11 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let value = llvm_call_i64(&b, host_helper, &[arg.into()], "host_call")?;
     b.build_return(Some(&value))?;
 
-    let aot_dispatch_f64 =
-        module.add_function("ogma_aot_dispatch_f64", aot_f64_type, None);
+    let aot_dispatch_f64 = module.add_function("ogma_aot_dispatch_f64", aot_f64_type, None);
     let aot_dispatch_handles =
         module.add_function("ogma_aot_dispatch_handles", aot_handles_type, None);
 
-    let aot_host_f64 =
-        module.add_function(&c.symbol("aot_host_call_f64")?, aot_f64_type, None);
+    let aot_host_f64 = module.add_function(&c.symbol("aot_host_call_f64")?, aot_f64_type, None);
     b.position_at_end(cx.append_basic_block(aot_host_f64, "entry"));
     llvm_safepoint(&cx, &b, safepoint, 1)?;
     llvm_safepoint(&cx, &b, safepoint, 5)?;
@@ -1698,8 +1687,12 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
         aot_host_handles.get_nth_param(3).unwrap().into(),
         aot_host_handles.get_nth_param(4).unwrap().into(),
     ];
-    let handle_value =
-        llvm_call_i64(&b, aot_dispatch_handles, &handle_args, "aot_dispatch_handles")?;
+    let handle_value = llvm_call_i64(
+        &b,
+        aot_dispatch_handles,
+        &handle_args,
+        "aot_dispatch_handles",
+    )?;
     b.build_return(Some(&handle_value))?;
 
     module
@@ -2323,12 +2316,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         unsafe { *lib.get(b"ogma_proof_last_call_receiver\0")? };
     let last_call_argument: LastCallArgument =
         unsafe { *lib.get(b"ogma_proof_last_call_argument\0")? };
-    let aot_last_status: ProofStatusU32 =
-        unsafe { *lib.get(b"ogma_aot_last_status\0")? };
+    let aot_last_status: ProofStatusU32 = unsafe { *lib.get(b"ogma_aot_last_status\0")? };
     let aot_last_completion_kind: ProofStatusU32 =
         unsafe { *lib.get(b"ogma_aot_last_completion_kind\0")? };
-    let aot_last_error_kind: ProofStatusU32 =
-        unsafe { *lib.get(b"ogma_aot_last_error_kind\0")? };
+    let aot_last_error_kind: ProofStatusU32 = unsafe { *lib.get(b"ogma_aot_last_error_kind\0")? };
     let aot_last_details: AotDetails = unsafe { *lib.get(b"ogma_aot_last_details\0")? };
     let aot_last_number: AotNumber = unsafe { *lib.get(b"ogma_aot_last_number\0")? };
     let aot_typed_calls: AotMetric = unsafe { *lib.get(b"ogma_aot_typed_calls\0")? };
@@ -2616,7 +2607,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
             ],
             true,
         )
-        .map_err(|error| anyhow!("{name}: OGM-32 generic-handle interpreter reference: {error:?}"))?;
+        .map_err(|error| {
+            anyhow!("{name}: OGM-32 generic-handle interpreter reference: {error:?}")
+        })?;
     if aot_interpreter_typed
         != ogma_typed_host_dispatch_proof::JsCompletion::Normal(
             ogma_typed_host_dispatch_proof::DispatchValue::Number(42.0),
@@ -2735,8 +2728,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         bail!("{name}: OGM-32 signature mismatch was not a JavaScript TypeError completion");
     }
 
-    let aot_capability_result =
-        unsafe { aot_host_f64(aot_table_ptr, 0, 1.0, 2.0, 0) };
+    let aot_capability_result = unsafe { aot_host_f64(aot_table_ptr, 0, 1.0, 2.0, 0) };
     let aot_capability_error = unsafe { aot_last_error_kind() };
     let aot_capability_details = unsafe { aot_last_details() };
     if aot_capability_result != i64::MIN
@@ -2752,15 +2744,8 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     incompatible_aot_table.abi_major = AOT_ABI_MAJOR + 1;
     let incompatible_aot_table_ptr =
         &incompatible_aot_table as *const AotHostFunctionTableV1 as usize as i64;
-    let aot_abi_mismatch_result = unsafe {
-        aot_host_f64(
-            incompatible_aot_table_ptr,
-            0,
-            1.0,
-            2.0,
-            AOT_CAPABILITY_MATH,
-        )
-    };
+    let aot_abi_mismatch_result =
+        unsafe { aot_host_f64(incompatible_aot_table_ptr, 0, 1.0, 2.0, AOT_CAPABILITY_MATH) };
     let aot_abi_mismatch_status = unsafe { aot_last_status() };
     if aot_abi_mismatch_result != i64::MIN || aot_abi_mismatch_status != 2 {
         bail!("{name}: OGM-32 versioned C table did not reject an ABI major mismatch");
@@ -2875,7 +2860,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         || aot_cancel_error != AOT_ERROR_CANCELLED
         || !aot_cancelled
     {
-        bail!("{name}: OGM-32 cancellation did not propagate through native completion and OGM-27 budget");
+        bail!(
+            "{name}: OGM-32 cancellation did not propagate through native completion and OGM-27 budget"
+        );
     }
     proof_state.set_aot_root_checks_enabled(false);
 
