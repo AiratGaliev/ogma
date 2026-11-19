@@ -1684,7 +1684,6 @@ fn gc_evidence(
     })
 }
 
-
 fn is_hex_byte(token: &str) -> bool {
     token.len() == 2 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
