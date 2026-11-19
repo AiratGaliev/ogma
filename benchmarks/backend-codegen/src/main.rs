@@ -27,13 +27,13 @@ use serde_json::Value as JsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    ffi::{c_void, CString},
-    panic::{catch_unwind, AssertUnwindSafe},
-    ptr,
+    ffi::{CString, c_void},
     fs,
     hint::black_box,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     process::Command,
+    ptr,
     time::Instant,
 };
 use target_lexicon::Triple;
@@ -137,11 +137,9 @@ impl NativeProofState {
             maps,
         )
         .map_err(|error| anyhow!("create OGM-27 shadow-frame descriptor: {error:?}"))?;
-        let frame = boundary::NativeFrame::new(
-            descriptor,
-            vec![boundary::JsValue::Managed(sentinel)],
-        )
-        .map_err(|error| anyhow!("create OGM-27 native frame: {error:?}"))?;
+        let frame =
+            boundary::NativeFrame::new(descriptor, vec![boundary::JsValue::Managed(sentinel)])
+                .map_err(|error| anyhow!("create OGM-27 native frame: {error:?}"))?;
         let mut roots = boundary::RootProviders::default();
         let native_frame_token = roots
             .native
@@ -210,19 +208,31 @@ impl NativeProofState {
             boundary::ActivationKind::Native,
             "ogma_host_call_aot",
             None,
-            boundary::SourceLocation { file: "ogm31.native.js".into(), line: 1, column: 0 },
+            boundary::SourceLocation {
+                file: "ogm31.native.js".into(),
+                line: 1,
+                column: 0,
+            },
         );
         let interpreter = boundary::Activation::new(
             boundary::ActivationKind::Interpreter,
             "ogma_abi_callback_dispatch",
             None,
-            boundary::SourceLocation { file: "ogm31.host.js".into(), line: 2, column: 0 },
+            boundary::SourceLocation {
+                file: "ogm31.host.js".into(),
+                line: 2,
+                column: 0,
+            },
         );
         let host = boundary::Activation::new(
             boundary::ActivationKind::HostCallback,
             "ogm31_registered_rust_callback",
             None,
-            boundary::SourceLocation { file: "ogm31.host.js".into(), line: 3, column: 0 },
+            boundary::SourceLocation {
+                file: "ogm31.host.js".into(),
+                line: 3,
+                column: 0,
+            },
         );
 
         let returned = activations
@@ -233,36 +243,52 @@ impl NativeProofState {
                             .invoke(host, |stack| {
                                 if self.transition_paths.is_empty() {
                                     self.transition_paths.push(
-                                        stack.snapshot().iter().map(|frame| match frame.kind {
-                                            boundary::ActivationKind::Native => "Native",
-                                            boundary::ActivationKind::Interpreter => "Interpreter",
-                                            boundary::ActivationKind::HostCallback => "HostCallback",
-                                        }).collect(),
+                                        stack
+                                            .snapshot()
+                                            .iter()
+                                            .map(|frame| match frame.kind {
+                                                boundary::ActivationKind::Native => "Native",
+                                                boundary::ActivationKind::Interpreter => {
+                                                    "Interpreter"
+                                                }
+                                                boundary::ActivationKind::HostCallback => {
+                                                    "HostCallback"
+                                                }
+                                            })
+                                            .collect(),
                                     );
                                 }
                                 expected
                             })
                             .unwrap_or_else(|error| {
-                                self.failure = Some(format!("OGM-27 host activation failed: {error:?}"));
+                                self.failure =
+                                    Some(format!("OGM-27 host activation failed: {error:?}"));
                                 expected
                             });
                         if let Err(error) = stack.consume_pending_completion(callback_result) {
-                            self.failure = Some(format!("OGM-27 callback completion transfer: {error:?}"));
+                            self.failure =
+                                Some(format!("OGM-27 callback completion transfer: {error:?}"));
                         }
-                        if let Err(error) = self.roots.collect_with_execution(&mut self.heap, stack) {
-                            self.failure = Some(format!("OGM-27 interpreter completion root: {error:?}"));
+                        if let Err(error) = self.roots.collect_with_execution(&mut self.heap, stack)
+                        {
+                            self.failure =
+                                Some(format!("OGM-27 interpreter completion root: {error:?}"));
                         }
                         if let Err(error) = stack.release_consumed_completion(callback_result) {
-                            self.failure = Some(format!("OGM-27 callback completion release: {error:?}"));
+                            self.failure =
+                                Some(format!("OGM-27 callback completion release: {error:?}"));
                         }
                         callback_result
                     })
                     .unwrap_or_else(|error| {
-                        self.failure = Some(format!("OGM-27 interpreter activation failed: {error:?}"));
+                        self.failure =
+                            Some(format!("OGM-27 interpreter activation failed: {error:?}"));
                         expected
                     });
                 if let Err(error) = stack.consume_pending_completion(interpreter_result) {
-                    self.failure = Some(format!("OGM-27 native/interpreter completion transfer: {error:?}"));
+                    self.failure = Some(format!(
+                        "OGM-27 native/interpreter completion transfer: {error:?}"
+                    ));
                 }
                 if let Err(error) = self.roots.collect_with_execution(&mut self.heap, stack) {
                     self.failure = Some(format!("OGM-27 native completion root: {error:?}"));
@@ -322,12 +348,15 @@ impl NativeProofState {
                 bail!("native AOT code did not publish required safepoint site {site}");
             }
         }
-        if !self.argument_roots_survived_collection || self.callback_count < 5 || self.callback_trace.len() != 5 {
-            bail!("OGM-19 callback/root contract and its five semantic trace cases were not exercised by native code");
-        }
-        if self.transition_paths
-            != vec![vec!["Native", "Interpreter", "HostCallback"]]
+        if !self.argument_roots_survived_collection
+            || self.callback_count < 5
+            || self.callback_trace.len() != 5
         {
+            bail!(
+                "OGM-19 callback/root contract and its five semantic trace cases were not exercised by native code"
+            );
+        }
+        if self.transition_paths != vec![vec!["Native", "Interpreter", "HostCallback"]] {
             bail!("OGM-27 native/interpreter/host activation path was not observed exactly");
         }
         if self.normal_completion_count == 0 || self.throw_completion_count == 0 {
@@ -364,7 +393,9 @@ impl NativeProofState {
         self.roots
             .native
             .leave(self.native_frame_token)
-            .map_err(|error| anyhow!("OGM-27 native frame did not close in LIFO order: {error:?}"))?;
+            .map_err(|error| {
+                anyhow!("OGM-27 native frame did not close in LIFO order: {error:?}")
+            })?;
         if self.roots.native.depth() != 0 {
             bail!("OGM-27 native frame remained active after execution");
         }
@@ -403,7 +434,9 @@ unsafe extern "C-unwind" fn dynamic_add_host_callback(
     completion: *mut abi::OgmaCompletion,
     user_data: *mut c_void,
 ) -> abi::OgmaStatus {
-    callback_entry(runtime, context, args, args_len, completion, user_data, true)
+    callback_entry(
+        runtime, context, args, args_len, completion, user_data, true,
+    )
 }
 
 unsafe extern "C-unwind" fn host_echo_callback(
@@ -414,7 +447,9 @@ unsafe extern "C-unwind" fn host_echo_callback(
     completion: *mut abi::OgmaCompletion,
     user_data: *mut c_void,
 ) -> abi::OgmaStatus {
-    callback_entry(runtime, context, args, args_len, completion, user_data, false)
+    callback_entry(
+        runtime, context, args, args_len, completion, user_data, false,
+    )
 }
 
 fn callback_entry(
@@ -485,7 +520,8 @@ fn callback_entry(
                 numbers[0] + 11.0
             };
             let mut result_handle = abi::OgmaHandle::default();
-            let status = abi::ogma_context_create_number(runtime, context, value, &mut result_handle);
+            let status =
+                abi::ogma_context_create_number(runtime, context, value, &mut result_handle);
             if status != abi::OgmaStatus::OK {
                 return status;
             }
@@ -1172,15 +1208,12 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     safepoint_sig.params.push(AbiParam::new(types::I32));
     safepoint_sig.returns.push(AbiParam::new(types::I32));
     let safepoint = m.declare_function("ogma_proof_safepoint", Linkage::Import, &safepoint_sig)?;
-    let completion_kind = m.declare_function(
-        "ogma_proof_last_completion_kind",
-        Linkage::Import,
-        &{
+    let completion_kind =
+        m.declare_function("ogma_proof_last_completion_kind", Linkage::Import, &{
             let mut signature = m.make_signature();
             signature.returns.push(AbiParam::new(types::I32));
             signature
-        },
-    )?;
+        })?;
 
     define_clif(&mut m, branch, branch_sig, |m, b, p| {
         emit_clif_safepoint(m, b, safepoint, 1);
@@ -1445,11 +1478,15 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let rhs = exception.get_nth_param(1).unwrap().into_int_value();
     let result = llvm_call_i64(&b, add_completion, &[lhs.into(), rhs.into()], "js_add")?;
     let completion_call = b.build_call(completion_kind, &[], "completion_kind")?;
-    let kind = completion_call.try_as_basic_value().unwrap_basic().into_int_value();
+    let kind = completion_call
+        .try_as_basic_value()
+        .unwrap_basic()
+        .into_int_value();
     let normal = b.build_int_compare(
         IntPredicate::EQ,
         kind,
-        cx.i32_type().const_int(u64::from(abi::COMPLETION_NORMAL), false),
+        cx.i32_type()
+            .const_int(u64::from(abi::COMPLETION_NORMAL), false),
         "is_normal",
     )?;
     b.build_conditional_branch(normal, ok, thrown)?;
@@ -1750,8 +1787,7 @@ int64_t ogma_host_echo(int64_t arg) {
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
     fs::write(helper, HELPERS)?;
     let start = Instant::now();
-    let abi_include = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../rust-abi/include");
+    let abi_include = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rust-abi/include");
     let out = Command::new("cc")
         .args(["-shared", "-fPIC"])
         .arg("-I")
@@ -1902,7 +1938,8 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let reset: ResetCounters = unsafe { *lib.get(b"ogma_proof_reset\0")? };
     let count: CountHelper = unsafe { *lib.get(b"ogma_proof_count\0")? };
     let safepoint_count: ProofCounter = unsafe { *lib.get(b"ogma_proof_safepoint_count\0")? };
-    let last_safepoint_status: ProofStatus = unsafe { *lib.get(b"ogma_proof_last_safepoint_status\0")? };
+    let last_safepoint_status: ProofStatus =
+        unsafe { *lib.get(b"ogma_proof_last_safepoint_status\0")? };
     let last_abi_status: ProofStatusU32 = unsafe { *lib.get(b"ogma_proof_last_abi_status\0")? };
     let last_completion_kind: ProofCompletionKind =
         unsafe { *lib.get(b"ogma_proof_last_completion_kind\0")? };
@@ -2095,10 +2132,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let host_call = unsafe { host(31) };
     let host_normal_kind = unsafe { last_completion_kind() };
     let host_normal_payload = unsafe { last_completion_payload() };
-    if host_call != 42
-        || host_normal_kind != abi::COMPLETION_NORMAL
-        || host_normal_payload != 42
-    {
+    if host_call != 42 || host_normal_kind != abi::COMPLETION_NORMAL || host_normal_payload != 42 {
         bail!("{name}: host capability did not travel through the OGM-19 Normal completion");
     }
     let host_repeat = unsafe { host(32) };
@@ -2111,10 +2145,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let host_throw = unsafe { host(-7) };
     let host_throw_kind = unsafe { last_completion_kind() };
     let host_throw_payload = unsafe { last_completion_payload() };
-    if host_throw != -7
-        || host_throw_kind != abi::COMPLETION_THROW
-        || host_throw_payload != -7
-    {
+    if host_throw != -7 || host_throw_kind != abi::COMPLETION_THROW || host_throw_payload != -7 {
         bail!("{name}: OGM-19 Throw completion did not survive the native host boundary");
     }
 
@@ -2258,8 +2289,6 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if status != abi::OgmaStatus::OK || !runtime.is_null() {
         bail!("{name}: destroy OGM-19 runtime failed: {status:?}");
     }
-
-
 
     let native_object_path = if let Some(directory) = &o.artifact_dir {
         fs::create_dir_all(directory)?;
@@ -2558,14 +2587,14 @@ fn main() -> Result<()> {
         cranelift_build_artifact_bytes: cranelift_artifacts.bytes,
         llvm_binding_build_artifact_bytes: llvm_artifacts.bytes,
         integration_notes: serde_json::json!({
- "core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixture inputs",
- "cranelift":"Rust crates and in-process ObjectModule; no external LLVM toolchain",
- "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
- "ogm19":"dynamic addition and host echo call through the versioned mock C ABI function table, opaque handles, registered Rust callbacks, root scopes and explicit completions",
- "ogm27":"generated code calls modeled shadow-frame safepoints for entry, loop, allocation, call and host-call boundaries; the model verifies roots, transitions and execution-budget polls",
- "fixture_adapters":"string/object call-boundary conversion and the reserved Symbol failure sentinel remain exact-fixture test adapters",
- "status":"M0 fixture proof; not a production source compiler, Runtime, ABI implementation or machine-register stack-map encoder"
-}),
+            "core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixture inputs",
+            "cranelift":"Rust crates and in-process ObjectModule; no external LLVM toolchain",
+            "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
+            "ogm19":"dynamic addition and host echo call through the versioned mock C ABI function table, opaque handles, registered Rust callbacks, root scopes and explicit completions",
+            "ogm27":"generated code calls modeled shadow-frame safepoints for entry, loop, allocation, call and host-call boundaries; the model verifies roots, transitions and execution-budget polls",
+            "fixture_adapters":"string/object call-boundary conversion and the reserved Symbol failure sentinel remain exact-fixture test adapters",
+            "status":"M0 fixture proof; not a production source compiler, Runtime, ABI implementation or machine-register stack-map encoder"
+        }),
         cranelift,
         llvm_backend,
     };
