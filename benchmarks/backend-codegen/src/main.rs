@@ -368,7 +368,7 @@ impl NativeProofState {
         let root_maps: BTreeMap<String, u64> = self
             .safepoint_counts
             .iter()
-            .map(|(site, count)| (site.0.to_string(), *count))
+            .map(|(site, count)| (site.to_string(), *count))
             .collect();
         let result = serde_json::json!({
             "abi_version": {"major": 1, "minor": 0, "patch": 0},
