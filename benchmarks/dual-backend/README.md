@@ -42,6 +42,7 @@ The workflow uses Python 3.12, Rust 1.100.0, LLVM 18, Clang 18 and the existing 
 
 From the repository root, after installing the same toolchain and LLVM packages:
 
+    test -f benchmarks/backend-codegen/Cargo.lock || cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
     python -m unittest discover -s benchmarks/dual-backend -p "test_*.py" -v
     cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
     cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings

@@ -1149,7 +1149,8 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         unsafe { *lib.get(b"ogma_proof_last_call_receiver\0")? };
     let last_call_argument: LastCallArgument =
         unsafe { *lib.get(b"ogma_proof_last_call_argument\0")? };
-    reset();
+    // SAFETY: the function pointer was resolved from the just-loaded helper library.
+    unsafe { reset() };
 
     let branch: BinaryF64 = unsafe { *lib.get(sym(&c.symbol("branch")?).as_slice())? };
     let loop_fn: TernaryF64 = unsafe { *lib.get(sym(&c.symbol("loop")?).as_slice())? };
