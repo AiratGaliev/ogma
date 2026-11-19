@@ -1125,9 +1125,9 @@ fn load_corpus() -> Result<CoreCorpus> {
         ("aot_host_call_handles", "ogma_aot_host_call_handles"),
     ];
     if native_export_symbols.len() != expected_native_exports.len()
-        || expected_native_exports.iter().any(|(id, symbol)| {
-            native_export_symbols.get(*id).map(String::as_str) != Some(*symbol)
-        })
+        || expected_native_exports
+            .iter()
+            .any(|(id, symbol)| native_export_symbols.get(*id).map(String::as_str) != Some(*symbol))
     {
         bail!("workload manifest must declare each OGM-32 generated native export exactly once");
     }
