@@ -68,3 +68,10 @@ The report is written to benchmarks/value-representations/results/value-ssa-repo
 ## Recommendation
 
 Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Preserve representation-aware SSA as the compiler direction and box only at dynamic semantic and external ABI boundaries. Keep NaN-boxing unselected until the Rust heap, GC, ABI and native benchmark prototypes exist.
+
+
+## Native follow-up (OGM-38)
+
+The native follow-up is documented separately in [OGM-38 native Value/SSA evidence](native-evidence-ogm38.md). It builds and executes four Cranelift native numeric-loop candidates, measures native compile/object/throughput costs, runs a regalloc2 pressure probe over the canonical call-boundary dataflow, and validates roots against the real OGM-26 GcHeap/HostHandle API.
+
+The OGM-38 report does not turn the M0 prototypes into a production Runtime. Its exact semantic, allocation, GC and process-memory boundaries are stated in the report and companion document.

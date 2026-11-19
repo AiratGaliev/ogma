@@ -212,6 +212,99 @@ jobs:
           retention-days: 30
 
 
+  native-value-ssa-benchmark:
+    name: OGM-38 native Value and SSA representation evidence
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-38-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: target-ogm38
+
+    steps:
+      - name: Checkout tested PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install LLVM and native linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 build-essential
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify canonical Core IR and OGM-17 semantic baseline
+        run: |
+          set -euo pipefail
+          python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json --report "$RUNNER_TEMP/ogm38-core-ir-report.json"
+          python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
+
+      - name: Resolve lockfiles for OGM-26/27 and native backend proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for crate in gc-comparison native-runtime-boundary backend-codegen; do
+            manifest="benchmarks/$crate/Cargo.toml"
+            lockfile="benchmarks/$crate/Cargo.lock"
+            if [ ! -f "$lockfile" ]; then
+              cargo generate-lockfile --manifest-path "$manifest"
+            fi
+          done
+
+      - name: Check OGM-26/27 and backend formatting
+        run: |
+          cargo fmt --manifest-path benchmarks/gc-comparison/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+
+      - name: Run Clippy on GC, native-boundary and backend evidence crates
+        run: |
+          cargo clippy --manifest-path benchmarks/gc-comparison/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run OGM-26/27 and backend contract tests
+        run: |
+          cargo test --manifest-path benchmarks/gc-comparison/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+
+      - name: Execute four native Value/SSA candidates and collect measurements
+        run: |
+          set -euo pipefail
+          rustc --version
+          llvm-config-18 --version
+          clang-18 --version
+          cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release --bin ogm38-value-ssa -- \
+            --iterations 1000 --warmups 3 --samples 101 \
+            --revision "${{ github.event.pull_request.head.sha }}" \
+            --output "$RUNNER_TEMP/ogm38-native-value-ssa-report.json"
+          cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm38-Cargo.lock"
+
+      - name: Upload OGM-38 raw measurements and dependency lock
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm38-native-value-ssa-evidence
+          path: |
+            ${{ runner.temp }}/ogm38-core-ir-report.json
+            ${{ runner.temp }}/ogm38-native-value-ssa-report.json
+            ${{ runner.temp }}/ogm38-Cargo.lock
+          if-no-files-found: warn
+          retention-days: 90
+
   portable-bytecode-benchmark:
     name: OGM-16 portable bytecode benchmark
     if: github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-16-')

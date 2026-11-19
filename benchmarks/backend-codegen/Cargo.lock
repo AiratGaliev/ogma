@@ -407,14 +407,20 @@ dependencies = [
  "cranelift-object",
  "inkwell",
  "libloading",
+ "ogma-gc-comparison-proof",
  "ogma-host-execution-scope-proof",
  "ogma-native-runtime-boundary-proof",
  "ogma-rust-abi-proof",
  "ogma-typed-host-dispatch-proof",
+ "regalloc2",
  "serde",
  "serde_json",
  "target-lexicon",
 ]
+
+[[package]]
+name = "ogma-gc-comparison-proof"
+version = "0.1.0"
 
 [[package]]
 name = "ogma-host-execution-scope-proof"
