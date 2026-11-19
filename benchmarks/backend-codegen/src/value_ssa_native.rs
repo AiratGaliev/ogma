@@ -14,8 +14,8 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use libloading::Library;
 use ogma_gc_comparison_proof::{CollectorKind, FrameKind, GcHeap};
 use regalloc2::{
-    Edit, Algorithm, Block, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand, PReg,
-    PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
+    Algorithm, Block, Edit, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand,
+    PReg, PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
 };
 use serde::Serialize;
 use serde_json::Value as JsonValue;
