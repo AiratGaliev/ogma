@@ -75,3 +75,6 @@ Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Pr
 The native follow-up is documented separately in [OGM-38 native Value/SSA evidence](native-evidence-ogm38.md). It builds and executes four Cranelift native numeric-loop candidates, measures native compile/object/throughput costs, runs a regalloc2 pressure probe over the canonical call-boundary dataflow, and validates roots against the real OGM-26 GcHeap/HostHandle API.
 
 The OGM-38 report does not turn the M0 prototypes into a production Runtime. Its exact semantic, allocation, GC and process-memory boundaries are stated in the report and companion document.
+
+- Authoritative native CI evidence: [OGM-38 run #44569693384](https://github.com/AiratGaliev/ogma/actions/runs/44569693384), tested source revision `d9b76aae822c87ce66902fb460dcc3d588f7f700`.
+- Committed raw report: `benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz`. It contains 101 compile and 101 throughput samples for each of the four candidates; the companion OGM-38 document records the aggregate measurements and exact limitations.

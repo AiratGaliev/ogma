@@ -40,6 +40,38 @@ cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --relea
   --output /tmp/ogm38-native-value-ssa-report.json
 ~~~
 
+
+## Measured M0 results
+
+**Authoritative run:** [OGM-38 CI run #44569693384](https://github.com/AiratGaliev/ogma/actions/runs/44569693384)  
+**Measured source/tested revision:** `d9b76aae822c87ce66902fb460dcc3d588f7f700`  
+**Environment:** Ubuntu 24.04, Rust 1.100.0, Cranelift 0.137.2, regalloc2 0.15.3, x86_64-unknown-linux-gnu, AMD EPYC 9V74 80-Core Processor  
+**Sampling:** 3 warmups, 101 samples, 1,000 native calls per throughput sample.
+
+| Candidate | Value bytes | Compile p50 (ns) | Native call p50 / p95 / p99 (ns) | Object bytes | Spill slots / logical bytes | Spill stores / reloads |
+|---|---:|---:|---:|---:|---:|---:|
+| tagged-16-boxed | 16 | 347,592 | 340.722 / 354.903 / 365.439 | 776 | 6 / 48 B | 6 / 6 |
+| tagged-16-representation-aware | 16 | 334,072 | 128.189 / 138.894 / 143.351 | 768 | 0 / 0 B | 0 / 0 |
+| nanbox-8-boxed | 8 | 308,685 | 337.126 / 348.604 / 353.781 | 704 | 0 / 0 B | 0 / 0 |
+| nanbox-8-representation-aware | 8 | 292,902 | 141.308 / 149.680 / 265.231 | 696 | 0 / 0 B | 0 / 0 |
+
+All four generated native functions returned the expected value `128`. The linked shared library was 14,856 bytes for each candidate.
+
+### Interpretation
+
+- Representation-aware SSA reduced median native-call latency by **62.4% (2.66×)** versus boxed SSA with the tagged layout, and by **58.1% (2.39×)** with the NaN-box layout. This is the result for the measured Number-only loop adapter, not a general ECMAScript workload.
+- NaN-box reduced the generated object file by about **9.3%** versus the corresponding tagged candidate, but did not improve the representation-aware loop latency here: 141.308 ns versus 128.189 ns for tagged representation-aware (about 10.2% higher). These measurements do not justify selecting NaN-boxing for the production Value ABI.
+- The controlled call-boundary allocator profile produced 6 logical spill slots (48 B) and six spill-store/six spill-reload edits for tagged boxed SSA. The other three profiles had no spill slots or spill edits under this 6-register-per-class budget. This is the regalloc2 profile derived from canonical Core IR value flow, not Cranelift's private allocation result for the generated loop or the host ISA's real register-pressure map.
+- For each candidate, the OGM-26 proof heap started with two objects and 224 logical heap bytes. One native-frame root and one persistent host handle kept both objects alive during forced MarkSweep collection; after releasing both roots, two objects were reclaimed and zero remained live. This validates the existing M0 heap/handle/root API path, not production Runtime GC.
+
+The raw machine-readable report is committed as `results/ogm38-native-value-ssa-report.json.gz`. SHA-256 of the uncompressed JSON: `498dae3c5849ff146b9c16c87b06ae9dabb22afff0c9e31b4f0b69627f13ab5a`. Reproduce the report with the command in the section above and inspect the committed samples with:
+
+~~~sh
+gzip -dc benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz
+~~~
+
+This is the completed M0 measurement slice only. It does not satisfy the full OGM-38 criteria for four-candidate execution over the accepted corpus, native differential semantics across all supported JS types/exceptions/side effects/host traces, production heap/allocator/peak-memory metrics, or real interpreter/native ABI and machine-stack-map integration.
+
 ## Semantic and architecture limits
 
 The generated native workload is numeric-only. It verifies that the four candidates produce the same numeric loop result for equivalent inputs. The OGM-17 semantic fixture suite remains the source of coverage for NaN, signed zero, infinities, BigInt, undefined/null, strings, object identity and symbol identity; those cases are not claimed as native differential execution in OGM-38.
