@@ -30,8 +30,17 @@ PORTABLE_DIR = ROOT / "benchmarks" / "portable-bytecode"
 BACKEND_DIR = ROOT / "benchmarks" / "backend-codegen"
 PROFILE_MANIFEST = ROOT / "contracts" / "runtime-profiles" / "v1" / "profiles.json"
 
-sys.path.insert(0, str(DUAL_DIR))
-import run as dual  # noqa: E402
+import importlib.util
+
+dual_spec = importlib.util.spec_from_file_location(
+    "ogm31_dual_backend_proof", DUAL_DIR / "run.py"
+)
+if dual_spec is None or dual_spec.loader is None:
+    raise RuntimeError("unable to load the canonical OGM-31 dual-backend proof module")
+dual = importlib.util.module_from_spec(dual_spec)
+sys.modules[dual_spec.name] = dual
+dual_spec.loader.exec_module(dual)
+
 from prototype import (  # noqa: E402
     HostFunction,
     JSException,
