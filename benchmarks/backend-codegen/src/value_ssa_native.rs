@@ -217,10 +217,7 @@ fn decode_candidate_object_value(
             }
             let exponent = word & 0x7ff0_0000_0000_0000;
             let fraction = word & 0x000f_ffff_ffff_ffff;
-            if exponent == 0x7ff0_0000_0000_0000
-                && fraction != 0
-                && word != CANONICAL_NAN_BITS
-            {
+            if exponent == 0x7ff0_0000_0000_0000 && fraction != 0 && word != CANONICAL_NAN_BITS {
                 bail!("non-canonical NaN encountered while scanning candidate Values");
             }
             if (NANBOX_RESERVED_TAG_MIN..=NANBOX_RESERVED_TAG_MAX).contains(&word) {
@@ -1603,8 +1600,7 @@ fn run_gc_sample(
 
         if component % 16 == 0 {
             let scope_object_index = base + 3;
-            let scope_value_slot =
-                scope_object_index * GC_VALUE_SLOTS_PER_OBJECT + 1;
+            let scope_value_slot = scope_object_index * GC_VALUE_SLOTS_PER_OBJECT + 1;
             encode_candidate_object_value(
                 candidate.runtime,
                 &mut value_storage,
@@ -1837,8 +1833,7 @@ fn gc_evidence(
         value_storage_bytes,
         value_layout_bytes: candidate.runtime.value_bytes(),
         handle_payload_bits: NAN_TAG_SHIFT,
-        encoded_object_values_resolved: collector_comparisons[0]
-            .encoded_object_values_resolved,
+        encoded_object_values_resolved: collector_comparisons[0].encoded_object_values_resolved,
         collector_comparisons,
     })
 }
