@@ -53,7 +53,6 @@ const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000;
 const GC_OBJECT_COUNT: usize = 2_048;
 const GC_VALUE_SLOTS_PER_OBJECT: usize = 16;
-const NANBOX_OBJECT_TAG: u64 = 0x7ffe;
 
 fn canonical_number_bits(value: f64) -> u64 {
     if value.is_nan() {
@@ -1082,8 +1081,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     .load(types::I64, MemFlagsData::new(), parameters[0], 8),
             ),
             RuntimeLayout::NanBox8 => (
-                b.ins().ushr_imm(parameters[0], NAN_TAG_SHIFT as u8),
-                b.ins().band_imm(parameters[0], MAX_PAYLOAD as i64),
+                b.ins().ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64),
+                b.ins().band_imm_u(parameters[0], MAX_PAYLOAD as i64),
             ),
         };
 
