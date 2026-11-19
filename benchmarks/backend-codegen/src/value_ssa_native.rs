@@ -2647,7 +2647,7 @@ mod tests {
             .expect("parse indirect callback helper");
         assert_eq!(metrics.symbol, "ogma_value_handle_dispatch");
         assert_eq!(metrics.instruction_count, 3);
-        assert_eq!(metrics.direct_call_instructions, 1);
+        assert_eq!(metrics.call_instructions, 1);
     }
 
     #[test]
