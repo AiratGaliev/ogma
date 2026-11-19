@@ -1647,12 +1647,7 @@ fn run_gc_sample(
         .zip(deferred_native_handles.into_iter())
     {
         heap.add_frame_root(native_frame, root)?;
-        encode_candidate_number_value(
-            candidate.runtime,
-            &mut value_storage,
-            value_slot,
-            0.0,
-        )?;
+        encode_candidate_number_value(candidate.runtime, &mut value_storage, value_slot, 0.0)?;
         heap.release_host_handle(handle)?;
     }
     black_box(value_storage.as_slice());
@@ -2298,7 +2293,9 @@ mod tests {
     fn tagged_and_nanbox_object_values_resolve_real_host_handle_tokens() {
         let mut heap = GcHeap::new(CollectorKind::MarkSweep);
         let object = heap.allocate(32);
-        let handle = heap.retain_host_handle(object).expect("retain object handle");
+        let handle = heap
+            .retain_host_handle(object)
+            .expect("retain object handle");
         let token = heap
             .encode_host_handle_token(handle)
             .expect("encode OGM-26 handle token");
@@ -2321,7 +2318,8 @@ mod tests {
             object
         );
 
-        heap.release_host_handle(handle).expect("release object handle");
+        heap.release_host_handle(handle)
+            .expect("release object handle");
         assert!(
             resolve_candidate_object_value(RuntimeLayout::NanBox8, &nanbox, 0, &heap).is_err(),
             "released candidate Value must not resolve through a stale handle token"
