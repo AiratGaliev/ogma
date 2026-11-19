@@ -165,7 +165,7 @@ def _measure_startup_probe(
                     "startup probe did not emit its readiness marker within 15 seconds; "
                     f"stdout={stdout[-2000:]!r}, stderr={stderr[-4000:]!r}"
                 )
-            line = process.stdout.readline().rstrip(b"\\r\\n")
+            line = process.stdout.readline().rstrip(b"\r\n")
             ready_ns = time.perf_counter_ns()
             remaining_stdout, stderr = process.communicate(timeout=15)
         except subprocess.TimeoutExpired as error:
@@ -209,7 +209,7 @@ def _measure_startup_probe(
     }
 
 
-def _peak_tracemalloc(callback: Any) -> tuple[Any, int):
+def _peak_tracemalloc(callback: Any) -> tuple[Any, int]:
     gc.collect()
     tracemalloc.start()
     try:
