@@ -219,6 +219,108 @@ def verify_invalid_bytecode(compiled: Any) -> dict[str, Any]:
     }
 
 
+def validate_runtime_integration(
+    backend_name: str, integration: dict[str, Any]
+) -> dict[str, Any]:
+    abi_version = integration.get("ogm19_version", {})
+    required_features = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 63)
+    if abi_version.get("major") != 1 or (
+        int(abi_version.get("features", 0)) & required_features
+    ) != required_features:
+        raise RuntimeError(f"{backend_name}: OGM-19 ABI v1 feature negotiation was incomplete")
+
+    completions = integration.get("ogm19_completions", {})
+    expected_completions = {
+        "dynamic_add_normal": (0, 15),
+        "dynamic_add_throw": (1, -(1 << 63)),
+        "host_echo_normal": (0, 42),
+        "host_echo_throw": (1, -7),
+    }
+    for name, (kind, payload) in expected_completions.items():
+        actual = completions.get(name, {})
+        if actual.get("kind") != kind or actual.get("payload") != payload:
+            raise RuntimeError(
+                f"{backend_name}: OGM-19 completion mismatch for {name}: {actual!r}"
+            )
+    if integration.get("ogm19_last_status") != 0:
+        raise RuntimeError(f"{backend_name}: OGM-19 reported a failed ABI status")
+
+    safepoints = integration.get("ogm27_native_safepoints", {})
+    required_sites = {
+        "function_entry", "loop_back_edge", "allocation_boundary",
+        "call_boundary", "host_call_boundary",
+    }
+    if set(safepoints) != required_sites or any(
+        int(safepoints[site]) <= 0 for site in required_sites
+    ):
+        raise RuntimeError(f"{backend_name}: generated code did not execute every OGM-27 safepoint")
+
+    model = integration.get("ogm27_model", {})
+    if int(model.get("callback_invocations", 0)) < 5:
+        raise RuntimeError(f"{backend_name}: OGM-19 callbacks were not exercised")
+    expected_callback_trace = [
+        {
+            "symbol": "benchmark.core_ir.dynamic_add",
+            "args": [7.0, 8.0],
+            "completion": {"kind": 0, "value": 15.0},
+        },
+        {
+            "symbol": "benchmark.core_ir.dynamic_add",
+            "args": [-(1 << 63), 9.0],
+            "completion": {"kind": 1, "value": -(1 << 63)},
+        },
+        {
+            "symbol": "benchmark.host.echo",
+            "args": [31.0],
+            "completion": {"kind": 0, "value": 42.0},
+        },
+        {
+            "symbol": "benchmark.host.echo",
+            "args": [32.0],
+            "completion": {"kind": 0, "value": 43.0},
+        },
+        {
+            "symbol": "benchmark.host.echo",
+            "args": [-7.0],
+            "completion": {"kind": 1, "value": -7.0},
+        },
+    ]
+    if model.get("callback_trace") != expected_callback_trace:
+        raise RuntimeError(f"{backend_name}: actual OGM-19 callback argument/completion trace differed")
+    if not model.get("argument_handles_survived_collection_inside_callback"):
+        raise RuntimeError(f"{backend_name}: callback argument roots did not survive collection")
+    if int(model.get("normal_completions", 0)) <= 0 or int(model.get("throw_completions", 0)) <= 0:
+        raise RuntimeError(f"{backend_name}: OGM-27 transition model missed a completion kind")
+    expected_path = ["Native", "Interpreter", "HostCallback"]
+    if expected_path not in model.get("completion_transition_paths", []):
+        raise RuntimeError(f"{backend_name}: missing nested OGM-27 transition path")
+    native_frame = model.get("native_shadow_frame", {})
+    if (
+        not native_frame.get("active_during_execution")
+        or not native_frame.get("live_managed_root_survived_every_collection")
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-27 native shadow-frame root proof failed")
+    root_maps = native_frame.get("root_maps", {})
+    if set(root_maps) != {"1", "2", "3", "4", "5"} or any(
+        int(value) <= 0 for value in root_maps.values()
+    ):
+        raise RuntimeError(f"{backend_name}: not all root-map safepoints were observed")
+    budget = model.get("execution_budget", {})
+    if (
+        int(budget.get("work_units", 0)) <= 0
+        or int(budget.get("polls", 0)) < 5
+        or int(budget.get("max_unpolled_work", 0)) != 64
+    ):
+        raise RuntimeError(f"{backend_name}: OGM-27 budget polling was not exercised")
+
+    return {
+        "ogm19_abi_v1_negotiated": True,
+        "ogm19_completions": completions,
+        "ogm19_callback_trace": model["callback_trace"],
+        "ogm19_callbacks": int(model["callback_invocations"]),
+        "ogm27_native_safepoints": safepoints,
+        "ogm27_model": model,
+    }
 def run_native_backends(
     *,
     output_path: Path,
@@ -264,9 +366,14 @@ def run_native_backends(
         object_path = item.get("native_object_path")
         if not object_path or not Path(object_path).is_file() or Path(object_path).stat().st_size == 0:
             raise RuntimeError(f"{key}: missing target-native object artifact")
+        if Path(object_path).read_bytes()[:4] != bytes.fromhex("7f454c46"):
+            raise RuntimeError(f"{key}: target object is not an ELF relocatable object")
         helper_calls = item["runtime_helper_calls"]
         if not helper_calls or any(int(value) <= 0 for value in helper_calls.values()):
             raise RuntimeError(f"{key}: one or more expected runtime helper calls were not observed")
+        runtime_integration = validate_runtime_integration(
+            key, item.get("runtime_integration", {})
+        )
         backends["llvm" if key == "llvm_backend" else key] = {
             "native_object": {
                 "path": object_path,
@@ -277,6 +384,7 @@ def run_native_backends(
             "link": item["link_time_ns"],
             "semantic_observations": item["semantic_observations"],
             "runtime_helper_calls": helper_calls,
+            "runtime_integration": runtime_integration,
             "workloads": item["workloads"],
         }
 
@@ -356,6 +464,15 @@ def build_report(
         "target_specific_native_objects_separate_from_ogmb": True,
         "differential_values_exceptions_side_effects_and_host_calls": True,
         "invalid_bytecode_unsupported_aot_and_runtime_helper_fallback": True,
+        "ogm19_versioned_abi_callbacks_and_explicit_completions": all(
+            backend["runtime_integration"]["ogm19_abi_v1_negotiated"]
+            for backend in native["backends"].values()
+        ),
+        "ogm27_generated_safepoints_roots_transitions_and_budget": all(
+            backend["runtime_integration"]["ogm27_native_safepoints"]
+            and backend["runtime_integration"]["ogm27_model"]["native_shadow_frame"]["live_managed_root_survived_every_collection"]
+            for backend in native["backends"].values()
+        ),
         "reproducible_documented_linux_x86_64_target": True,
         "unsupported_subset_and_m0_non_production_scope_documented": True,
     }
@@ -402,6 +519,10 @@ def build_report(
             ),
         },
         "runtime_helper_fallback": helper_evidence,
+        "native_runtime_integration": {
+            name: backend["runtime_integration"]
+            for name, backend in native["backends"].items()
+        },
         "unsupported_aot_fallback": fallback,
         "negative_cases": {
             "tampered_ogmb": invalid_bytecode,
@@ -415,9 +536,10 @@ def build_report(
         "limitations": [
             "This is an M0 architecture proof, not a production JavaScript/TypeScript engine or Runtime.",
             "The source files are traceable reference inputs paired with canonical pre-authored Core IR v1 fixtures; no source parser or source-to-Core-IR compiler is implemented here.",
-            "The native AOT adapters are exact-fixture profile lowerers. The native C helpers are deterministic proof shims, not the production Ogma Runtime or versioned production host ABI.",
+            "The native AOT adapters are exact-fixture profile lowerers. Dynamic-add and host calls route through the existing OGM-19 mock C ABI function table, opaque handles, root scopes, registered callbacks and explicit completions; this is still a mock ABI/Runtime proof, not a production Runtime.",
+            "The OGM-19 mock value store supports Number, Boolean and Function only. The native Symbol-conversion failure is represented at this boundary by the reserved i64::MIN numeric sentinel, not by a production JS Symbol Value. The string/object call-boundary fixture still uses a dedicated exact-fixture callback shim.",
+            "Generated Cranelift and LLVM objects call modeled OGM-27 safepoints for function entry, loop back-edge, allocation, call and host-call boundaries. The proof exercises the OGM-27 shadow-frame root map, activation/completion, persistent-promotion and budget model; it is not a production stack-map encoder or production collector.",
             "The exception fixture's handler only rethrows the same value. Portable lowering maps that narrow case to direct propagation and rejects handlers with additional effects; general catch/finally lowering is not implemented.",
-            "The GC/root/safepoint behavior remains covered by the separate OGM-27 model proof and is not integrated into these generated objects.",
             "Property access, proxies, accessors, prototypes, suspension, general calls, arbitrary source programs and broad ECMAScript conformance are outside the supported AOT subset.",
         ],
     }

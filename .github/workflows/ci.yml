@@ -1113,19 +1113,32 @@ jobs:
           llvm-config-18 --version
           clang-18 --version
           cc --version
-          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
-            cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
-          fi
-          cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm31-Cargo.lock"
+          for crate in rust-abi native-runtime-boundary backend-codegen; do
+            manifest="benchmarks/$crate/Cargo.toml"
+            lockfile="benchmarks/$crate/Cargo.lock"
+            if [ ! -f "$lockfile" ]; then
+              cargo generate-lockfile --manifest-path "$manifest"
+            fi
+            cp "$lockfile" "$RUNNER_TEMP/ogm31-$crate-Cargo.lock"
+          done
 
-      - name: Check native backend formatting
-        run: cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+      - name: Check OGM-19 ABI, OGM-27 boundary and native backend formatting
+        run: |
+          cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
 
-      - name: Run native backend Clippy
-        run: cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+      - name: Run OGM-19 ABI, OGM-27 boundary and native backend Clippy
+        run: |
+          cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
-      - name: Run native backend contract tests
-        run: cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+      - name: Run OGM-19 ABI, OGM-27 boundary and native backend contract tests
+        run: |
+          cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
 
       - name: Generate portable bytecode verifier fixtures
         run: python tests/ogmb/build_fixtures.py
@@ -1165,11 +1178,33 @@ jobs:
           assert report["unsupported_aot_fallback"]["selected_fallback"] == "portable-register-bytecode-interpreter"
           assert all(report["acceptance"].values())
           assert set(report["native_backends"]) == {"cranelift", "llvm"}
+          required_features = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 63)
           for backend in report["native_backends"].values():
               assert backend["native_object"]["bytes"] > 0
+              assert backend["native_object"]["format"] == "ELF relocatable object (.o)"
               assert all(int(value) > 0 for value in backend["runtime_helper_calls"].values())
+              integration = backend["runtime_integration"]
+              assert integration["ogm19_abi_v1_negotiated"]
+              assert (integration["ogm19_version"]["features"] & required_features) == required_features
+              assert len(integration["ogm19_callback_trace"]) == 5
+              assert integration["ogm27_model"]["callback_invocations"] >= 5
+              assert integration["ogm27_model"]["execution_budget"]["max_unpolled_work"] == 64
+              assert (integration["ogm19_completions"]["dynamic_add_normal"]["kind"],
+                      integration["ogm19_completions"]["dynamic_add_normal"]["payload"]) == (0, 15)
+              assert (integration["ogm19_completions"]["dynamic_add_throw"]["kind"],
+                      integration["ogm19_completions"]["dynamic_add_throw"]["payload"]) == (1, -(1 << 63))
+              assert (integration["ogm19_completions"]["host_echo_normal"]["kind"],
+                      integration["ogm19_completions"]["host_echo_normal"]["payload"]) == (0, 42)
+              assert (integration["ogm19_completions"]["host_echo_throw"]["kind"],
+                      integration["ogm19_completions"]["host_echo_throw"]["payload"]) == (1, -7)
+              assert all(value > 0 for value in integration["ogm27_native_safepoints"].values())
+              model = integration["ogm27_model"]
+              assert model["native_shadow_frame"]["active_during_execution"]
+              assert model["native_shadow_frame"]["live_managed_root_survived_every_collection"]
+              assert model["execution_budget"]["polls"] >= 5
+              assert ["Native", "Interpreter", "HostCallback"] in model["completion_transition_paths"]
           assert len(report["portable_bytecode"]["register_artifacts"]) == 5
-          print("Validated OGM-31 differential values, throws, host traces, bytecode verification, fallbacks and native objects.")
+          print("Validated OGM-31 portable/native differential behaviour, OGM-19 ABI completions, OGM-27 roots/safepoints/budget, invalid bytecode and fallbacks.")
           PY
 
       - name: Upload OGM-31 proof report and compiled evidence
@@ -1180,6 +1215,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ogm31-dual-backend-report.json
             ${{ runner.temp }}/ogm31-artifacts/**
-            ${{ runner.temp }}/ogm31-Cargo.lock
+            ${{ runner.temp }}/ogm31-rust-abi-Cargo.lock
+            ${{ runner.temp }}/ogm31-native-runtime-boundary-Cargo.lock
+            ${{ runner.temp }}/ogm31-backend-codegen-Cargo.lock
           if-no-files-found: warn
           retention-days: 90

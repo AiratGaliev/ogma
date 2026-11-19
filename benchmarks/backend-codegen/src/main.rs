@@ -20,12 +20,16 @@ use inkwell::{
     values::{FloatValue, IntValue},
 };
 use libloading::Library;
+use ogma_native_runtime_boundary_proof as boundary;
+use ogma_rust_abi_proof as abi;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    ffi::CString,
+    ffi::{c_void, CString},
+    panic::{catch_unwind, AssertUnwindSafe},
+    ptr,
     fs,
     hint::black_box,
     path::{Path, PathBuf},
@@ -42,6 +46,477 @@ type AddNumber = unsafe extern "C" fn(f64, f64) -> i64;
 type ToNumber = unsafe extern "C" fn(i64) -> f64;
 type CallBoundary = unsafe extern "C" fn(i64, i64, i64, i64, i64, f64) -> i64;
 type CallTarget = unsafe extern "C" fn(i64, i64) -> i64;
+
+type ProofSafepointCallback = unsafe extern "C" fn(u32, *mut c_void) -> i32;
+type BindProofAbi = unsafe extern "C" fn(
+    *const OgmaProofAbi,
+    *const abi::OgmaRuntime,
+    abi::OgmaContextHandle,
+    abi::OgmaHandle,
+    abi::OgmaHandle,
+    ProofSafepointCallback,
+    *mut c_void,
+);
+type ProofCounter = unsafe extern "C" fn(u32) -> u64;
+type ProofStatus = unsafe extern "C" fn() -> i32;
+type ProofStatusU32 = unsafe extern "C" fn() -> u32;
+type ProofCompletionKind = unsafe extern "C" fn() -> u32;
+type ProofCompletionPayload = unsafe extern "C" fn() -> i64;
+
+#[repr(C)]
+struct OgmaProofAbi {
+    version: abi::OgmaAbiVersion,
+    context_create_number: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        f64,
+        *mut abi::OgmaHandle,
+    ) -> abi::OgmaStatus,
+    context_get_number: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        abi::OgmaHandle,
+        *mut f64,
+    ) -> abi::OgmaStatus,
+    root_scope_open: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        *mut abi::OgmaRootScopeHandle,
+    ) -> abi::OgmaStatus,
+    root_scope_add: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        abi::OgmaRootScopeHandle,
+        abi::OgmaHandle,
+    ) -> abi::OgmaStatus,
+    root_scope_close: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        abi::OgmaRootScopeHandle,
+    ) -> abi::OgmaStatus,
+    context_call: unsafe extern "C" fn(
+        *const abi::OgmaRuntime,
+        abi::OgmaContextHandle,
+        abi::OgmaHandle,
+        *const abi::OgmaHandle,
+        usize,
+        *mut abi::OgmaCompletion,
+    ) -> abi::OgmaStatus,
+}
+
+struct NativeProofState {
+    heap: boundary::GcHeap,
+    roots: boundary::RootProviders,
+    native_frame_token: boundary::NativeFrameToken,
+    sentinel: boundary::GcRef,
+    budget: boundary::BudgetMeter,
+    safepoint_counts: BTreeMap<u32, u64>,
+    callback_count: u64,
+    callback_trace: Vec<JsonValue>,
+    normal_completion_count: u64,
+    throw_completion_count: u64,
+    argument_roots_survived_collection: bool,
+    transition_paths: Vec<Vec<&'static str>>,
+    failure: Option<String>,
+}
+
+impl NativeProofState {
+    fn new() -> Result<Box<Self>> {
+        let mut heap = boundary::GcHeap::default();
+        let sentinel = heap.allocate();
+        let maps = (1_u32..=5)
+            .map(|site| boundary::RootMap {
+                safepoint: boundary::SafepointId(site),
+                slots: vec![0],
+            })
+            .collect();
+        let descriptor = boundary::FrameDescriptor::new(
+            "ogm31-native-aot-frame",
+            1,
+            boundary::SafepointId(1),
+            maps,
+        )
+        .map_err(|error| anyhow!("create OGM-27 shadow-frame descriptor: {error:?}"))?;
+        let frame = boundary::NativeFrame::new(
+            descriptor,
+            vec![boundary::JsValue::Managed(sentinel)],
+        )
+        .map_err(|error| anyhow!("create OGM-27 native frame: {error:?}"))?;
+        let mut roots = boundary::RootProviders::default();
+        let native_frame_token = roots
+            .native
+            .enter(frame)
+            .map_err(|error| anyhow!("push OGM-27 native shadow frame: {error:?}"))?;
+        let budget = boundary::BudgetMeter::new(10_000_000, 64)
+            .map_err(|error| anyhow!("create OGM-27 execution budget: {error:?}"))?;
+        Ok(Box::new(Self {
+            heap,
+            roots,
+            native_frame_token,
+            sentinel,
+            budget,
+            safepoint_counts: BTreeMap::new(),
+            callback_count: 0,
+            callback_trace: Vec::new(),
+            normal_completion_count: 0,
+            throw_completion_count: 0,
+            argument_roots_survived_collection: false,
+            transition_paths: Vec::new(),
+            failure: None,
+        }))
+    }
+
+    fn on_safepoint(&mut self, site: u32) -> Result<()> {
+        let point = boundary::SafepointId(site);
+        self.roots
+            .native
+            .current_mut(self.native_frame_token)
+            .map_err(|error| anyhow!("OGM-27 native frame is not current: {error:?}"))?
+            .set_safepoint(point, &[0])
+            .map_err(|error| anyhow!("OGM-27 root map mismatch at site {site}: {error:?}"))?;
+        self.budget
+            .record_work(1)
+            .map_err(|error| anyhow!("OGM-27 work accounting failed: {error:?}"))?;
+        let poll_site = match site {
+            1 => boundary::PollSite::FunctionEntry,
+            2 => boundary::PollSite::LoopBackEdge,
+            3 => boundary::PollSite::AllocationBoundary,
+            4 | 5 => boundary::PollSite::CallBoundary,
+            _ => bail!("unknown OGM-27 native safepoint site {site}"),
+        };
+        self.budget
+            .poll(poll_site)
+            .map_err(|error| anyhow!("OGM-27 budget/cancellation poll failed: {error:?}"))?;
+        self.roots
+            .collect(&mut self.heap)
+            .map_err(|error| anyhow!("OGM-27 root collection failed: {error:?}"))?;
+        if !self.heap.is_alive(self.sentinel) {
+            bail!("OGM-27 live native-frame root was reclaimed at safepoint {site}");
+        }
+        *self.safepoint_counts.entry(site).or_default() += 1;
+        Ok(())
+    }
+
+    fn exercise_transition_model(&mut self, is_throw: bool) -> Result<()> {
+        let completion_value = self.heap.allocate();
+        let managed = boundary::JsValue::Managed(completion_value);
+        let expected = if is_throw {
+            boundary::Completion::Throw(managed)
+        } else {
+            boundary::Completion::Normal(managed)
+        };
+        let mut activations = boundary::ActivationStack::default();
+        let native = boundary::Activation::new(
+            boundary::ActivationKind::Native,
+            "ogma_host_call_aot",
+            None,
+            boundary::SourceLocation { file: "ogm31.native.js".into(), line: 1, column: 0 },
+        );
+        let interpreter = boundary::Activation::new(
+            boundary::ActivationKind::Interpreter,
+            "ogma_abi_callback_dispatch",
+            None,
+            boundary::SourceLocation { file: "ogm31.host.js".into(), line: 2, column: 0 },
+        );
+        let host = boundary::Activation::new(
+            boundary::ActivationKind::HostCallback,
+            "ogm31_registered_rust_callback",
+            None,
+            boundary::SourceLocation { file: "ogm31.host.js".into(), line: 3, column: 0 },
+        );
+
+        let returned = activations
+            .invoke(native, |stack| {
+                let interpreter_result = stack
+                    .invoke(interpreter, |stack| {
+                        let callback_result = stack
+                            .invoke(host, |stack| {
+                                if self.transition_paths.is_empty() {
+                                    self.transition_paths.push(
+                                        stack.snapshot().iter().map(|frame| match frame.kind {
+                                            boundary::ActivationKind::Native => "Native",
+                                            boundary::ActivationKind::Interpreter => "Interpreter",
+                                            boundary::ActivationKind::HostCallback => "HostCallback",
+                                        }).collect(),
+                                    );
+                                }
+                                expected
+                            })
+                            .unwrap_or_else(|error| {
+                                self.failure = Some(format!("OGM-27 host activation failed: {error:?}"));
+                                expected
+                            });
+                        if let Err(error) = stack.consume_pending_completion(callback_result) {
+                            self.failure = Some(format!("OGM-27 callback completion transfer: {error:?}"));
+                        }
+                        if let Err(error) = self.roots.collect_with_execution(&mut self.heap, stack) {
+                            self.failure = Some(format!("OGM-27 interpreter completion root: {error:?}"));
+                        }
+                        if let Err(error) = stack.release_consumed_completion(callback_result) {
+                            self.failure = Some(format!("OGM-27 callback completion release: {error:?}"));
+                        }
+                        callback_result
+                    })
+                    .unwrap_or_else(|error| {
+                        self.failure = Some(format!("OGM-27 interpreter activation failed: {error:?}"));
+                        expected
+                    });
+                if let Err(error) = stack.consume_pending_completion(interpreter_result) {
+                    self.failure = Some(format!("OGM-27 native/interpreter completion transfer: {error:?}"));
+                }
+                if let Err(error) = self.roots.collect_with_execution(&mut self.heap, stack) {
+                    self.failure = Some(format!("OGM-27 native completion root: {error:?}"));
+                }
+                if let Err(error) = stack.release_consumed_completion(interpreter_result) {
+                    self.failure = Some(format!("OGM-27 native completion release: {error:?}"));
+                }
+                interpreter_result
+            })
+            .map_err(|error| anyhow!("OGM-27 activation transition failed: {error:?}"))?;
+        if let Some(error) = self.failure.take() {
+            bail!("{error}");
+        }
+        if returned != expected {
+            bail!("OGM-27 native/interpreter/host transition changed completion semantics");
+        }
+        let host_completion = activations
+            .host_completion()
+            .ok_or_else(|| anyhow!("OGM-27 top-level completion was not retained"))?;
+        self.roots
+            .collect_with_execution(&mut self.heap, &activations)
+            .map_err(|error| anyhow!("OGM-27 top-level completion was not rooted: {error:?}"))?;
+        if !self.heap.is_alive(completion_value) {
+            bail!("OGM-27 top-level completion was reclaimed before persistent promotion");
+        }
+        let promoted = self
+            .roots
+            .persistent
+            .retain(&self.heap, completion_value)
+            .map_err(|error| anyhow!("OGM-27 persistent promotion failed: {error:?}"))?;
+        activations
+            .release_host_completion_after_promotion(
+                host_completion,
+                Some(promoted),
+                &self.roots.persistent,
+            )
+            .map_err(|error| anyhow!("OGM-27 completion release-before-promotion: {error:?}"))?;
+        self.roots
+            .persistent
+            .release(promoted)
+            .map_err(|error| anyhow!("OGM-27 persistent-root release failed: {error:?}"))?;
+        self.roots
+            .collect(&mut self.heap)
+            .map_err(|error| anyhow!("OGM-27 post-completion collection failed: {error:?}"))?;
+        if self.heap.is_alive(completion_value) {
+            bail!("OGM-27 completion root remained live after persistent promotion was released");
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<JsonValue> {
+        if let Some(error) = self.failure.take() {
+            bail!("{error}");
+        }
+        for site in 1..=5 {
+            if self.safepoint_counts.get(&site).copied().unwrap_or(0) == 0 {
+                bail!("native AOT code did not publish required safepoint site {site}");
+            }
+        }
+        if !self.argument_roots_survived_collection || self.callback_count < 5 || self.callback_trace.len() != 5 {
+            bail!("OGM-19 callback/root contract and its five semantic trace cases were not exercised by native code");
+        }
+        if self.transition_paths
+            != vec![vec!["Native", "Interpreter", "HostCallback"]]
+        {
+            bail!("OGM-27 native/interpreter/host activation path was not observed exactly");
+        }
+        if self.normal_completion_count == 0 || self.throw_completion_count == 0 {
+            bail!("native AOT did not exercise both explicit OGM-19 completion kinds");
+        }
+        if self.roots.native.depth() != 1 {
+            bail!("OGM-27 native shadow frame was unexpectedly popped before finish");
+        }
+        let root_maps: BTreeMap<String, u64> = self
+            .safepoint_counts
+            .iter()
+            .map(|(site, count)| (site.0.to_string(), *count))
+            .collect();
+        let result = serde_json::json!({
+            "abi_version": {"major": 1, "minor": 0, "patch": 0},
+            "abi_features": ["opaque-handles", "root-scopes", "persistent-handles", "callbacks", "explicit-completions", "mock-proof"],
+            "callback_invocations": self.callback_count,
+            "callback_trace": self.callback_trace,
+            "argument_handles_survived_collection_inside_callback": self.argument_roots_survived_collection,
+            "normal_completions": self.normal_completion_count,
+            "throw_completions": self.throw_completion_count,
+            "completion_transition_paths": self.transition_paths,
+            "native_shadow_frame": {
+                "active_during_execution": true,
+                "root_maps": root_maps,
+                "live_managed_root_survived_every_collection": true
+            },
+            "execution_budget": {
+                "work_units": self.budget.spent(),
+                "max_unpolled_work": self.budget.max_unpolled_work(),
+                "polls": self.budget.poll_trace().len()
+            }
+        });
+        self.roots
+            .native
+            .leave(self.native_frame_token)
+            .map_err(|error| anyhow!("OGM-27 native frame did not close in LIFO order: {error:?}"))?;
+        if self.roots.native.depth() != 0 {
+            bail!("OGM-27 native frame remained active after execution");
+        }
+        Ok(result)
+    }
+}
+
+unsafe extern "C" fn native_safepoint_callback(site: u32, user_data: *mut c_void) -> i32 {
+    if user_data.is_null() {
+        return -1;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &mut *user_data.cast::<NativeProofState>() };
+        state.on_safepoint(site)
+    }));
+    match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            let state = unsafe { &mut *user_data.cast::<NativeProofState>() };
+            state.failure = Some(error.to_string());
+            -1
+        }
+        Err(_) => {
+            let state = unsafe { &mut *user_data.cast::<NativeProofState>() };
+            state.failure = Some("panic inside native safepoint callback".into());
+            -1
+        }
+    }
+}
+
+unsafe extern "C-unwind" fn dynamic_add_host_callback(
+    runtime: *const abi::OgmaRuntime,
+    context: abi::OgmaContextHandle,
+    args: *const abi::OgmaHandle,
+    args_len: usize,
+    completion: *mut abi::OgmaCompletion,
+    user_data: *mut c_void,
+) -> abi::OgmaStatus {
+    callback_entry(runtime, context, args, args_len, completion, user_data, true)
+}
+
+unsafe extern "C-unwind" fn host_echo_callback(
+    runtime: *const abi::OgmaRuntime,
+    context: abi::OgmaContextHandle,
+    args: *const abi::OgmaHandle,
+    args_len: usize,
+    completion: *mut abi::OgmaCompletion,
+    user_data: *mut c_void,
+) -> abi::OgmaStatus {
+    callback_entry(runtime, context, args, args_len, completion, user_data, false)
+}
+
+fn callback_entry(
+    runtime: *const abi::OgmaRuntime,
+    context: abi::OgmaContextHandle,
+    args: *const abi::OgmaHandle,
+    args_len: usize,
+    completion: *mut abi::OgmaCompletion,
+    user_data: *mut c_void,
+    dynamic_add: bool,
+) -> abi::OgmaStatus {
+    if runtime.is_null() || args.is_null() || completion.is_null() || user_data.is_null() {
+        return abi::OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+        let state = &mut *user_data.cast::<NativeProofState>();
+        let expected_count = if dynamic_add { 2 } else { 1 };
+        if args_len != expected_count {
+            return abi::OgmaStatus::INVALID_ARGUMENT;
+        }
+        let arguments = std::slice::from_raw_parts(args, args_len);
+        let mut numbers = Vec::with_capacity(args_len);
+        for handle in arguments {
+            let mut number = 0.0;
+            let status = abi::ogma_context_get_number(runtime, context, *handle, &mut number);
+            if status != abi::OgmaStatus::OK {
+                return status;
+            }
+            numbers.push(number);
+        }
+        // Force a mock collection while context_call's argument roots are active.
+        let status = abi::ogma_context_collect_unrooted(runtime, context);
+        if status != abi::OgmaStatus::OK {
+            return status;
+        }
+        for (handle, expected) in arguments.iter().zip(numbers.iter()) {
+            let mut observed = 0.0;
+            let status = abi::ogma_context_get_number(runtime, context, *handle, &mut observed);
+            if status != abi::OgmaStatus::OK || observed.to_bits() != expected.to_bits() {
+                return if status == abi::OgmaStatus::OK {
+                    abi::OgmaStatus::INTERNAL_ERROR
+                } else {
+                    status
+                };
+            }
+        }
+        state.argument_roots_survived_collection = true;
+        state.callback_count += 1;
+
+        let is_throw = if dynamic_add {
+            numbers[0] == i64::MIN as f64
+        } else {
+            numbers[0] < 0.0
+        };
+        if let Err(error) = state.exercise_transition_model(is_throw) {
+            state.failure = Some(error.to_string());
+            return abi::OgmaStatus::INTERNAL_ERROR;
+        }
+
+        let (kind, value) = if is_throw {
+            state.throw_completion_count += 1;
+            (abi::COMPLETION_THROW, arguments[0])
+        } else {
+            state.normal_completion_count += 1;
+            let value = if dynamic_add {
+                numbers[0] + numbers[1]
+            } else {
+                numbers[0] + 11.0
+            };
+            let mut result_handle = abi::OgmaHandle::default();
+            let status = abi::ogma_context_create_number(runtime, context, value, &mut result_handle);
+            if status != abi::OgmaStatus::OK {
+                return status;
+            }
+            (abi::COMPLETION_NORMAL, result_handle)
+        };
+        if state.callback_trace.len() < 5 {
+            let trace_payload = if is_throw {
+                numbers[0]
+            } else if dynamic_add {
+                numbers[0] + numbers[1]
+            } else {
+                numbers[0] + 11.0
+            };
+            state.callback_trace.push(serde_json::json!({
+                "symbol": if dynamic_add { "benchmark.core_ir.dynamic_add" } else { "benchmark.host.echo" },
+                "args": numbers.clone(),
+                "completion": {"kind": kind, "value": trace_payload}
+            }));
+        }
+        completion.write(abi::OgmaCompletion {
+            kind,
+            reserved: 0,
+            value,
+        });
+        abi::OgmaStatus::OK
+    }));
+    match result {
+        Ok(status) => status,
+        Err(_) => abi::OgmaStatus::PANIC,
+    }
+}
 
 #[derive(Clone)]
 struct Options {
@@ -619,6 +1094,17 @@ fn ternary_f64_sig(m: &mut ObjectModule) -> Signature {
     s.returns.push(AbiParam::new(types::F64));
     s
 }
+fn emit_clif_safepoint(
+    module: &mut ObjectModule,
+    builder: &mut FunctionBuilder<'_>,
+    safepoint: FuncId,
+    site: i64,
+) {
+    let reference = module.declare_func_in_func(safepoint, builder.func);
+    let argument = builder.ins().iconst(types::I32, site);
+    let _ = builder.ins().call(reference, &[argument]);
+}
+
 fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -682,8 +1168,22 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     js_call_sig.returns.push(AbiParam::new(types::I64));
     let js_call = m.declare_function("ogma_js_call", Linkage::Import, &js_call_sig)?;
     let host_helper = m.declare_function("ogma_host_echo", Linkage::Import, &host_sig)?;
+    let mut safepoint_sig = m.make_signature();
+    safepoint_sig.params.push(AbiParam::new(types::I32));
+    safepoint_sig.returns.push(AbiParam::new(types::I32));
+    let safepoint = m.declare_function("ogma_proof_safepoint", Linkage::Import, &safepoint_sig)?;
+    let completion_kind = m.declare_function(
+        "ogma_proof_last_completion_kind",
+        Linkage::Import,
+        &{
+            let mut signature = m.make_signature();
+            signature.returns.push(AbiParam::new(types::I32));
+            signature
+        },
+    )?;
 
-    define_clif(&mut m, branch, branch_sig, |_, b, p| {
+    define_clif(&mut m, branch, branch_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
         let eq = b.ins().fcmp(FloatCC::Equal, p[0], p[1]);
         let yes = b.create_block();
         let no = b.create_block();
@@ -695,6 +1195,7 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         Ok(())
     })?;
     define_clif(&mut m, loop_fn, loop_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
         let lp = b.create_block();
         let body = b.create_block();
         let exit = b.create_block();
@@ -727,6 +1228,7 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         let conv_ref = m.declare_func_in_func(to_number, b.func);
         let conv = b.ins().call(conv_ref, &[boxed]);
         let next = b.inst_results(conv)[0];
+        emit_clif_safepoint(m, b, safepoint, 2);
         let next_args = [
             BlockArg::Value(next),
             BlockArg::Value(bl),
@@ -738,12 +1240,16 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         Ok(())
     })?;
     define_clif(&mut m, exception, exception_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
+        emit_clif_safepoint(m, b, safepoint, 3);
         let add_ref = m.declare_func_in_func(add_completion, b.func);
         let add = b.ins().call(add_ref, &[p[0], p[1]]);
         let result = b.inst_results(add)[0];
-        let tag = b.ins().ushr_imm_u(result, 56);
-        let zero = b.ins().iconst(types::I64, 0);
-        let normal = b.ins().icmp(IntCC::Equal, tag, zero);
+        let completion_ref = m.declare_func_in_func(completion_kind, b.func);
+        let kind_call = b.ins().call(completion_ref, &[]);
+        let kind = b.inst_results(kind_call)[0];
+        let normal_kind = b.ins().iconst(types::I32, abi::COMPLETION_NORMAL as i64);
+        let normal = b.ins().icmp(IntCC::Equal, kind, normal_kind);
         let ok = b.create_block();
         let thrown = b.create_block();
         b.ins().brif(normal, ok, &[], thrown, &[]);
@@ -757,10 +1263,13 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         Ok(())
     })?;
     define_clif(&mut m, call, call_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
         let _same = b.ins().icmp(IntCC::Equal, p[3], p[4]);
+        emit_clif_safepoint(m, b, safepoint, 3);
         let add_ref = m.declare_func_in_func(add_mixed, b.func);
         let add = b.ins().call(add_ref, &[p[2], p[5]]);
         let mixed = b.inst_results(add)[0];
+        emit_clif_safepoint(m, b, safepoint, 4);
         let call_ref = m.declare_func_in_func(js_call, b.func);
         let invoked = b.ins().call(call_ref, &[p[0], p[1], mixed]);
         let value = b.inst_results(invoked)[0];
@@ -768,6 +1277,8 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         Ok(())
     })?;
     define_clif(&mut m, host, host_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
+        emit_clif_safepoint(m, b, safepoint, 5);
         let f = m.declare_func_in_func(host_helper, b.func);
         let call = b.ins().call(f, &[p[0]]);
         let value = b.inst_results(call)[0];
@@ -800,6 +1311,17 @@ fn llvm_call_f64<'ctx>(
         .unwrap_basic()
         .into_float_value())
 }
+fn llvm_safepoint<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    function: inkwell::values::FunctionValue<'ctx>,
+    site: u32,
+) -> Result<()> {
+    let site_value = context.i32_type().const_int(u64::from(site), false);
+    builder.build_call(function, &[site_value.into()], "ogma_safepoint")?;
+    Ok(())
+}
+
 fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let start = Instant::now();
     Target::initialize_all(&InitializationConfig::default());
@@ -831,6 +1353,13 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let i64t = cx.i64_type();
     let f64t = cx.f64_type();
     let unary = i64t.fn_type(&[i64t.into()], false);
+    let safepoint_type = cx.i32_type().fn_type(&[cx.i32_type().into()], false);
+    let safepoint = module.add_function("ogma_proof_safepoint", safepoint_type, None);
+    let completion_kind = module.add_function(
+        "ogma_proof_last_completion_kind",
+        cx.i32_type().fn_type(&[], false),
+        None,
+    );
     let binary = i64t.fn_type(&[i64t.into(), i64t.into()], false);
     let ternary_f = f64t.fn_type(&[f64t.into(), f64t.into(), f64t.into()], false);
     let branch_type = f64t.fn_type(&[f64t.into(), f64t.into()], false);
@@ -851,6 +1380,7 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let yes = cx.append_basic_block(branch, "equal");
     let no = cx.append_basic_block(branch, "not_equal");
     b.position_at_end(entry);
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
     let left = branch.get_nth_param(0).unwrap().into_float_value();
     let right = branch.get_nth_param(1).unwrap().into_float_value();
     let eq = b.build_float_compare(FloatPredicate::OEQ, left, right, "strict_equal")?;
@@ -876,6 +1406,7 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let body = cx.append_basic_block(loop_fn, "body");
     let exit = cx.append_basic_block(loop_fn, "exit");
     b.position_at_end(loop_entry);
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
     b.build_unconditional_branch(loop_bb)?;
     b.position_at_end(loop_bb);
     let current = b.build_phi(f64t, "current")?;
@@ -889,6 +1420,7 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let step_v = step.as_basic_value().into_float_value();
     let boxed = llvm_call_i64(&b, add_number, &[current_v.into(), step_v.into()], "js_add")?;
     let next = llvm_call_f64(&b, to_number, &[boxed.into()], "to_number")?;
+    llvm_safepoint(&cx, &b, safepoint, 2)?;
     b.build_unconditional_branch(loop_bb)?;
     let body_end = b.get_insert_block().context("loop body missing")?;
     let start_value = loop_fn.get_nth_param(0).unwrap().into_float_value();
@@ -907,11 +1439,19 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let ok = cx.append_basic_block(exception, "normal");
     let thrown = cx.append_basic_block(exception, "throw");
     b.position_at_end(ex_entry);
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
+    llvm_safepoint(&cx, &b, safepoint, 3)?;
     let lhs = exception.get_nth_param(0).unwrap().into_int_value();
     let rhs = exception.get_nth_param(1).unwrap().into_int_value();
     let result = llvm_call_i64(&b, add_completion, &[lhs.into(), rhs.into()], "js_add")?;
-    let tag = b.build_right_shift(result, i64t.const_int(56, false), false, "completion_tag")?;
-    let normal = b.build_int_compare(IntPredicate::EQ, tag, i64t.const_zero(), "is_normal")?;
+    let completion_call = b.build_call(completion_kind, &[], "completion_kind")?;
+    let kind = completion_call.try_as_basic_value().unwrap_basic().into_int_value();
+    let normal = b.build_int_compare(
+        IntPredicate::EQ,
+        kind,
+        cx.i32_type().const_int(u64::from(abi::COMPLETION_NORMAL), false),
+        "is_normal",
+    )?;
     b.build_conditional_branch(normal, ok, thrown)?;
     b.position_at_end(ok);
     b.build_return(Some(&result))?;
@@ -931,6 +1471,7 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     );
     let call = module.add_function(&c.symbol("call_boundary")?, call_type, None);
     b.position_at_end(cx.append_basic_block(call, "entry"));
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
     let callee = call.get_nth_param(0).unwrap().into_int_value();
     let receiver = call.get_nth_param(1).unwrap().into_int_value();
     let text = call.get_nth_param(2).unwrap().into_int_value();
@@ -938,7 +1479,9 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let right = call.get_nth_param(4).unwrap().into_int_value();
     let numeric = call.get_nth_param(5).unwrap().into_float_value();
     let _same = b.build_int_compare(IntPredicate::EQ, left, right, "strict_equal")?;
+    llvm_safepoint(&cx, &b, safepoint, 3)?;
     let mixed = llvm_call_i64(&b, add_mixed, &[text.into(), numeric.into()], "js_add")?;
+    llvm_safepoint(&cx, &b, safepoint, 4)?;
     let invoked = llvm_call_i64(
         &b,
         js_call,
@@ -950,6 +1493,8 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let host_helper = module.add_function("ogma_host_echo", unary, None);
     let host = module.add_function(&c.symbol("host_call")?, unary, None);
     b.position_at_end(cx.append_basic_block(host, "entry"));
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
+    llvm_safepoint(&cx, &b, safepoint, 5)?;
     let arg = host.get_nth_param(0).unwrap().into_int_value();
     let value = llvm_call_i64(&b, host_helper, &[arg.into()], "host_call")?;
     b.build_return(Some(&value))?;
@@ -962,45 +1507,255 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
 }
 
 const HELPERS: &str = r#"
+#include "ogma_abi.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-static const uint64_t PAYLOAD_MASK=UINT64_C(0x00ffffffffffffff);
+
+typedef struct {
+  OgmaAbiVersion version;
+  OgmaStatus (*context_create_number)(const OgmaRuntime *, OgmaContextHandle, double, OgmaHandle *);
+  OgmaStatus (*context_get_number)(const OgmaRuntime *, OgmaContextHandle, OgmaHandle, double *);
+  OgmaStatus (*root_scope_open)(const OgmaRuntime *, OgmaContextHandle, OgmaRootScopeHandle *);
+  OgmaStatus (*root_scope_add)(const OgmaRuntime *, OgmaContextHandle, OgmaRootScopeHandle, OgmaHandle);
+  OgmaStatus (*root_scope_close)(const OgmaRuntime *, OgmaContextHandle, OgmaRootScopeHandle);
+  OgmaStatus (*context_call)(const OgmaRuntime *, OgmaContextHandle, OgmaHandle, const OgmaHandle *, size_t, OgmaCompletion *);
+} OgmaProofAbi;
+_Static_assert(offsetof(OgmaProofAbi, context_create_number) == sizeof(OgmaAbiVersion),
+               "OGM-19 C function-table layout drift");
+_Static_assert(sizeof(OgmaProofAbi) == sizeof(OgmaAbiVersion) + 6 * sizeof(void (*)(void)),
+               "OGM-19 C function-table size drift");
+typedef int32_t (*OgmaProofSafepointCallback)(uint32_t, void *);
+
+static const uint64_t PAYLOAD_MASK = UINT64_C(0x00ffffffffffffff);
 static char dynamic_string[128];
 static char call_argument[128];
 static int64_t call_receiver;
 static uint64_t proof_helper_counts[8];
-void ogma_proof_reset(void){memset(proof_helper_counts,0,sizeof(proof_helper_counts));call_argument[0]='\0';call_receiver=0;}
-uint64_t ogma_proof_count(uint32_t index){return index<8?proof_helper_counts[index]:0;}
-int64_t ogma_proof_last_call_receiver(void){return call_receiver;}
-const char *ogma_proof_last_call_argument(void){return call_argument;}
-int64_t ogma_js_add_number(double a,double b){proof_helper_counts[0]++;double value=a+b;int64_t boxed;memcpy(&boxed,&value,sizeof(boxed));return boxed;}
-double ogma_js_to_number(int64_t boxed){proof_helper_counts[1]++;double value;memcpy(&value,&boxed,sizeof(value));return value;}
-int64_t ogma_js_add_completion(int64_t a,int64_t b){
- proof_helper_counts[2]++;
- uint64_t tag=(a==INT64_MIN)?1:0;
- uint64_t payload=(a==INT64_MIN)?1:((uint64_t)a+(uint64_t)b);
- return (int64_t)((tag<<56)|(payload&PAYLOAD_MASK));
+static uint64_t proof_safepoint_counts[6];
+static OgmaProofAbi proof_api;
+static const OgmaRuntime *proof_runtime;
+static OgmaContextHandle proof_context;
+static OgmaHandle proof_dynamic_function;
+static OgmaHandle proof_host_function;
+static OgmaProofSafepointCallback proof_safepoint_callback;
+static void *proof_safepoint_user_data;
+static uint32_t proof_last_abi_status;
+static uint32_t proof_last_safepoint_status;
+static uint32_t proof_last_completion_kind;
+static int64_t proof_last_completion_payload;
+
+void ogma_proof_reset(void) {
+  memset(proof_helper_counts, 0, sizeof(proof_helper_counts));
+  memset(proof_safepoint_counts, 0, sizeof(proof_safepoint_counts));
+  call_argument[0] = '\0';
+  call_receiver = 0;
+  proof_last_abi_status = OGMA_STATUS_OK;
+  proof_last_safepoint_status = 0;
+  proof_last_completion_kind = OGMA_COMPLETION_NORMAL;
+  proof_last_completion_payload = 0;
 }
-int64_t ogma_js_throw(int64_t completion){proof_helper_counts[3]++;return completion;}
-int64_t ogma_js_add_mixed(int64_t text,double number){proof_helper_counts[4]++;const char *left=(const char *)(uintptr_t)text;(void)snprintf(dynamic_string,sizeof(dynamic_string),"%s%.0f",left,number);return (int64_t)(uintptr_t)dynamic_string;}
-typedef int64_t (*OgmaCallTarget)(int64_t,int64_t);
-int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){proof_helper_counts[5]++;OgmaCallTarget target=(OgmaCallTarget)(uintptr_t)callee;return target(receiver,arg);}
-int64_t ogma_js_call_target(int64_t receiver,int64_t arg){
- proof_helper_counts[6]++;
- const char *value=(const char *)(uintptr_t)arg;
- call_receiver=receiver;
- (void)snprintf(call_argument,sizeof(call_argument),"%s",value);
- if(strcmp(value,"item=5")!=0)return -1;
- return receiver+(int64_t)strlen(value);
+uint64_t ogma_proof_count(uint32_t index) {
+  return index < 8 ? proof_helper_counts[index] : 0;
 }
-int64_t ogma_host_echo(int64_t arg){proof_helper_counts[7]++;return arg+11;}
+uint64_t ogma_proof_safepoint_count(uint32_t site) {
+  return site < 6 ? proof_safepoint_counts[site] : 0;
+}
+int32_t ogma_proof_last_safepoint_status(void) {
+  return (int32_t)proof_last_safepoint_status;
+}
+uint32_t ogma_proof_last_abi_status(void) {
+  return proof_last_abi_status;
+}
+uint32_t ogma_proof_last_completion_kind(void) {
+  return proof_last_completion_kind;
+}
+int64_t ogma_proof_last_completion_payload(void) {
+  return proof_last_completion_payload;
+}
+int64_t ogma_proof_last_call_receiver(void) {
+  return call_receiver;
+}
+const char *ogma_proof_last_call_argument(void) {
+  return call_argument;
+}
+void ogma_proof_bind_abi(
+  const OgmaProofAbi *api,
+  const OgmaRuntime *runtime,
+  OgmaContextHandle context,
+  OgmaHandle dynamic_function,
+  OgmaHandle host_function,
+  OgmaProofSafepointCallback safepoint_callback,
+  void *user_data
+) {
+  if (!api || !runtime || !safepoint_callback || !user_data) {
+    proof_last_abi_status = OGMA_STATUS_INVALID_ARGUMENT;
+    return;
+  }
+  proof_api = *api;
+  proof_runtime = runtime;
+  proof_context = context;
+  proof_dynamic_function = dynamic_function;
+  proof_host_function = host_function;
+  proof_safepoint_callback = safepoint_callback;
+  proof_safepoint_user_data = user_data;
+  proof_last_abi_status = OGMA_STATUS_OK;
+}
+int32_t ogma_proof_safepoint(uint32_t site) {
+  if (proof_last_safepoint_status != 0) return (int32_t)proof_last_safepoint_status;
+  if (site == 0 || site >= 6 || !proof_safepoint_callback) {
+    proof_last_safepoint_status = (uint32_t)-1;
+    return -1;
+  }
+  proof_safepoint_counts[site]++;
+  int32_t status = proof_safepoint_callback(site, proof_safepoint_user_data);
+  if (status != 0 && proof_last_safepoint_status == 0) {
+    proof_last_safepoint_status = (uint32_t)status;
+  }
+  return status;
+}
+
+static int64_t proof_context_call(OgmaHandle function, const int64_t *values, size_t count, uint32_t helper_index) {
+  proof_helper_counts[helper_index]++;
+  if (proof_last_abi_status != OGMA_STATUS_OK) return INT64_MIN;
+  if (!proof_runtime || !proof_safepoint_callback || !values || count == 0 || count > 2) {
+    proof_last_abi_status = OGMA_STATUS_INVALID_ARGUMENT;
+    return INT64_MIN;
+  }
+  const uint64_t required = OGMA_FEATURE_OPAQUE_HANDLES
+    | OGMA_FEATURE_ROOT_SCOPES
+    | OGMA_FEATURE_PERSISTENT_HANDLES
+    | OGMA_FEATURE_CALLBACKS
+    | OGMA_FEATURE_COMPLETIONS
+    | OGMA_FEATURE_MOCK_PROOF;
+  if (proof_api.version.major != 1
+      || proof_api.version.struct_size != sizeof(OgmaAbiVersion)
+      || (proof_api.version.features & required) != required) {
+    proof_last_abi_status = OGMA_STATUS_INCOMPATIBLE_ABI;
+    return INT64_MIN;
+  }
+
+  OgmaRootScopeHandle scope = {0};
+  OgmaStatus status = proof_api.root_scope_open(proof_runtime, proof_context, &scope);
+  if (status != OGMA_STATUS_OK) {
+    if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+    return INT64_MIN;
+  }
+
+  OgmaHandle arguments[2] = {{0}};
+  for (size_t index = 0; index < count; index++) {
+    status = proof_api.context_create_number(
+      proof_runtime, proof_context, (double)values[index], &arguments[index]
+    );
+    if (status != OGMA_STATUS_OK) {
+      if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+      (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+      return INT64_MIN;
+    }
+    status = proof_api.root_scope_add(proof_runtime, proof_context, scope, arguments[index]);
+    if (status != OGMA_STATUS_OK) {
+      if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+      (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+      return INT64_MIN;
+    }
+  }
+
+  OgmaCompletion completion = {0};
+  status = proof_api.context_call(
+    proof_runtime, proof_context, function, arguments, count, &completion
+  );
+  if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+  if (status != OGMA_STATUS_OK) {
+    (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+    return INT64_MIN;
+  }
+  if (completion.kind != OGMA_COMPLETION_NORMAL && completion.kind != OGMA_COMPLETION_THROW) {
+    proof_last_abi_status = OGMA_STATUS_INVALID_COMPLETION;
+    (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+    return INT64_MIN;
+  }
+  proof_last_completion_kind = completion.kind;
+  if (completion.value.opaque[0] == 0) {
+    proof_last_abi_status = OGMA_STATUS_INVALID_COMPLETION;
+    (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+    return INT64_MIN;
+  }
+  status = proof_api.root_scope_add(proof_runtime, proof_context, scope, completion.value);
+  if (status != OGMA_STATUS_OK) {
+    if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+    (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+    return INT64_MIN;
+  }
+  double result = 0.0;
+  status = proof_api.context_get_number(proof_runtime, proof_context, completion.value, &result);
+  if (status != OGMA_STATUS_OK) {
+    if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+    (void)proof_api.root_scope_close(proof_runtime, proof_context, scope);
+    return INT64_MIN;
+  }
+  status = proof_api.root_scope_close(proof_runtime, proof_context, scope);
+  if (status != OGMA_STATUS_OK) {
+    if (status != OGMA_STATUS_OK && proof_last_abi_status == OGMA_STATUS_OK) proof_last_abi_status = status;
+    return INT64_MIN;
+  }
+  proof_last_completion_payload = (int64_t)result;
+  return proof_last_completion_payload;
+}
+
+int64_t ogma_js_add_number(double a, double b) {
+  proof_helper_counts[0]++;
+  double value = a + b;
+  int64_t boxed;
+  memcpy(&boxed, &value, sizeof(boxed));
+  return boxed;
+}
+double ogma_js_to_number(int64_t boxed) {
+  proof_helper_counts[1]++;
+  double value;
+  memcpy(&value, &boxed, sizeof(value));
+  return value;
+}
+int64_t ogma_js_add_completion(int64_t a, int64_t b) {
+  const int64_t values[] = {a, b};
+  return proof_context_call(proof_dynamic_function, values, 2, 2);
+}
+int64_t ogma_js_throw(int64_t completion) {
+  proof_helper_counts[3]++;
+  return completion;
+}
+int64_t ogma_js_add_mixed(int64_t text, double number) {
+  proof_helper_counts[4]++;
+  const char *left = (const char *)(uintptr_t)text;
+  (void)snprintf(dynamic_string, sizeof(dynamic_string), "%s%.0f", left, number);
+  return (int64_t)(uintptr_t)dynamic_string;
+}
+typedef int64_t (*OgmaCallTarget)(int64_t, int64_t);
+int64_t ogma_js_call(int64_t callee, int64_t receiver, int64_t arg) {
+  proof_helper_counts[5]++;
+  OgmaCallTarget target = (OgmaCallTarget)(uintptr_t)callee;
+  return target(receiver, arg);
+}
+int64_t ogma_js_call_target(int64_t receiver, int64_t arg) {
+  proof_helper_counts[6]++;
+  const char *value = (const char *)(uintptr_t)arg;
+  call_receiver = receiver;
+  (void)snprintf(call_argument, sizeof(call_argument), "%s", value);
+  if (strcmp(value, "item=5") != 0) return -1;
+  return receiver + (int64_t)strlen(value);
+}
+int64_t ogma_host_echo(int64_t arg) {
+  return proof_context_call(proof_host_function, &arg, 1, 7);
+}
 "#;
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
     fs::write(helper, HELPERS)?;
     let start = Instant::now();
+    let abi_include = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../rust-abi/include");
     let out = Command::new("cc")
         .args(["-shared", "-fPIC"])
+        .arg("-I")
+        .arg(abi_include)
         .arg(object)
         .arg("-x")
         .arg("c")
@@ -1082,6 +1837,7 @@ struct BackendReport {
     native_object_path: Option<String>,
     semantic_observations: JsonValue,
     runtime_helper_calls: JsonValue,
+    runtime_integration: JsonValue,
     workloads: JsonValue,
 }
 fn compile_once(backend: &str, path: &Path, c: &CoreCorpus) -> Result<u64> {
@@ -1145,12 +1901,129 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
 
     let reset: ResetCounters = unsafe { *lib.get(b"ogma_proof_reset\0")? };
     let count: CountHelper = unsafe { *lib.get(b"ogma_proof_count\0")? };
+    let safepoint_count: ProofCounter = unsafe { *lib.get(b"ogma_proof_safepoint_count\0")? };
+    let last_safepoint_status: ProofStatus = unsafe { *lib.get(b"ogma_proof_last_safepoint_status\0")? };
+    let last_abi_status: ProofStatusU32 = unsafe { *lib.get(b"ogma_proof_last_abi_status\0")? };
+    let last_completion_kind: ProofCompletionKind =
+        unsafe { *lib.get(b"ogma_proof_last_completion_kind\0")? };
+    let last_completion_payload: ProofCompletionPayload =
+        unsafe { *lib.get(b"ogma_proof_last_completion_payload\0")? };
     let last_call_receiver: LastCallReceiver =
         unsafe { *lib.get(b"ogma_proof_last_call_receiver\0")? };
     let last_call_argument: LastCallArgument =
         unsafe { *lib.get(b"ogma_proof_last_call_argument\0")? };
-    // SAFETY: the function pointer was resolved from the just-loaded helper library.
+    // SAFETY: this helper resets only its private counters and trace snapshots.
     unsafe { reset() };
+
+    // Negotiate the existing versioned OGM-19 C ABI and register real callback-backed
+    // mock functions. The native object calls through a C function table populated
+    // with these exported ABI entry points; it does not call the callbacks directly.
+    let required_features = abi::FEATURE_OPAQUE_HANDLES
+        | abi::FEATURE_ROOT_SCOPES
+        | abi::FEATURE_PERSISTENT_HANDLES
+        | abi::FEATURE_CALLBACKS
+        | abi::FEATURE_COMPLETIONS
+        | abi::FEATURE_MOCK_PROOF;
+    let mut abi_version = abi::OgmaAbiVersion::default();
+    let status = unsafe { abi::ogma_abi_negotiate(1, 0, required_features, &mut abi_version) };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: OGM-19 ABI negotiation failed: {status:?}");
+    }
+    if abi_version.major != 1 || abi_version.reserved != 0 || abi_version.reserved2 != 0 {
+        bail!("{name}: unexpected negotiated OGM-19 ABI descriptor");
+    }
+
+    let mut runtime = ptr::null_mut();
+    let status = unsafe { abi::ogma_runtime_create(&mut runtime) };
+    if status != abi::OgmaStatus::OK || runtime.is_null() {
+        bail!("{name}: OGM-19 runtime creation failed: {status:?}");
+    }
+    let mut context = abi::OgmaContextHandle::default();
+    let status = unsafe { abi::ogma_context_create(runtime, &mut context) };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: OGM-19 context creation failed: {status:?}");
+    }
+
+    let mut proof_state = NativeProofState::new()?;
+    let state_ptr = (&mut *proof_state as *mut NativeProofState).cast::<c_void>();
+    let mut dynamic_callback = abi::OgmaCallbackHandle::default();
+    let status = unsafe {
+        abi::ogma_callback_register(
+            runtime,
+            context,
+            Some(dynamic_add_host_callback),
+            state_ptr,
+            &mut dynamic_callback,
+        )
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: register OGM-19 dynamic-add callback failed: {status:?}");
+    }
+    let mut host_callback = abi::OgmaCallbackHandle::default();
+    let status = unsafe {
+        abi::ogma_callback_register(
+            runtime,
+            context,
+            Some(host_echo_callback),
+            state_ptr,
+            &mut host_callback,
+        )
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: register OGM-19 host-echo callback failed: {status:?}");
+    }
+    let mut dynamic_function = abi::OgmaHandle::default();
+    let status = unsafe {
+        abi::ogma_mock_function_create(runtime, context, dynamic_callback, &mut dynamic_function)
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: create OGM-19 dynamic-add function failed: {status:?}");
+    }
+    let mut host_function = abi::OgmaHandle::default();
+    let status = unsafe {
+        abi::ogma_mock_function_create(runtime, context, host_callback, &mut host_function)
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: create OGM-19 host-echo function failed: {status:?}");
+    }
+    let mut dynamic_persistent = abi::OgmaPersistentHandle::default();
+    let status = unsafe {
+        abi::ogma_persistent_create(runtime, context, dynamic_function, &mut dynamic_persistent)
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: persist dynamic-add function failed: {status:?}");
+    }
+    let mut host_persistent = abi::OgmaPersistentHandle::default();
+    let status = unsafe {
+        abi::ogma_persistent_create(runtime, context, host_function, &mut host_persistent)
+    };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: persist host-echo function failed: {status:?}");
+    }
+
+    let proof_api = OgmaProofAbi {
+        version: abi_version,
+        context_create_number: abi::ogma_context_create_number,
+        context_get_number: abi::ogma_context_get_number,
+        root_scope_open: abi::ogma_root_scope_open,
+        root_scope_add: abi::ogma_root_scope_add,
+        root_scope_close: abi::ogma_root_scope_close,
+        context_call: abi::ogma_context_call,
+    };
+    let bind: BindProofAbi = unsafe { *lib.get(b"ogma_proof_bind_abi\0")? };
+    // SAFETY: the helper copies the table and token values. proof_state remains boxed
+    // and both ABI objects remain alive until all generated calls have completed.
+    unsafe {
+        bind(
+            &proof_api,
+            runtime,
+            context,
+            dynamic_function,
+            host_function,
+            native_safepoint_callback,
+            state_ptr,
+        );
+    }
 
     let branch: BinaryF64 = unsafe { *lib.get(sym(&c.symbol("branch")?).as_slice())? };
     let loop_fn: TernaryF64 = unsafe { *lib.get(sym(&c.symbol("loop")?).as_slice())? };
@@ -1174,6 +2047,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if unsafe { branch(f64::NAN, 3.0) } != 3.0 || !unsafe { branch(3.0, f64::NAN) }.is_nan() {
         bail!("{name}: strict equality must treat NaN as unequal");
     }
+    if unsafe { last_safepoint_status() } != 0 {
+        bail!("{name}: OGM-27 safepoint callback failed during branch execution");
+    }
 
     let loop_integer = unsafe { loop_fn(0.0, 5.0, 1.0) };
     let loop_fractional = unsafe { loop_fn(0.5, 3.5, 0.75) };
@@ -1182,12 +2058,22 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     }
 
     let dynamic_add_normal = unsafe { exception(7, 8) };
-    if dynamic_add_normal != 15 {
-        bail!("{name}: normal completion mismatch");
+    let dynamic_normal_kind = unsafe { last_completion_kind() };
+    let dynamic_normal_payload = unsafe { last_completion_payload() };
+    if dynamic_add_normal != 15
+        || dynamic_normal_kind != abi::COMPLETION_NORMAL
+        || dynamic_normal_payload != 15
+    {
+        bail!("{name}: normal JS addition did not preserve the OGM-19 Normal completion");
     }
     let dynamic_add_throw = unsafe { exception(i64::MIN, 9) };
-    if dynamic_add_throw != ((1_u64 << 56) | 1) as i64 {
-        bail!("{name}: Symbol TypeError completion tag/payload was not preserved");
+    let dynamic_throw_kind = unsafe { last_completion_kind() };
+    let dynamic_throw_payload = unsafe { last_completion_payload() };
+    if dynamic_add_throw != i64::MIN
+        || dynamic_throw_kind != abi::COMPLETION_THROW
+        || dynamic_throw_payload != i64::MIN
+    {
+        bail!("{name}: Symbol-conversion failure did not preserve OGM-19 Throw completion");
     }
 
     let call_boundary = unsafe { call(callee, 2, text_handle, 4, 4, 5.0) };
@@ -1200,18 +2086,42 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     }
     let call_argument = unsafe { std::ffi::CStr::from_ptr(call_arg_ptr) }
         .to_str()
-        .context("host callback argument was not UTF-8")?;
+        .context("call-boundary callback argument was not UTF-8")?;
     let call_receiver = unsafe { last_call_receiver() };
     if call_receiver != 2 || call_argument != "item=5" {
-        bail!("{name}: host callback trace mismatch");
+        bail!("{name}: call-boundary receiver/argument trace mismatch");
     }
 
     let host_call = unsafe { host(31) };
-    if host_call != 42 {
-        bail!("{name}: host.call mismatch");
+    let host_normal_kind = unsafe { last_completion_kind() };
+    let host_normal_payload = unsafe { last_completion_payload() };
+    if host_call != 42
+        || host_normal_kind != abi::COMPLETION_NORMAL
+        || host_normal_payload != 42
+    {
+        bail!("{name}: host capability did not travel through the OGM-19 Normal completion");
+    }
+    let host_repeat = unsafe { host(32) };
+    if host_repeat != 43
+        || unsafe { last_completion_kind() } != abi::COMPLETION_NORMAL
+        || unsafe { last_completion_payload() } != 43
+    {
+        bail!("{name}: repeated OGM-19 host callback changed its completion");
+    }
+    let host_throw = unsafe { host(-7) };
+    let host_throw_kind = unsafe { last_completion_kind() };
+    let host_throw_payload = unsafe { last_completion_payload() };
+    if host_throw != -7
+        || host_throw_kind != abi::COMPLETION_THROW
+        || host_throw_payload != -7
+    {
+        bail!("{name}: OGM-19 Throw completion did not survive the native host boundary");
     }
 
-    // Snapshot runtime helper counts before the direct helper microbenchmarks below.
+    if unsafe { last_abi_status() } != 0 || unsafe { last_safepoint_status() } != 0 {
+        bail!("{name}: an OGM-19 ABI operation or OGM-27 safepoint failed");
+    }
+    // Snapshot helper counts before the direct helper microbenchmarks below.
     let helper_names = [
         "js_add_number",
         "js_to_number",
@@ -1292,6 +2202,65 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
       "direct_host_helper":bench(o,|n|{black_box(unsafe{host_direct(n as i64)});})
     });
 
+    if unsafe { last_abi_status() } != 0 || unsafe { last_safepoint_status() } != 0 {
+        bail!("{name}: an OGM-19 ABI operation or OGM-27 safepoint failed during measurements");
+    }
+    for site in 1..=5 {
+        if unsafe { safepoint_count(site) } == 0 {
+            bail!("{name}: required OGM-27 safepoint site {site} was not observed");
+        }
+    }
+    let native_safepoints = serde_json::json!({
+        "function_entry": unsafe { safepoint_count(1) },
+        "loop_back_edge": unsafe { safepoint_count(2) },
+        "allocation_boundary": unsafe { safepoint_count(3) },
+        "call_boundary": unsafe { safepoint_count(4) },
+        "host_call_boundary": unsafe { safepoint_count(5) }
+    });
+    let model_evidence = proof_state.finish()?;
+    let runtime_integration = serde_json::json!({
+        "ogm19_version": {
+            "major": abi_version.major,
+            "minor": abi_version.minor,
+            "patch": abi_version.patch,
+            "features": abi_version.features,
+            "negotiated_required_features": required_features
+        },
+        "ogm19_completions": {
+            "dynamic_add_normal": {"kind": dynamic_normal_kind, "payload": dynamic_normal_payload},
+            "dynamic_add_throw": {"kind": dynamic_throw_kind, "payload": dynamic_throw_payload},
+            "host_echo_normal": {"kind": host_normal_kind, "payload": host_normal_payload},
+            "host_echo_throw": {"kind": host_throw_kind, "payload": host_throw_payload}
+        },
+        "ogm19_last_status": unsafe { last_abi_status() },
+        "ogm27_native_safepoints": native_safepoints,
+        "ogm27_model": model_evidence
+    });
+
+    // Release the mock Runtime only after every generated-code call has returned.
+    for callback in [dynamic_callback, host_callback] {
+        let status = unsafe { abi::ogma_callback_unregister(runtime, context, callback) };
+        if status != abi::OgmaStatus::OK {
+            bail!("{name}: unregister OGM-19 callback failed: {status:?}");
+        }
+    }
+    for persistent in [dynamic_persistent, host_persistent] {
+        let status = unsafe { abi::ogma_persistent_release(runtime, context, persistent) };
+        if status != abi::OgmaStatus::OK {
+            bail!("{name}: release OGM-19 persistent function root failed: {status:?}");
+        }
+    }
+    let status = unsafe { abi::ogma_context_destroy(runtime, context) };
+    if status != abi::OgmaStatus::OK {
+        bail!("{name}: destroy OGM-19 context failed: {status:?}");
+    }
+    let status = unsafe { abi::ogma_runtime_destroy(&mut runtime) };
+    if status != abi::OgmaStatus::OK || !runtime.is_null() {
+        bail!("{name}: destroy OGM-19 runtime failed: {status:?}");
+    }
+
+
+
     let native_object_path = if let Some(directory) = &o.artifact_dir {
         fs::create_dir_all(directory)?;
         let destination = directory.join(format!("{name}.o"));
@@ -1311,6 +2280,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         native_object_path,
         semantic_observations,
         runtime_helper_calls,
+        runtime_integration,
         workloads,
     })
 }
@@ -1587,11 +2557,15 @@ fn main() -> Result<()> {
         llvm_binding_source_bytes: cargo_source_size(&["inkwell-", "llvm-sys-181"]),
         cranelift_build_artifact_bytes: cranelift_artifacts.bytes,
         llvm_binding_build_artifact_bytes: llvm_artifacts.bytes,
-        integration_notes: serde_json::json!({"core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixtures",
+        integration_notes: serde_json::json!({
+ "core_ir":"both backends lower the same canonical ogma.core-ir/1.0.0 fixture inputs",
  "cranelift":"Rust crates and in-process ObjectModule; no external LLVM toolchain",
  "llvm":"Inkwell/llvm-sys and system LLVM 18 development toolchain; in-process target-machine emission",
- "runtime_helpers":"C helper stubs exercise explicit JS semantic and host-call boundaries; not production Ogma Runtime or OGM-27 root maps",
- "status":"M0 benchmark only; no production compiler/Runtime integration"}),
+ "ogm19":"dynamic addition and host echo call through the versioned mock C ABI function table, opaque handles, registered Rust callbacks, root scopes and explicit completions",
+ "ogm27":"generated code calls modeled shadow-frame safepoints for entry, loop, allocation, call and host-call boundaries; the model verifies roots, transitions and execution-budget polls",
+ "fixture_adapters":"string/object call-boundary conversion and the reserved Symbol failure sentinel remain exact-fixture test adapters",
+ "status":"M0 fixture proof; not a production source compiler, Runtime, ABI implementation or machine-register stack-map encoder"
+}),
         cranelift,
         llvm_backend,
     };
@@ -1615,6 +2589,25 @@ mod tests {
         document["function"]["blocks"][0]["instructions"][1]["operands"][0] =
             JsonValue::String("wrong_value".into());
         assert!(validate_lowering_profile("call_boundary", &document).is_err());
+    }
+
+    #[test]
+    fn ogm31_composes_native_safepoints_and_completion_roots() {
+        let mut state = NativeProofState::new().unwrap();
+        for site in 1..=5 {
+            state.on_safepoint(site).unwrap();
+        }
+        state.exercise_transition_model(false).unwrap();
+        state.exercise_transition_model(true).unwrap();
+        assert_eq!(state.safepoint_counts.len(), 5);
+        assert_eq!(state.transition_paths.len(), 1);
+        assert_eq!(
+            state.transition_paths[0],
+            vec!["Native", "Interpreter", "HostCallback"]
+        );
+        assert!(state.heap.is_alive(state.sentinel));
+        assert_eq!(state.roots.native.depth(), 1);
+        assert_eq!(state.budget.poll_trace().len(), 5);
     }
 
     #[test]

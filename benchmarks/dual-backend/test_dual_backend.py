@@ -36,6 +36,66 @@ class DualBackendProofTests(unittest.TestCase):
             {item["core_ir"] for item in proof_manifest["source_fixtures"]},
         )
 
+    def test_native_runtime_integration_evidence_is_checked_not_assumed(self) -> None:
+        features = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 63)
+        integration = {
+            "ogm19_version": {"major": 1, "features": features},
+            "ogm19_completions": {
+                "dynamic_add_normal": {"kind": 0, "payload": 15},
+                "dynamic_add_throw": {"kind": 1, "payload": -(1 << 63)},
+                "host_echo_normal": {"kind": 0, "payload": 42},
+                "host_echo_throw": {"kind": 1, "payload": -7},
+            },
+            "ogm19_last_status": 0,
+            "ogm27_native_safepoints": {
+                "function_entry": 3,
+                "loop_back_edge": 4,
+                "allocation_boundary": 2,
+                "call_boundary": 2,
+                "host_call_boundary": 3,
+            },
+            "ogm27_model": {
+                "callback_invocations": 5,
+                "callback_trace": [
+                    {"symbol": "benchmark.core_ir.dynamic_add", "args": [7.0, 8.0],
+                     "completion": {"kind": 0, "value": 15.0}},
+                    {"symbol": "benchmark.core_ir.dynamic_add", "args": [-(1 << 63), 9.0],
+                     "completion": {"kind": 1, "value": -(1 << 63)}},
+                    {"symbol": "benchmark.host.echo", "args": [31.0],
+                     "completion": {"kind": 0, "value": 42.0}},
+                    {"symbol": "benchmark.host.echo", "args": [32.0],
+                     "completion": {"kind": 0, "value": 43.0}},
+                    {"symbol": "benchmark.host.echo", "args": [-7.0],
+                     "completion": {"kind": 1, "value": -7.0}},
+                ],
+                "argument_handles_survived_collection_inside_callback": True,
+                "normal_completions": 3,
+                "throw_completions": 2,
+                "completion_transition_paths": [["Native", "Interpreter", "HostCallback"]],
+                "native_shadow_frame": {
+                    "active_during_execution": True,
+                    "live_managed_root_survived_every_collection": True,
+                    "root_maps": {"1": 2, "2": 3, "3": 1, "4": 1, "5": 2},
+                },
+                "execution_budget": {
+                    "work_units": 9,
+                    "polls": 9,
+                    "max_unpolled_work": 64,
+                },
+            },
+        }
+        self.assertTrue(proof.validate_runtime_integration("cranelift", integration)["ogm19_abi_v1_negotiated"])
+
+        invalid = json.loads(json.dumps(integration))
+        del invalid["ogm27_native_safepoints"]["loop_back_edge"]
+        with self.assertRaisesRegex(RuntimeError, "every OGM-27 safepoint"):
+            proof.validate_runtime_integration("cranelift", invalid)
+
+        invalid = json.loads(json.dumps(integration))
+        invalid["ogm19_completions"]["host_echo_throw"]["kind"] = 0
+        with self.assertRaisesRegex(RuntimeError, "completion mismatch"):
+            proof.validate_runtime_integration("llvm", invalid)
+
     def test_stack_and_register_interpreters_match_all_common_observations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             register, _ = proof.run_portable_observations(

@@ -407,10 +407,20 @@ dependencies = [
  "cranelift-object",
  "inkwell",
  "libloading",
+ "ogma-native-runtime-boundary-proof",
+ "ogma-rust-abi-proof",
  "serde",
  "serde_json",
  "target-lexicon",
 ]
+
+[[package]]
+name = "ogma-native-runtime-boundary-proof"
+version = "0.1.0"
+
+[[package]]
+name = "ogma-rust-abi-proof"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"
