@@ -477,7 +477,8 @@ fn map_dispatch_error(error: DispatchError) -> OgmaStatus {
         | DispatchError::WrongThread => OgmaStatus::WRONG_THREAD,
         DispatchError::HostExecution(
             ogma_host_execution_scope_proof::HostError::ScopeDepthExceeded,
-        ) | DispatchError::Busy => OgmaStatus::BUSY,
+        )
+        | DispatchError::Busy => OgmaStatus::BUSY,
         DispatchError::HostExecution(
             ogma_host_execution_scope_proof::HostError::ScopeAlreadyActive,
         )
