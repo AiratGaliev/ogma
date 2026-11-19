@@ -29,11 +29,17 @@ use std::{
     time::Instant,
 };
 
+const UNDEFINED_TAG: u64 = 1;
+const NULL_TAG: u64 = 2;
 const NUMBER_TAG: u64 = 3;
 const STRING_TAG: u64 = 4;
 const BIGINT_TAG: u64 = 5;
 const OBJECT_TAG: u64 = 6;
 const SYMBOL_TAG: u64 = 7;
+const BOOLEAN_TAG: u64 = 8;
+const NANBOX_UNDEFINED_TAG: u64 = 0x7ff9;
+const NANBOX_NULL_TAG: u64 = 0x7ffa;
+const NANBOX_BOOLEAN_TAG: u64 = 0x7ffb;
 const NANBOX_STRING_TAG: u64 = 0x7ffc;
 const NANBOX_BIGINT_TAG: u64 = 0x7ffd;
 const NANBOX_OBJECT_TAG: u64 = 0x7ffe;
@@ -44,6 +50,30 @@ const NANBOX_HANDLE_TAGS: [u64; 4] = [
     NANBOX_BIGINT_TAG,
     NANBOX_OBJECT_TAG,
     NANBOX_SYMBOL_TAG,
+];
+const NANBOX_IMMEDIATE_TAGS: [u64; 3] = [
+    NANBOX_UNDEFINED_TAG,
+    NANBOX_NULL_TAG,
+    NANBOX_BOOLEAN_TAG,
+];
+const NANBOX_VALUE_TAGS: [u64; 7] = [
+    NANBOX_UNDEFINED_TAG,
+    NANBOX_NULL_TAG,
+    NANBOX_BOOLEAN_TAG,
+    NANBOX_STRING_TAG,
+    NANBOX_BIGINT_TAG,
+    NANBOX_OBJECT_TAG,
+    NANBOX_SYMBOL_TAG,
+];
+const NATIVE_VALUE_TAGS: [u64; 8] = [
+    UNDEFINED_TAG,
+    NULL_TAG,
+    NUMBER_TAG,
+    STRING_TAG,
+    BIGINT_TAG,
+    OBJECT_TAG,
+    SYMBOL_TAG,
+    BOOLEAN_TAG,
 ];
 const NAN_TAG_SHIFT: u32 = 48;
 const MAX_PAYLOAD: u64 = (1_u64 << NAN_TAG_SHIFT) - 1;
@@ -67,7 +97,8 @@ type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 
 struct NativeHandleCallbackContext {
     heap: *mut GcHeap,
-    expected_object: ogma_gc_comparison_proof::GcRef,
+    expected_object: Option<ogma_gc_comparison_proof::GcRef>,
+    expected_payload: u64,
     expected_tag: u64,
     calls: u64,
     collections: u64,
@@ -81,7 +112,7 @@ unsafe extern "C" fn resolve_native_handle_callback(
     tag: u64,
     token: u64,
 ) -> i32 {
-    if context_pointer == 0 || token == 0 {
+    if context_pointer == 0 {
         return 1;
     }
     // SAFETY: the caller passes a pointer to NativeHandleCallbackContext for
@@ -99,9 +130,18 @@ unsafe extern "C" fn resolve_native_handle_callback(
         }
         context.collections += 1;
     }
-    match heap.resolve_host_handle_token(token) {
-        Ok(reference) if reference == context.expected_object => 0,
-        _ => 4,
+    match context.expected_object {
+        Some(expected) => {
+            if token == 0 {
+                return 4;
+            }
+            match heap.resolve_host_handle_token(token) {
+                Ok(reference) if reference == expected => 0,
+                _ => 4,
+            }
+        }
+        None if token == context.expected_payload => 0,
+        None => 4,
     }
 }
 
@@ -205,6 +245,182 @@ fn encode_candidate_number_value(
         }
     }
     Ok(())
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateValue {
+    Undefined,
+    Null,
+    Boolean(bool),
+    Number(u64),
+    StringRef(u64),
+    BigIntRef(u64),
+    ObjectRef(u64),
+    SymbolRef(u64),
+}
+
+fn encode_candidate_value(
+    runtime: RuntimeLayout,
+    storage: &mut [u64],
+    slot_index: usize,
+    value: CandidateValue,
+) -> Result<()> {
+    match value {
+        CandidateValue::Undefined | CandidateValue::Null | CandidateValue::Boolean(_) => {
+            let (tagged_tag, payload, nanbox_tag) = match value {
+                CandidateValue::Undefined => (UNDEFINED_TAG, 0, NANBOX_UNDEFINED_TAG),
+                CandidateValue::Null => (NULL_TAG, 0, NANBOX_NULL_TAG),
+                CandidateValue::Boolean(value) => {
+                    (BOOLEAN_TAG, u64::from(value), NANBOX_BOOLEAN_TAG)
+                }
+                _ => unreachable!(),
+            };
+            match runtime {
+                RuntimeLayout::Tagged16 => {
+                    let word_index = slot_index
+                        .checked_mul(2)
+                        .context("tagged immediate Value slot index overflow")?;
+                    let words = storage
+                        .get_mut(word_index..word_index + 2)
+                        .context("tagged immediate Value storage slot out of bounds")?;
+                    words[0] = tagged_tag;
+                    words[1] = payload;
+                }
+                RuntimeLayout::NanBox8 => {
+                    *storage
+                        .get_mut(slot_index)
+                        .context("NaN-box immediate Value storage slot out of bounds")? =
+                        (nanbox_tag << NAN_TAG_SHIFT) | payload;
+                }
+            }
+            Ok(())
+        }
+        CandidateValue::Number(bits) => {
+            encode_candidate_number_value(
+                runtime,
+                storage,
+                slot_index,
+                f64::from_bits(bits),
+            )
+        }
+        CandidateValue::StringRef(token) => {
+            encode_candidate_reference_value(runtime, storage, slot_index, STRING_TAG, token)
+        }
+        CandidateValue::BigIntRef(token) => {
+            encode_candidate_reference_value(runtime, storage, slot_index, BIGINT_TAG, token)
+        }
+        CandidateValue::ObjectRef(token) => {
+            encode_candidate_reference_value(runtime, storage, slot_index, OBJECT_TAG, token)
+        }
+        CandidateValue::SymbolRef(token) => {
+            encode_candidate_reference_value(runtime, storage, slot_index, SYMBOL_TAG, token)
+        }
+    }
+}
+
+fn decode_candidate_value(
+    runtime: RuntimeLayout,
+    storage: &[u64],
+    slot_index: usize,
+) -> Result<CandidateValue> {
+    match runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("tagged Value slot index overflow")?;
+            let words = storage
+                .get(word_index..word_index + 2)
+                .context("tagged Value storage slot out of bounds")?;
+            match words[0] {
+                UNDEFINED_TAG if words[1] == 0 => Ok(CandidateValue::Undefined),
+                NULL_TAG if words[1] == 0 => Ok(CandidateValue::Null),
+                BOOLEAN_TAG if words[1] <= 1 => Ok(CandidateValue::Boolean(words[1] != 0)),
+                NUMBER_TAG => {
+                    let number = f64::from_bits(words[1]);
+                    if number.is_nan() && words[1] != CANONICAL_NAN_BITS {
+                        bail!("tagged Number contains a non-canonical NaN");
+                    }
+                    Ok(CandidateValue::Number(words[1]))
+                }
+                STRING_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => {
+                    Ok(CandidateValue::StringRef(words[1]))
+                }
+                BIGINT_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => {
+                    Ok(CandidateValue::BigIntRef(words[1]))
+                }
+                OBJECT_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => {
+                    Ok(CandidateValue::ObjectRef(words[1]))
+                }
+                SYMBOL_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => {
+                    Ok(CandidateValue::SymbolRef(words[1]))
+                }
+                tag => bail!("invalid tagged Value tag/payload combination {tag}/{:#x}", words[1]),
+            }
+        }
+        RuntimeLayout::NanBox8 => {
+            let word = *storage
+                .get(slot_index)
+                .context("NaN-box Value storage slot out of bounds")?;
+            let tag = word >> NAN_TAG_SHIFT;
+            let payload = word & MAX_PAYLOAD;
+            match tag {
+                NANBOX_UNDEFINED_TAG if payload == 0 => Ok(CandidateValue::Undefined),
+                NANBOX_NULL_TAG if payload == 0 => Ok(CandidateValue::Null),
+                NANBOX_BOOLEAN_TAG if payload <= 1 => {
+                    Ok(CandidateValue::Boolean(payload != 0))
+                }
+                NANBOX_STRING_TAG if payload != 0 => Ok(CandidateValue::StringRef(payload)),
+                NANBOX_BIGINT_TAG if payload != 0 => Ok(CandidateValue::BigIntRef(payload)),
+                NANBOX_OBJECT_TAG if payload != 0 => Ok(CandidateValue::ObjectRef(payload)),
+                NANBOX_SYMBOL_TAG if payload != 0 => Ok(CandidateValue::SymbolRef(payload)),
+                NANBOX_UNDEFINED_TAG
+                | NANBOX_NULL_TAG
+                | NANBOX_BOOLEAN_TAG
+                | NANBOX_STRING_TAG
+                | NANBOX_BIGINT_TAG
+                | NANBOX_OBJECT_TAG
+                | NANBOX_SYMBOL_TAG => bail!(
+                    "invalid NaN-box tag/payload combination {tag:#06x}/{payload:#x}"
+                ),
+                _ => {
+                    let exponent = word & 0x7ff0_0000_0000_0000;
+                    let fraction = word & 0x000f_ffff_ffff_ffff;
+                    if exponent == 0x7ff0_0000_0000_0000
+                        && fraction != 0
+                        && word != CANONICAL_NAN_BITS
+                    {
+                        bail!("NaN-box Number contains a non-canonical NaN");
+                    }
+                    Ok(CandidateValue::Number(canonical_number_bits(f64::from_bits(word))))
+                }
+            }
+        }
+    }
+}
+
+fn candidate_value_tag_payload(
+    runtime: RuntimeLayout,
+    storage: &[u64],
+    slot_index: usize,
+) -> Result<(u64, u64)> {
+    match runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("tagged Value slot index overflow")?;
+            let words = storage
+                .get(word_index..word_index + 2)
+                .context("tagged Value storage slot out of bounds")?;
+            Ok((words[0], words[1]))
+        }
+        RuntimeLayout::NanBox8 => {
+            let word = *storage
+                .get(slot_index)
+                .context("NaN-box Value storage slot out of bounds")?;
+            Ok((word >> NAN_TAG_SHIFT, word & MAX_PAYLOAD))
+        }
+    }
 }
 
 fn encode_candidate_reference_value(
