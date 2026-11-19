@@ -426,9 +426,15 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         if candidate.runtime == RuntimeLayout::Tagged16 {
             let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
-            let start_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
-            let limit_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
-            let step_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
+            let start_tag = b
+                .ins()
+                .load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
+            let limit_tag = b
+                .ins()
+                .load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
+            let step_tag = b
+                .ins()
+                .load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
             let start_is_number = b.ins().icmp(
                 cranelift_codegen::ir::condcodes::IntCC::Equal,
                 start_tag,
@@ -459,12 +465,24 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         b.switch_to_block(initial_state);
         let initial_values = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
-                let start_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
-                let start_payload = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
-                let limit_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
-                let limit_payload = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
-                let step_tag = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
-                let step_payload = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
+                let start_tag = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
+                let start_payload =
+                    b.ins()
+                        .load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
+                let limit_tag = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
+                let limit_payload =
+                    b.ins()
+                        .load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
+                let step_tag = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
+                let step_payload =
+                    b.ins()
+                        .load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![
                     start_tag,
@@ -477,12 +495,24 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 ]
             }
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
-                let start_bits = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
-                let limit_bits = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
-                let step_bits = b.ins().load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
-                let start = b.ins().bitcast(types::F64, MemFlags::from_u32(0), start_bits);
-                let limit = b.ins().bitcast(types::F64, MemFlags::from_u32(0), limit_bits);
-                let step = b.ins().bitcast(types::F64, MemFlags::from_u32(0), step_bits);
+                let start_bits = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
+                let limit_bits = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
+                let step_bits = b
+                    .ins()
+                    .load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
+                let start = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), start_bits);
+                let limit = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), limit_bits);
+                let step = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), step_bits);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![start, limit, step, zero]
             }
@@ -491,9 +521,15 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 vec![parameters[0], parameters[1], parameters[2], zero]
             }
             (RuntimeLayout::NanBox8, SsaPolicy::RepresentationAware) => {
-                let start = b.ins().bitcast(types::F64, MemFlags::from_u32(0), parameters[0]);
-                let limit = b.ins().bitcast(types::F64, MemFlags::from_u32(0), parameters[1]);
-                let step = b.ins().bitcast(types::F64, MemFlags::from_u32(0), parameters[2]);
+                let start = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[0]);
+                let limit = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[1]);
+                let step = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[2]);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![start, limit, step, zero]
             }
@@ -509,13 +545,21 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let loop_state = b.block_params(loop_block).to_vec();
         let (current, limit, step, count) = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
-                let current_bits = b.ins().bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
-                let limit_bits = b.ins().bitcast(types::F64, MemFlags::from_u32(0), loop_state[3]);
+                let current_bits =
+                    b.ins()
+                        .bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
+                let limit_bits = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), loop_state[3]);
                 (current_bits, limit_bits, loop_state[5], loop_state[6])
             }
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
-                let current_bits = b.ins().bitcast(types::F64, MemFlags::from_u32(0), loop_state[0]);
-                let limit_bits = b.ins().bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
+                let current_bits =
+                    b.ins()
+                        .bitcast(types::F64, MemFlags::from_u32(0), loop_state[0]);
+                let limit_bits = b
+                    .ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
                 (current_bits, limit_bits, loop_state[2], loop_state[3])
             }
             (_, SsaPolicy::RepresentationAware) => {
@@ -553,13 +597,17 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let add_state = b.block_params(add_block).to_vec();
         let (add_current, add_step, add_count) = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => (
-                b.ins().bitcast(types::F64, MemFlags::from_u32(0), add_state[1]),
-                b.ins().bitcast(types::F64, MemFlags::from_u32(0), add_state[5]),
+                b.ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[1]),
+                b.ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[5]),
                 add_state[6],
             ),
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => (
-                b.ins().bitcast(types::F64, MemFlags::from_u32(0), add_state[0]),
-                b.ins().bitcast(types::F64, MemFlags::from_u32(0), add_state[2]),
+                b.ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[0]),
+                b.ins()
+                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[2]),
                 add_state[3],
             ),
             (_, SsaPolicy::RepresentationAware) => (add_state[0], add_state[2], add_state[3]),
@@ -596,7 +644,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             }
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
                 let tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
-                let bits = b.ins().bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
+                let bits = b
+                    .ins()
+                    .bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
                 b.ins().store(MemFlags::from_u32(0), tag, parameters[3], 0);
                 b.ins().store(MemFlags::from_u32(0), bits, parameters[3], 8);
             }
@@ -605,7 +655,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     .store(MemFlags::from_u32(0), done_state[0], parameters[3], 0);
             }
             (RuntimeLayout::NanBox8, SsaPolicy::RepresentationAware) => {
-                let bits = b.ins().bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
+                let bits = b
+                    .ins()
+                    .bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
                 b.ins().store(MemFlags::from_u32(0), bits, parameters[3], 0);
             }
         }
