@@ -51,7 +51,7 @@ python benchmarks/runtime-footprint/run.py \
 
 The run builds the pinned OGM-30 backend proof executable with cargo build --release --locked, starts the isolated portable proof worker, executes the native benchmark binary under GNU time, and emits a JSON report plus .ogmb and native-object evidence. The CI job uploads the complete report, Cargo target output summary, timing report and proof artifacts. The tested source revision, full toolchain versions, CPU and target are recorded.
 
-The command line permits smaller sample counts for local smoke testing; accepted baseline evidence should use at least 101 measurement samples and the same workload/target for both paths. The report retains raw measurement samples, p50/p95/p99, warm-up/sample counts and the exact revision.
+The native OGM-30 benchmark requires at least 101 measurement samples, so the unified runner enforces that minimum for both paths. Use a reduced iteration count for a faster local smoke run; accepted baseline evidence should retain the same workload/target and at least 101 samples. The report retains raw samples, p50/p95/p99, warm-up/sample counts and the exact revision.
 
 ## Interpretation and limitations
 
