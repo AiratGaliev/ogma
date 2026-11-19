@@ -249,7 +249,6 @@ fn encode_candidate_reference_value(
     Ok(())
 }
 
-
 fn encode_candidate_object_value(
     runtime: RuntimeLayout,
     storage: &mut [u64],
@@ -275,7 +274,10 @@ fn decode_candidate_object_value(
             match words[0] {
                 NUMBER_TAG => Ok(None),
                 STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG
-                    if words[1] != 0 && words[1] <= MAX_PAYLOAD => Ok(Some(words[1])),
+                    if words[1] != 0 && words[1] <= MAX_PAYLOAD =>
+                {
+                    Ok(Some(words[1]))
+                }
                 STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG => {
                     bail!("tagged reference Value has an invalid handle token")
                 }
@@ -1074,8 +1076,10 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         let (tag, payload) = match candidate.runtime {
             RuntimeLayout::Tagged16 => (
-                b.ins().load(types::I64, MemFlagsData::new(), parameters[0], 0),
-                b.ins().load(types::I64, MemFlagsData::new(), parameters[0], 8),
+                b.ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0),
+                b.ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8),
             ),
             RuntimeLayout::NanBox8 => (
                 b.ins().ushr_imm(parameters[0], NAN_TAG_SHIFT as u8),
@@ -1115,11 +1119,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         b.switch_to_block(dispatch_block);
         let callback_sig = b.import_signature(callback_signature.clone());
-        let invoked = b.ins().call_indirect(
-            callback_sig,
-            parameters[1],
-            &[parameters[2], tag, payload],
-        );
+        let invoked =
+            b.ins()
+                .call_indirect(callback_sig, parameters[1], &[parameters[2], tag, payload]);
         let callback_status = b.inst_results(invoked)[0];
         b.ins().return_(&[callback_status]);
 
@@ -1173,7 +1175,6 @@ fn compile_distribution(
     }
     Ok((first, distribution(timings)))
 }
-
 
 #[derive(Clone, Copy)]
 struct NativeHandleTagFamily {
@@ -1351,11 +1352,17 @@ fn run_native_handle_dispatch_validation(
     if callback_context.calls != (warmups as u64 + samples as u64) * iterations
         || callback_context.collections != 0
     {
-        bail!("{} native helper callback accounting mismatch", candidate.name());
+        bail!(
+            "{} native helper callback accounting mismatch",
+            candidate.name()
+        );
     }
     for (index, token) in tokens.iter().copied().enumerate() {
         if heap.resolve_host_handle_token(token)? != objects[index] {
-            bail!("{} native helper lost a persistent handle", candidate.name());
+            bail!(
+                "{} native helper lost a persistent handle",
+                candidate.name()
+            );
         }
     }
 
@@ -2337,10 +2344,7 @@ fn is_vector_register(token: &str) -> bool {
     })
 }
 
-fn parse_native_disassembly(
-    disassembly: &str,
-    symbol: &'static str,
-) -> Result<NativeCodeMetrics> {
+fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<NativeCodeMetrics> {
     let mut in_function = false;
     let mut found_symbol = false;
     let mut instruction_count = 0_usize;
@@ -2428,10 +2432,7 @@ fn parse_native_disassembly(
     })
 }
 
-fn native_code_metrics(
-    object_path: &Path,
-    symbol: &'static str,
-) -> Result<NativeCodeMetrics> {
+fn native_code_metrics(object_path: &Path, symbol: &'static str) -> Result<NativeCodeMetrics> {
     if env::consts::ARCH != "x86_64" {
         bail!("OGM-38 native register disassembly currently requires an x86_64 target");
     }
@@ -2738,7 +2739,10 @@ mod tests {
             .collect::<Vec<_>>();
         let tokens = handles
             .iter()
-            .map(|handle| heap.encode_host_handle_token(*handle).expect("encode handle"))
+            .map(|handle| {
+                heap.encode_host_handle_token(*handle)
+                    .expect("encode handle")
+            })
             .collect::<Vec<_>>();
 
         for candidate in Candidate::ALL {
@@ -2756,12 +2760,7 @@ mod tests {
                 )
                 .expect("encode candidate reference Value");
                 assert_eq!(
-                    resolve_candidate_object_value(
-                        candidate.runtime,
-                        &storage,
-                        0,
-                        &heap,
-                    )
+                    resolve_candidate_object_value(candidate.runtime, &storage, 0, &heap,)
                     .expect("resolve candidate reference Value"),
                     objects[index],
                     "{} {}",
@@ -2772,7 +2771,8 @@ mod tests {
         }
 
         for handle in handles {
-            heap.release_host_handle(handle).expect("release reference handle");
+            heap.release_host_handle(handle)
+                .expect("release reference handle");
         }
         heap.collect().expect("collect released reference Values");
         assert_eq!(heap.stats().live_objects, 0);
