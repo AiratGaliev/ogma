@@ -169,7 +169,7 @@
       "root_package": "ogma-backend-codegen-benchmark",
       "resolved_package_count": 70,
       "source": "cargo metadata --locked for benchmarks/backend-codegen/Cargo.toml",
-      "lockfile_sha256": "See raw report for exact Cargo.lock digest; summary intentionally omits a duplicate claim."
+      "lockfile_sha256": "2332bb8455c659706ecf18c88096318b04ac741cff7610090b249998ab51bfe4"
     },
     "shipped_runtime_dependency_graph": {
       "status": "not_implemented",
