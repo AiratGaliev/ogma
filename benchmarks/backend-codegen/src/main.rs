@@ -22,6 +22,13 @@ use inkwell::{
 use libloading::Library;
 use ogma_native_runtime_boundary_proof as boundary;
 use ogma_rust_abi_proof as abi;
+use ogma_typed_host_dispatch_proof::HostFunctionRegistry;
+
+mod aot_host_abi;
+use aot_host_abi::{
+    AOT_ABI_MAJOR, AOT_CAPABILITY_MATH, AOT_ERROR_CANCELLED, AOT_ERROR_CAPABILITY,
+    AOT_ERROR_THROWN, AOT_ERROR_TYPE, AotHostFunctionTable, AotHostFunctionTableV1,
+};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::{
@@ -46,6 +53,11 @@ type AddNumber = unsafe extern "C" fn(f64, f64) -> i64;
 type ToNumber = unsafe extern "C" fn(i64) -> f64;
 type CallBoundary = unsafe extern "C" fn(i64, i64, i64, i64, i64, f64) -> i64;
 type CallTarget = unsafe extern "C" fn(i64, i64) -> i64;
+type AotDispatchF64 = unsafe extern "C" fn(i64, i32, f64, f64, u64) -> i64;
+type AotDispatchHandles = unsafe extern "C" fn(i64, i32, i64, i64, u64) -> i64;
+type AotMetric = unsafe extern "C" fn() -> u64;
+type AotDetails = unsafe extern "C" fn() -> u64;
+type AotNumber = unsafe extern "C" fn() -> f64;
 
 type ProofSafepointCallback = unsafe extern "C" fn(u32, *mut c_void) -> i32;
 type BindProofAbi = unsafe extern "C" fn(
@@ -118,6 +130,10 @@ struct NativeProofState {
     argument_roots_survived_collection: bool,
     transition_paths: Vec<Vec<&'static str>>,
     failure: Option<String>,
+    aot_registry: *const HostFunctionRegistry,
+    aot_roots: Vec<(abi::OgmaHandle, f64)>,
+    aot_root_checks_enabled: bool,
+    aot_root_checks: u64,
 }
 
 impl NativeProofState {
@@ -161,7 +177,24 @@ impl NativeProofState {
             argument_roots_survived_collection: false,
             transition_paths: Vec::new(),
             failure: None,
+            aot_registry: ptr::null(),
+            aot_roots: Vec::new(),
+            aot_root_checks_enabled: false,
+            aot_root_checks: 0,
         }))
+    }
+
+    fn bind_aot_roots(
+        &mut self,
+        registry: &HostFunctionRegistry,
+        roots: Vec<(abi::OgmaHandle, f64)>,
+    ) {
+        self.aot_registry = registry as *const HostFunctionRegistry;
+        self.aot_roots = roots;
+    }
+
+    fn set_aot_root_checks_enabled(&mut self, enabled: bool) {
+        self.aot_root_checks_enabled = enabled;
     }
 
     fn on_safepoint(&mut self, site: u32) -> Result<()> {
@@ -190,6 +223,21 @@ impl NativeProofState {
             .map_err(|error| anyhow!("OGM-27 root collection failed: {error:?}"))?;
         if !self.heap.is_alive(self.sentinel) {
             bail!("OGM-27 live native-frame root was reclaimed at safepoint {site}");
+        }
+        if self.aot_root_checks_enabled && !self.aot_registry.is_null() {
+            let registry = unsafe { &*self.aot_registry };
+            registry.collect_unrooted().map_err(|error| {
+                anyhow!("OGM-32 host handle collection at safepoint {site}: {error:?}")
+            })?;
+            for (handle, expected) in &self.aot_roots {
+                let actual = registry.read_number(*handle).map_err(|error| {
+                    anyhow!("OGM-32 host root was invalid at safepoint {site}: {error:?}")
+                })?;
+                if actual.to_bits() != expected.to_bits() {
+                    bail!("OGM-32 opaque host handle changed across safepoint {site}");
+                }
+            }
+            self.aot_root_checks = self.aot_root_checks.saturating_add(1);
         }
         *self.safepoint_counts.entry(site).or_default() += 1;
         Ok(())
@@ -365,6 +413,9 @@ impl NativeProofState {
         if self.roots.native.depth() != 1 {
             bail!("OGM-27 native shadow frame was unexpectedly popped before finish");
         }
+        if !self.aot_registry.is_null() && self.aot_root_checks == 0 {
+            bail!("OGM-32 did not validate persistent opaque handles at native safepoints");
+        }
         let root_maps: BTreeMap<String, u64> = self
             .safepoint_counts
             .iter()
@@ -388,7 +439,8 @@ impl NativeProofState {
                 "work_units": self.budget.spent(),
                 "max_unpolled_work": self.budget.max_unpolled_work(),
                 "polls": self.budget.poll_trace().len()
-            }
+            },
+            "ogm32_aot_root_checks": self.aot_root_checks
         });
         self.roots
             .native
@@ -607,6 +659,7 @@ struct CoreFixture {
 }
 struct CoreCorpus {
     fixtures: Vec<CoreFixture>,
+    native_exports: BTreeMap<String, String>,
 }
 impl CoreCorpus {
     fn get(&self, label: &str) -> Result<&CoreFixture> {
@@ -616,8 +669,13 @@ impl CoreCorpus {
             .ok_or_else(|| anyhow!("missing Core IR workload {label}"))
     }
     fn symbol(&self, label: &str) -> Result<String> {
-        let f = self.get(label)?;
-        Ok(format!("ogma_{}_{}", f.label, f.id))
+        if let Some(fixture) = self.fixtures.iter().find(|f| f.label == label) {
+            return Ok(format!("ogma_{}_{}", fixture.label, fixture.id));
+        }
+        self.native_exports
+            .get(label)
+            .cloned()
+            .ok_or_else(|| anyhow!("missing native export {label}"))
     }
 }
 fn parse_fixture(label: &'static str, raw: &str) -> Result<CoreFixture> {
@@ -949,6 +1007,9 @@ fn load_corpus() -> Result<CoreCorpus> {
     let entries = manifest["workloads"]
         .as_array()
         .context("workloads missing")?;
+    let native_exports = manifest["native_exports"]
+        .as_array()
+        .context("native exports missing")?;
     let sources = [
         (
             "branch",
@@ -1039,7 +1100,41 @@ fn load_corpus() -> Result<CoreCorpus> {
         }
         fixtures.push(f);
     }
-    let c = CoreCorpus { fixtures };
+    let mut native_export_symbols = BTreeMap::new();
+    for export in native_exports {
+        let id = export["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .context("native export ID missing")?;
+        let symbol = export["symbol"]
+            .as_str()
+            .filter(|symbol| !symbol.is_empty())
+            .context("native export symbol missing")?;
+        if symbol != format!("ogma_{id}") {
+            bail!("native export {id}: symbol must be ogma_{id}");
+        }
+        if native_export_symbols
+            .insert(id.to_owned(), symbol.to_owned())
+            .is_some()
+        {
+            bail!("duplicate native export {id}");
+        }
+    }
+    let expected_native_exports = [
+        ("aot_host_call_f64", "ogma_aot_host_call_f64"),
+        ("aot_host_call_handles", "ogma_aot_host_call_handles"),
+    ];
+    if native_export_symbols.len() != expected_native_exports.len()
+        || expected_native_exports
+            .iter()
+            .any(|(id, symbol)| native_export_symbols.get(*id).map(String::as_str) != Some(*symbol))
+    {
+        bail!("workload manifest must declare each OGM-32 generated native export exactly once");
+    }
+    let c = CoreCorpus {
+        fixtures,
+        native_exports: native_export_symbols,
+    };
     expect_signature(&c, "branch", &["f64", "f64"], "f64")?;
     expect_signature(&c, "loop", &["f64", "f64", "f64"], "f64")?;
     expect_signature(&c, "dynamic_exception", &["boxed", "boxed"], "boxed")?;
@@ -1153,6 +1248,20 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let loop_sig = ternary_f64_sig(&mut m);
     let exception_sig = binary_i64_sig(&mut m);
     let host_sig = unary_i64_sig(&mut m);
+    let mut aot_f64_sig = m.make_signature();
+    aot_f64_sig.params.extend(
+        [types::I64, types::I32, types::F64, types::F64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    aot_f64_sig.returns.push(AbiParam::new(types::I64));
+    let mut aot_handles_sig = m.make_signature();
+    aot_handles_sig.params.extend(
+        [types::I64, types::I32, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    aot_handles_sig.returns.push(AbiParam::new(types::I64));
     let mut call_sig = m.make_signature();
     call_sig.params.extend(
         [
@@ -1176,6 +1285,23 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
     )?;
     let call = m.declare_function(&c.symbol("call_boundary")?, Linkage::Export, &call_sig)?;
     let host = m.declare_function(&c.symbol("host_call")?, Linkage::Export, &host_sig)?;
+    let aot_host_f64 = m.declare_function(
+        &c.symbol("aot_host_call_f64")?,
+        Linkage::Export,
+        &aot_f64_sig,
+    )?;
+    let aot_host_handles = m.declare_function(
+        &c.symbol("aot_host_call_handles")?,
+        Linkage::Export,
+        &aot_handles_sig,
+    )?;
+    let aot_dispatch_f64 =
+        m.declare_function("ogma_aot_dispatch_f64", Linkage::Import, &aot_f64_sig)?;
+    let aot_dispatch_handles = m.declare_function(
+        "ogma_aot_dispatch_handles",
+        Linkage::Import,
+        &aot_handles_sig,
+    )?;
     let mut add_num_sig = m.make_signature();
     add_num_sig
         .params
@@ -1318,6 +1444,24 @@ fn compile_cranelift(path: &Path, c: &CoreCorpus) -> Result<u64> {
         b.ins().return_(&[value]);
         Ok(())
     })?;
+    define_clif(&mut m, aot_host_f64, aot_f64_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
+        emit_clif_safepoint(m, b, safepoint, 5);
+        let f = m.declare_func_in_func(aot_dispatch_f64, b.func);
+        let call = b.ins().call(f, &[p[0], p[1], p[2], p[3], p[4]]);
+        let value = b.inst_results(call)[0];
+        b.ins().return_(&[value]);
+        Ok(())
+    })?;
+    define_clif(&mut m, aot_host_handles, aot_handles_sig, |m, b, p| {
+        emit_clif_safepoint(m, b, safepoint, 1);
+        emit_clif_safepoint(m, b, safepoint, 5);
+        let f = m.declare_func_in_func(aot_dispatch_handles, b.func);
+        let call = b.ins().call(f, &[p[0], p[1], p[2], p[3], p[4]]);
+        let value = b.inst_results(call)[0];
+        b.ins().return_(&[value]);
+        Ok(())
+    })?;
     fs::write(path, m.finish().emit()?)?;
     Ok(start.elapsed().as_nanos() as u64)
 }
@@ -1404,6 +1548,26 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
             i64t.into(),
             i64t.into(),
             f64t.into(),
+        ],
+        false,
+    );
+    let aot_f64_type = i64t.fn_type(
+        &[
+            i64t.into(),
+            cx.i32_type().into(),
+            f64t.into(),
+            f64t.into(),
+            i64t.into(),
+        ],
+        false,
+    );
+    let aot_handles_type = i64t.fn_type(
+        &[
+            i64t.into(),
+            cx.i32_type().into(),
+            i64t.into(),
+            i64t.into(),
+            i64t.into(),
         ],
         false,
     );
@@ -1535,6 +1699,45 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
     let arg = host.get_nth_param(0).unwrap().into_int_value();
     let value = llvm_call_i64(&b, host_helper, &[arg.into()], "host_call")?;
     b.build_return(Some(&value))?;
+
+    let aot_dispatch_f64 = module.add_function("ogma_aot_dispatch_f64", aot_f64_type, None);
+    let aot_dispatch_handles =
+        module.add_function("ogma_aot_dispatch_handles", aot_handles_type, None);
+
+    let aot_host_f64 = module.add_function(&c.symbol("aot_host_call_f64")?, aot_f64_type, None);
+    b.position_at_end(cx.append_basic_block(aot_host_f64, "entry"));
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
+    llvm_safepoint(&cx, &b, safepoint, 5)?;
+    let f64_args = [
+        aot_host_f64.get_nth_param(0).unwrap().into(),
+        aot_host_f64.get_nth_param(1).unwrap().into(),
+        aot_host_f64.get_nth_param(2).unwrap().into(),
+        aot_host_f64.get_nth_param(3).unwrap().into(),
+        aot_host_f64.get_nth_param(4).unwrap().into(),
+    ];
+    let f64_value = llvm_call_i64(&b, aot_dispatch_f64, &f64_args, "aot_dispatch_f64")?;
+    b.build_return(Some(&f64_value))?;
+
+    let aot_host_handles =
+        module.add_function(&c.symbol("aot_host_call_handles")?, aot_handles_type, None);
+    b.position_at_end(cx.append_basic_block(aot_host_handles, "entry"));
+    llvm_safepoint(&cx, &b, safepoint, 1)?;
+    llvm_safepoint(&cx, &b, safepoint, 5)?;
+    let handle_args = [
+        aot_host_handles.get_nth_param(0).unwrap().into(),
+        aot_host_handles.get_nth_param(1).unwrap().into(),
+        aot_host_handles.get_nth_param(2).unwrap().into(),
+        aot_host_handles.get_nth_param(3).unwrap().into(),
+        aot_host_handles.get_nth_param(4).unwrap().into(),
+    ];
+    let handle_value = llvm_call_i64(
+        &b,
+        aot_dispatch_handles,
+        &handle_args,
+        "aot_dispatch_handles",
+    )?;
+    b.build_return(Some(&handle_value))?;
+
     module
         .verify()
         .map_err(|e| anyhow!("LLVM verification: {e}"))?;
@@ -1545,9 +1748,11 @@ fn compile_llvm(path: &Path, c: &CoreCorpus) -> Result<u64> {
 
 const HELPERS: &str = r#"
 #include "ogma_abi.h"
+#include "ogma_aot_host_calls.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 typedef struct {
   OgmaAbiVersion version;
@@ -1581,6 +1786,11 @@ static uint32_t proof_last_abi_status;
 static uint32_t proof_last_safepoint_status;
 static uint32_t proof_last_completion_kind;
 static int64_t proof_last_completion_payload;
+static OgmaAotCompletionV1 aot_last_completion;
+static OgmaStatus aot_last_status = OGMA_STATUS_OK;
+static uint64_t aot_typed_calls;
+static uint64_t aot_generic_calls;
+static uint64_t aot_handle_calls;
 
 void ogma_proof_reset(void) {
   memset(proof_helper_counts, 0, sizeof(proof_helper_counts));
@@ -1591,6 +1801,11 @@ void ogma_proof_reset(void) {
   proof_last_safepoint_status = 0;
   proof_last_completion_kind = OGMA_COMPLETION_NORMAL;
   proof_last_completion_payload = 0;
+  memset(&aot_last_completion, 0, sizeof(aot_last_completion));
+  aot_last_status = OGMA_STATUS_OK;
+  aot_typed_calls = 0;
+  aot_generic_calls = 0;
+  aot_handle_calls = 0;
 }
 uint64_t ogma_proof_count(uint32_t index) {
   return index < 8 ? proof_helper_counts[index] : 0;
@@ -1615,6 +1830,32 @@ int64_t ogma_proof_last_call_receiver(void) {
 }
 const char *ogma_proof_last_call_argument(void) {
   return call_argument;
+}
+
+uint32_t ogma_aot_last_status(void) {
+  return aot_last_status;
+}
+uint32_t ogma_aot_last_completion_kind(void) {
+  return aot_last_completion.kind;
+}
+uint32_t ogma_aot_last_error_kind(void) {
+  return aot_last_completion.error_kind;
+}
+uint64_t ogma_aot_last_details(void) {
+  return aot_last_completion.details;
+}
+double ogma_aot_last_number(void) {
+  return aot_last_completion.value.tag == OGMA_AOT_VALUE_NUMBER
+      ? aot_last_completion.value.payload.number : 0.0;
+}
+uint64_t ogma_aot_typed_calls(void) {
+  return aot_typed_calls;
+}
+uint64_t ogma_aot_generic_calls(void) {
+  return aot_generic_calls;
+}
+uint64_t ogma_aot_handle_calls(void) {
+  return aot_handle_calls;
 }
 void ogma_proof_bind_abi(
   const OgmaProofAbi *api,
@@ -1783,15 +2024,184 @@ int64_t ogma_js_call_target(int64_t receiver, int64_t arg) {
 int64_t ogma_host_echo(int64_t arg) {
   return proof_context_call(proof_host_function, &arg, 1, 7);
 }
+
+static void aot_reset_completion(void) {
+  memset(&aot_last_completion, 0, sizeof(aot_last_completion));
+  aot_last_completion.kind = OGMA_AOT_COMPLETION_NORMAL;
+  aot_last_completion.error_kind = OGMA_AOT_ERROR_NONE;
+  aot_last_status = OGMA_STATUS_OK;
+}
+
+static int64_t aot_finish_result(void) {
+  if (aot_last_status != OGMA_STATUS_OK) return INT64_MIN;
+  if (aot_last_completion.kind == OGMA_AOT_COMPLETION_THROW) {
+    if (aot_last_completion.error_kind == OGMA_AOT_ERROR_NONE
+        || aot_last_completion.error_kind > OGMA_AOT_ERROR_REFERENCE
+        || aot_last_completion.value.reserved != 0
+        || aot_last_completion.value.tag > OGMA_AOT_VALUE_HANDLE
+        || (aot_last_completion.value.tag == OGMA_AOT_VALUE_BOOLEAN
+            && aot_last_completion.value.payload.boolean > 1)) {
+      aot_last_status = OGMA_STATUS_INVALID_COMPLETION;
+    }
+    return INT64_MIN;
+  }
+  if (aot_last_completion.kind != OGMA_AOT_COMPLETION_NORMAL
+      || aot_last_completion.error_kind != OGMA_AOT_ERROR_NONE
+      || aot_last_completion.details != 0) {
+    aot_last_status = OGMA_STATUS_INVALID_COMPLETION;
+    return INT64_MIN;
+  }
+  if (aot_last_completion.value.tag != OGMA_AOT_VALUE_NUMBER
+      || aot_last_completion.value.reserved != 0) {
+    aot_last_status = OGMA_STATUS_TYPE_MISMATCH;
+    return INT64_MIN;
+  }
+  const double number = aot_last_completion.value.payload.number;
+  if (!isfinite(number) || number >= 9223372036854775808.0
+      || number < -9223372036854775808.0) {
+    aot_last_status = OGMA_STATUS_OUT_OF_RANGE;
+    return INT64_MIN;
+  }
+  return (int64_t)number;
+}
+
+static OgmaStatus aot_validate_table(
+    const OgmaAotHostFunctionTableV1 *table, int32_t slot,
+    const OgmaAotHostFunctionEntryV1 **out_entry) {
+  if (table == NULL || out_entry == NULL) return OGMA_STATUS_INVALID_ARGUMENT;
+  if (table->abi_major != OGMA_AOT_HOST_ABI_MAJOR
+      || table->abi_minor > OGMA_AOT_HOST_ABI_MINOR) {
+    return OGMA_STATUS_INCOMPATIBLE_ABI;
+  }
+  if (table->struct_size != sizeof(OgmaAotHostFunctionTableV1)
+      || table->entry_size != sizeof(OgmaAotHostFunctionEntryV1)
+      || table->entry_count == 0
+      || table->entry_count > OGMA_AOT_MAX_ENTRIES
+      || table->entries == NULL
+      || table->table_version == 0
+      || table->reserved != 0
+      || slot < 0 || (uint32_t)slot >= table->entry_count) {
+    return OGMA_STATUS_INVALID_ARGUMENT;
+  }
+
+  const OgmaAotHostFunctionEntryV1 *entry = &table->entries[(uint32_t)slot];
+  if (entry->abi_major != OGMA_AOT_HOST_ABI_MAJOR
+      || entry->abi_minor > OGMA_AOT_HOST_ABI_MINOR
+      || entry->descriptor_version != OGMA_AOT_HOST_DESCRIPTOR_VERSION) {
+    return OGMA_STATUS_INCOMPATIBLE_ABI;
+  }
+  if (entry->struct_size != sizeof(OgmaAotHostFunctionEntryV1)
+      || entry->reserved != 0
+      || entry->function_id == 0
+      || entry->user_data == NULL
+      || entry->generic_thunk == NULL) {
+    return OGMA_STATUS_INVALID_ARGUMENT;
+  }
+  const uint32_t known_effects = OGMA_HOST_EFFECT_MAY_ALLOCATE
+      | OGMA_HOST_EFFECT_MAY_GC | OGMA_HOST_EFFECT_MAY_THROW
+      | OGMA_HOST_EFFECT_MAY_SUSPEND | OGMA_HOST_EFFECT_MAY_REENTER;
+  if ((entry->effects & ~known_effects) != 0) {
+    return OGMA_STATUS_UNSUPPORTED_FEATURE;
+  }
+  *out_entry = entry;
+  return OGMA_STATUS_OK;
+}
+
+int64_t ogma_aot_dispatch_f64(
+    int64_t table_address, int32_t slot, double left, double right,
+    uint64_t capabilities) {
+  aot_reset_completion();
+  if (table_address == 0) {
+    aot_last_status = OGMA_STATUS_INVALID_ARGUMENT;
+    return INT64_MIN;
+  }
+  const OgmaAotHostFunctionTableV1 *table =
+      (const OgmaAotHostFunctionTableV1 *)(uintptr_t)table_address;
+  const OgmaAotHostFunctionEntryV1 *entry = NULL;
+  aot_last_status = aot_validate_table(table, slot, &entry);
+  if (aot_last_status != OGMA_STATUS_OK) return INT64_MIN;
+  if (entry->signature != OGMA_HOST_SIGNATURE_F64_BINARY
+      || entry->signature_id != OGMA_AOT_SIGNATURE_ID_F64_BINARY
+      || entry->primitive_f64_thunk == NULL) {
+    aot_last_status = OGMA_STATUS_TYPE_MISMATCH;
+    return INT64_MIN;
+  }
+
+  capabilities &= table->capabilities;
+  if ((entry->effects & OGMA_AOT_COMPLEX_EFFECT_MASK) != 0) {
+    const OgmaAotValueV1 args[2] = {
+      { .tag = OGMA_AOT_VALUE_NUMBER, .reserved = 0, .payload.number = left },
+      { .tag = OGMA_AOT_VALUE_NUMBER, .reserved = 0, .payload.number = right }
+    };
+    aot_last_status = entry->generic_thunk(
+        entry->user_data, capabilities, args, 2, &aot_last_completion);
+    if (aot_last_status == OGMA_STATUS_OK) aot_generic_calls++;
+  } else {
+    aot_last_status = entry->primitive_f64_thunk(
+        entry->user_data, capabilities, left, right, &aot_last_completion);
+    if (aot_last_status == OGMA_STATUS_OK) aot_typed_calls++;
+  }
+  return aot_finish_result();
+}
+
+int64_t ogma_aot_dispatch_handles(
+    int64_t table_address, int32_t slot, int64_t left_handle_address,
+    int64_t right_handle_address, uint64_t capabilities) {
+  aot_reset_completion();
+  if (table_address == 0 || left_handle_address == 0 || right_handle_address == 0) {
+    aot_last_status = OGMA_STATUS_INVALID_ARGUMENT;
+    return INT64_MIN;
+  }
+  const OgmaAotHostFunctionTableV1 *table =
+      (const OgmaAotHostFunctionTableV1 *)(uintptr_t)table_address;
+  const OgmaAotHostFunctionEntryV1 *entry = NULL;
+  aot_last_status = aot_validate_table(table, slot, &entry);
+  if (aot_last_status != OGMA_STATUS_OK) return INT64_MIN;
+  if (entry->signature != OGMA_HOST_SIGNATURE_NUMBER_HANDLE_BINARY
+      || entry->signature_id != OGMA_AOT_SIGNATURE_ID_NUMBER_HANDLE_BINARY
+      || entry->number_handle_f64_thunk == NULL) {
+    aot_last_status = OGMA_STATUS_TYPE_MISMATCH;
+    return INT64_MIN;
+  }
+
+  OgmaHandle left;
+  OgmaHandle right;
+  memcpy(&left, (const void *)(uintptr_t)left_handle_address, sizeof(left));
+  memcpy(&right, (const void *)(uintptr_t)right_handle_address, sizeof(right));
+  capabilities &= table->capabilities;
+  if ((entry->effects & OGMA_AOT_COMPLEX_EFFECT_MASK) != 0) {
+    const OgmaAotValueV1 args[2] = {
+      { .tag = OGMA_AOT_VALUE_HANDLE, .reserved = 0, .payload.handle = left },
+      { .tag = OGMA_AOT_VALUE_HANDLE, .reserved = 0, .payload.handle = right }
+    };
+    aot_last_status = entry->generic_thunk(
+        entry->user_data, capabilities, args, 2, &aot_last_completion);
+    if (aot_last_status == OGMA_STATUS_OK) aot_generic_calls++;
+  } else {
+    aot_last_status = entry->number_handle_f64_thunk(
+        entry->user_data, capabilities, left, right, &aot_last_completion);
+    if (aot_last_status == OGMA_STATUS_OK) aot_typed_calls++;
+  }
+  aot_handle_calls++;
+  return aot_finish_result();
+}
+
 "#;
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
     fs::write(helper, HELPERS)?;
     let start = Instant::now();
-    let abi_include = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rust-abi/include");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let abi_include = manifest_dir.join("../rust-abi/include");
+    let typed_include = manifest_dir.join("../typed-host-dispatch/include");
+    let aot_include = manifest_dir.join("include");
     let out = Command::new("cc")
         .args(["-shared", "-fPIC"])
         .arg("-I")
         .arg(abi_include)
+        .arg("-I")
+        .arg(typed_include)
+        .arg("-I")
+        .arg(aot_include)
         .arg(object)
         .arg("-x")
         .arg("c")
@@ -1949,6 +2359,15 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         unsafe { *lib.get(b"ogma_proof_last_call_receiver\0")? };
     let last_call_argument: LastCallArgument =
         unsafe { *lib.get(b"ogma_proof_last_call_argument\0")? };
+    let aot_last_status: ProofStatusU32 = unsafe { *lib.get(b"ogma_aot_last_status\0")? };
+    let aot_last_completion_kind: ProofStatusU32 =
+        unsafe { *lib.get(b"ogma_aot_last_completion_kind\0")? };
+    let aot_last_error_kind: ProofStatusU32 = unsafe { *lib.get(b"ogma_aot_last_error_kind\0")? };
+    let aot_last_details: AotDetails = unsafe { *lib.get(b"ogma_aot_last_details\0")? };
+    let aot_last_number: AotNumber = unsafe { *lib.get(b"ogma_aot_last_number\0")? };
+    let aot_typed_calls: AotMetric = unsafe { *lib.get(b"ogma_aot_typed_calls\0")? };
+    let aot_generic_calls: AotMetric = unsafe { *lib.get(b"ogma_aot_generic_calls\0")? };
+    let aot_handle_calls: AotMetric = unsafe { *lib.get(b"ogma_aot_handle_calls\0")? };
     // SAFETY: this helper resets only its private counters and trace snapshots.
     unsafe { reset() };
 
@@ -1982,6 +2401,28 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     }
 
     let mut proof_state = NativeProofState::new()?;
+    let aot_table = AotHostFunctionTable::new(proof_state.budget.cancellation_token())
+        .map_err(|error| anyhow!("{name}: create OGM-32 host table: {error:?}"))?;
+    let aot_registry = aot_table.registry();
+    let aot_left = aot_registry
+        .create_number(19.0)
+        .map_err(|error| anyhow!("{name}: create OGM-32 left handle: {error:?}"))?;
+    let aot_right = aot_registry
+        .create_number(23.0)
+        .map_err(|error| anyhow!("{name}: create OGM-32 right handle: {error:?}"))?;
+    let aot_boolean = aot_registry
+        .create_boolean(true)
+        .map_err(|error| anyhow!("{name}: create OGM-32 mismatch handle: {error:?}"))?;
+    let _aot_left_root = aot_registry
+        .root_handle(aot_left)
+        .map_err(|error| anyhow!("{name}: root OGM-32 left handle: {error:?}"))?;
+    let _aot_right_root = aot_registry
+        .root_handle(aot_right)
+        .map_err(|error| anyhow!("{name}: root OGM-32 right handle: {error:?}"))?;
+    let _aot_boolean_root = aot_registry
+        .root_handle(aot_boolean)
+        .map_err(|error| anyhow!("{name}: root OGM-32 signature-mismatch handle: {error:?}"))?;
+    proof_state.bind_aot_roots(aot_registry, vec![(aot_left, 19.0), (aot_right, 23.0)]);
     let state_ptr = (&mut *proof_state as *mut NativeProofState).cast::<c_void>();
     let mut dynamic_callback = abi::OgmaCallbackHandle::default();
     let status = unsafe {
@@ -2072,6 +2513,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let text = CString::new("item=").unwrap();
     let text_handle = text.as_ptr() as i64;
     let host: UnaryI64 = unsafe { *lib.get(sym(&c.symbol("host_call")?).as_slice())? };
+    let aot_host_f64: AotDispatchF64 =
+        unsafe { *lib.get(sym(&c.symbol("aot_host_call_f64")?).as_slice())? };
+    let aot_host_handles: AotDispatchHandles =
+        unsafe { *lib.get(sym(&c.symbol("aot_host_call_handles")?).as_slice())? };
 
     let branch_equal = unsafe { branch(7.0, 7.0) };
     let branch_unequal = unsafe { branch(7.0, 8.0) };
@@ -2148,6 +2593,216 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if host_throw != -7 || host_throw_kind != abi::COMPLETION_THROW || host_throw_payload != -7 {
         bail!("{name}: OGM-19 Throw completion did not survive the native host boundary");
     }
+
+    // OGM-32 interpreter reference: this calls the same OGM-21 registry slots
+    // through the interpreter-side dispatch path before exercising generated code.
+    let aot_interpreter_typed = aot_table
+        .invoke_interpreter(
+            0,
+            AOT_CAPABILITY_MATH,
+            &[
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(31.0),
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(11.0),
+            ],
+            false,
+        )
+        .map_err(|error| anyhow!("{name}: OGM-32 typed interpreter reference: {error:?}"))?;
+    let aot_interpreter_generic = aot_table
+        .invoke_interpreter(
+            1,
+            AOT_CAPABILITY_MATH,
+            &[
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(12.0),
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(30.0),
+            ],
+            true,
+        )
+        .map_err(|error| anyhow!("{name}: OGM-32 generic interpreter reference: {error:?}"))?;
+    let aot_interpreter_throw = aot_table
+        .invoke_interpreter(
+            1,
+            AOT_CAPABILITY_MATH,
+            &[
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(-7.0),
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(1.0),
+            ],
+            true,
+        )
+        .map_err(|error| anyhow!("{name}: OGM-32 throw interpreter reference: {error:?}"))?;
+    let aot_interpreter_typed_handle = aot_table
+        .invoke_interpreter(
+            2,
+            AOT_CAPABILITY_MATH,
+            &[
+                ogma_typed_host_dispatch_proof::DispatchValue::Handle(aot_left),
+                ogma_typed_host_dispatch_proof::DispatchValue::Handle(aot_right),
+            ],
+            false,
+        )
+        .map_err(|error| anyhow!("{name}: OGM-32 typed-handle interpreter reference: {error:?}"))?;
+    let aot_interpreter_generic_handle = aot_table
+        .invoke_interpreter(
+            3,
+            AOT_CAPABILITY_MATH,
+            &[
+                ogma_typed_host_dispatch_proof::DispatchValue::Handle(aot_left),
+                ogma_typed_host_dispatch_proof::DispatchValue::Handle(aot_right),
+            ],
+            true,
+        )
+        .map_err(|error| {
+            anyhow!("{name}: OGM-32 generic-handle interpreter reference: {error:?}")
+        })?;
+    if aot_interpreter_typed
+        != ogma_typed_host_dispatch_proof::JsCompletion::Normal(
+            ogma_typed_host_dispatch_proof::DispatchValue::Number(42.0),
+        )
+        || aot_interpreter_generic
+            != ogma_typed_host_dispatch_proof::JsCompletion::Normal(
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(42.0),
+            )
+        || aot_interpreter_throw
+            != ogma_typed_host_dispatch_proof::JsCompletion::Throw(
+                ogma_typed_host_dispatch_proof::JsException::Thrown(
+                    ogma_typed_host_dispatch_proof::DispatchValue::Number(-7.0),
+                ),
+            )
+        || aot_interpreter_typed_handle
+            != ogma_typed_host_dispatch_proof::JsCompletion::Normal(
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(42.0),
+            )
+        || aot_interpreter_generic_handle
+            != ogma_typed_host_dispatch_proof::JsCompletion::Normal(
+                ogma_typed_host_dispatch_proof::DispatchValue::Number(42.0),
+            )
+    {
+        bail!("{name}: OGM-32 interpreter typed/generic/throw reference semantics changed");
+    }
+
+    // OGM-32: execute generated Cranelift/LLVM entry points that dispatch only
+    // through the fixed C ABI table. Keep root checking enabled for these native
+    // calls, then disable it before the OGM-31 workload timing loops.
+    let aot_table_ptr = aot_table.as_abi() as *const AotHostFunctionTableV1 as usize as i64;
+    let aot_left_ptr = &aot_left as *const abi::OgmaHandle as usize as i64;
+    let aot_right_ptr = &aot_right as *const abi::OgmaHandle as usize as i64;
+    let aot_boolean_ptr = &aot_boolean as *const abi::OgmaHandle as usize as i64;
+    proof_state.set_aot_root_checks_enabled(true);
+
+    let aot_typed_primitive_result =
+        unsafe { aot_host_f64(aot_table_ptr, 0, 31.0, 11.0, AOT_CAPABILITY_MATH) };
+    if aot_typed_primitive_result != 42
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 0
+        || unsafe { aot_last_number() } != 42.0
+    {
+        bail!("{name}: OGM-32 typed primitive C ABI dispatch failed");
+    }
+
+    let aot_generic_reentrant_result =
+        unsafe { aot_host_f64(aot_table_ptr, 1, 12.0, 30.0, AOT_CAPABILITY_MATH) };
+    if aot_generic_reentrant_result != 42
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 0
+    {
+        bail!("{name}: OGM-32 generic fallback or nested callback reentrancy failed");
+    }
+
+    let aot_generic_throw_result =
+        unsafe { aot_host_f64(aot_table_ptr, 1, -7.0, 1.0, AOT_CAPABILITY_MATH) };
+    let aot_generic_throw_kind = unsafe { aot_last_completion_kind() };
+    let aot_generic_throw_error = unsafe { aot_last_error_kind() };
+    let aot_generic_throw_value = unsafe { aot_last_number() };
+    if aot_generic_throw_result != i64::MIN
+        || unsafe { aot_last_status() } != 0
+        || aot_generic_throw_kind != 1
+        || aot_generic_throw_error != AOT_ERROR_THROWN
+        || aot_generic_throw_value != -7.0
+    {
+        bail!("{name}: OGM-32 generic Throw completion did not cross the C ABI");
+    }
+
+    let aot_typed_handle_result = unsafe {
+        aot_host_handles(
+            aot_table_ptr,
+            2,
+            aot_left_ptr,
+            aot_right_ptr,
+            AOT_CAPABILITY_MATH,
+        )
+    };
+    if aot_typed_handle_result != 42
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 0
+    {
+        bail!("{name}: OGM-32 typed opaque-handle dispatch failed");
+    }
+
+    let aot_generic_handle_result = unsafe {
+        aot_host_handles(
+            aot_table_ptr,
+            3,
+            aot_left_ptr,
+            aot_right_ptr,
+            AOT_CAPABILITY_MATH,
+        )
+    };
+    if aot_generic_handle_result != 42
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 0
+    {
+        bail!("{name}: OGM-32 generic opaque-handle fallback failed");
+    }
+
+    let aot_signature_mismatch_result = unsafe {
+        aot_host_handles(
+            aot_table_ptr,
+            2,
+            aot_boolean_ptr,
+            aot_right_ptr,
+            AOT_CAPABILITY_MATH,
+        )
+    };
+    let aot_signature_mismatch_error = unsafe { aot_last_error_kind() };
+    if aot_signature_mismatch_result != i64::MIN
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 1
+        || aot_signature_mismatch_error != AOT_ERROR_TYPE
+    {
+        bail!("{name}: OGM-32 signature mismatch was not a JavaScript TypeError completion");
+    }
+
+    let aot_capability_result = unsafe { aot_host_f64(aot_table_ptr, 0, 1.0, 2.0, 0) };
+    let aot_capability_error = unsafe { aot_last_error_kind() };
+    let aot_capability_details = unsafe { aot_last_details() };
+    if aot_capability_result != i64::MIN
+        || unsafe { aot_last_status() } != 0
+        || unsafe { aot_last_completion_kind() } != 1
+        || aot_capability_error != AOT_ERROR_CAPABILITY
+        || aot_capability_details != AOT_CAPABILITY_MATH
+    {
+        bail!("{name}: OGM-32 capability denial did not map to a Throw completion");
+    }
+
+    let mut incompatible_aot_table = *aot_table.as_abi();
+    incompatible_aot_table.abi_major = AOT_ABI_MAJOR + 1;
+    let incompatible_aot_table_ptr =
+        &incompatible_aot_table as *const AotHostFunctionTableV1 as usize as i64;
+    let aot_abi_mismatch_result =
+        unsafe { aot_host_f64(incompatible_aot_table_ptr, 0, 1.0, 2.0, AOT_CAPABILITY_MATH) };
+    let aot_abi_mismatch_status = unsafe { aot_last_status() };
+    if aot_abi_mismatch_result != i64::MIN || aot_abi_mismatch_status != 2 {
+        bail!("{name}: OGM-32 versioned C table did not reject an ABI major mismatch");
+    }
+    let (aot_generic_callback_invocations, aot_nested_callback_invocations) =
+        aot_table.callback_stats();
+    if aot_generic_callback_invocations != 6 || aot_nested_callback_invocations != 2 {
+        bail!("{name}: OGM-32 interpreter/native callback or reentrancy counts differ");
+    }
+    let aot_pre_cancel_root_checks = proof_state.aot_root_checks;
+    if aot_pre_cancel_root_checks != 16 {
+        bail!("{name}: OGM-32 native host handles were not checked at every pre-cancel safepoint");
+    }
+    proof_state.set_aot_root_checks_enabled(false);
 
     if unsafe { last_abi_status() } != 0 || unsafe { last_safepoint_status() } != 0 {
         bail!("{name}: an OGM-19 ABI operation or OGM-27 safepoint failed");
@@ -2233,6 +2888,28 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
       "direct_host_helper":bench(o,|n|{black_box(unsafe{host_direct(n as i64)});})
     });
 
+    // Cancellation is deliberately the final generated native call: subsequent
+    // OGM-27 budget polls must observe the cancelled token and reject execution.
+    proof_state.set_aot_root_checks_enabled(true);
+    let aot_cancel_result =
+        unsafe { aot_host_f64(aot_table_ptr, 1, 99.0, 1.0, AOT_CAPABILITY_MATH) };
+    let aot_cancel_status = unsafe { aot_last_status() };
+    let aot_cancel_kind = unsafe { aot_last_completion_kind() };
+    let aot_cancel_error = unsafe { aot_last_error_kind() };
+    let aot_cancelled = proof_state.budget.cancellation_token().is_cancelled();
+    if aot_cancel_result != i64::MIN
+        || aot_cancel_status != 0
+        || aot_cancel_kind != 1
+        || aot_cancel_error != AOT_ERROR_CANCELLED
+        || !aot_cancelled
+        || proof_state.aot_root_checks != 18
+    {
+        bail!(
+            "{name}: OGM-32 cancellation did not propagate through native completion and OGM-27 budget"
+        );
+    }
+    proof_state.set_aot_root_checks_enabled(false);
+
     if unsafe { last_abi_status() } != 0 || unsafe { last_safepoint_status() } != 0 {
         bail!("{name}: an OGM-19 ABI operation or OGM-27 safepoint failed during measurements");
     }
@@ -2247,6 +2924,108 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         "allocation_boundary": unsafe { safepoint_count(3) },
         "call_boundary": unsafe { safepoint_count(4) },
         "host_call_boundary": unsafe { safepoint_count(5) }
+    });
+    let (aot_generic_callbacks, aot_nested_callbacks) = aot_table.callback_stats();
+    let aot_dispatch_counts = serde_json::json!({
+        "typed_calls": unsafe { aot_typed_calls() },
+        "generic_calls": unsafe { aot_generic_calls() },
+        "handle_calls": unsafe { aot_handle_calls() }
+    });
+    if aot_generic_callbacks != 7
+        || aot_nested_callbacks != 2
+        || aot_dispatch_counts["typed_calls"].as_u64() != Some(4)
+        || aot_dispatch_counts["generic_calls"].as_u64() != Some(4)
+        || aot_dispatch_counts["handle_calls"].as_u64() != Some(3)
+    {
+        bail!(
+            "{name}: OGM-32 dispatch counters differ from the interpreter/native fixture contract"
+        );
+    }
+    let aot_evidence = serde_json::json!({
+        "abi_version": {
+            "major": aot_table.as_abi().abi_major,
+            "minor": aot_table.as_abi().abi_minor
+        },
+        "table_version": aot_table.as_abi().table_version,
+        "entry_count": aot_table.as_abi().entry_count,
+        "interpreter_reference": {
+            "typed": {
+                "kind": "normal",
+                "value": 42
+            },
+            "generic": {
+                "kind": "normal",
+                "value": 42
+            },
+            "throw": {
+                "kind": "throw",
+                "value": -7
+            },
+            "typed_handle": {
+                "kind": "normal",
+                "value": 42
+            },
+            "generic_handle": {
+                "kind": "normal",
+                "value": 42
+            }
+        },
+        "typed_primitive": {
+            "result": aot_typed_primitive_result,
+            "completion_kind": 0,
+            "error_kind": 0
+        },
+        "generic_reentrant": {
+            "result": aot_generic_reentrant_result,
+            "completion_kind": 0,
+            "nested_callbacks": aot_nested_callback_invocations
+        },
+        "generic_throw": {
+            "result": aot_generic_throw_result,
+            "completion_kind": aot_generic_throw_kind,
+            "error_kind": aot_generic_throw_error,
+            "value": aot_generic_throw_value
+        },
+        "typed_handle": {
+            "result": aot_typed_handle_result,
+            "completion_kind": 0
+        },
+        "generic_handle_fallback": {
+            "result": aot_generic_handle_result,
+            "completion_kind": 0
+        },
+        "signature_mismatch": {
+            "result": aot_signature_mismatch_result,
+            "completion_kind": 1,
+            "error_kind": aot_signature_mismatch_error
+        },
+        "capability_denied": {
+            "result": aot_capability_result,
+            "completion_kind": 1,
+            "error_kind": aot_capability_error,
+            "missing_capabilities": aot_capability_details
+        },
+        "abi_version_mismatch": {
+            "result": aot_abi_mismatch_result,
+            "status": aot_abi_mismatch_status,
+            "expected_status": 2
+        },
+        "cancellation": {
+            "result": aot_cancel_result,
+            "status": aot_cancel_status,
+            "completion_kind": aot_cancel_kind,
+            "error_kind": aot_cancel_error,
+            "budget_token_cancelled": aot_cancelled
+        },
+        "generic_callback_invocations": aot_generic_callbacks,
+        "nested_callback_invocations": aot_nested_callbacks,
+        "dispatch_counts": aot_dispatch_counts,
+        "opaque_roots": {
+            "safepoint_checks": proof_state.aot_root_checks,
+            "number_handles_survived_collection": aot_registry.read_number(aot_left).map_err(|error| anyhow!("{name}: read rooted left handle: {error:?}"))? == 19.0
+                && aot_registry.read_number(aot_right).map_err(|error| anyhow!("{name}: read rooted right handle: {error:?}"))? == 23.0
+        },
+        "all_checks_passed": true
     });
     let model_evidence = proof_state.finish()?;
     let runtime_integration = serde_json::json!({
@@ -2265,7 +3044,8 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         },
         "ogm19_last_status": unsafe { last_abi_status() },
         "ogm27_native_safepoints": native_safepoints,
-        "ogm27_model": model_evidence
+        "ogm27_model": model_evidence,
+        "ogm32_aot_host_calls": aot_evidence
     });
 
     // Release the mock Runtime only after every generated-code call has returned.

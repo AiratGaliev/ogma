@@ -30,6 +30,17 @@ class DualBackendProofTests(unittest.TestCase):
             ROOT / "benchmarks/backend-codegen/fixtures/workloads.json"
         )
         native_paths = {item["fixture"] for item in native_manifest["workloads"]}
+        native_exports = {
+            item["id"]: item["symbol"]
+            for item in native_manifest["native_exports"]
+        }
+        self.assertEqual(
+            {
+                "aot_host_call_f64": "ogma_aot_host_call_f64",
+                "aot_host_call_handles": "ogma_aot_host_call_handles",
+            },
+            native_exports,
+        )
         proof_manifest = proof.read_json(ROOT / "benchmarks/dual-backend/manifest.json")
         self.assertEqual(
             native_paths,
@@ -53,6 +64,71 @@ class DualBackendProofTests(unittest.TestCase):
                 "allocation_boundary": 2,
                 "call_boundary": 2,
                 "host_call_boundary": 3,
+            },
+            "ogm32_aot_host_calls": {
+                "abi_version": {"major": 1, "minor": 0},
+                "table_version": 5,
+                "entry_count": 4,
+                "interpreter_reference": {
+                    "typed": {"kind": "normal", "value": 42},
+                    "generic": {"kind": "normal", "value": 42},
+                    "throw": {"kind": "throw", "value": -7},
+                    "typed_handle": {"kind": "normal", "value": 42},
+                    "generic_handle": {"kind": "normal", "value": 42},
+                },
+                "typed_primitive": {
+                    "result": 42,
+                    "completion_kind": 0,
+                    "error_kind": 0,
+                },
+                "generic_reentrant": {
+                    "result": 42,
+                    "completion_kind": 0,
+                    "nested_callbacks": 2,
+                },
+                "generic_throw": {
+                    "result": -(1 << 63),
+                    "completion_kind": 1,
+                    "error_kind": 4,
+                    "value": -7.0,
+                },
+                "typed_handle": {"result": 42, "completion_kind": 0},
+                "generic_handle_fallback": {"result": 42, "completion_kind": 0},
+                "signature_mismatch": {
+                    "result": -(1 << 63),
+                    "completion_kind": 1,
+                    "error_kind": 1,
+                },
+                "capability_denied": {
+                    "result": -(1 << 63),
+                    "completion_kind": 1,
+                    "error_kind": 3,
+                    "missing_capabilities": 1,
+                },
+                "abi_version_mismatch": {
+                    "result": -(1 << 63),
+                    "status": 2,
+                    "expected_status": 2,
+                },
+                "cancellation": {
+                    "result": -(1 << 63),
+                    "status": 0,
+                    "completion_kind": 1,
+                    "error_kind": 5,
+                    "budget_token_cancelled": True,
+                },
+                "generic_callback_invocations": 7,
+                "nested_callback_invocations": 2,
+                "dispatch_counts": {
+                    "typed_calls": 4,
+                    "generic_calls": 4,
+                    "handle_calls": 3,
+                },
+                "opaque_roots": {
+                    "safepoint_checks": 18,
+                    "number_handles_survived_collection": True,
+                },
+                "all_checks_passed": True,
             },
             "ogm27_model": {
                 "callback_invocations": 5,
@@ -87,6 +163,11 @@ class DualBackendProofTests(unittest.TestCase):
         validated = proof.validate_runtime_integration("cranelift", integration)
         self.assertTrue(validated["ogm19_abi_v1_negotiated"])
         self.assertEqual(features, validated["ogm19_version"]["features"])
+        self.assertTrue(validated["ogm32_aot_host_calls"]["aot_abi_v1_validated"])
+        self.assertEqual(
+            {"kind": "normal", "value": 42},
+            validated["ogm32_aot_host_calls"]["interpreter_reference"]["typed"],
+        )
 
         invalid = json.loads(json.dumps(integration))
         del invalid["ogm27_native_safepoints"]["loop_back_edge"]
@@ -97,6 +178,16 @@ class DualBackendProofTests(unittest.TestCase):
         invalid["ogm19_completions"]["host_echo_throw"]["kind"] = 0
         with self.assertRaisesRegex(RuntimeError, "completion mismatch"):
             proof.validate_runtime_integration("llvm", invalid)
+
+        invalid_aot = json.loads(json.dumps(integration["ogm32_aot_host_calls"]))
+        invalid_aot["cancellation"]["budget_token_cancelled"] = False
+        with self.assertRaisesRegex(RuntimeError, "cancellation was not propagated"):
+            proof.validate_aot_host_calls("cranelift", invalid_aot)
+
+        invalid_aot = json.loads(json.dumps(integration["ogm32_aot_host_calls"]))
+        invalid_aot["typed_handle"]["result"] = 0
+        with self.assertRaisesRegex(RuntimeError, "typed opaque-handle call failed"):
+            proof.validate_aot_host_calls("llvm", invalid_aot)
 
     def test_stack_and_register_interpreters_match_all_common_observations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

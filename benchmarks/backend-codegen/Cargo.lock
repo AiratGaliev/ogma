@@ -407,12 +407,18 @@ dependencies = [
  "cranelift-object",
  "inkwell",
  "libloading",
+ "ogma-host-execution-scope-proof",
  "ogma-native-runtime-boundary-proof",
  "ogma-rust-abi-proof",
+ "ogma-typed-host-dispatch-proof",
  "serde",
  "serde_json",
  "target-lexicon",
 ]
+
+[[package]]
+name = "ogma-host-execution-scope-proof"
+version = "0.1.0"
 
 [[package]]
 name = "ogma-native-runtime-boundary-proof"
@@ -421,6 +427,14 @@ version = "0.1.0"
 [[package]]
 name = "ogma-rust-abi-proof"
 version = "0.1.0"
+
+[[package]]
+name = "ogma-typed-host-dispatch-proof"
+version = "0.1.0"
+dependencies = [
+ "ogma-host-execution-scope-proof",
+ "ogma-rust-abi-proof",
+]
 
 [[package]]
 name = "proc-macro2"

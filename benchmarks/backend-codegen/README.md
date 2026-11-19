@@ -40,12 +40,40 @@ validated by the project's existing Core IR Fast checks.
   runtime cost is not attributed to that workload; observable strict equality is
   measured in the branch/loop workloads. The dynamic-exception fixture lowers the
   explicit exception edge to a tagged completion and exercises `js.throw` propagation.
-- Helpers are deterministic benchmark stubs, not the production Ogma Runtime. They
-  exercise helper dispatch and call overhead but do not implement full ECMAScript
-  coercion, allocation, GC roots, stack maps, safepoints, re-entrancy or host ABI
-  ownership. The string/number `js.add` path is a narrow specialization. OGM-27's
-  root/safepoint contract and OGM-32's AOT host-call proof remain separate production
-  integration requirements.
+- The original OGM-31 helper fixtures remain deterministic stubs, not the production
+  Ogma Runtime. Their string/number `js.add` path is a narrow specialization.
+- OGM-32 adds a separate, versioned C-compatible AOT host-function table over the
+  existing OGM-21 `HostFunctionRegistry`. Generated Cranelift and LLVM functions call
+  native C dispatch helpers; those helpers validate ABI/table/descriptor versions and
+  choose the registered typed thunk or generic fallback. Native code receives only
+  fixed-layout metadata, opaque OGM handles, C function pointers and host-owned
+  `user_data`; it does not depend on Rust's default ABI or expose internal Runtime
+  layouts.
+- The OGM-32 proof compares typed, generic, opaque-handle and Throw results with the
+  interpreter-side OGM-21 dispatch path. It also exercises re-entrant callbacks,
+  root preservation during OGM-27 safepoints, capability denial, signature mismatch,
+  cancellation and incompatible ABI versions. The generic callback forces an
+  OGM-19 unrooted collection while callback argument handles are borrowed.
+- This remains an M0 integration proof, not a production JavaScript/TypeScript Runtime:
+  the C helper adapts its fixed numeric benchmark result to an `int64_t` return with a
+  separate completion/status snapshot; it is not a general ECMAScript Value ABI,
+  production stack-map encoder or collector. OGM-27's modeled shadow-frame contract
+  is still distinct from production machine-code stack maps and GC.
+
+## OGM-32 AOT host-call ABI
+
+The focused OGM-31/32 CI job builds the OGM-32 table and its C layout assertions
+alongside the OGM-19 ABI, OGM-20 execution scopes, OGM-21 typed dispatch and
+OGM-27 runtime-boundary crates. It then executes the same host-call cases through
+both native backends and validates the emitted JSON evidence. The AOT table is an
+adapter over OGM-21's registered slots, not a second host-function registry.
+
+The public C contract is defined in `include/ogma_aot_host_calls.h`; Rust's
+`repr(C)` mirror and dispatch adapters are in `src/aot_host_abi.rs`. The ABI is
+major/minor versioned, carries structure sizes and descriptor versions, bounds table
+and argument counts, rejects unsupported suspension and unknown effects, and keeps
+internal registry slots behind opaque host-owned bindings. The C helper is linked
+only into the M0 proof harness.
 
 ## Reproduction
 
