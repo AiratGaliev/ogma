@@ -1,8 +1,8 @@
 # Runtime, GC and memory evidence — OGM-8 M0 synthesis
 
-**Status:** M0 evidence consolidation and architecture handoff  
-**Scope:** GC/root strategy, native-frame integration contract, runtime feature profiles and interpreter/hybrid footprint  
-**Architecture authority:** [Ogma Notion architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 0.3–0.4, 7.3 and 9.5  
+**Status:** M0 evidence consolidation and architecture handoff
+**Scope:** GC/root strategy, native-frame integration contract, runtime feature profiles and interpreter/hybrid footprint
+**Architecture authority:** [Ogma Notion architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 0.3–0.4, 7.3 and 9.5
 **Baseline revision:** `dev` at `4efdb3727fbd41e9452df2b3e34b1e16c1109981` (OGM-29 merge)
 
 ## 1. M0 outcome
