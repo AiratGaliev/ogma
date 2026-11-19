@@ -105,12 +105,21 @@ frontend memory and final shipped Cargo dependency graph remain
 \`not_implemented\`. These unavailable values are null/status-labelled in
 the machine-readable report rather than estimated.
 
-The compressed report is committed at
-[\`results/ogm29-footprint-report.json.gz\`](results/ogm29-footprint-report.json.gz).
-It contains the raw samples, environment, workload hashes, logical profile
-closures, benchmark Cargo dependency graph, proof artifacts and limitations.
+The committed machine-readable summary is
+[`results/ogm29-footprint-summary.json`](results/ogm29-footprint-summary.json).
+It contains the measured p50/p95 values, memory and footprint boundaries,
+profile closures, dependency-graph status, acceptance flags and the SHA-256
+of the full raw report.
+
+The full raw JSON (183,335 bytes, including all samples) and compressed JSON
+(29,691 bytes) are retained in the successful GitHub Actions artifact
+[`ogm29-interpreter-hybrid-footprint`](https://github.com/AiratGaliev/ogma/actions/runs/44530165803/artifacts/14532414945).
 Uncompressed JSON SHA-256:
-\`e3a3b4ccae2858ebc1d3490fc97c907fddd2a89ab32dfe44d669cce41936240e\`.
-The report's \`source_revision\` and \`tested_revision\` are both
-\`1f93001c5b849b5e56410938ba28ad809650ed77\`; the subsequent commit only adds
-the generated evidence and this human-readable result summary.
+`e3a3b4ccae2858ebc1d3490fc97c907fddd2a89ab32dfe44d669cce41936240e`.
+Compressed JSON SHA-256:
+`cf0e192c7f1fb6bb5743bbdc8233f458fee61172afbf8b67d5ad5d2b7c16c239`.
+
+The report's `source_revision` and `tested_revision` are both
+`1f93001c5b849b5e56410938ba28ad809650ed77`. Subsequent commits only add
+the committed summary and human-readable result; they do not change the code
+that was measured.
