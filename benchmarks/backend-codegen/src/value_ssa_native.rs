@@ -5,7 +5,7 @@
 //! production ECMAScript Runtime or a general Core IR compiler.
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
-    ir::{AbiParam, BlockArg, InstBuilder, MemFlags, types},
+    ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, types},
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -428,13 +428,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
             let start_tag = b
                 .ins()
-                .load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
+                .load(types::I64, MemFlagsData::new(), parameters[0], 0);
             let limit_tag = b
                 .ins()
-                .load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
+                .load(types::I64, MemFlagsData::new(), parameters[1], 0);
             let step_tag = b
                 .ins()
-                .load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
+                .load(types::I64, MemFlagsData::new(), parameters[2], 0);
             let start_is_number = b.ins().icmp(
                 cranelift_codegen::ir::condcodes::IntCC::Equal,
                 start_tag,
@@ -467,22 +467,22 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
                 let start_tag = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[0], 0);
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
                 let start_payload =
                     b.ins()
-                        .load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
+                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
                 let limit_tag = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[1], 0);
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0);
                 let limit_payload =
                     b.ins()
-                        .load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
+                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let step_tag = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[2], 0);
+                    .load(types::I64, MemFlagsData::new(), parameters[2], 0);
                 let step_payload =
                     b.ins()
-                        .load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
+                        .load(types::I64, MemFlagsData::new(), parameters[2], 8);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![
                     start_tag,
@@ -497,22 +497,22 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
                 let start_bits = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[0], 8);
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
                 let limit_bits = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[1], 8);
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let step_bits = b
                     .ins()
-                    .load(types::I64, MemFlags::from_u32(0), parameters[2], 8);
+                    .load(types::I64, MemFlagsData::new(), parameters[2], 8);
                 let start = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), start_bits);
+                    .bitcast(types::F64, MemFlagsData::new(), start_bits);
                 let limit = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), limit_bits);
+                    .bitcast(types::F64, MemFlagsData::new(), limit_bits);
                 let step = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), step_bits);
+                    .bitcast(types::F64, MemFlagsData::new(), step_bits);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![start, limit, step, zero]
             }
@@ -523,13 +523,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             (RuntimeLayout::NanBox8, SsaPolicy::RepresentationAware) => {
                 let start = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[0]);
+                    .bitcast(types::F64, MemFlagsData::new(), parameters[0]);
                 let limit = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[1]);
+                    .bitcast(types::F64, MemFlagsData::new(), parameters[1]);
                 let step = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), parameters[2]);
+                    .bitcast(types::F64, MemFlagsData::new(), parameters[2]);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![start, limit, step, zero]
             }
@@ -547,19 +547,19 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
                 let current_bits =
                     b.ins()
-                        .bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
+                        .bitcast(types::F64, MemFlagsData::new(), loop_state[1]);
                 let limit_bits = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), loop_state[3]);
+                    .bitcast(types::F64, MemFlagsData::new(), loop_state[3]);
                 (current_bits, limit_bits, loop_state[5], loop_state[6])
             }
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
                 let current_bits =
                     b.ins()
-                        .bitcast(types::F64, MemFlags::from_u32(0), loop_state[0]);
+                        .bitcast(types::F64, MemFlagsData::new(), loop_state[0]);
                 let limit_bits = b
                     .ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), loop_state[1]);
+                    .bitcast(types::F64, MemFlagsData::new(), loop_state[1]);
                 (current_bits, limit_bits, loop_state[2], loop_state[3])
             }
             (_, SsaPolicy::RepresentationAware) => {
@@ -598,22 +598,22 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let (add_current, add_step, add_count) = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => (
                 b.ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[1]),
+                    .bitcast(types::F64, MemFlagsData::new(), add_state[1]),
                 b.ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[5]),
+                    .bitcast(types::F64, MemFlagsData::new(), add_state[5]),
                 add_state[6],
             ),
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => (
                 b.ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[0]),
+                    .bitcast(types::F64, MemFlagsData::new(), add_state[0]),
                 b.ins()
-                    .bitcast(types::F64, MemFlags::from_u32(0), add_state[2]),
+                    .bitcast(types::F64, MemFlagsData::new(), add_state[2]),
                 add_state[3],
             ),
             (_, SsaPolicy::RepresentationAware) => (add_state[0], add_state[2], add_state[3]),
         };
         let sum = b.ins().fadd(add_current, add_step);
-        let next_bits = b.ins().bitcast(types::I64, MemFlags::from_u32(0), sum);
+        let next_bits = b.ins().bitcast(types::I64, MemFlagsData::new(), sum);
         let next_count = b.ins().iadd_imm(add_count, 1);
         let mut next_state: Vec<BlockArg> =
             add_state.iter().copied().map(BlockArg::Value).collect();
@@ -638,27 +638,27 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
                 b.ins()
-                    .store(MemFlags::from_u32(0), done_state[0], parameters[3], 0);
+                    .store(MemFlagsData::new(), done_state[0], parameters[3], 0);
                 b.ins()
-                    .store(MemFlags::from_u32(0), done_state[1], parameters[3], 8);
+                    .store(MemFlagsData::new(), done_state[1], parameters[3], 8);
             }
             (RuntimeLayout::Tagged16, SsaPolicy::RepresentationAware) => {
                 let tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
                 let bits = b
                     .ins()
-                    .bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
-                b.ins().store(MemFlags::from_u32(0), tag, parameters[3], 0);
-                b.ins().store(MemFlags::from_u32(0), bits, parameters[3], 8);
+                    .bitcast(types::I64, MemFlagsData::new(), done_state[0]);
+                b.ins().store(MemFlagsData::new(), tag, parameters[3], 0);
+                b.ins().store(MemFlagsData::new(), bits, parameters[3], 8);
             }
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
                 b.ins()
-                    .store(MemFlags::from_u32(0), done_state[0], parameters[3], 0);
+                    .store(MemFlagsData::new(), done_state[0], parameters[3], 0);
             }
             (RuntimeLayout::NanBox8, SsaPolicy::RepresentationAware) => {
                 let bits = b
                     .ins()
-                    .bitcast(types::I64, MemFlags::from_u32(0), done_state[0]);
-                b.ins().store(MemFlags::from_u32(0), bits, parameters[3], 0);
+                    .bitcast(types::I64, MemFlagsData::new(), done_state[0]);
+                b.ins().store(MemFlagsData::new(), bits, parameters[3], 0);
             }
         }
         let ok = b.ins().iconst(types::I32, 0);
