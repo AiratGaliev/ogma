@@ -1644,7 +1644,7 @@ fn run_gc_sample(
     let native_frame = heap.begin_frame(FrameKind::NativePrototype)?;
     for ((root, value_slot), handle) in deferred_native_roots
         .into_iter()
-        .zip(deferred_native_handles.into_iter())
+        .zip(deferred_native_handles)
     {
         heap.add_frame_root(native_frame, root)?;
         encode_candidate_number_value(candidate.runtime, &mut value_storage, value_slot, 0.0)?;
