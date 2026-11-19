@@ -443,7 +443,7 @@ struct NativeCodeMetrics {
     stack_relative_memory_instructions: usize,
     stack_relative_loads: usize,
     stack_relative_stores: usize,
-    direct_call_instructions: usize,
+    call_instructions: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1171,6 +1171,213 @@ fn compile_distribution(
         timings.push(make_candidate_function(candidate, object_path)? as f64);
     }
     Ok((first, distribution(timings)))
+}
+
+
+#[derive(Clone, Copy)]
+struct NativeHandleTagFamily {
+    label: &'static str,
+    tagged_tag: u64,
+    nanbox_tag: u64,
+}
+
+const NATIVE_HANDLE_TAG_FAMILIES: [NativeHandleTagFamily; 4] = [
+    NativeHandleTagFamily {
+        label: "string",
+        tagged_tag: STRING_TAG,
+        nanbox_tag: NANBOX_STRING_TAG,
+    },
+    NativeHandleTagFamily {
+        label: "bigint",
+        tagged_tag: BIGINT_TAG,
+        nanbox_tag: NANBOX_BIGINT_TAG,
+    },
+    NativeHandleTagFamily {
+        label: "object",
+        tagged_tag: OBJECT_TAG,
+        nanbox_tag: NANBOX_OBJECT_TAG,
+    },
+    NativeHandleTagFamily {
+        label: "symbol",
+        tagged_tag: SYMBOL_TAG,
+        nanbox_tag: NANBOX_SYMBOL_TAG,
+    },
+];
+
+fn run_native_handle_dispatch_validation(
+    candidate: Candidate,
+    library: &Library,
+    object_path: &Path,
+    iterations: u64,
+    warmups: usize,
+    samples: usize,
+) -> Result<NativeHandleDispatchEvidence> {
+    let dispatch = unsafe {
+        *library
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .context("generated native Value handle-dispatch entry point missing")?
+    };
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let objects: Vec<_> = NATIVE_HANDLE_TAG_FAMILIES
+        .iter()
+        .map(|_| heap.allocate(32))
+        .collect();
+    let handles = objects
+        .iter()
+        .map(|object| heap.retain_host_handle(*object))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let tokens = handles
+        .iter()
+        .map(|handle| heap.encode_host_handle_token(*handle))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let callback_address = resolve_native_handle_callback as usize as u64;
+    let mut tag_evidence = Vec::with_capacity(NATIVE_HANDLE_TAG_FAMILIES.len());
+    for (index, family) in NATIVE_HANDLE_TAG_FAMILIES.iter().enumerate() {
+        let tag = match candidate.runtime {
+            RuntimeLayout::Tagged16 => family.tagged_tag,
+            RuntimeLayout::NanBox8 => family.nanbox_tag,
+        };
+        let mut value_storage = match candidate.runtime {
+            RuntimeLayout::Tagged16 => vec![0_u64; 2],
+            RuntimeLayout::NanBox8 => vec![0_u64; 1],
+        };
+        encode_candidate_reference_value(
+            candidate.runtime,
+            &mut value_storage,
+            0,
+            family.tagged_tag,
+            tokens[index],
+        )?;
+        let value_argument = match candidate.runtime {
+            RuntimeLayout::Tagged16 => value_storage.as_mut_ptr() as usize as u64,
+            RuntimeLayout::NanBox8 => value_storage[0],
+        };
+        let mut callback_context = NativeHandleCallbackContext {
+            heap: &mut heap as *mut GcHeap,
+            expected_object: objects[index],
+            expected_tag: tag,
+            calls: 0,
+            collections: 0,
+            force_collection: true,
+        };
+        let context_argument =
+            &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+        // SAFETY: the candidate Value, callback and context pointers remain
+        // valid for this synchronous native-to-host ABI invocation.
+        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        let handle_resolved_to_expected_object = status == 0
+            && callback_context.calls == 1
+            && callback_context.collections == 1
+            && heap.resolve_host_handle_token(tokens[index])? == objects[index];
+        if !handle_resolved_to_expected_object {
+            bail!(
+                "{} native {} helper did not preserve the expected OGM-26 handle across collection (status={status}, calls={}, collections={})",
+                candidate.name(),
+                family.label,
+                callback_context.calls,
+                callback_context.collections
+            );
+        }
+        tag_evidence.push(NativeHandleTagEvidence {
+            label: family.label,
+            tagged_value_tag: family.tagged_tag,
+            nanbox_value_tag: family.nanbox_tag,
+            callback_status: status,
+            callback_invocations: callback_context.calls,
+            forced_collections: callback_context.collections,
+            handle_resolved_to_expected_object,
+        });
+    }
+
+    // Measure the native indirect-call/helper path without collecting on
+    // every timing sample. Each callback resolves the payload through the
+    // live generation-checked OGM-26 HostHandle registry.
+    let representative_tag = match candidate.runtime {
+        RuntimeLayout::Tagged16 => NATIVE_HANDLE_TAG_FAMILIES[2].tagged_tag,
+        RuntimeLayout::NanBox8 => NATIVE_HANDLE_TAG_FAMILIES[2].nanbox_tag,
+    };
+    let mut value_storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; 1],
+    };
+    encode_candidate_reference_value(
+        candidate.runtime,
+        &mut value_storage,
+        0,
+        NATIVE_HANDLE_TAG_FAMILIES[2].tagged_tag,
+        tokens[2],
+    )?;
+    let value_argument = match candidate.runtime {
+        RuntimeLayout::Tagged16 => value_storage.as_mut_ptr() as usize as u64,
+        RuntimeLayout::NanBox8 => value_storage[0],
+    };
+    let mut callback_context = NativeHandleCallbackContext {
+        heap: &mut heap as *mut GcHeap,
+        expected_object: objects[2],
+        expected_tag: representative_tag,
+        calls: 0,
+        collections: 0,
+        force_collection: false,
+    };
+    let context_argument =
+        &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+    let invoke = || -> Result<()> {
+        // SAFETY: storage and callback context remain live during the call.
+        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        if status != 0 {
+            bail!(
+                "{} native helper callback returned status {status}",
+                candidate.name()
+            );
+        }
+        Ok(())
+    };
+
+    for _ in 0..warmups {
+        for _ in 0..iterations {
+            invoke()?;
+        }
+    }
+    let mut timings = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let begin = Instant::now();
+        for _ in 0..iterations {
+            invoke()?;
+        }
+        timings.push(begin.elapsed().as_nanos() as f64 / iterations as f64);
+    }
+    if callback_context.calls != (warmups as u64 + samples as u64) * iterations
+        || callback_context.collections != 0
+    {
+        bail!("{} native helper callback accounting mismatch", candidate.name());
+    }
+    for (index, token) in tokens.iter().copied().enumerate() {
+        if heap.resolve_host_handle_token(token)? != objects[index] {
+            bail!("{} native helper lost a persistent handle", candidate.name());
+        }
+    }
+
+    drop(value_storage);
+    for handle in handles {
+        heap.release_host_handle(handle)?;
+    }
+    let released = heap.collect()?;
+    if released.live_objects_after != 0 || released.reclaimed_objects != objects.len() {
+        bail!(
+            "{} native helper retained objects after releasing candidate Values and HostHandles",
+            candidate.name()
+        );
+    }
+
+    Ok(NativeHandleDispatchEvidence {
+        helper_calls_per_sample: iterations,
+        warmup_rounds: warmups,
+        throughput_ns_per_call: distribution(timings),
+        supported_reference_tags: tag_evidence,
+        native_code: native_code_metrics(object_path, "ogma_value_handle_dispatch")?,
+        all_callbacks_resolved_expected_handles: true,
+    })
 }
 
 fn run_native_candidate(
@@ -2142,7 +2349,7 @@ fn parse_native_disassembly(
     let mut stack_relative_memory_instructions = 0_usize;
     let mut stack_relative_loads = 0_usize;
     let mut stack_relative_stores = 0_usize;
-    let mut direct_call_instructions = 0_usize;
+    let mut call_instructions = 0_usize;
 
     for line in disassembly.lines() {
         let trimmed = line.trim();
@@ -2177,7 +2384,7 @@ fn parse_native_disassembly(
         function_code_bytes += byte_count;
 
         if mnemonic.starts_with("call") {
-            direct_call_instructions += 1;
+            call_instructions += 1;
         }
         let stack_access = operands.contains("[rsp")
             || operands.contains("[rbp")
@@ -2216,7 +2423,7 @@ fn parse_native_disassembly(
         stack_relative_memory_instructions,
         stack_relative_loads,
         stack_relative_stores,
-        direct_call_instructions,
+        call_instructions,
     })
 }
 
