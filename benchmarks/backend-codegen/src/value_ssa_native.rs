@@ -51,11 +51,7 @@ const NANBOX_HANDLE_TAGS: [u64; 4] = [
     NANBOX_OBJECT_TAG,
     NANBOX_SYMBOL_TAG,
 ];
-const NANBOX_IMMEDIATE_TAGS: [u64; 3] = [
-    NANBOX_UNDEFINED_TAG,
-    NANBOX_NULL_TAG,
-    NANBOX_BOOLEAN_TAG,
-];
+const NANBOX_IMMEDIATE_TAGS: [u64; 3] = [NANBOX_UNDEFINED_TAG, NANBOX_NULL_TAG, NANBOX_BOOLEAN_TAG];
 const NANBOX_VALUE_TAGS: [u64; 7] = [
     NANBOX_UNDEFINED_TAG,
     NANBOX_NULL_TAG,
@@ -247,7 +243,6 @@ fn encode_candidate_number_value(
     Ok(())
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CandidateValue {
     Undefined,
@@ -297,12 +292,7 @@ fn encode_candidate_value(
             Ok(())
         }
         CandidateValue::Number(bits) => {
-            encode_candidate_number_value(
-                runtime,
-                storage,
-                slot_index,
-                f64::from_bits(bits),
-            )
+            encode_candidate_number_value(runtime, storage, slot_index, f64::from_bits(bits))
         }
         CandidateValue::StringRef(token) => {
             encode_candidate_reference_value(runtime, storage, slot_index, STRING_TAG, token)
@@ -355,7 +345,10 @@ fn decode_candidate_value(
                 SYMBOL_TAG if words[1] != 0 && words[1] <= MAX_PAYLOAD => {
                     Ok(CandidateValue::SymbolRef(words[1]))
                 }
-                tag => bail!("invalid tagged Value tag/payload combination {tag}/{:#x}", words[1]),
+                tag => bail!(
+                    "invalid tagged Value tag/payload combination {tag}/{:#x}",
+                    words[1]
+                ),
             }
         }
         RuntimeLayout::NanBox8 => {
@@ -367,22 +360,15 @@ fn decode_candidate_value(
             match tag {
                 NANBOX_UNDEFINED_TAG if payload == 0 => Ok(CandidateValue::Undefined),
                 NANBOX_NULL_TAG if payload == 0 => Ok(CandidateValue::Null),
-                NANBOX_BOOLEAN_TAG if payload <= 1 => {
-                    Ok(CandidateValue::Boolean(payload != 0))
-                }
+                NANBOX_BOOLEAN_TAG if payload <= 1 => Ok(CandidateValue::Boolean(payload != 0)),
                 NANBOX_STRING_TAG if payload != 0 => Ok(CandidateValue::StringRef(payload)),
                 NANBOX_BIGINT_TAG if payload != 0 => Ok(CandidateValue::BigIntRef(payload)),
                 NANBOX_OBJECT_TAG if payload != 0 => Ok(CandidateValue::ObjectRef(payload)),
                 NANBOX_SYMBOL_TAG if payload != 0 => Ok(CandidateValue::SymbolRef(payload)),
-                NANBOX_UNDEFINED_TAG
-                | NANBOX_NULL_TAG
-                | NANBOX_BOOLEAN_TAG
-                | NANBOX_STRING_TAG
-                | NANBOX_BIGINT_TAG
-                | NANBOX_OBJECT_TAG
-                | NANBOX_SYMBOL_TAG => bail!(
-                    "invalid NaN-box tag/payload combination {tag:#06x}/{payload:#x}"
-                ),
+                NANBOX_UNDEFINED_TAG | NANBOX_NULL_TAG | NANBOX_BOOLEAN_TAG | NANBOX_STRING_TAG
+                | NANBOX_BIGINT_TAG | NANBOX_OBJECT_TAG | NANBOX_SYMBOL_TAG => {
+                    bail!("invalid NaN-box tag/payload combination {tag:#06x}/{payload:#x}")
+                }
                 _ => {
                     let exponent = word & 0x7ff0_0000_0000_0000;
                     let fraction = word & 0x000f_ffff_ffff_ffff;
@@ -392,7 +378,9 @@ fn decode_candidate_value(
                     {
                         bail!("NaN-box Number contains a non-canonical NaN");
                     }
-                    Ok(CandidateValue::Number(canonical_number_bits(f64::from_bits(word))))
+                    Ok(CandidateValue::Number(canonical_number_bits(
+                        f64::from_bits(word),
+                    )))
                 }
             }
         }
@@ -1332,7 +1320,12 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             tag,
             first_tag,
         );
-        for allowed_tag in allowed_tags.iter().copied().skip(1).take(allowed_tag_count - 1) {
+        for allowed_tag in allowed_tags
+            .iter()
+            .copied()
+            .skip(1)
+            .take(allowed_tag_count - 1)
+        {
             let expected_tag = b.ins().iconst(types::I64, allowed_tag as i64);
             let matches = b.ins().icmp(
                 cranelift_codegen::ir::condcodes::IntCC::Equal,
@@ -1351,13 +1344,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         let dispatch_block = b.create_block();
         let invalid_block = b.create_block();
-        b.ins().brif(
-            is_supported_value,
-            dispatch_block,
-            &[],
-            invalid_block,
-            &[],
-        );
+        b.ins()
+            .brif(is_supported_value, dispatch_block, &[], invalid_block, &[]);
 
         b.switch_to_block(dispatch_block);
         let callback_sig = b.import_signature(callback_signature.clone());
