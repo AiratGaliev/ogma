@@ -487,7 +487,7 @@ fn decode_candidate_object_value(
                 .get(word_index..word_index + 2)
                 .context("tagged Value storage slot out of bounds")?;
             match words[0] {
-                NUMBER_TAG => Ok(None),
+                UNDEFINED_TAG | NULL_TAG | BOOLEAN_TAG | NUMBER_TAG => Ok(None),
                 STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG
                     if words[1] != 0 && words[1] <= MAX_PAYLOAD =>
                 {
@@ -510,6 +510,14 @@ fn decode_candidate_object_value(
                     bail!("NaN-box reference Value has an invalid handle token");
                 }
                 return Ok(Some(token));
+            }
+            if NANBOX_IMMEDIATE_TAGS.contains(&tag) {
+                let payload = word & MAX_PAYLOAD;
+                match tag {
+                    NANBOX_UNDEFINED_TAG | NANBOX_NULL_TAG if payload == 0 => return Ok(None),
+                    NANBOX_BOOLEAN_TAG if payload <= 1 => return Ok(None),
+                    _ => bail!("invalid NaN-box immediate Value payload {payload:#x}"),
+                }
             }
             let exponent = word & 0x7ff0_0000_0000_0000;
             let fraction = word & 0x000f_ffff_ffff_ffff;
@@ -640,11 +648,23 @@ struct NativeHandleTagEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativePrimitiveValueEvidence {
+    label: &'static str,
+    tagged_value_tag: u64,
+    nanbox_value_tag: u64,
+    payload: u64,
+    callback_status: i32,
+    callback_invocations: u64,
+    encoded_value_roundtrip_matches: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeHandleDispatchEvidence {
     helper_calls_per_sample: u64,
     warmup_rounds: usize,
     throughput_ns_per_call: Distribution,
     supported_reference_tags: Vec<NativeHandleTagEvidence>,
+    primitive_values: Vec<NativePrimitiveValueEvidence>,
     native_code: NativeCodeMetrics,
     all_callbacks_resolved_expected_handles: bool,
 }
@@ -1302,30 +1322,37 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             ),
         };
 
-        let allowed_tags = match candidate.runtime {
-            RuntimeLayout::Tagged16 => &NATIVE_HANDLE_TAGS,
-            RuntimeLayout::NanBox8 => &NANBOX_HANDLE_TAGS,
+        let (allowed_tags, allowed_tag_count): (&[u64], usize) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => (&NATIVE_VALUE_TAGS, NATIVE_VALUE_TAGS.len()),
+            RuntimeLayout::NanBox8 => (&NANBOX_VALUE_TAGS, NANBOX_VALUE_TAGS.len()),
         };
         let first_tag = b.ins().iconst(types::I64, allowed_tags[0] as i64);
-        let mut is_supported_reference = b.ins().icmp(
+        let mut is_supported_value = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             tag,
             first_tag,
         );
-        for allowed_tag in allowed_tags.iter().copied().skip(1) {
+        for allowed_tag in allowed_tags.iter().copied().skip(1).take(allowed_tag_count - 1) {
             let expected_tag = b.ins().iconst(types::I64, allowed_tag as i64);
             let matches = b.ins().icmp(
                 cranelift_codegen::ir::condcodes::IntCC::Equal,
                 tag,
                 expected_tag,
             );
-            is_supported_reference = b.ins().bor(is_supported_reference, matches);
+            is_supported_value = b.ins().bor(is_supported_value, matches);
+        }
+        if candidate.runtime == RuntimeLayout::NanBox8 {
+            // Non-tagged words are valid Number values except non-canonical NaN
+            // payloads; canonical NaN, infinities and signed zero pass through.
+            let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
+            let valid_number = b.ins().bnot(invalid_number);
+            is_supported_value = b.ins().bor(is_supported_value, valid_number);
         }
 
         let dispatch_block = b.create_block();
         let invalid_block = b.create_block();
         b.ins().brif(
-            is_supported_reference,
+            is_supported_value,
             dispatch_block,
             &[],
             invalid_block,
@@ -1472,7 +1499,8 @@ fn run_native_handle_dispatch_validation(
         };
         let mut callback_context = NativeHandleCallbackContext {
             heap: &mut heap as *mut GcHeap,
-            expected_object: objects[index],
+            expected_object: Some(objects[index]),
+            expected_payload: tokens[index],
             expected_tag: tag,
             calls: 0,
             collections: 0,
@@ -1507,6 +1535,92 @@ fn run_native_handle_dispatch_validation(
         });
     }
 
+    // Marshal immediate values through the same generated native ABI helper.
+    // The callback checks the extracted tag/payload; the codec additionally
+    // verifies the complete value roundtrip for each candidate layout.
+    let primitive_cases = [
+        ("undefined", CandidateValue::Undefined),
+        ("null", CandidateValue::Null),
+        ("boolean-false", CandidateValue::Boolean(false)),
+        ("boolean-true", CandidateValue::Boolean(true)),
+        (
+            "number-negative-zero",
+            CandidateValue::Number((-0.0_f64).to_bits()),
+        ),
+        (
+            "number-canonical-nan",
+            CandidateValue::Number(CANONICAL_NAN_BITS),
+        ),
+        (
+            "number-positive-infinity",
+            CandidateValue::Number(f64::INFINITY.to_bits()),
+        ),
+        (
+            "number-negative-infinity",
+            CandidateValue::Number(f64::NEG_INFINITY.to_bits()),
+        ),
+    ];
+    let mut primitive_value_evidence = Vec::with_capacity(primitive_cases.len());
+    for (label, value) in primitive_cases {
+        let mut value_storage = match candidate.runtime {
+            RuntimeLayout::Tagged16 => vec![0_u64; 2],
+            RuntimeLayout::NanBox8 => vec![0_u64; 1],
+        };
+        encode_candidate_value(candidate.runtime, &mut value_storage, 0, value)?;
+        let roundtrip_matches =
+            decode_candidate_value(candidate.runtime, &value_storage, 0)? == value;
+        if !roundtrip_matches {
+            bail!(
+                "{} {} candidate Value codec roundtrip failed",
+                candidate.name(),
+                label
+            );
+        }
+        let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &value_storage, 0)?;
+        let value_argument = match candidate.runtime {
+            RuntimeLayout::Tagged16 => value_storage.as_mut_ptr() as usize as u64,
+            RuntimeLayout::NanBox8 => value_storage[0],
+        };
+        let mut callback_context = NativeHandleCallbackContext {
+            heap: &mut heap as *mut GcHeap,
+            expected_object: None,
+            expected_payload: payload,
+            expected_tag: tag,
+            calls: 0,
+            collections: 0,
+            force_collection: false,
+        };
+        let context_argument =
+            &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+        // SAFETY: value storage and callback context stay live for this
+        // synchronous native C ABI invocation.
+        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        if status != 0 || callback_context.calls != 1 || callback_context.collections != 0 {
+            bail!(
+                "{} {} immediate value failed native ABI dispatch (status={status}, calls={})",
+                candidate.name(),
+                label,
+                callback_context.calls
+            );
+        }
+        let (tagged_value_tag, nanbox_value_tag) = match value {
+            CandidateValue::Undefined => (UNDEFINED_TAG, NANBOX_UNDEFINED_TAG),
+            CandidateValue::Null => (NULL_TAG, NANBOX_NULL_TAG),
+            CandidateValue::Boolean(_) => (BOOLEAN_TAG, NANBOX_BOOLEAN_TAG),
+            CandidateValue::Number(_) => (NUMBER_TAG, tag),
+            _ => bail!("unexpected reference in primitive Value cases"),
+        };
+        primitive_value_evidence.push(NativePrimitiveValueEvidence {
+            label,
+            tagged_value_tag,
+            nanbox_value_tag,
+            payload,
+            callback_status: status,
+            callback_invocations: callback_context.calls,
+            encoded_value_roundtrip_matches: roundtrip_matches,
+        });
+    }
+
     // Measure the native indirect-call/helper path without collecting on
     // every timing sample. Each callback resolves the payload through the
     // live generation-checked OGM-26 HostHandle registry.
@@ -1531,7 +1645,8 @@ fn run_native_handle_dispatch_validation(
     };
     let mut callback_context = NativeHandleCallbackContext {
         heap: &mut heap as *mut GcHeap,
-        expected_object: objects[2],
+        expected_object: Some(objects[2]),
+        expected_payload: tokens[2],
         expected_tag: representative_tag,
         calls: 0,
         collections: 0,
@@ -1598,6 +1713,7 @@ fn run_native_handle_dispatch_validation(
         warmup_rounds: warmups,
         throughput_ns_per_call: distribution(timings),
         supported_reference_tags: tag_evidence,
+        primitive_values: primitive_value_evidence,
         native_code: native_code_metrics(object_path, "ogma_value_handle_dispatch")?,
         all_callbacks_resolved_expected_handles: true,
     })
@@ -2939,6 +3055,37 @@ mod tests {
         assert!(tagged_boxed.spill_reload_edits > 0);
         assert_eq!(nanbox_boxed.spill_store_edits, 0);
         assert_eq!(nanbox_boxed.spill_reload_edits, 0);
+    }
+
+    #[test]
+    fn candidate_immediate_value_codec_preserves_undefined_null_boolean_and_number_edges() {
+        let cases = [
+            CandidateValue::Undefined,
+            CandidateValue::Null,
+            CandidateValue::Boolean(false),
+            CandidateValue::Boolean(true),
+            CandidateValue::Number((-0.0_f64).to_bits()),
+            CandidateValue::Number(CANONICAL_NAN_BITS),
+            CandidateValue::Number(f64::INFINITY.to_bits()),
+            CandidateValue::Number(f64::NEG_INFINITY.to_bits()),
+        ];
+        for candidate in Candidate::ALL {
+            for value in cases {
+                let mut storage = match candidate.runtime {
+                    RuntimeLayout::Tagged16 => vec![0_u64; 2],
+                    RuntimeLayout::NanBox8 => vec![0_u64; 1],
+                };
+                encode_candidate_value(candidate.runtime, &mut storage, 0, value)
+                    .expect("encode immediate candidate Value");
+                assert_eq!(
+                    decode_candidate_value(candidate.runtime, &storage, 0)
+                        .expect("decode immediate candidate Value"),
+                    value,
+                    "{} {value:?}",
+                    candidate.name()
+                );
+            }
+        }
     }
 
     #[test]
