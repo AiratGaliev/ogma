@@ -1378,6 +1378,12 @@ jobs:
               assert backend["link_time"]["sample_count"] == 101
               assert backend["object_bytes"] > 0
               assert backend["copied_native_object"]["bytes"] > 0
+          portable_startup = report["startup_and_memory"]["portable_proof_worker_startup"]["latency"]
+          native_startup = report["startup_and_memory"]["native_proof_tool_startup"]["latency"]
+          assert portable_startup["sample_count"] == 101
+          assert native_startup["sample_count"] == 101
+          assert portable_startup["p50_ns_per_call"] > 0
+          assert native_startup["p50_ns_per_call"] > 0
           assert report["startup_and_memory"]["portable_proof_worker_peak_rss_bytes"] > 0
           assert report["startup_and_memory"]["native_compiler_and_proof_process_peak_rss_bytes"] > 0
           assert report["production_metric_status"]["runtime_startup"] == "not_implemented"
