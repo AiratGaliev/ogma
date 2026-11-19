@@ -1069,3 +1069,114 @@ jobs:
             ${{ runner.temp }}/ogm30-Cargo.lock
           if-no-files-found: warn
           retention-days: 90
+
+  ogm31-dual-backend-execution-proof:
+    name: OGM-31 shared Core IR portable and native execution proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-31-dual-backend-execution-proof')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: target-ogm31
+
+    steps:
+      - name: Checkout tested PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install LLVM and native linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 build-essential
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record toolchain versions and resolve backend lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          python --version
+          llvm-config-18 --version
+          clang-18 --version
+          cc --version
+          if [ ! -f benchmarks/backend-codegen/Cargo.lock ]; then
+            cargo generate-lockfile --manifest-path benchmarks/backend-codegen/Cargo.toml
+          fi
+          cp benchmarks/backend-codegen/Cargo.lock "$RUNNER_TEMP/ogm31-Cargo.lock"
+
+      - name: Check native backend formatting
+        run: cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+
+      - name: Run native backend Clippy
+        run: cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run native backend contract tests
+        run: cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+
+      - name: Run portable bytecode verifier and interpreter regressions
+        run: |
+          python -m unittest discover -s .github/scripts -p "test_ogmb.py" -v
+          python -m unittest discover -s .github/scripts -p "test_portable_bytecode.py" -v
+
+      - name: Run OGM-31 portable differential and negative-case tests
+        run: python -m unittest discover -s benchmarks/dual-backend -p "test_*.py" -v
+
+      - name: Run same-Core-IR dual-backend proof
+        id: proof
+        env:
+          OGM31_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python benchmarks/dual-backend/run.py \
+            --iterations 1000 \
+            --output "$RUNNER_TEMP/ogm31-dual-backend-report.json" \
+            --artifact-dir "$RUNNER_TEMP/ogm31-artifacts"
+
+      - name: Validate OGM-31 proof report acceptance
+        run: |
+          python3 - "$RUNNER_TEMP/ogm31-dual-backend-report.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report_file:
+              report = json.load(report_file)
+
+          assert report["task"] == "OGM-31"
+          assert report["target"] == "x86_64-unknown-linux-gnu"
+          assert report["differential_observations"]["all_equal"]
+          assert report["negative_cases"]["tampered_ogmb"]["rejected"]
+          assert report["unsupported_aot_fallback"]["selected_fallback"] == "portable-register-bytecode-interpreter"
+          assert all(report["acceptance"].values())
+          assert set(report["native_backends"]) == {"cranelift", "llvm"}
+          for backend in report["native_backends"].values():
+              assert backend["native_object"]["bytes"] > 0
+              assert all(int(value) > 0 for value in backend["runtime_helper_calls"].values())
+          assert len(report["portable_bytecode"]["register_artifacts"]) == 5
+          print("Validated OGM-31 differential values, throws, host traces, bytecode verification, fallbacks and native objects.")
+          PY
+
+      - name: Upload OGM-31 proof report and compiled evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm31-dual-backend-execution-proof
+          path: |
+            ${{ runner.temp }}/ogm31-dual-backend-report.json
+            ${{ runner.temp }}/ogm31-artifacts/**
+            ${{ runner.temp }}/ogm31-Cargo.lock
+          if-no-files-found: warn
+          retention-days: 90

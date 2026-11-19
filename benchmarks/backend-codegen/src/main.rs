@@ -50,6 +50,7 @@ struct Options {
     samples: usize,
     revision: String,
     output: PathBuf,
+    artifact_dir: Option<PathBuf>,
 }
 fn options() -> Result<Options> {
     let mut args = env::args().skip(1);
@@ -59,6 +60,7 @@ fn options() -> Result<Options> {
         samples: 101,
         revision: env::var("GITHUB_SHA").unwrap_or_else(|_| "working-tree".into()),
         output: PathBuf::from("ogm30-report.json"),
+        artifact_dir: None,
     };
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -67,6 +69,11 @@ fn options() -> Result<Options> {
             "--samples" => o.samples = args.next().context("missing samples")?.parse()?,
             "--revision" => o.revision = args.next().context("missing revision")?,
             "--output" => o.output = PathBuf::from(args.next().context("missing output")?),
+            "--artifact-dir" => {
+                o.artifact_dir = Some(PathBuf::from(
+                    args.next().context("missing artifact directory")?,
+                ));
+            }
             _ => bail!("unknown argument: {a}"),
         }
     }
@@ -960,18 +967,34 @@ const HELPERS: &str = r#"
 #include <string.h>
 static const uint64_t PAYLOAD_MASK=UINT64_C(0x00ffffffffffffff);
 static char dynamic_string[128];
-int64_t ogma_js_add_number(double a,double b){double value=a+b;int64_t boxed;memcpy(&boxed,&value,sizeof(boxed));return boxed;}
-double ogma_js_to_number(int64_t boxed){double value;memcpy(&value,&boxed,sizeof(value));return value;}
+static char call_argument[128];
+static int64_t call_receiver;
+static uint64_t proof_helper_counts[8];
+void ogma_proof_reset(void){memset(proof_helper_counts,0,sizeof(proof_helper_counts));call_argument[0]='\0';call_receiver=0;}
+uint64_t ogma_proof_count(uint32_t index){return index<8?proof_helper_counts[index]:0;}
+int64_t ogma_proof_last_call_receiver(void){return call_receiver;}
+const char *ogma_proof_last_call_argument(void){return call_argument;}
+int64_t ogma_js_add_number(double a,double b){proof_helper_counts[0]++;double value=a+b;int64_t boxed;memcpy(&boxed,&value,sizeof(boxed));return boxed;}
+double ogma_js_to_number(int64_t boxed){proof_helper_counts[1]++;double value;memcpy(&value,&boxed,sizeof(value));return value;}
 int64_t ogma_js_add_completion(int64_t a,int64_t b){
- uint64_t tag=(a==INT64_MIN)?1:0;uint64_t payload=(a==INT64_MIN)?(uint64_t)b:(uint64_t)a+(uint64_t)b;
+ proof_helper_counts[2]++;
+ uint64_t tag=(a==INT64_MIN)?1:0;
+ uint64_t payload=(a==INT64_MIN)?1:((uint64_t)a+(uint64_t)b);
  return (int64_t)((tag<<56)|(payload&PAYLOAD_MASK));
 }
-int64_t ogma_js_throw(int64_t completion){return completion;}
-int64_t ogma_js_add_mixed(int64_t text,double number){const char *left=(const char *)(uintptr_t)text;(void)snprintf(dynamic_string,sizeof(dynamic_string),"%s%.0f",left,number);return (int64_t)(uintptr_t)dynamic_string;}
+int64_t ogma_js_throw(int64_t completion){proof_helper_counts[3]++;return completion;}
+int64_t ogma_js_add_mixed(int64_t text,double number){proof_helper_counts[4]++;const char *left=(const char *)(uintptr_t)text;(void)snprintf(dynamic_string,sizeof(dynamic_string),"%s%.0f",left,number);return (int64_t)(uintptr_t)dynamic_string;}
 typedef int64_t (*OgmaCallTarget)(int64_t,int64_t);
-int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){OgmaCallTarget target=(OgmaCallTarget)(uintptr_t)callee;return target(receiver,arg);}
-int64_t ogma_js_call_target(int64_t receiver,int64_t arg){const char *value=(const char *)(uintptr_t)arg;if(strcmp(value,"item=5")!=0)return -1;return receiver+(int64_t)strlen(value);}
-int64_t ogma_host_echo(int64_t arg){return arg+11;}
+int64_t ogma_js_call(int64_t callee,int64_t receiver,int64_t arg){proof_helper_counts[5]++;OgmaCallTarget target=(OgmaCallTarget)(uintptr_t)callee;return target(receiver,arg);}
+int64_t ogma_js_call_target(int64_t receiver,int64_t arg){
+ proof_helper_counts[6]++;
+ const char *value=(const char *)(uintptr_t)arg;
+ call_receiver=receiver;
+ (void)snprintf(call_argument,sizeof(call_argument),"%s",value);
+ if(strcmp(value,"item=5")!=0)return -1;
+ return receiver+(int64_t)strlen(value);
+}
+int64_t ogma_host_echo(int64_t arg){proof_helper_counts[7]++;return arg+11;}
 "#;
 fn link(object: &Path, shared: &Path, helper: &Path) -> Result<u64> {
     fs::write(helper, HELPERS)?;
@@ -1056,6 +1079,9 @@ struct BackendReport {
     link_time_ns: LatencyDistribution,
     object_bytes: u64,
     shared_library_bytes: u64,
+    native_object_path: Option<String>,
+    semantic_observations: JsonValue,
+    runtime_helper_calls: JsonValue,
     workloads: JsonValue,
 }
 fn compile_once(backend: &str, path: &Path, c: &CoreCorpus) -> Result<u64> {
@@ -1111,6 +1137,20 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let helper = root.join(format!("{name}.c"));
     let (first_link_ns, link_samples) = link_rounds(&object, &shared, &helper, o)?;
     let lib = unsafe { Library::new(&shared)? };
+
+    type ResetCounters = unsafe extern "C" fn();
+    type CountHelper = unsafe extern "C" fn(u32) -> u64;
+    type LastCallReceiver = unsafe extern "C" fn() -> i64;
+    type LastCallArgument = unsafe extern "C" fn() -> *const std::ffi::c_char;
+
+    let reset: ResetCounters = unsafe { *lib.get(b"ogma_proof_reset\0")? };
+    let count: CountHelper = unsafe { *lib.get(b"ogma_proof_count\0")? };
+    let last_call_receiver: LastCallReceiver =
+        unsafe { *lib.get(b"ogma_proof_last_call_receiver\0")? };
+    let last_call_argument: LastCallArgument =
+        unsafe { *lib.get(b"ogma_proof_last_call_argument\0")? };
+    reset();
+
     let branch: BinaryF64 = unsafe { *lib.get(sym(&c.symbol("branch")?).as_slice())? };
     let loop_fn: TernaryF64 = unsafe { *lib.get(sym(&c.symbol("loop")?).as_slice())? };
     let exception: BinaryI64 =
@@ -1121,7 +1161,10 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     let text = CString::new("item=").unwrap();
     let text_handle = text.as_ptr() as i64;
     let host: UnaryI64 = unsafe { *lib.get(sym(&c.symbol("host_call")?).as_slice())? };
-    if unsafe { branch(7.0, 7.0) } != 7.0 || unsafe { branch(7.0, 8.0) } != 8.0 {
+
+    let branch_equal = unsafe { branch(7.0, 7.0) };
+    let branch_unequal = unsafe { branch(7.0, 8.0) };
+    if branch_equal != 7.0 || branch_unequal != 8.0 {
         bail!("{name}: branch mismatch");
     }
     if unsafe { branch(0.0, -0.0) }.to_bits() != 0.0_f64.to_bits() {
@@ -1130,22 +1173,96 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
     if unsafe { branch(f64::NAN, 3.0) } != 3.0 || !unsafe { branch(3.0, f64::NAN) }.is_nan() {
         bail!("{name}: strict equality must treat NaN as unequal");
     }
-    if unsafe { loop_fn(0.0, 5.0, 1.0) } != 5.0 || unsafe { loop_fn(0.5, 3.5, 0.75) } != 3.5 {
+
+    let loop_integer = unsafe { loop_fn(0.0, 5.0, 1.0) };
+    let loop_fractional = unsafe { loop_fn(0.5, 3.5, 0.75) };
+    if loop_integer != 5.0 || loop_fractional != 3.5 {
         bail!("{name}: loop-carried value mismatch");
     }
-    if unsafe { exception(7, 8) } != 15 {
+
+    let dynamic_add_normal = unsafe { exception(7, 8) };
+    if dynamic_add_normal != 15 {
         bail!("{name}: normal completion mismatch");
     }
-    let thrown = unsafe { exception(i64::MIN, 9) };
-    if thrown != ((1_u64 << 56) | 9) as i64 {
-        bail!("{name}: Throw completion payload/tag was not preserved");
+    let dynamic_add_throw = unsafe { exception(i64::MIN, 9) };
+    if dynamic_add_throw != ((1_u64 << 56) | 1) as i64 {
+        bail!("{name}: Symbol TypeError completion tag/payload was not preserved");
     }
-    if unsafe { call(callee, 2, text_handle, 4, 4, 5.0) } != 8 {
+
+    let call_boundary = unsafe { call(callee, 2, text_handle, 4, 4, 5.0) };
+    if call_boundary != 8 {
         bail!("{name}: call-boundary string/result mismatch");
     }
-    if unsafe { host(31) } != 42 {
+    let call_arg_ptr = unsafe { last_call_argument() };
+    if call_arg_ptr.is_null() {
+        bail!("{name}: host callback did not record its string argument");
+    }
+    let call_argument = unsafe { std::ffi::CStr::from_ptr(call_arg_ptr) }
+        .to_str()
+        .context("host callback argument was not UTF-8")?;
+    let call_receiver = unsafe { last_call_receiver() };
+    if call_receiver != 2 || call_argument != "item=5" {
+        bail!("{name}: host callback trace mismatch");
+    }
+
+    let host_call = unsafe { host(31) };
+    if host_call != 42 {
         bail!("{name}: host.call mismatch");
     }
+
+    // Snapshot runtime helper counts before the direct helper microbenchmarks below.
+    let helper_names = [
+        "js_add_number",
+        "js_to_number",
+        "js_add_completion",
+        "js_throw",
+        "js_add_mixed",
+        "js_call",
+        "host_call_target",
+        "host_echo",
+    ];
+    let runtime_helper_calls = serde_json::json!({
+        "js_add_number": unsafe { count(0) },
+        "js_to_number": unsafe { count(1) },
+        "js_add_completion": unsafe { count(2) },
+        "js_throw": unsafe { count(3) },
+        "js_add_mixed": unsafe { count(4) },
+        "js_call": unsafe { count(5) },
+        "host_call_target": unsafe { count(6) },
+        "host_echo": unsafe { count(7) },
+    });
+    for helper in helper_names {
+        if runtime_helper_calls[helper].as_u64().unwrap_or(0) == 0 {
+            bail!("{name}: expected runtime helper {helper} was not exercised");
+        }
+    }
+
+    let semantic_observations = serde_json::json!({
+        "branch_equal": {"return": branch_equal, "host_trace": []},
+        "branch_unequal": {"return": branch_unequal, "host_trace": []},
+        "loop_integer": {"return": loop_integer, "host_trace": []},
+        "loop_fractional": {"return": loop_fractional, "host_trace": []},
+        "dynamic_add_normal": {"return": dynamic_add_normal, "host_trace": []},
+        "dynamic_add_throw": {
+            "throw": "TypeError: Cannot convert a Symbol value to a number",
+            "host_trace": []
+        },
+        "call_boundary": {
+            "return": call_boundary,
+            "host_trace": [{
+                "symbol": "benchmark.host.call_target",
+                "args": [call_receiver, call_argument]
+            }]
+        },
+        "host_call": {
+            "return": host_call,
+            "host_trace": [{
+                "symbol": "benchmark.host.echo",
+                "args": [31]
+            }]
+        }
+    });
+
     let add_number: AddNumber = unsafe { *lib.get(b"ogma_js_add_number\0")? };
     let to_number: ToNumber = unsafe { *lib.get(b"ogma_js_to_number\0")? };
     let add_completion: BinaryI64 = unsafe { *lib.get(b"ogma_js_add_completion\0")? };
@@ -1161,6 +1278,7 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
             bail!("{name}: numeric add/to_number helper ABI mismatch");
         }
     }
+
     let workloads = serde_json::json!({
       "core_ir_ssa_branch":bench(o,|n|{black_box(unsafe{branch((n%17)as f64,(n%13)as f64)});}),
       "core_ir_loop_js_add_to_number":bench(o,|_|{black_box(unsafe{loop_fn(0.0,5.0,1.0)});}),
@@ -1172,6 +1290,16 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
       "direct_dynamic_completion_helper":bench(o,|n|{black_box(unsafe{add_completion(n as i64,7)});}),
       "direct_host_helper":bench(o,|n|{black_box(unsafe{host_direct(n as i64)});})
     });
+
+    let native_object_path = if let Some(directory) = &o.artifact_dir {
+        fs::create_dir_all(directory)?;
+        let destination = directory.join(format!("{name}.o"));
+        fs::copy(&object, &destination)?;
+        Some(destination.display().to_string())
+    } else {
+        None
+    };
+
     Ok(BackendReport {
         first_compile_ns,
         compile_time_ns: latency_distribution(compile),
@@ -1179,6 +1307,9 @@ fn run_backend(name: &str, o: &Options, root: &Path, c: &CoreCorpus) -> Result<B
         link_time_ns: latency_distribution(link_samples),
         object_bytes: fs::metadata(&object)?.len(),
         shared_library_bytes: fs::metadata(&shared)?.len(),
+        native_object_path,
+        semantic_observations,
+        runtime_helper_calls,
         workloads,
     })
 }
@@ -1196,6 +1327,7 @@ struct Report {
     clang: String,
     os: String,
     host_arch: &'static str,
+    native_target_triple: String,
     cpu_model: String,
     build_configuration: &'static str,
     iterations_per_sample: u64,
@@ -1411,6 +1543,10 @@ fn main() -> Result<()> {
         .unwrap_or_default();
     let footprint =
         (!llvm_package_sizes_kib.is_empty()).then(|| llvm_package_sizes_kib.values().sum::<u64>());
+    let native_target_triple = command("rustc", &["-vV"])
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+        .context("rustc -vV did not report a host target triple")?;
     let cargo_target_directory = cargo_target_directory();
     let cranelift_artifacts = cargo_artifact_summary(&cargo_target_directory, &["cranelift"]);
     let llvm_artifacts = cargo_artifact_summary(&cargo_target_directory, &["inkwell", "llvm_sys"]);
@@ -1426,6 +1562,7 @@ fn main() -> Result<()> {
         clang: command("clang-18", &["--version"]),
         os: command("uname", &["-sr"]),
         host_arch: env::consts::ARCH,
+        native_target_triple,
         cpu_model: cpu_model(),
         build_configuration: "release; Cranelift opt_level=speed; LLVM OptimizationLevel::Default; host CPU/features matched; PIC",
         iterations_per_sample: o.iterations,

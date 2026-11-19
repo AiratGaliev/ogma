@@ -61,7 +61,7 @@
     "source_files": [
       {
         "id": "src0",
-        "path": "fixtures/call-boundary.js",
+        "path": "benchmarks/dual-backend/sources/call-boundary.js",
         "language": "javascript"
       }
     ],

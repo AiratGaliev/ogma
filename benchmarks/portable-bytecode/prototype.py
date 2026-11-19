@@ -55,7 +55,7 @@ REGISTER_OPCODES = {
     "RETURN": 0x19,
     "THROW": 0x1A,
 }
-UNARY_SUBOPS = {"copy": 0, "make_closure": 1}
+UNARY_SUBOPS = {"copy": 0, "make_closure": 1, "to_number": 2}
 BINARY_SUBOPS = {"add": 0, "strict_equal": 1}
 UNARY_NAMES = {value: key for key, value in UNARY_SUBOPS.items()}
 BINARY_NAMES = {value: key for key, value in BINARY_SUBOPS.items()}
@@ -157,10 +157,22 @@ class Closure:
     function_id: str
 
 
+@dataclass(frozen=True)
+class JSSymbol:
+    description: str = "ogm31-test"
+
+
+@dataclass(frozen=True)
+class HostFunction:
+    name: str
+
+
 @dataclass
 class RuntimeState:
     functions: dict[str, CompiledFunction]
     host_trace: list[dict[str, Any]] = field(default_factory=list)
+    call_trace: list[dict[str, Any]] = field(default_factory=list)
+    host_callbacks: dict[str, Callable[..., Any]] = field(default_factory=dict)
     dispatches: int = 0
     calls: int = 0
     call_depth: int = 0
@@ -213,6 +225,45 @@ def core_ir_plan(
     bindings = fn["environment"]["bindings"]
     blocks = fn["blocks"]
     blocks_by_id = {block["id"]: block for block in blocks}
+
+    # The M0 exception fixture has a deliberately narrow handler that only rethrows
+    # the original completion. Model it as direct propagation; reject handlers with
+    # observable work rather than silently dropping their semantics.
+    passthrough_handlers: set[str] = set()
+    for source_block in blocks:
+        for ir_instruction in source_block["instructions"]:
+            exception = ir_instruction.get("exception") or {}
+            if exception.get("kind") != "edge":
+                continue
+            target_id = exception.get("target")
+            handler = blocks_by_id.get(target_id)
+            exception_parameter = None if handler is None else handler.get("exception_parameter")
+            if (
+                handler is None
+                or exception_parameter is None
+                or len(handler["instructions"]) != 1
+                or handler["instructions"][0]["op"] != "js.throw"
+                or handler["instructions"][0]["operands"] != [exception_parameter["id"]]
+                or handler["terminator"]["kind"] != "unreachable"
+                or handler["terminator"].get("reason") != "after_throw"
+            ):
+                raise ValueError(
+                    f"{fn['id']}: exception edge to {target_id!r} is not a supported "
+                    "passthrough-rethrow handler"
+                )
+            passthrough_handlers.add(target_id)
+
+    active_blocks = [block for block in blocks if block["id"] not in passthrough_handlers]
+    for block in active_blocks:
+        terminator = block["terminator"]
+        if terminator["kind"] == "jump" and terminator["target"] in passthrough_handlers:
+            raise ValueError(f"{fn['id']}: normal control flow cannot enter a rethrow handler")
+        if terminator["kind"] == "branch" and any(
+            edge["target"] in passthrough_handlers
+            for edge in (terminator["then"], terminator["else"])
+        ):
+            raise ValueError(f"{fn['id']}: normal control flow cannot enter a rethrow handler")
+
     values: dict[str, int] = {}
     binding_locations: dict[str, int] = {}
     next_location = 0
@@ -229,7 +280,7 @@ def core_ir_plan(
 
     # Core IR block parameters are real SSA definitions with edge-specific incoming
     # values. Give them stable frame locations before allocating instruction results.
-    for block in blocks:
+    for block in active_blocks:
         for block_parameter in block["parameters"]:
             if block_parameter["kind"] == "value":
                 values[block_parameter["id"]] = next_location
@@ -359,6 +410,19 @@ def core_ir_plan(
                     emit(block_id, "STORE_LOCAL", {"local": result_loc}, source_id, src)
                 else:
                     emit(block_id, "CONST", {"dest": result_loc, "constant_index": constant_index}, source_id, src)
+
+            elif op == "js.to_number":
+                source_loc = values[operands[0]]
+                if model == "stack":
+                    emit(block_id, "LOAD_LOCAL", {"local": source_loc}, source_id, src)
+                    emit(block_id, "UNARY", {"subop": "to_number"}, source_id, src, may_throw)
+                    emit(block_id, "STORE_LOCAL", {"local": result_loc}, source_id, src)
+                else:
+                    emit(
+                        block_id, "UNARY",
+                        {"dest": result_loc, "source": source_loc, "subop": "to_number"},
+                        source_id, src, may_throw,
+                    )
 
             elif op in {"js.add", "js.strict_equal"}:
                 subop = "add" if op == "js.add" else "strict_equal"
@@ -1041,6 +1105,8 @@ def js_truthy(value: Any) -> bool:
 
 
 def js_to_string(value: Any) -> str:
+    if isinstance(value, JSSymbol):
+        raise JSException("TypeError: Cannot convert a Symbol value to a string")
     if value is None:
         return "null"
     if value is True:
@@ -1055,6 +1121,8 @@ def js_to_string(value: Any) -> str:
 
 
 def js_to_number(value: Any) -> float | int:
+    if isinstance(value, JSSymbol):
+        raise JSException("TypeError: Cannot convert a Symbol value to a number")
     if value is None:
         return 0
     if value is True:
@@ -1120,6 +1188,12 @@ def invoke_call(values: list[Any], state: RuntimeState) -> Any:
             obj.properties[key] = value
             return value
         raise JSException(f"TypeError: unknown runtime intrinsic {intrinsic}")
+    if isinstance(callee, HostFunction):
+        callback = state.host_callbacks.get(callee.name)
+        if callback is None:
+            raise JSException(f"TypeError: unknown host callback {callee.name}")
+        state.call_trace.append({"symbol": callee.name, "args": arguments})
+        return callback(*arguments)
     if isinstance(callee, Closure):
         if not arguments:
             raise JSException("TypeError: missing thisArg")
@@ -1132,6 +1206,13 @@ def invoke_call(values: list[Any], state: RuntimeState) -> Any:
             state.host_trace.append({"symbol": symbol, "args": arguments})
             state.host_allocations += 1
             return JSObject({"seed": arguments[0]})
+        if symbol == "benchmark.host.echo":
+            if len(arguments) != 1:
+                raise JSException("TypeError: benchmark.host.echo expects one argument")
+            state.host_trace.append({"symbol": symbol, "args": arguments})
+            if isinstance(arguments[0], bool) or not isinstance(arguments[0], (int, float)):
+                raise JSException("TypeError: benchmark.host.echo expects a number")
+            return arguments[0] + 11
         if symbol != "trace":
             raise JSException(f"TypeError: unknown host capability {symbol}")
         state.host_trace.append({"symbol": symbol, "args": arguments})
@@ -1187,6 +1268,8 @@ def execute_function(function_id: str, arguments: list[Any], state: RuntimeState
                     elif details["subop"] == "make_closure":
                         result = Closure(str(operand))
                         state.runtime_allocations += 1
+                    elif details["subop"] == "to_number":
+                        result = js_to_number(operand)
                     else:
                         raise JSException("InternalError: unsupported unary operation")
                     operand_stack.append(result)
@@ -1229,6 +1312,8 @@ def execute_function(function_id: str, arguments: list[Any], state: RuntimeState
                     elif details["subop"] == "make_closure":
                         result = Closure(str(operand))
                         state.runtime_allocations += 1
+                    elif details["subop"] == "to_number":
+                        result = js_to_number(operand)
                     else:
                         raise JSException("InternalError: unsupported unary operation")
                     registers[details["dest"]] = result
