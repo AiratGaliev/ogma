@@ -92,7 +92,7 @@ class RuntimeFootprintTests(unittest.TestCase):
         )
         self.assertEqual("measured_proof_tool_startup", result["status"])
         self.assertEqual(3, result["latency"]["sample_count"])
-        self.assertGreater(result["latency"]["p50_ns_per_call"], 0)
+        self.assertGreater(result["latency"]["p50_ns"], 0)
         self.assertEqual(1, result["warmup_processes"])
 
     def test_native_runtime_metrics_are_not_fabricated_by_profile_contract(self) -> None:
