@@ -21,7 +21,7 @@
     "source_files": [
       {
         "id": "src0",
-        "path": "fixtures/host-call.js",
+        "path": "benchmarks/dual-backend/sources/host-call.js",
         "language": "javascript"
       }
     ],

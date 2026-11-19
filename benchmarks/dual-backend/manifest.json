@@ -1,0 +1,51 @@
+{
+  "schema": "ogma.dual-backend-proof",
+  "version": "1.0.0",
+  "task": "OGM-31",
+  "core_ir_contract": "ogma.core-ir/1.0.0",
+  "portable_artifact": "ogma.ogmb/1.0",
+  "native_backend_manifest": "benchmarks/backend-codegen/fixtures/workloads.json",
+  "target": {
+    "triple": "x86_64-unknown-linux-gnu",
+    "operating_system": "Ubuntu 24.04",
+    "native_artifact": "ELF relocatable object (.o)"
+  },
+  "portable_execution_model": "register",
+  "source_fixtures": [
+    {
+      "id": "branch",
+      "source": "benchmarks/dual-backend/sources/branch.js",
+      "core_ir": "tests/core-ir/fixtures/positive-ssa-branch.json"
+    },
+    {
+      "id": "loop",
+      "source": "benchmarks/dual-backend/sources/loop-carried.js",
+      "core_ir": "tests/core-ir/fixtures/positive-loop-carried-values.json"
+    },
+    {
+      "id": "dynamic_exception",
+      "source": "benchmarks/dual-backend/sources/dynamic-exception.js",
+      "core_ir": "tests/core-ir/fixtures/positive-dynamic-exception.json"
+    },
+    {
+      "id": "call_boundary",
+      "source": "benchmarks/dual-backend/sources/call-boundary.js",
+      "core_ir": "tests/core-ir/fixtures/positive-call-boundary.json"
+    },
+    {
+      "id": "host_call",
+      "source": "benchmarks/dual-backend/sources/host-call.js",
+      "core_ir": "tests/core-ir/fixtures/positive-host-call.json"
+    }
+  ],
+  "excluded_aot_workload": {
+    "id": "property-access",
+    "source": "benchmarks/dual-backend/sources/property-fallback.js",
+    "generated_by": "benchmarks/portable-bytecode/corpus.py",
+    "fallback": "portable register bytecode interpreter",
+    "unsupported_operations": [
+      "js.get_property",
+      "js.set_property"
+    ]
+  }
+}

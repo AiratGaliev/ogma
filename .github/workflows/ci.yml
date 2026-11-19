@@ -1069,3 +1069,154 @@ jobs:
             ${{ runner.temp }}/ogm30-Cargo.lock
           if-no-files-found: warn
           retention-days: 90
+
+  ogm31-dual-backend-execution-proof:
+    name: OGM-31 shared Core IR portable and native execution proof
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'feat/ogm-31-dual-backend-execution-proof')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+      CARGO_TARGET_DIR: target-ogm31
+
+    steps:
+      - name: Checkout tested PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install LLVM and native linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 build-essential
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record toolchain versions and resolve backend lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          python --version
+          llvm-config-18 --version
+          clang-18 --version
+          cc --version
+          for crate in rust-abi native-runtime-boundary backend-codegen; do
+            manifest="benchmarks/$crate/Cargo.toml"
+            lockfile="benchmarks/$crate/Cargo.lock"
+            if [ ! -f "$lockfile" ]; then
+              cargo generate-lockfile --manifest-path "$manifest"
+            fi
+            cp "$lockfile" "$RUNNER_TEMP/ogm31-$crate-Cargo.lock"
+          done
+
+      - name: Check OGM-19 ABI, OGM-27 boundary and native backend formatting
+        run: |
+          cargo fmt --manifest-path benchmarks/rust-abi/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
+          cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+
+      - name: Run OGM-19 ABI, OGM-27 boundary and native backend Clippy
+        run: |
+          cargo clippy --manifest-path benchmarks/rust-abi/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
+          cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run OGM-19 ABI, OGM-27 boundary and native backend contract tests
+        run: |
+          cargo test --manifest-path benchmarks/rust-abi/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
+          cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
+
+      - name: Generate portable bytecode verifier fixtures
+        run: python tests/ogmb/build_fixtures.py
+
+      - name: Run portable bytecode verifier and interpreter regressions
+        run: |
+          python -m unittest discover -s .github/scripts -p "test_ogmb.py" -v
+          python -m unittest discover -s .github/scripts -p "test_portable_bytecode.py" -v
+
+      - name: Run OGM-31 portable differential and negative-case tests
+        run: python -m unittest discover -s benchmarks/dual-backend -p "test_*.py" -v
+
+      - name: Run same-Core-IR dual-backend proof
+        id: proof
+        env:
+          OGM31_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python benchmarks/dual-backend/run.py \
+            --iterations 1000 \
+            --output "$RUNNER_TEMP/ogm31-dual-backend-report.json" \
+            --artifact-dir "$RUNNER_TEMP/ogm31-artifacts"
+
+      - name: Validate OGM-31 proof report acceptance
+        run: |
+          python3 - "$RUNNER_TEMP/ogm31-dual-backend-report.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as report_file:
+              report = json.load(report_file)
+
+          assert report["task"] == "OGM-31"
+          assert report["target"] == "x86_64-unknown-linux-gnu"
+          assert report["differential_observations"]["all_equal"]
+          assert report["negative_cases"]["tampered_ogmb"]["rejected"]
+          assert report["unsupported_aot_fallback"]["selected_fallback"] == "portable-register-bytecode-interpreter"
+          assert all(report["acceptance"].values())
+          assert set(report["native_backends"]) == {"cranelift", "llvm"}
+          required_features = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 63)
+          for backend in report["native_backends"].values():
+              assert backend["native_object"]["bytes"] > 0
+              assert backend["native_object"]["format"] == "ELF relocatable object (.o)"
+              assert all(int(value) > 0 for value in backend["runtime_helper_calls"].values())
+              integration = backend["runtime_integration"]
+              assert integration["ogm19_abi_v1_negotiated"]
+              assert (integration["ogm19_version"]["features"] & required_features) == required_features
+              assert len(integration["ogm19_callback_trace"]) == 5
+              assert integration["ogm27_model"]["callback_invocations"] >= 5
+              assert integration["ogm27_model"]["execution_budget"]["max_unpolled_work"] == 64
+              assert (integration["ogm19_completions"]["dynamic_add_normal"]["kind"],
+                      integration["ogm19_completions"]["dynamic_add_normal"]["payload"]) == (0, 15)
+              assert (integration["ogm19_completions"]["dynamic_add_throw"]["kind"],
+                      integration["ogm19_completions"]["dynamic_add_throw"]["payload"]) == (1, -(1 << 63))
+              assert (integration["ogm19_completions"]["host_echo_normal"]["kind"],
+                      integration["ogm19_completions"]["host_echo_normal"]["payload"]) == (0, 42)
+              assert (integration["ogm19_completions"]["host_echo_throw"]["kind"],
+                      integration["ogm19_completions"]["host_echo_throw"]["payload"]) == (1, -7)
+              assert all(value > 0 for value in integration["ogm27_native_safepoints"].values())
+              model = integration["ogm27_model"]
+              assert model["native_shadow_frame"]["active_during_execution"]
+              assert model["native_shadow_frame"]["live_managed_root_survived_every_collection"]
+              assert model["execution_budget"]["polls"] >= 5
+              assert ["Native", "Interpreter", "HostCallback"] in model["completion_transition_paths"]
+          assert len(report["portable_bytecode"]["register_artifacts"]) == 5
+          print("Validated OGM-31 portable/native differential behaviour, OGM-19 ABI completions, OGM-27 roots/safepoints/budget, invalid bytecode and fallbacks.")
+          PY
+
+      - name: Upload OGM-31 proof report and compiled evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogm31-dual-backend-execution-proof
+          path: |
+            ${{ runner.temp }}/ogm31-dual-backend-report.json
+            ${{ runner.temp }}/ogm31-artifacts/**
+            ${{ runner.temp }}/ogm31-rust-abi-Cargo.lock
+            ${{ runner.temp }}/ogm31-native-runtime-boundary-Cargo.lock
+            ${{ runner.temp }}/ogm31-backend-codegen-Cargo.lock
+          if-no-files-found: warn
+          retention-days: 90

@@ -37,7 +37,7 @@
     "source_files": [
       {
         "id": "src0",
-        "path": "fixtures/loop-carried.js",
+        "path": "benchmarks/dual-backend/sources/loop-carried.js",
         "language": "javascript"
       }
     ],
