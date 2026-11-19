@@ -8,7 +8,7 @@
     "os": "Ubuntu 24.04",
     "kernel": "Linux 7.0.0-1017-azure",
     "target": "x86_64-unknown-linux-gnu",
-    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "cpu": "AMD EPYC 9V45 96-Core Processor",
     "python": "3.12.16",
     "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
     "cargo": "1.100.0 (3acc79c0c 2026-11-05)",
@@ -110,11 +110,12 @@
       },
       "host_call": {
         "dispatch_p50_ns": 1968.031,
-        "dispatch_p95_ns": 1998.37,
+        "dispatch_p95_ns": 2052.597,
         "direct_python_callback_p50_ns": 25.879,
         "estimated_overhead_ns": 1942.152,
         "estimated_overhead_ratio": 76.04741296031531,
-        "status": "Python proof interpreter only; not Rust ABI or production Runtime"
+        "status": "Python proof interpreter only; not Rust ABI or production Runtime",
+        "direct_python_callback_p95_ns": 28.263
       },
       "stack_register_observations_equal": true,
       "startup_probe": {
