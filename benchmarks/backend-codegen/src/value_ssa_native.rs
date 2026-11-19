@@ -456,8 +456,12 @@ fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> 
     );
     let reserved_tag = builder.ins().band(reserved_ge, reserved_le);
 
-    let exponent_mask = builder.ins().iconst(types::I64, 0x7ff0_0000_0000_0000_u64 as i64);
-    let fraction_mask = builder.ins().iconst(types::I64, 0x000f_ffff_ffff_ffff_u64 as i64);
+    let exponent_mask = builder
+        .ins()
+        .iconst(types::I64, 0x7ff0_0000_0000_0000_u64 as i64);
+    let fraction_mask = builder
+        .ins()
+        .iconst(types::I64, 0x000f_ffff_ffff_ffff_u64 as i64);
     let exponent = builder.ins().band(word, exponent_mask);
     let fraction = builder.ins().band(word, fraction_mask);
     let exponent_all_ones = builder.ins().icmp(
@@ -472,9 +476,7 @@ fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> 
         zero,
     );
     let is_nan = builder.ins().band(exponent_all_ones, fraction_nonzero);
-    let canonical_nan = builder
-        .ins()
-        .iconst(types::I64, CANONICAL_NAN_BITS as i64);
+    let canonical_nan = builder.ins().iconst(types::I64, CANONICAL_NAN_BITS as i64);
     let is_not_canonical_nan = builder.ins().icmp(
         cranelift_codegen::ir::condcodes::IntCC::NotEqual,
         word,
@@ -936,15 +938,14 @@ fn run_native_candidate(
     }
 
     let mut semantic_cases = Vec::new();
-    let mut run_case = |
-        name: &'static str,
-        case_start: f64,
-        case_limit: f64,
-        case_step: f64,
-        max_iterations: u64,
-        expected_status: i32,
-        expected_result: Option<f64>,
-    | -> Result<()> {
+    let mut run_case = |name: &'static str,
+                        case_start: f64,
+                        case_limit: f64,
+                        case_step: f64,
+                        max_iterations: u64,
+                        expected_status: i32,
+                        expected_result: Option<f64>|
+     -> Result<()> {
         let mut case_tagged_start = TaggedValue {
             tag: NUMBER_TAG,
             payload: canonical_number_bits(case_start),
@@ -975,9 +976,7 @@ fn run_native_candidate(
         };
         // SAFETY: the generated function uses the same C ABI and input/output
         // layout that was used for the primary native benchmark invocation.
-        let status = unsafe {
-            function(case_a, case_b, case_c, case_output, max_iterations)
-        };
+        let status = unsafe { function(case_a, case_b, case_c, case_output, max_iterations) };
         let actual_bits = if status == 0 {
             Some(match candidate.runtime {
                 RuntimeLayout::Tagged16 => {
@@ -1019,9 +1018,33 @@ fn run_native_candidate(
     // edge cases, and loop-carried conversions can change observable behavior.
     run_case("fractional-loop", 0.25, 1.0, 0.25, 8, 0, Some(1.0))?;
     run_case("negative-step-loop", 3.0, 0.0, -1.0, 8, 0, Some(0.0))?;
-    run_case("signed-zero-strict-equality", -0.0, 0.0, 1.0, 8, 0, Some(-0.0))?;
-    run_case("positive-infinity-equality", f64::INFINITY, f64::INFINITY, 1.0, 8, 0, Some(f64::INFINITY))?;
-    run_case("nan-is-not-strictly-equal-to-itself", f64::NAN, f64::NAN, 1.0, 3, 2, None)?;
+    run_case(
+        "signed-zero-strict-equality",
+        -0.0,
+        0.0,
+        1.0,
+        8,
+        0,
+        Some(-0.0),
+    )?;
+    run_case(
+        "positive-infinity-equality",
+        f64::INFINITY,
+        f64::INFINITY,
+        1.0,
+        8,
+        0,
+        Some(f64::INFINITY),
+    )?;
+    run_case(
+        "nan-is-not-strictly-equal-to-itself",
+        f64::NAN,
+        f64::NAN,
+        1.0,
+        3,
+        2,
+        None,
+    )?;
     drop(run_case);
 
     let invalid_tag_rejected = match candidate.runtime {
@@ -1036,15 +1059,8 @@ fn run_native_candidate(
         RuntimeLayout::NanBox8 => {
             let invalid_object_word = (0x7ffe_u64 << NAN_TAG_SHIFT) | 1;
             // SAFETY: the NaN-box layout passes the word directly, not a pointer.
-            let status = unsafe {
-                function(
-                    invalid_object_word,
-                    b,
-                    c,
-                    output_pointer,
-                    max_iterations,
-                )
-            };
+            let status =
+                unsafe { function(invalid_object_word, b, c, output_pointer, max_iterations) };
             status == 1
         }
     };
@@ -1446,7 +1462,10 @@ fn run_gc_sample(
         );
     }
     if objects.iter().any(|object| !heap.is_alive(*object)) {
-        bail!("{} GC proof lost an object retained by one of the root mechanisms", candidate.name());
+        bail!(
+            "{} GC proof lost an object retained by one of the root mechanisms",
+            candidate.name()
+        );
     }
 
     // Validate every opaque NaN-box handle token against the actual generation-checked
@@ -1497,8 +1516,7 @@ fn run_gc_sample(
         );
     }
 
-    let actual_value_storage_capacity_bytes =
-        value_storage.capacity() * size_of::<u64>();
+    let actual_value_storage_capacity_bytes = value_storage.capacity() * size_of::<u64>();
     let stats = heap.stats();
     Ok(GcSample {
         build_ns,
@@ -1529,7 +1547,9 @@ fn summarize_gc_collector(
     object_count: usize,
     raw_samples: Vec<GcSample>,
 ) -> Result<GcCollectorEvidence> {
-    let first = raw_samples.first().context("GC measurement samples missing")?;
+    let first = raw_samples
+        .first()
+        .context("GC measurement samples missing")?;
     if raw_samples.iter().any(|sample| {
         sample.graph_edges != first.graph_edges
             || sample.interpreter_frame_roots != first.interpreter_frame_roots
@@ -1539,7 +1559,10 @@ fn summarize_gc_collector(
             || sample.actual_value_storage_capacity_bytes
                 != first.actual_value_storage_capacity_bytes
     }) {
-        bail!("{} GC benchmark topology/storage changed between samples", collector.name());
+        bail!(
+            "{} GC benchmark topology/storage changed between samples",
+            collector.name()
+        );
     }
     let peak_logical_heap_bytes_max = raw_samples
         .iter()
@@ -1571,10 +1594,8 @@ fn gc_evidence(
     object_count: usize,
 ) -> Result<GcEvidence> {
     let collectors = CollectorKind::ALL;
-    let mut raw_samples: [Vec<GcSample>; 2] = [
-        Vec::with_capacity(samples),
-        Vec::with_capacity(samples),
-    ];
+    let mut raw_samples: [Vec<GcSample>; 2] =
+        [Vec::with_capacity(samples), Vec::with_capacity(samples)];
 
     // Alternate collector order for paired samples so the first collector does
     // not always receive the colder cache/allocator state.
@@ -1586,7 +1607,11 @@ fn gc_evidence(
     }
 
     for sample_index in 0..samples {
-        let order = if sample_index % 2 == 0 { [0, 1] } else { [1, 0] };
+        let order = if sample_index % 2 == 0 {
+            [0, 1]
+        } else {
+            [1, 0]
+        };
         let mut pair: [Option<GcSample>; 2] = [None, None];
         for index in order {
             pair[index] = Some(run_gc_sample(candidate, collectors[index], object_count)?);
@@ -1612,8 +1637,16 @@ fn gc_evidence(
     }
 
     let collector_comparisons = vec![
-        summarize_gc_collector(collectors[0], object_count, std::mem::take(&mut raw_samples[0]))?,
-        summarize_gc_collector(collectors[1], object_count, std::mem::take(&mut raw_samples[1]))?,
+        summarize_gc_collector(
+            collectors[0],
+            object_count,
+            std::mem::take(&mut raw_samples[0]),
+        )?,
+        summarize_gc_collector(
+            collectors[1],
+            object_count,
+            std::mem::take(&mut raw_samples[1]),
+        )?,
     ];
     let graph_edges = collector_comparisons
         .first()
@@ -1641,14 +1674,42 @@ fn is_hex_byte(token: &str) -> bool {
 fn is_general_purpose_register(token: &str) -> bool {
     matches!(
         token,
-        "rax" | "eax" | "ax" | "al" | "ah"
-            | "rbx" | "ebx" | "bx" | "bl" | "bh"
-            | "rcx" | "ecx" | "cx" | "cl" | "ch"
-            | "rdx" | "edx" | "dx" | "dl" | "dh"
-            | "rsi" | "esi" | "si" | "sil"
-            | "rdi" | "edi" | "di" | "dil"
-            | "rbp" | "ebp" | "bp" | "bpl"
-            | "rsp" | "esp" | "sp" | "spl"
+        "rax"
+            | "eax"
+            | "ax"
+            | "al"
+            | "ah"
+            | "rbx"
+            | "ebx"
+            | "bx"
+            | "bl"
+            | "bh"
+            | "rcx"
+            | "ecx"
+            | "cx"
+            | "cl"
+            | "ch"
+            | "rdx"
+            | "edx"
+            | "dx"
+            | "dl"
+            | "dh"
+            | "rsi"
+            | "esi"
+            | "si"
+            | "sil"
+            | "rdi"
+            | "edi"
+            | "di"
+            | "dil"
+            | "rbp"
+            | "ebp"
+            | "bp"
+            | "bpl"
+            | "rsp"
+            | "esp"
+            | "sp"
+            | "spl"
     ) || (token
         .strip_prefix('r')
         .and_then(|tail| {
@@ -1663,13 +1724,11 @@ fn is_general_purpose_register(token: &str) -> bool {
 }
 
 fn is_vector_register(token: &str) -> bool {
-    ["xmm", "ymm", "zmm", "mm"]
-        .iter()
-        .any(|prefix| {
-            token
-                .strip_prefix(prefix)
-                .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
-        })
+    ["xmm", "ymm", "zmm", "mm"].iter().any(|prefix| {
+        token
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
@@ -1733,9 +1792,7 @@ fn parse_native_disassembly(disassembly: &str) -> Result<NativeCodeMetrics> {
             }
         }
 
-        for word in assembly.split(|character: char| {
-            !character.is_ascii_alphanumeric()
-        }) {
+        for word in assembly.split(|character: char| !character.is_ascii_alphanumeric()) {
             if is_general_purpose_register(word) {
                 integer_registers.insert(word.to_owned());
             } else if is_vector_register(word) {
@@ -1778,8 +1835,8 @@ fn native_code_metrics(object_path: &Path) -> Result<NativeCodeMetrics> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let disassembly = String::from_utf8(output.stdout)
-        .context("objdump returned non-UTF-8 disassembly")?;
+    let disassembly =
+        String::from_utf8(output.stdout).context("objdump returned non-UTF-8 disassembly")?;
     parse_native_disassembly(&disassembly)
 }
 
@@ -1933,7 +1990,6 @@ pub fn parse_args_and_run() -> Result<()> {
 mod tests {
     use super::*;
 
-
     #[test]
     fn objdump_parser_counts_actual_instruction_bytes_and_register_classes() {
         let disassembly = r#"
@@ -2040,10 +2096,15 @@ mod tests {
                 evidence.value_storage_bytes,
                 64 * GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes()
             );
-            assert_eq!(evidence.collector_comparisons.len(), CollectorKind::ALL.len());
+            assert_eq!(
+                evidence.collector_comparisons.len(),
+                CollectorKind::ALL.len()
+            );
             for collector in evidence.collector_comparisons {
                 assert_eq!(collector.object_count, 64);
-                assert!(collector.actual_value_storage_capacity_bytes >= evidence.value_storage_bytes);
+                assert!(
+                    collector.actual_value_storage_capacity_bytes >= evidence.value_storage_bytes
+                );
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
                 assert!(collector.raw_samples[0].roots_scanned > 0);
