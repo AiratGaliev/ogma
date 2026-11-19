@@ -468,21 +468,21 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let start_tag = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[0], 0);
-                let start_payload =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let start_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
                 let limit_tag = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[1], 0);
-                let limit_payload =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let limit_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let step_tag = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[2], 0);
-                let step_payload =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[2], 8);
+                let step_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[2], 8);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![
                     start_tag,
@@ -504,15 +504,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let step_bits = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[2], 8);
-                let start = b
-                    .ins()
-                    .bitcast(types::F64, MemFlagsData::new(), start_bits);
-                let limit = b
-                    .ins()
-                    .bitcast(types::F64, MemFlagsData::new(), limit_bits);
-                let step = b
-                    .ins()
-                    .bitcast(types::F64, MemFlagsData::new(), step_bits);
+                let start = b.ins().bitcast(types::F64, MemFlagsData::new(), start_bits);
+                let limit = b.ins().bitcast(types::F64, MemFlagsData::new(), limit_bits);
+                let step = b.ins().bitcast(types::F64, MemFlagsData::new(), step_bits);
                 let zero = b.ins().iconst(types::I64, 0);
                 vec![start, limit, step, zero]
             }
@@ -545,18 +539,18 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let loop_state = b.block_params(loop_block).to_vec();
         let (current, limit, step, count) = match (candidate.runtime, candidate.ssa) {
             (RuntimeLayout::Tagged16, SsaPolicy::Boxed) => {
-                let current_bits =
-                    b.ins()
-                        .bitcast(types::F64, MemFlagsData::new(), loop_state[1]);
+                let current_bits = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), loop_state[1]);
                 let limit_bits = b
                     .ins()
                     .bitcast(types::F64, MemFlagsData::new(), loop_state[3]);
                 (current_bits, limit_bits, loop_state[5], loop_state[6])
             }
             (RuntimeLayout::NanBox8, SsaPolicy::Boxed) => {
-                let current_bits =
-                    b.ins()
-                        .bitcast(types::F64, MemFlagsData::new(), loop_state[0]);
+                let current_bits = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), loop_state[0]);
                 let limit_bits = b
                     .ins()
                     .bitcast(types::F64, MemFlagsData::new(), loop_state[1]);
