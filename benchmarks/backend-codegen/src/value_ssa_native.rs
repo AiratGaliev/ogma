@@ -1264,8 +1264,12 @@ mod tests {
             assert!(evidence.spill_bytes >= evidence.spill_slots * 8);
             reports.insert(candidate.name(), evidence);
         }
-        let tagged_boxed = reports.get("tagged-16-boxed").expect("tagged boxed candidate");
-        let nanbox_boxed = reports.get("nanbox-8-boxed").expect("NaN-box boxed candidate");
+        let tagged_boxed = reports
+            .get("tagged-16-boxed")
+            .expect("tagged boxed candidate");
+        let nanbox_boxed = reports
+            .get("nanbox-8-boxed")
+            .expect("NaN-box boxed candidate");
         assert!(tagged_boxed.spill_slots > nanbox_boxed.spill_slots);
     }
 
