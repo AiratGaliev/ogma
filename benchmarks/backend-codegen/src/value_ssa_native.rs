@@ -33,7 +33,18 @@ const NUMBER_TAG: u64 = 3;
 const OBJECT_TAG: u64 = 6;
 const NAN_TAG_SHIFT: u32 = 48;
 const MAX_PAYLOAD: u64 = (1_u64 << NAN_TAG_SHIFT) - 1;
+const NANBOX_RESERVED_TAG_MIN: u64 = 0x7ff9_0000_0000_0000;
+const NANBOX_RESERVED_TAG_MAX: u64 = 0x7fff_ffff_ffff_ffff;
+const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000;
+
+fn canonical_number_bits(value: f64) -> u64 {
+    if value.is_nan() {
+        CANONICAL_NAN_BITS
+    } else {
+        value.to_bits()
+    }
+}
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 
@@ -150,6 +161,22 @@ struct GcEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeSemanticCase {
+    name: &'static str,
+    expected_status: i32,
+    actual_status: i32,
+    expected_result_bits: Option<u64>,
+    actual_result_bits: Option<u64>,
+    matches: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NativeSemanticValidation {
+    numeric_edge_cases: Vec<NativeSemanticCase>,
+    invalid_tag_rejected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct CandidateEvidence {
     name: String,
     runtime_value_bytes: usize,
@@ -166,6 +193,7 @@ struct CandidateEvidence {
     calls_per_second_p50: f64,
     completed_loop_iterations: u64,
     result_matches: bool,
+    native_semantic_validation: NativeSemanticValidation,
     register_pressure: RegisterPressure,
     gc: GcEvidence,
 }
@@ -460,7 +488,57 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             b.ins()
                 .brif(step_is_number, initial_state, &[], invalid_block, &[]);
         } else {
-            b.ins().jump(initial_state, &[]);
+            // NaN-boxed Values reserve the 0x7ff9..=0x7fff high-word range
+            // for non-number tags. A native numeric fast path must not silently
+            // reinterpret an object/string/symbol handle as an IEEE-754 NaN.
+            let reserved_min =
+                b.ins().iconst(types::I64, NANBOX_RESERVED_TAG_MIN as i64);
+            let reserved_max =
+                b.ins().iconst(types::I64, NANBOX_RESERVED_TAG_MAX as i64);
+
+            let start_ge = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                parameters[0],
+                reserved_min,
+            );
+            let start_le = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+                parameters[0],
+                reserved_max,
+            );
+            let start_reserved = b.ins().band(start_ge, start_le);
+            b.ins()
+                .brif(start_reserved, invalid_block, &[], check_second_tag, &[]);
+
+            b.switch_to_block(check_second_tag);
+            let limit_ge = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                parameters[1],
+                reserved_min,
+            );
+            let limit_le = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+                parameters[1],
+                reserved_max,
+            );
+            let limit_reserved = b.ins().band(limit_ge, limit_le);
+            b.ins()
+                .brif(limit_reserved, invalid_block, &[], check_third_tag, &[]);
+
+            b.switch_to_block(check_third_tag);
+            let step_ge = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                parameters[2],
+                reserved_min,
+            );
+            let step_le = b.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+                parameters[2],
+                reserved_max,
+            );
+            let step_reserved = b.ins().band(step_ge, step_le);
+            b.ins()
+                .brif(step_reserved, invalid_block, &[], initial_state, &[]);
         }
 
         b.switch_to_block(initial_state);
@@ -735,15 +813,15 @@ fn run_native_candidate(
 
     let mut tagged_start = TaggedValue {
         tag: NUMBER_TAG,
-        payload: start.to_bits(),
+        payload: canonical_number_bits(start),
     };
     let mut tagged_limit = TaggedValue {
         tag: NUMBER_TAG,
-        payload: limit.to_bits(),
+        payload: canonical_number_bits(limit),
     };
     let mut tagged_step = TaggedValue {
         tag: NUMBER_TAG,
-        payload: step.to_bits(),
+        payload: canonical_number_bits(step),
     };
     let mut tagged_output = TaggedValue::default();
     let mut nanbox_output = 0_u64;
@@ -756,9 +834,9 @@ fn run_native_candidate(
             (&mut tagged_output as *mut TaggedValue) as usize as u64,
         ),
         RuntimeLayout::NanBox8 => (
-            start.to_bits(),
-            limit.to_bits(),
-            step.to_bits(),
+            canonical_number_bits(start),
+            canonical_number_bits(limit),
+            canonical_number_bits(step),
             (&mut nanbox_output as *mut u64) as usize as u64,
         ),
     };
@@ -791,6 +869,129 @@ fn run_native_candidate(
         );
     }
 
+    let mut semantic_cases = Vec::new();
+    let mut run_case = |
+        name: &'static str,
+        case_start: f64,
+        case_limit: f64,
+        case_step: f64,
+        max_iterations: u64,
+        expected_status: i32,
+        expected_result: Option<f64>,
+    | -> Result<()> {
+        let mut case_tagged_start = TaggedValue {
+            tag: NUMBER_TAG,
+            payload: canonical_number_bits(case_start),
+        };
+        let mut case_tagged_limit = TaggedValue {
+            tag: NUMBER_TAG,
+            payload: canonical_number_bits(case_limit),
+        };
+        let mut case_tagged_step = TaggedValue {
+            tag: NUMBER_TAG,
+            payload: canonical_number_bits(case_step),
+        };
+        let mut case_tagged_output = TaggedValue::default();
+        let mut case_nanbox_output = 0_u64;
+        let (case_a, case_b, case_c, case_output) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => (
+                (&mut case_tagged_start as *mut TaggedValue) as usize as u64,
+                (&mut case_tagged_limit as *mut TaggedValue) as usize as u64,
+                (&mut case_tagged_step as *mut TaggedValue) as usize as u64,
+                (&mut case_tagged_output as *mut TaggedValue) as usize as u64,
+            ),
+            RuntimeLayout::NanBox8 => (
+                canonical_number_bits(case_start),
+                canonical_number_bits(case_limit),
+                canonical_number_bits(case_step),
+                (&mut case_nanbox_output as *mut u64) as usize as u64,
+            ),
+        };
+        // SAFETY: the generated function uses the same C ABI and input/output
+        // layout that was used for the primary native benchmark invocation.
+        let status = unsafe {
+            function(case_a, case_b, case_c, case_output, max_iterations)
+        };
+        let actual_bits = if status == 0 {
+            Some(match candidate.runtime {
+                RuntimeLayout::Tagged16 => {
+                    if case_tagged_output.tag != NUMBER_TAG {
+                        bail!("{name}: tagged output did not contain a Number");
+                    }
+                    case_tagged_output.payload
+                }
+                RuntimeLayout::NanBox8 => case_nanbox_output,
+            })
+        } else {
+            None
+        };
+        let expected_bits = expected_result.map(canonical_number_bits);
+        let matches = status == expected_status
+            && match (expected_bits, actual_bits) {
+                (Some(expected), Some(actual)) => expected == actual,
+                (None, None) => true,
+                _ => false,
+            };
+        semantic_cases.push(NativeSemanticCase {
+            name,
+            expected_status,
+            actual_status: status,
+            expected_result_bits: expected_bits,
+            actual_result_bits: actual_bits,
+            matches,
+        });
+        if !matches {
+            bail!(
+                "{} native semantic case {name} mismatch: status {status}, expected {expected_status}, result {actual_bits:?}, expected bits {expected_bits:?}",
+                candidate.name()
+            );
+        }
+        Ok(())
+    };
+
+    // Exercise the loop semantics at values where strict equality, IEEE-754
+    // edge cases, and loop-carried conversions can change observable behavior.
+    run_case("fractional-loop", 0.25, 1.0, 0.25, 8, 0, Some(1.0))?;
+    run_case("negative-step-loop", 3.0, 0.0, -1.0, 8, 0, Some(0.0))?;
+    run_case("signed-zero-strict-equality", -0.0, 0.0, 1.0, 8, 0, Some(-0.0))?;
+    run_case("positive-infinity-equality", f64::INFINITY, f64::INFINITY, 1.0, 8, 0, Some(f64::INFINITY))?;
+    run_case("nan-is-not-strictly-equal-to-itself", f64::NAN, f64::NAN, 1.0, 3, 2, None)?;
+
+    let invalid_tag_rejected = match candidate.runtime {
+        RuntimeLayout::Tagged16 => {
+            let original_tag = tagged_start.tag;
+            tagged_start.tag = OBJECT_TAG;
+            // SAFETY: the first tagged input pointer refers to a live input struct.
+            let status = unsafe { function(a, b, c, output_pointer, max_iterations) };
+            tagged_start.tag = original_tag;
+            status == 1
+        }
+        RuntimeLayout::NanBox8 => {
+            let invalid_object_word = (0x7ffe_u64 << NAN_TAG_SHIFT) | 1;
+            // SAFETY: the NaN-box layout passes the word directly, not a pointer.
+            let status = unsafe {
+                function(
+                    invalid_object_word,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
+            status == 1
+        }
+    };
+    if !invalid_tag_rejected {
+        bail!(
+            "{} numeric fast path accepted a non-number Value tag",
+            candidate.name()
+        );
+    }
+    let semantic_validation = NativeSemanticValidation {
+        numeric_edge_cases: semantic_cases,
+        invalid_tag_rejected,
+    };
+
     for _ in 0..warmups {
         for _ in 0..iterations {
             black_box(invoke()?);
@@ -807,7 +1008,11 @@ fn run_native_candidate(
     }
 
     let final_result = invoke()?;
-    Ok((distribution(timings), final_result == expected))
+    Ok((
+        distribution(timings),
+        final_result == expected,
+        semantic_validation,
+    ))
 }
 
 #[derive(Default)]
@@ -1145,7 +1350,7 @@ fn run(
         link_shared_library(&object_path, &library_path)?;
         let library = unsafe { Library::new(&library_path) }
             .with_context(|| format!("load generated native object for {}", candidate.name()))?;
-        let (throughput_ns_per_call, result_matches) =
+        let (throughput_ns_per_call, result_matches, native_semantic_validation) =
             run_native_candidate(candidate, &library, iterations, warmups, samples, expected)?;
         let register_pressure = register_pressure(candidate)?;
         let gc = gc_evidence(candidate)?;
@@ -1174,6 +1379,7 @@ fn run(
             throughput_ns_per_call,
             completed_loop_iterations: expected as u64,
             result_matches,
+            native_semantic_validation,
             register_pressure,
             gc,
         });
