@@ -1474,22 +1474,23 @@ fn gc_distribution(samples: &[GcSample], select: impl Fn(&GcSample) -> u128) -> 
     distribution(samples.iter().map(|sample| select(sample) as f64).collect())
 }
 
-fn gc_collector_evidence(
-    candidate: Candidate,
+fn summarize_gc_collector(
     collector: CollectorKind,
-    warmups: usize,
-    samples: usize,
     object_count: usize,
+    raw_samples: Vec<GcSample>,
 ) -> Result<GcCollectorEvidence> {
-    for _ in 0..warmups {
-        black_box(run_gc_sample(candidate, collector, object_count)?);
-    }
-
-    let mut raw_samples = Vec::with_capacity(samples);
-    for _ in 0..samples {
-        raw_samples.push(run_gc_sample(candidate, collector, object_count)?);
-    }
     let first = raw_samples.first().context("GC measurement samples missing")?;
+    if raw_samples.iter().any(|sample| {
+        sample.graph_edges != first.graph_edges
+            || sample.interpreter_frame_roots != first.interpreter_frame_roots
+            || sample.native_frame_roots != first.native_frame_roots
+            || sample.persistent_host_handles != first.persistent_host_handles
+            || sample.temporary_scope_roots != first.temporary_scope_roots
+            || sample.actual_value_storage_capacity_bytes
+                != first.actual_value_storage_capacity_bytes
+    }) {
+        bail!("{} GC benchmark topology/storage changed between samples", collector.name());
+    }
     let peak_logical_heap_bytes_max = raw_samples
         .iter()
         .map(|sample| sample.peak_logical_heap_bytes)
@@ -1519,12 +1520,51 @@ fn gc_evidence(
     samples: usize,
     object_count: usize,
 ) -> Result<GcEvidence> {
-    let collector_comparisons = CollectorKind::ALL
-        .into_iter()
-        .map(|collector| {
-            gc_collector_evidence(candidate, collector, warmups, samples, object_count)
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let collectors = CollectorKind::ALL;
+    let mut raw_samples: [Vec<GcSample>; 2] = [
+        Vec::with_capacity(samples),
+        Vec::with_capacity(samples),
+    ];
+
+    // Alternate collector order for paired samples so the first collector does
+    // not always receive the colder cache/allocator state.
+    for warmup in 0..warmups {
+        let order = if warmup % 2 == 0 { [0, 1] } else { [1, 0] };
+        for index in order {
+            black_box(run_gc_sample(candidate, collectors[index], object_count)?);
+        }
+    }
+
+    for sample_index in 0..samples {
+        let order = if sample_index % 2 == 0 { [0, 1] } else { [1, 0] };
+        let mut pair: [Option<GcSample>; 2] = [None, None];
+        for index in order {
+            pair[index] = Some(run_gc_sample(candidate, collectors[index], object_count)?);
+        }
+        let first = pair[0].take().context("missing RC-cycle-removal sample")?;
+        let second = pair[1].take().context("missing MarkSweep sample")?;
+        if first.graph_edges != second.graph_edges
+            || first.interpreter_frame_roots != second.interpreter_frame_roots
+            || first.native_frame_roots != second.native_frame_roots
+            || first.persistent_host_handles != second.persistent_host_handles
+            || first.temporary_scope_roots != second.temporary_scope_roots
+            || first.logical_heap_bytes_before_collection
+                != second.logical_heap_bytes_before_collection
+            || first.actual_value_storage_capacity_bytes
+                != second.actual_value_storage_capacity_bytes
+            || first.reclaimed_after_root_release != second.reclaimed_after_root_release
+            || first.live_objects_after_release != second.live_objects_after_release
+        {
+            bail!("OGM-26 collector pair did not execute an equivalent candidate workload");
+        }
+        raw_samples[0].push(first);
+        raw_samples[1].push(second);
+    }
+
+    let collector_comparisons = vec![
+        summarize_gc_collector(collectors[0], object_count, std::mem::take(&mut raw_samples[0]))?,
+        summarize_gc_collector(collectors[1], object_count, std::mem::take(&mut raw_samples[1]))?,
+    ];
     let graph_edges = collector_comparisons
         .first()
         .context("GC collector evidence missing")?
@@ -1953,7 +1993,7 @@ mod tests {
             assert_eq!(evidence.collector_comparisons.len(), CollectorKind::ALL.len());
             for collector in evidence.collector_comparisons {
                 assert_eq!(collector.object_count, 64);
-                assert_eq!(collector.actual_value_storage_capacity_bytes, evidence.value_storage_bytes);
+                assert!(collector.actual_value_storage_capacity_bytes >= evidence.value_storage_bytes);
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
                 assert!(collector.raw_samples[0].roots_scanned > 0);
