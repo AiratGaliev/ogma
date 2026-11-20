@@ -2109,11 +2109,11 @@ fn run_native_candidate(
     let (noncanonical_nan_payload_rejected, noncanonical_nanbox_words_rejected) = match candidate
         .runtime
     {
-            RuntimeLayout::Tagged16 => {
-                let mut invalid_nan_start = TaggedValue {
-                    tag: NUMBER_TAG,
-                    payload: 0x7ff8_0000_0000_0001,
-                };
+        RuntimeLayout::Tagged16 => {
+            let mut invalid_nan_start = TaggedValue {
+                tag: NUMBER_TAG,
+                payload: 0x7ff8_0000_0000_0001,
+            };
                 let invalid_nan_start_ptr =
                     (&mut invalid_nan_start as *mut TaggedValue) as usize as u64;
                 // SAFETY: the pointer addresses a live repr(C) tagged Value.
