@@ -1059,8 +1059,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 step_tag,
                 number_tag,
             );
-            b.ins()
-                .brif(step_is_number, validate_tagged_numbers, &[], invalid_block, &[]);
+            b.ins().brif(
+                step_is_number,
+                validate_tagged_numbers,
+                &[],
+                invalid_block,
+                &[],
+            );
 
             b.switch_to_block(validate_tagged_numbers);
             let start_bits = b
@@ -1405,16 +1410,14 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     payload,
                     max_payload,
                 );
-                let valid_reference_payload =
-                    b.ins().band(payload_is_nonzero, payload_fits);
+                let valid_reference_payload = b.ins().band(payload_is_nonzero, payload_fits);
                 let valid_reference = b.ins().band(is_reference, valid_reference_payload);
 
                 let valid_immediate_or_boolean = b.ins().bor(valid_immediate, valid_boolean);
                 let valid_number_or_reference = b.ins().bor(valid_number, valid_reference);
-                let valid_payload = b.ins().bor(
-                    valid_immediate_or_boolean,
-                    valid_number_or_reference,
-                );
+                let valid_payload = b
+                    .ins()
+                    .bor(valid_immediate_or_boolean, valid_number_or_reference);
                 b.ins().band(has_known_tag, valid_payload)
             }
             RuntimeLayout::NanBox8 => {
@@ -1448,8 +1451,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let valid_immediate_or_boolean = b.ins().bor(valid_immediate, valid_boolean);
                 let valid_special_payload =
                     b.ins().bor(valid_immediate_or_boolean, valid_reference);
-                let valid_special =
-                    b.ins().band(has_known_tag, valid_special_payload);
+                let valid_special = b.ins().band(has_known_tag, valid_special_payload);
                 let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
                 let valid_number = b.ins().bnot(invalid_number);
                 b.ins().bor(valid_special, valid_number)
@@ -1730,8 +1732,14 @@ fn run_native_handle_dispatch_validation(
             ("undefined-nonzero-payload", vec![UNDEFINED_TAG, 1]),
             ("boolean-out-of-range", vec![BOOLEAN_TAG, 2]),
             ("reference-zero-handle", vec![OBJECT_TAG, 0]),
-            ("reference-token-over-48-bits", vec![STRING_TAG, MAX_PAYLOAD + 1]),
-            ("noncanonical-number-nan", vec![NUMBER_TAG, 0x7ff8_0000_0000_0001]),
+            (
+                "reference-token-over-48-bits",
+                vec![STRING_TAG, MAX_PAYLOAD + 1],
+            ),
+            (
+                "noncanonical-number-nan",
+                vec![NUMBER_TAG, 0x7ff8_0000_0000_0001],
+            ),
         ],
         RuntimeLayout::NanBox8 => vec![
             (
@@ -2098,8 +2106,9 @@ fn run_native_candidate(
             candidate.name()
         );
     }
-    let (noncanonical_nan_payload_rejected, noncanonical_nanbox_words_rejected) =
-        match candidate.runtime {
+    let (noncanonical_nan_payload_rejected, noncanonical_nanbox_words_rejected) = match candidate
+        .runtime
+    {
             RuntimeLayout::Tagged16 => {
                 let mut invalid_nan_start = TaggedValue {
                     tag: NUMBER_TAG,
@@ -2108,15 +2117,8 @@ fn run_native_candidate(
                 let invalid_nan_start_ptr =
                     (&mut invalid_nan_start as *mut TaggedValue) as usize as u64;
                 // SAFETY: the pointer addresses a live repr(C) tagged Value.
-                let status = unsafe {
-                    function(
-                        invalid_nan_start_ptr,
-                        b,
-                        c,
-                        output_pointer,
-                        max_iterations,
-                    )
-                };
+                let status =
+                    unsafe { function(invalid_nan_start_ptr, b, c, output_pointer, max_iterations) };
                 (status == 1, None)
             }
             RuntimeLayout::NanBox8 => {
