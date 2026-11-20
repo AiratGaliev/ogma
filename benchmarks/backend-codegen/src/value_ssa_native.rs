@@ -6822,7 +6822,9 @@ mod tests {
                 );
                 assert_eq!(collector.raw_samples[0].allocator_allocation_failures, 0);
                 assert!(collector.process_peak_rss_bytes > 0);
-                assert!(collector.process_peak_rss_bytes >= collector.process_peak_rss_baseline_bytes);
+                assert!(
+                    collector.process_peak_rss_bytes >= collector.process_peak_rss_baseline_bytes
+                );
                 assert_eq!(
                     collector.process_peak_rss_delta_bytes,
                     collector.process_peak_rss_bytes - collector.process_peak_rss_baseline_bytes
