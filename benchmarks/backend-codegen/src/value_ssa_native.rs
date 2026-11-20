@@ -666,6 +666,7 @@ struct NativeValueSemanticCaseEvidence {
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_reference_identity_preserved: bool,
+    native_reference_equality_result: Option<bool>,
     native_store_load_transition: bool,
     matches: bool,
 }
@@ -3105,6 +3106,38 @@ fn candidate_reference_token(value: CandidateValue) -> Option<u64> {
     }
 }
 
+fn native_reference_identity_evidence(
+    case_name: &str,
+    tokens: &[Option<u64>],
+) -> (bool, Option<bool>) {
+    let token_pair = tokens
+        .first()
+        .copied()
+        .flatten()
+        .zip(tokens.get(1).copied().flatten());
+
+    match case_name {
+        "call-boundary" => {
+            let object_tokens = tokens
+                .get(3)
+                .copied()
+                .flatten()
+                .zip(tokens.get(4).copied().flatten());
+            let equality = object_tokens.map(|(left, right)| left == right);
+            (equality == Some(true), equality)
+        }
+        "object-identity-same" | "symbol-identity-same" => {
+            let equality = token_pair.map(|(left, right)| left == right);
+            (equality == Some(true), equality)
+        }
+        "object-identity-distinct" | "symbol-identity-distinct" => {
+            let equality = token_pair.map(|(left, right)| left == right);
+            (equality == Some(false), equality)
+        }
+        _ => (true, None),
+    }
+}
+
 fn dispatch_native_semantic_inputs(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
@@ -3292,32 +3325,12 @@ fn run_native_value_semantics(
             actual = SemanticCompletion::Normal(SemanticValue::Number(host_callback.result_bits));
             actual_host_trace = vec![host_callback.trace.clone()];
         }
-        let native_reference_identity_preserved = match case.name {
-            "call-boundary" => {
-                reference_tokens.get(3).copied().flatten().is_some()
-                    && reference_tokens.get(3) == reference_tokens.get(4)
-            }
-            "object-identity-same" | "symbol-identity-same" => {
-                reference_tokens.first().copied().flatten().is_some()
-                    && reference_tokens.first() == reference_tokens.get(1)
-            }
-            "object-identity-distinct" | "symbol-identity-distinct" => {
-                reference_tokens.first().copied().flatten().is_some()
-                    && reference_tokens.get(1).copied().flatten().is_some()
-                    && reference_tokens.first() != reference_tokens.get(1)
-            }
-            _ => true,
-        };
-        if matches!(
-            case.name,
-            "object-identity-same"
-                | "symbol-identity-same"
-                | "object-identity-distinct"
-                | "symbol-identity-distinct"
-        ) {
-            actual = SemanticCompletion::Normal(SemanticValue::Boolean(
-                native_reference_identity_preserved,
-            ));
+        let (
+            native_reference_identity_preserved,
+            native_reference_equality_result,
+        ) = native_reference_identity_evidence(case.name, &reference_tokens);
+        if let Some(equality_result) = native_reference_equality_result {
+            actual = SemanticCompletion::Normal(SemanticValue::Boolean(equality_result));
         }
         if invoke_aot_host {
             let host_call = aot_host_call
@@ -3406,6 +3419,7 @@ fn run_native_value_semantics(
             aot_host_call,
             native_host_callback,
             native_reference_identity_preserved,
+            native_reference_equality_result,
             native_store_load_transition,
             matches,
         });
@@ -5556,6 +5570,38 @@ mod tests {
         assert!(tagged_boxed.spill_reload_edits > 0);
         assert_eq!(nanbox_boxed.spill_store_edits, 0);
         assert_eq!(nanbox_boxed.spill_reload_edits, 0);
+    }
+
+    #[test]
+    fn native_reference_identity_evidence_separates_preservation_from_strict_equality() {
+        let same_tokens = [Some(0x1_0000_0001), Some(0x1_0000_0001)];
+        assert_eq!(
+            native_reference_identity_evidence("object-identity-same", &same_tokens),
+            (true, Some(true))
+        );
+        assert_eq!(
+            native_reference_identity_evidence("symbol-identity-same", &same_tokens),
+            (true, Some(true))
+        );
+
+        let distinct_tokens = [Some(0x1_0000_0001), Some(0x1_0000_0002)];
+        assert_eq!(
+            native_reference_identity_evidence("object-identity-distinct", &distinct_tokens),
+            (true, Some(false))
+        );
+        assert_eq!(
+            native_reference_identity_evidence("symbol-identity-distinct", &distinct_tokens),
+            (true, Some(false))
+        );
+
+        assert_eq!(
+            native_reference_identity_evidence("object-identity-distinct", &[Some(7), Some(7)]),
+            (false, Some(true))
+        );
+        assert_eq!(
+            native_reference_identity_evidence("object-identity-distinct", &[Some(7), None]),
+            (false, None)
+        );
     }
 
     #[test]
