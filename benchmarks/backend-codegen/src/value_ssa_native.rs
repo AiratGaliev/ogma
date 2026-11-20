@@ -5230,25 +5230,107 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     })
 }
 
+fn process_rss_bytes() -> Result<u64> {
+    let status = fs::read_to_string("/proc/self/status")
+        .context("read Linux process RSS from /proc/self/status")?;
+    let kilobytes = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .and_then(|value| value.split_whitespace().next())
+        .context("Linux process VmRSS entry missing")?
+        .parse::<u64>()
+        .context("parse Linux process VmRSS")?;
+    Ok(kilobytes.saturating_mul(1024))
+}
+
+fn encode_candidate_number_heap(
+    heap: &mut GcHeap,
+    objects: &[ogma_gc_comparison_proof::GcRef],
+    runtime: RuntimeLayout,
+    slot_index: usize,
+    value: f64,
+) -> Result<()> {
+    let object_index = slot_index / GC_VALUE_SLOTS_PER_OBJECT;
+    let local_slot = slot_index % GC_VALUE_SLOTS_PER_OBJECT;
+    let object = *objects
+        .get(object_index)
+        .context("candidate Value slot exceeds the allocated GC object graph")?;
+    encode_candidate_number_value(
+        runtime,
+        heap.payload_words_mut(object)?,
+        local_slot,
+        value,
+    )
+}
+
+fn encode_candidate_object_heap(
+    heap: &mut GcHeap,
+    objects: &[ogma_gc_comparison_proof::GcRef],
+    runtime: RuntimeLayout,
+    slot_index: usize,
+    token: u64,
+) -> Result<()> {
+    let object_index = slot_index / GC_VALUE_SLOTS_PER_OBJECT;
+    let local_slot = slot_index % GC_VALUE_SLOTS_PER_OBJECT;
+    let object = *objects
+        .get(object_index)
+        .context("candidate object Value slot exceeds the allocated GC graph")?;
+    encode_candidate_object_value(
+        runtime,
+        heap.payload_words_mut(object)?,
+        local_slot,
+        token,
+    )
+}
+
+fn decode_candidate_object_heap(
+    heap: &GcHeap,
+    objects: &[ogma_gc_comparison_proof::GcRef],
+    runtime: RuntimeLayout,
+    slot_index: usize,
+) -> Result<Option<u64>> {
+    let object_index = slot_index / GC_VALUE_SLOTS_PER_OBJECT;
+    let local_slot = slot_index % GC_VALUE_SLOTS_PER_OBJECT;
+    let object = *objects
+        .get(object_index)
+        .context("candidate object Value slot exceeds the allocated GC graph")?;
+    decode_candidate_object_value(runtime, heap.payload_words(object)?, local_slot)
+}
+
+fn resolve_candidate_object_heap(
+    heap: &GcHeap,
+    objects: &[ogma_gc_comparison_proof::GcRef],
+    runtime: RuntimeLayout,
+    slot_index: usize,
+) -> Result<ogma_gc_comparison_proof::GcRef> {
+    let object_index = slot_index / GC_VALUE_SLOTS_PER_OBJECT;
+    let local_slot = slot_index % GC_VALUE_SLOTS_PER_OBJECT;
+    let object = *objects
+        .get(object_index)
+        .context("candidate object Value slot exceeds the allocated GC graph")?;
+    resolve_candidate_object_value(runtime, heap.payload_words(object)?, local_slot, heap)
+}
+
 fn run_gc_sample(
     candidate: Candidate,
     collector: CollectorKind,
+    allocator_strategy: AllocatorStrategy,
     object_count: usize,
 ) -> Result<GcSample> {
     if object_count < 12 || !object_count.is_multiple_of(4) {
         bail!("GC workload object count must be >=12 and divisible by four");
     }
 
+    let process_rss_before_bytes = process_rss_bytes()?;
     let build_start = Instant::now();
-    let value_words_per_object =
-        GC_VALUE_SLOTS_PER_OBJECT * (candidate.runtime.value_bytes() / size_of::<u64>());
-    let storage_words = object_count
-        .checked_mul(value_words_per_object)
-        .context("candidate Value storage size overflow")?;
-    let mut value_storage = vec![0_u64; storage_words];
-
-    let mut heap = GcHeap::new(collector);
     let payload_bytes = GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
+    let one_round_bytes = object_count
+        .checked_mul(payload_bytes)
+        .context("candidate GC allocator payload size overflow")?;
+    let quota_bytes = one_round_bytes
+        .checked_add(16 * 1024 * 1024)
+        .context("candidate GC allocator quota overflow")?;
+    let mut heap = GcHeap::new_with_allocator(collector, allocator_strategy, quota_bytes);
     let objects: Vec<_> = (0..object_count)
         .map(|_| heap.allocate(payload_bytes))
         .collect();
@@ -5272,9 +5354,10 @@ fn run_gc_sample(
     // token and HostHandle through collection.
     let value_slot_count = object_count * GC_VALUE_SLOTS_PER_OBJECT;
     for slot_index in 0..value_slot_count {
-        encode_candidate_number_value(
+        encode_candidate_number_heap(
+            &mut heap,
+            &objects,
             candidate.runtime,
-            &mut value_storage,
             slot_index,
             (slot_index + 1) as f64,
         )?;
@@ -5298,17 +5381,18 @@ fn run_gc_sample(
         let root_value_slot = root_object_index * GC_VALUE_SLOTS_PER_OBJECT;
         let handle = heap.retain_host_handle(objects[root_object_index])?;
         let token = heap.encode_host_handle_token(handle)?;
-        encode_candidate_object_value(
+        encode_candidate_object_heap(
+            &mut heap,
+            &objects,
             candidate.runtime,
-            &mut value_storage,
             root_value_slot,
             token,
         )?;
-        let root = resolve_candidate_object_value(
-            candidate.runtime,
-            &value_storage,
-            root_value_slot,
+        let root = resolve_candidate_object_heap(
             &heap,
+            &objects,
+            candidate.runtime,
+            root_value_slot,
         )?;
         if root != objects[root_object_index] {
             bail!("candidate Value decoded to a different OGM-26 GcRef");
@@ -5318,9 +5402,10 @@ fn run_gc_sample(
         match component % 3 {
             0 => {
                 heap.add_frame_root(interpreter_frame, root)?;
-                encode_candidate_number_value(
+                encode_candidate_number_heap(
+                    &mut heap,
+                    &objects,
                     candidate.runtime,
-                    &mut value_storage,
                     root_value_slot,
                     0.0,
                 )?;
@@ -5338,25 +5423,27 @@ fn run_gc_sample(
             let scope_value_slot = scope_object_index * GC_VALUE_SLOTS_PER_OBJECT + 1;
             let scope_handle = heap.retain_host_handle(objects[scope_object_index])?;
             let scope_token = heap.encode_host_handle_token(scope_handle)?;
-            encode_candidate_object_value(
+            encode_candidate_object_heap(
+                &mut heap,
+                &objects,
                 candidate.runtime,
-                &mut value_storage,
                 scope_value_slot,
                 scope_token,
             )?;
-            let scope_root = resolve_candidate_object_value(
-                candidate.runtime,
-                &value_storage,
-                scope_value_slot,
+            let scope_root = resolve_candidate_object_heap(
                 &heap,
+                &objects,
+                candidate.runtime,
+                scope_value_slot,
             )?;
             if scope_root != objects[scope_object_index] {
                 bail!("temporary-scope Value decoded to a different OGM-26 GcRef");
             }
             heap.scope_add(scope, scope_root)?;
-            encode_candidate_number_value(
+            encode_candidate_number_heap(
+                &mut heap,
+                &objects,
                 candidate.runtime,
-                &mut value_storage,
                 scope_value_slot,
                 0.0,
             )?;
@@ -5373,11 +5460,9 @@ fn run_gc_sample(
         .zip(deferred_native_handles)
     {
         heap.add_frame_root(native_frame, root)?;
-        encode_candidate_number_value(candidate.runtime, &mut value_storage, value_slot, 0.0)?;
+        encode_candidate_number_heap(&mut heap, &objects, candidate.runtime, value_slot, 0.0)?;
         heap.release_host_handle(handle)?;
     }
-    black_box(value_storage.as_slice());
-
     let graph = heap.graph_shape()?;
     let graph_edges = graph.edges;
     let interpreter_frame_roots = graph.roots.interpreter_frame_roots;
@@ -5385,6 +5470,10 @@ fn run_gc_sample(
     let persistent_host_handles = graph.roots.persistent_host_handles;
     let temporary_scope_roots = graph.roots.temporary_scope_roots;
     let before = heap.stats();
+    let allocator_before = heap.allocator_stats();
+    let process_rss_after_build_bytes = process_rss_bytes()?;
+    let process_rss_delta_bytes =
+        process_rss_after_build_bytes.saturating_sub(process_rss_before_bytes);
     let build_ns = build_start.elapsed().as_nanos();
     let retained = heap.collect()?;
     if retained.reclaimed_objects != 0 || retained.live_objects_after != object_count as u64 {
@@ -5407,13 +5496,17 @@ fn run_gc_sample(
     // alive across collection; decode the Value again after the safepoint.
     for (handle, expected_object, value_slot) in persistent_handles.iter() {
         let token = heap.encode_host_handle_token(*handle)?;
-        if decode_candidate_object_value(candidate.runtime, &value_storage, *value_slot)?
-            != Some(token)
-            || resolve_candidate_object_value(
-                candidate.runtime,
-                &value_storage,
-                *value_slot,
+        if decode_candidate_object_heap(
+            &heap,
+            &objects,
+            candidate.runtime,
+            *value_slot,
+        )? != Some(token)
+            || resolve_candidate_object_heap(
                 &heap,
+                &objects,
+                candidate.runtime,
+                *value_slot,
             )? != *expected_object
         {
             bail!(
@@ -5422,9 +5515,6 @@ fn run_gc_sample(
             );
         }
     }
-    let actual_value_storage_capacity_bytes = value_storage.capacity() * size_of::<u64>();
-    drop(value_storage);
-
     heap.close_scope(scope)?;
     heap.end_frame(native_frame)?;
     for (handle, _, _) in persistent_handles.iter().copied() {
@@ -5443,6 +5533,22 @@ fn run_gc_sample(
     }
 
     let stats = heap.stats();
+    let allocator_after_release = heap.allocator_stats();
+    if allocator_before.live_requested_bytes != one_round_bytes
+        || allocator_before.live_backing_bytes < one_round_bytes
+        || allocator_after_release.live_requested_bytes != 0
+        || allocator_after_release.live_backing_bytes != 0
+    {
+        bail!(
+            "{} {} integrated heap allocator did not account for candidate payload blocks (requested={}/{}, backing={}/{})",
+            candidate.name(),
+            collector.name(),
+            allocator_before.live_requested_bytes,
+            one_round_bytes,
+            allocator_after_release.live_backing_bytes,
+            0
+        );
+    }
     Ok(GcSample {
         build_ns,
         collection_ns: retained.collection_ns,
@@ -5457,10 +5563,23 @@ fn run_gc_sample(
         temporary_scope_roots,
         logical_heap_bytes_before_collection: before.live_bytes,
         peak_logical_heap_bytes: stats.peak_heap_bytes,
-        actual_value_storage_capacity_bytes,
+        actual_value_storage_capacity_bytes: allocator_before.live_backing_bytes,
         encoded_object_values_resolved,
         reclaimed_after_root_release: released.reclaimed_objects,
         live_objects_after_release: stats.live_objects,
+        allocator_strategy: allocator_strategy.name(),
+        allocator_live_requested_bytes: allocator_before.live_requested_bytes,
+        allocator_live_backing_bytes: allocator_before.live_backing_bytes,
+        allocator_reserved_bytes_before_collection: allocator_before.reserved_bytes,
+        allocator_peak_reserved_bytes: allocator_before.peak_reserved_bytes,
+        allocator_peak_internal_fragmentation_bytes: allocator_before
+            .peak_internal_fragmentation_bytes as u64,
+        allocator_reused_allocations: allocator_before.reused_allocations,
+        allocator_allocation_failures: allocator_before.allocation_failures,
+        allocator_reserved_bytes_after_release: allocator_after_release.reserved_bytes,
+        process_rss_before_bytes,
+        process_rss_after_build_bytes,
+        process_rss_delta_bytes,
     })
 }
 
