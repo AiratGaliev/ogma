@@ -302,6 +302,10 @@ jobs:
             --output "$RUNNER_TEMP/ogm38-dual-backend-report.json" \
             --artifact-dir "$RUNNER_TEMP/ogm38-dual-backend-artifacts" \
             --iterations 1000
+          python benchmarks/value-representations/validate_ogm38_ogm31.py \
+            --native-report "$RUNNER_TEMP/ogm38-native-value-ssa-report.json" \
+            --ogm31-report "$RUNNER_TEMP/ogm38-dual-backend-report.json" \
+            --output "$RUNNER_TEMP/ogm38-ogm31-differential-report.json"
 
       - name: Upload OGM-38 raw measurements and dependency lock
         if: always()
@@ -312,6 +316,7 @@ jobs:
             ${{ runner.temp }}/ogm38-core-ir-report.json
             ${{ runner.temp }}/ogm38-native-value-ssa-report.json
             ${{ runner.temp }}/ogm38-dual-backend-report.json
+            ${{ runner.temp }}/ogm38-ogm31-differential-report.json
             ${{ runner.temp }}/ogm38-dual-backend-artifacts
             ${{ runner.temp }}/ogm38-Cargo.lock
           if-no-files-found: warn
