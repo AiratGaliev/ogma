@@ -3717,7 +3717,10 @@ fn invoke_native_numeric_binary(
     let result_bits = match candidate.runtime {
         RuntimeLayout::Tagged16 => {
             if tagged_output.tag != NUMBER_TAG {
-                bail!("{} generated branch/add fixture returned a non-Number tag", candidate.name());
+                bail!(
+                    "{} generated branch/add fixture returned a non-Number tag",
+                    candidate.name()
+                );
             }
             tagged_output.payload
         }
@@ -3773,7 +3776,10 @@ fn invoke_native_loop_numbers(
     let bits = match candidate.runtime {
         RuntimeLayout::Tagged16 => {
             if tagged_output.tag != NUMBER_TAG {
-                bail!("{} generated native loop returned a non-Number", candidate.name());
+                bail!(
+                    "{} generated native loop returned a non-Number",
+                    candidate.name()
+                );
             }
             tagged_output.payload
         }
@@ -3839,13 +3845,7 @@ fn invoke_native_symbol_add_throw(
         &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
     // SAFETY: symbol storage, callback context and callback function remain
     // valid for the synchronous native helper call.
-    let dispatch_status = unsafe {
-        dispatch(
-            symbol_value_arg,
-            callback_address,
-            context_argument,
-        )
-    };
+    let dispatch_status = unsafe { dispatch(symbol_value_arg, callback_address, context_argument) };
     let handle_survived = dispatch_status == 0
         && callback_context.calls == 1
         && callback_context.collections == 1
@@ -3908,8 +3908,7 @@ fn run_native_core_ir_execution(
     let branch_equal = invoke_native_numeric_binary(candidate, branch, 7.0, 7.0)?;
     let branch_unequal = invoke_native_numeric_binary(candidate, branch, 7.0, 8.0)?;
     let loop_integer = invoke_native_loop_numbers(candidate, loop_function, 0.0, 5.0, 1.0)?;
-    let loop_fractional =
-        invoke_native_loop_numbers(candidate, loop_function, 0.5, 3.5, 0.75)?;
+    let loop_fractional = invoke_native_loop_numbers(candidate, loop_function, 0.5, 3.5, 0.75)?;
     let dynamic_add_result = invoke_native_numeric_binary(candidate, dynamic_add, 7.0, 8.0)?;
     let (dynamic_add_throw_status, symbol_handle_survived_forced_collection) =
         invoke_native_symbol_add_throw(candidate, dynamic_add, dispatch)?;
