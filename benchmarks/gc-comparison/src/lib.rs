@@ -8,7 +8,7 @@ use std::mem::{align_of, size_of};
 use std::time::Instant;
 
 use ogma_isolate_allocator_proof::{
-    Allocation, AllocatorError, AllocatorStats, AllocatorStrategy, IsolateAllocator,
+    Allocation, AllocatorStats, AllocatorStrategy, IsolateAllocator,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
