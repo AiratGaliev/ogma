@@ -5917,9 +5917,15 @@ fn run_gc_worker_mode(arguments: &[String]) -> Result<()> {
         .context("unknown OGM-26 GC worker collector")?;
     let allocator_strategy = AllocatorStrategy::parse(&arguments[3])
         .context("unknown OGM-24 GC worker allocator strategy")?;
-    let warmups = arguments[4].parse::<usize>().context("invalid GC worker warmup count")?;
-    let samples = arguments[5].parse::<usize>().context("invalid GC worker sample count")?;
-    let object_count = arguments[6].parse::<usize>().context("invalid GC worker object count")?;
+    let warmups = arguments[4]
+        .parse::<usize>()
+        .context("invalid GC worker warmup count")?;
+    let samples = arguments[5]
+        .parse::<usize>()
+        .context("invalid GC worker sample count")?;
+    let object_count = arguments[6]
+        .parse::<usize>()
+        .context("invalid GC worker object count")?;
     if samples == 0 {
         bail!("GC worker sample count must be positive");
     }
@@ -6010,8 +6016,9 @@ fn gc_evidence(
             );
         }
 
-        for (collector, worker_result) in
-            CollectorKind::ALL.into_iter().zip(worker_results.into_iter())
+        for (collector, worker_result) in CollectorKind::ALL
+            .into_iter()
+            .zip(worker_results.into_iter())
         {
             collector_comparisons.push(summarize_gc_collector(
                 collector,
@@ -6458,7 +6465,10 @@ fn run(
 
 pub fn parse_args_and_run() -> Result<()> {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    if arguments.first().is_some_and(|argument| argument == "--gc-worker") {
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--gc-worker")
+    {
         return run_gc_worker_mode(&arguments);
     }
     let mut output = PathBuf::from("ogm38-native-value-ssa-report.json");
