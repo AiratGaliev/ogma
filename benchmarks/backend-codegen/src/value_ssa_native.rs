@@ -3543,14 +3543,14 @@ fn run_native_value_semantics(
         }
         let (native_reference_identity_preserved, expected_reference_equality) =
             native_reference_identity_evidence(case.name, &reference_tokens);
-        if let Some(expected_equal) = expected_reference_equality {
-            if native_strict_equal_result != Some(expected_equal) {
-                bail!(
-                    "{} generated native strict equality disagreed with encoded HostHandle identity for {}",
-                    candidate.name(),
-                    case.name
-                );
-            }
+        if expected_reference_equality
+            .is_some_and(|expected_equal| native_strict_equal_result != Some(expected_equal))
+        {
+            bail!(
+                "{} generated native strict equality disagreed with encoded HostHandle identity for {}",
+                candidate.name(),
+                case.name
+            );
         }
         let equality_case = matches!(
             case.name,
