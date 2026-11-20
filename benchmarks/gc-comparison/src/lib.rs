@@ -931,6 +931,72 @@ impl GcHeap {
         }
         Ok(())
     }
+
+    #[test]
+    fn heap_payload_words_are_backed_and_reclaimed_by_all_allocator_strategies() {
+        for strategy in AllocatorStrategy::ALL {
+            let mut heap = GcHeap::new_with_allocator(
+                CollectorKind::MarkSweep,
+                strategy,
+                4096,
+            );
+            let object = heap.try_allocate(64).expect("allocate object payload");
+            assert_eq!(heap.payload_words(object).unwrap().len(), 8);
+            {
+                let words = heap.payload_words_mut(object).unwrap();
+                words[0] = 0x1122_3344_5566_7788;
+                words[7] = 0x8877_6655_4433_2211;
+            }
+            let words = heap.payload_words(object).unwrap();
+            assert_eq!(words[0], 0x1122_3344_5566_7788);
+            assert_eq!(words[7], 0x8877_6655_4433_2211);
+
+            let live = heap.allocator_stats();
+            assert_eq!(live.live_requested_bytes, 64);
+            assert_eq!(live.live_backing_bytes, 64);
+            assert_eq!(live.allocation_failures, 0);
+            assert_eq!(heap.collect().unwrap().reclaimed_objects, 1);
+            let released = heap.allocator_stats();
+            assert_eq!(released.live_requested_bytes, 0);
+            assert_eq!(released.live_backing_bytes, 0);
+            match strategy {
+                AllocatorStrategy::System => {
+                    assert_eq!(released.reserved_bytes, 0);
+                    assert_eq!(released.free_cached_bytes, 0);
+                }
+                AllocatorStrategy::PerIsolateReuse | AllocatorStrategy::SizeClassPool => {
+                    assert_eq!(released.reserved_bytes, 64);
+                    assert_eq!(released.free_cached_bytes, 64);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn heap_payload_storage_is_part_of_the_real_rooted_gc_lifecycle() {
+        for collector in CollectorKind::ALL {
+            let mut heap = GcHeap::new_with_allocator(
+                collector,
+                AllocatorStrategy::PerIsolateReuse,
+                4096,
+            );
+            let object = heap.try_allocate(128).unwrap();
+            heap.payload_words_mut(object).unwrap()[3] = 0xfeed_beef;
+            let frame = heap.begin_frame(FrameKind::NativePrototype).unwrap();
+            heap.add_frame_root(frame, object).unwrap();
+            heap.collect().unwrap();
+            assert!(heap.is_alive(object));
+            assert_eq!(heap.payload_words(object).unwrap()[3], 0xfeed_beef);
+            heap.end_frame(frame).unwrap();
+            heap.collect().unwrap();
+            assert!(!heap.is_alive(object));
+            let stats = heap.allocator_stats();
+            assert_eq!(stats.live_requested_bytes, 0);
+            assert_eq!(stats.live_backing_bytes, 0);
+            assert_eq!(stats.reused_allocations, 0);
+        }
+    }
+
 }
 
 fn hash_u64(hash: &mut u64, value: u64) {
