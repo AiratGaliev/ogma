@@ -932,6 +932,20 @@ impl GcHeap {
         Ok(())
     }
 
+
+}
+
+fn hash_u64(hash: &mut u64, value: u64) {
+    for byte in value.to_le_bytes() {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
     #[test]
     fn heap_payload_words_are_backed_and_reclaimed_by_all_allocator_strategies() {
         for strategy in AllocatorStrategy::ALL {
@@ -989,18 +1003,6 @@ impl GcHeap {
             assert_eq!(stats.reused_allocations, 0);
         }
     }
-}
-
-fn hash_u64(hash: &mut u64, value: u64) {
-    for byte in value.to_le_bytes() {
-        *hash ^= u64::from(byte);
-        *hash = hash.wrapping_mul(0x100000001b3);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     fn candidates() -> [CollectorKind; 2] {
         CollectorKind::ALL
