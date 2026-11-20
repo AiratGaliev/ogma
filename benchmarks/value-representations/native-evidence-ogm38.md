@@ -23,8 +23,8 @@ This is an exact-fixture native adapter, not a general Core IR compiler. It does
 - **Tested/source revision:** `b98ef1ed2441306803d7c537ca59a6d9696a7e25`.
 - **Environment:** GitHub-hosted Linux x86_64; Rust 1.100.0; Cranelift 0.137.2; regalloc2 0.15.3; target `x86_64-unknown-linux-gnu`; AMD EPYC 9V45 96-Core Processor.
 - **Sampling:** 3 warmups, 101 compile samples and 101 native-call samples per candidate; each throughput sample executes 1,000 native calls.
-- **Artifact:** `ogm38-native-value-ssa-evidence` from the workflow run, containing the machine-readable native report, OGM-31 differential report, verifier report, resolved dependency lock and generated proof artifacts.
-- **Committed raw report:** `results/ogm38-native-value-ssa-report.json.gz`. SHA-256 of the uncompressed JSON: `8e3efb549d418ef94cc59b84e88033d8a09548cc594eae235cb47ce0d7aed820`.
+- **Artifact:** `ogm38-native-value-ssa-evidence` from the workflow run, containing `ogm38-native-value-ssa-report.json` (820,962 bytes), the OGM-31 differential report, verifier report, resolved dependency lock and generated proof artifacts.
+- **Raw report SHA-256:** `8e3efb549d418ef94cc59b84e88033d8a09548cc594eae235cb47ce0d7aed820` (uncompressed JSON). The repository's existing `results/ogm38-native-value-ssa-report.json.gz` is an earlier snapshot and does **not** contain this latest `b98ef1e` run; the new raw artifact still needs to be added to Git.
 
 ## Native loop measurements
 
@@ -113,7 +113,7 @@ The focused workflow additionally verifies the canonical Core IR manifest and OG
 | Equivalent heap/allocator/GC and peak-memory metrics | **Partial** | Equivalent OGM-26 graph/root/handle workloads and logical heap/Value capacity are measured. The GC workload is separate from candidate execution; process RSS and allocator fragmentation are not measured. |
 | Native differential semantics across requested JS values and effects | **Partial** | Native numeric edge cases, primitive codec/helper round-trips, malformed values and reference handle families are tested. BigInt arithmetic, strings, identity semantics, type transitions, exceptions, side effects and host-call traces are not differentially executed through all four candidate layouts. OGM-31 separately covers its narrower five-fixture portable/native subset. |
 | Rooting, handle lifetime, safepoints and ABI transitions | **Partial** | Candidate encodings cross the native helper and real OGM-26 handles/roots survive forced GC. Production OGM-19 ABI and candidate-integrated OGM-27 safepoints/stack maps and interpreter/native transitions are not implemented by this benchmark. |
-| Raw measurements, target/toolchain/runtime revisions and reproduction | **Met for this M0 slice** | The raw JSON report and dependency lock are uploaded by CI; the raw report is also committed with target/toolchain/revision and reproduction instructions. |
+| Raw measurements, target/toolchain/runtime revisions and reproduction | **Partial** | The latest complete raw JSON, dependency lock and reports are available in successful CI artifact #14604484603, with target/toolchain/revision metadata and reproduction instructions. The committed gzip report is still an older snapshot; latest raw measurements are not yet committed to the PR branch. |
 | Separate public Value ABI and internal SSA decision | **Partial** | The results support representation-aware SSA as a promising compiler direction and do not support choosing NaN-box by width. A final production Value ABI decision still needs broader Runtime/GC/ABI evidence. |
 
 This is a completed and reproducible M0 evidence slice, **not completion of all OGM-38 acceptance criteria**. The Linear task remains In Progress. Per the latest OGM-38 correction, remaining M0 proof gaps must be addressed with M0-fidelity prototypes; they must not be dismissed as browser QA or silently deferred to an unauthorized M1 production Runtime implementation.
