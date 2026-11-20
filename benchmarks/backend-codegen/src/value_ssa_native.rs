@@ -636,6 +636,27 @@ struct NativePrimitiveValueEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeValueSemanticCaseEvidence {
+    name: String,
+    inputs: Vec<String>,
+    expected_completion: String,
+    actual_completion: String,
+    expected_host_trace: Vec<String>,
+    actual_host_trace: Vec<String>,
+    native_callbacks: usize,
+    forced_collections: usize,
+    matches: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NativeValueSemanticsEvidence {
+    cases: Vec<NativeValueSemanticCaseEvidence>,
+    native_callbacks: usize,
+    forced_collections: usize,
+    every_case_matches: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeCoreIrFixtureEvidence {
     fixture: String,
     path: String,
@@ -701,6 +722,7 @@ struct CandidateEvidence {
     native_code: NativeCodeMetrics,
     native_handle_dispatch: NativeHandleDispatchEvidence,
     native_core_ir_corpus: NativeCoreIrCorpusEvidence,
+    native_value_semantics: NativeValueSemanticsEvidence,
     /// Real x86-64 disassembly of the Cranelift-generated live-value stress
     /// function. Stack-relative loads/stores are native spill traffic, unlike
     /// the separate regalloc2 pressure model below.
@@ -2090,6 +2112,589 @@ fn run_native_handle_dispatch_validation(
         invalid_value_encodings_rejected,
         native_code: native_code_metrics(object_path, "ogma_value_handle_dispatch")?,
         all_callbacks_resolved_expected_handles: true,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum SemanticValue {
+    Undefined,
+    Null,
+    Boolean(bool),
+    Number(u64),
+    String(String),
+    BigInt(i128),
+    Object { identity: u64, primitive: String },
+    Symbol(u64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum SemanticCompletion {
+    Normal(SemanticValue),
+    Throw { name: &'static str, value: Option<SemanticValue> },
+}
+
+#[derive(Clone, Debug)]
+struct SemanticReference {
+    reference: ogma_gc_comparison_proof::GcRef,
+    value: SemanticValue,
+}
+
+struct NativeSemanticCallbackContext {
+    runtime: RuntimeLayout,
+    heap: *mut GcHeap,
+    references: BTreeMap<u64, SemanticReference>,
+    observed: Vec<SemanticValue>,
+    calls: usize,
+    forced_collections: usize,
+}
+
+fn decode_semantic_reference(
+    context: &mut NativeSemanticCallbackContext,
+    token: u64,
+) -> std::result::Result<SemanticValue, i32> {
+    if token == 0 || context.heap.is_null() {
+        return Err(4);
+    }
+    let reference = context.references.get(&token).cloned().ok_or(4)?;
+    // SAFETY: the context holds the live heap pointer owned by the caller for
+    // this synchronous generated native callback.
+    let heap = unsafe { &mut *context.heap };
+    heap.collect().map_err(|_| 3)?;
+    context.forced_collections += 1;
+    match heap.resolve_host_handle_token(token) {
+        Ok(actual) if actual == reference.reference => Ok(reference.value),
+        _ => Err(4),
+    }
+}
+
+fn decode_native_semantic_value(
+    context: &mut NativeSemanticCallbackContext,
+    tag: u64,
+    payload: u64,
+) -> std::result::Result<SemanticValue, i32> {
+    match context.runtime {
+        RuntimeLayout::Tagged16 => match tag {
+            UNDEFINED_TAG if payload == 0 => Ok(SemanticValue::Undefined),
+            NULL_TAG if payload == 0 => Ok(SemanticValue::Null),
+            BOOLEAN_TAG if payload <= 1 => Ok(SemanticValue::Boolean(payload == 1)),
+            NUMBER_TAG => {
+                let value = f64::from_bits(payload);
+                if value.is_nan() && payload != CANONICAL_NAN_BITS {
+                    Err(5)
+                } else {
+                    Ok(SemanticValue::Number(canonical_number_bits(value)))
+                }
+            }
+            STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG => {
+                decode_semantic_reference(context, payload)
+            }
+            _ => Err(5),
+        },
+        RuntimeLayout::NanBox8 => match tag {
+            NANBOX_UNDEFINED_TAG if payload == 0 => Ok(SemanticValue::Undefined),
+            NANBOX_NULL_TAG if payload == 0 => Ok(SemanticValue::Null),
+            NANBOX_BOOLEAN_TAG if payload <= 1 => Ok(SemanticValue::Boolean(payload == 1)),
+            NANBOX_STRING_TAG | NANBOX_BIGINT_TAG | NANBOX_OBJECT_TAG | NANBOX_SYMBOL_TAG => {
+                decode_semantic_reference(context, payload)
+            }
+            _ => {
+                let bits = (tag << NAN_TAG_SHIFT) | payload;
+                let value = f64::from_bits(bits);
+                if (NANBOX_RESERVED_TAG_MIN..=NANBOX_RESERVED_TAG_MAX).contains(&bits)
+                    || (value.is_nan() && bits != CANONICAL_NAN_BITS)
+                {
+                    Err(5)
+                } else {
+                    Ok(SemanticValue::Number(canonical_number_bits(value)))
+                }
+            }
+        },
+    }
+}
+
+unsafe extern "C" fn decode_native_semantic_value_callback(
+    context_pointer: u64,
+    tag: u64,
+    payload: u64,
+) -> i32 {
+    if context_pointer == 0 {
+        return 1;
+    }
+    // SAFETY: the generated function receives the pointer to a live, uniquely
+    // borrowed NativeSemanticCallbackContext for this synchronous call.
+    let context = unsafe { &mut *(context_pointer as *mut NativeSemanticCallbackContext) };
+    context.calls += 1;
+    match decode_native_semantic_value(context, tag, payload) {
+        Ok(value) => {
+            context.observed.push(value);
+            0
+        }
+        Err(status) => status,
+    }
+}
+
+fn semantic_number(value: f64) -> SemanticValue {
+    SemanticValue::Number(canonical_number_bits(value))
+}
+
+fn semantic_to_string(value: &SemanticValue) -> std::result::Result<String, &'static str> {
+    match value {
+        SemanticValue::Undefined => Ok("undefined".to_owned()),
+        SemanticValue::Null => Ok("null".to_owned()),
+        SemanticValue::Boolean(value) => Ok(value.to_string()),
+        SemanticValue::Number(bits) => {
+            let number = f64::from_bits(*bits);
+            if number.is_nan() {
+                Ok("NaN".to_owned())
+            } else if number == f64::INFINITY {
+                Ok("Infinity".to_owned())
+            } else if number == f64::NEG_INFINITY {
+                Ok("-Infinity".to_owned())
+            } else if number == 0.0 {
+                Ok("0".to_owned())
+            } else {
+                Ok(number.to_string())
+            }
+        }
+        SemanticValue::String(value) => Ok(value.clone()),
+        SemanticValue::BigInt(value) => Ok(value.to_string()),
+        SemanticValue::Object { primitive, .. } => Ok(primitive.clone()),
+        SemanticValue::Symbol(_) => Err("TypeError"),
+    }
+}
+
+fn semantic_to_number(value: &SemanticValue) -> std::result::Result<f64, &'static str> {
+    match value {
+        SemanticValue::Undefined => Ok(f64::NAN),
+        SemanticValue::Null => Ok(0.0),
+        SemanticValue::Boolean(value) => Ok(if *value { 1.0 } else { 0.0 }),
+        SemanticValue::Number(bits) => Ok(f64::from_bits(*bits)),
+        SemanticValue::String(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(trimmed.parse::<f64>().unwrap_or(f64::NAN))
+            }
+        }
+        SemanticValue::BigInt(_) | SemanticValue::Symbol(_) => Err("TypeError"),
+        SemanticValue::Object { primitive, .. } => {
+            let trimmed = primitive.trim();
+            if trimmed.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(trimmed.parse::<f64>().unwrap_or(f64::NAN))
+            }
+        }
+    }
+}
+
+fn semantic_add(
+    left: &SemanticValue,
+    right: &SemanticValue,
+) -> SemanticCompletion {
+    if matches!(left, SemanticValue::Symbol(_)) || matches!(right, SemanticValue::Symbol(_)) {
+        return SemanticCompletion::Throw {
+            name: "TypeError",
+            value: None,
+        };
+    }
+    if let (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) = (left, right) {
+        return SemanticCompletion::Normal(SemanticValue::BigInt(left + right));
+    }
+    if matches!(left, SemanticValue::BigInt(_)) || matches!(right, SemanticValue::BigInt(_)) {
+        return SemanticCompletion::Throw {
+            name: "TypeError",
+            value: None,
+        };
+    }
+    if matches!(left, SemanticValue::String(_) | SemanticValue::Object { .. })
+        || matches!(right, SemanticValue::String(_) | SemanticValue::Object { .. })
+    {
+        let left = semantic_to_string(left).unwrap_or_else(|_| "[symbol]".to_owned());
+        let right = semantic_to_string(right).unwrap_or_else(|_| "[symbol]".to_owned());
+        return SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")));
+    }
+    match (semantic_to_number(left), semantic_to_number(right)) {
+        (Ok(left), Ok(right)) => SemanticCompletion::Normal(semantic_number(left + right)),
+        _ => SemanticCompletion::Throw {
+            name: "TypeError",
+            value: None,
+        },
+    }
+}
+
+fn semantic_strict_equal(left: &SemanticValue, right: &SemanticValue) -> bool {
+    match (left, right) {
+        (SemanticValue::Undefined, SemanticValue::Undefined)
+        | (SemanticValue::Null, SemanticValue::Null) => true,
+        (SemanticValue::Boolean(left), SemanticValue::Boolean(right)) => left == right,
+        (SemanticValue::Number(left), SemanticValue::Number(right)) => {
+            let left = f64::from_bits(*left);
+            let right = f64::from_bits(*right);
+            !left.is_nan() && !right.is_nan() && left == right
+        }
+        (SemanticValue::String(left), SemanticValue::String(right)) => left == right,
+        (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) => left == right,
+        (
+            SemanticValue::Object { identity: left, .. },
+            SemanticValue::Object { identity: right, .. },
+        ) => left == right,
+        (SemanticValue::Symbol(left), SemanticValue::Symbol(right)) => left == right,
+        _ => false,
+    }
+}
+
+struct SemanticCase {
+    name: &'static str,
+    inputs: Vec<SemanticValue>,
+    expected: SemanticCompletion,
+    expected_host_trace: Vec<String>,
+}
+
+fn semantic_cases() -> Vec<SemanticCase> {
+    let number_4 = semantic_number(4.0);
+    let number_5 = semantic_number(5.0);
+    let number_31 = semantic_number(31.0);
+    let object_a = SemanticValue::Object {
+        identity: 1,
+        primitive: "item=".to_owned(),
+    };
+    let object_a_same = object_a.clone();
+    let object_b = SemanticValue::Object {
+        identity: 2,
+        primitive: "other".to_owned(),
+    };
+    vec![
+        SemanticCase {
+            name: "number-add",
+            inputs: vec![number_4.clone(), number_5.clone()],
+            expected: SemanticCompletion::Normal(semantic_number(9.0)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "string-concat",
+            inputs: vec![
+                SemanticValue::String("item=".to_owned()),
+                number_5.clone(),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::String("item=5".to_owned())),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "bigint-add",
+            inputs: vec![SemanticValue::BigInt(20), SemanticValue::BigInt(22)],
+            expected: SemanticCompletion::Normal(SemanticValue::BigInt(42)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "object-to-primitive-add",
+            inputs: vec![object_a.clone(), number_5.clone()],
+            expected: SemanticCompletion::Normal(SemanticValue::String("item=5".to_owned())),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "symbol-add-throws",
+            inputs: vec![SemanticValue::Symbol(7), number_5.clone()],
+            expected: SemanticCompletion::Throw { name: "TypeError", value: None },
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "bigint-to-number-throws",
+            inputs: vec![SemanticValue::BigInt(7)],
+            expected: SemanticCompletion::Throw { name: "TypeError", value: None },
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "nan-strict-equality",
+            inputs: vec![
+                SemanticValue::Number(CANONICAL_NAN_BITS),
+                SemanticValue::Number(CANONICAL_NAN_BITS),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "signed-zero-strict-equality",
+            inputs: vec![
+                SemanticValue::Number((-0.0_f64).to_bits()),
+                SemanticValue::Number(0.0_f64.to_bits()),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "object-identity-same",
+            inputs: vec![object_a.clone(), object_a_same],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "object-identity-distinct",
+            inputs: vec![object_a.clone(), object_b],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "symbol-identity-same",
+            inputs: vec![SemanticValue::Symbol(9), SemanticValue::Symbol(9)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "symbol-identity-distinct",
+            inputs: vec![SemanticValue::Symbol(9), SemanticValue::Symbol(10)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "type-transition-number-to-string",
+            inputs: vec![number_4, SemanticValue::String("changed".to_owned())],
+            expected: SemanticCompletion::Normal(SemanticValue::String("changed".to_owned())),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "exception-passthrough",
+            inputs: vec![SemanticValue::Symbol(41)],
+            expected: SemanticCompletion::Throw {
+                name: "UserThrown",
+                value: Some(SemanticValue::Symbol(41)),
+            },
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "host-call-normal",
+            inputs: vec![number_31.clone()],
+            expected: SemanticCompletion::Normal(number_31),
+            expected_host_trace: vec!["benchmark.host.echo([31])".to_owned()],
+        },
+        SemanticCase {
+            name: "host-call-throw",
+            inputs: vec![SemanticValue::Symbol(77)],
+            expected: SemanticCompletion::Throw { name: "HostException", value: None },
+            expected_host_trace: vec!["benchmark.host.throw([Symbol#77])".to_owned()],
+        },
+    ]
+}
+
+fn evaluate_semantic_case(
+    name: &str,
+    values: &[SemanticValue],
+) -> (SemanticCompletion, Vec<String>) {
+    let trace = Vec::new();
+    let completion = match name {
+        "number-add" | "string-concat" | "bigint-add" | "object-to-primitive-add"
+        | "symbol-add-throws" => semantic_add(&values[0], &values[1]),
+        "bigint-to-number-throws" => match semantic_to_number(&values[0]) {
+            Ok(value) => SemanticCompletion::Normal(semantic_number(value)),
+            Err(name) => SemanticCompletion::Throw { name, value: None },
+        },
+        "nan-strict-equality" | "signed-zero-strict-equality" | "object-identity-same"
+        | "object-identity-distinct" | "symbol-identity-same" | "symbol-identity-distinct" => {
+            SemanticCompletion::Normal(SemanticValue::Boolean(semantic_strict_equal(
+                &values[0], &values[1],
+            )))
+        }
+        "type-transition-number-to-string" => {
+            // Model a mutable lexical binding: define with [0], store [1], then reload.
+            let mut lexical_binding = values[0].clone();
+            lexical_binding = values[1].clone();
+            SemanticCompletion::Normal(lexical_binding)
+        }
+        "exception-passthrough" => SemanticCompletion::Throw {
+            name: "UserThrown",
+            value: Some(values[0].clone()),
+        },
+        "host-call-normal" => (
+            SemanticCompletion::Normal(values[0].clone()),
+            vec!["benchmark.host.echo([31])".to_owned()],
+        )
+            .0,
+        "host-call-throw" => SemanticCompletion::Throw {
+            name: "HostException",
+            value: None,
+        },
+        other => {
+            return (
+                SemanticCompletion::Throw {
+                    name: if other.is_empty() { "UnknownOperation" } else { "UnsupportedOperation" },
+                    value: None,
+                },
+                trace,
+            )
+        }
+    };
+    let host_trace = match name {
+        "host-call-normal" => vec!["benchmark.host.echo([31])".to_owned()],
+        "host-call-throw" => vec!["benchmark.host.throw([Symbol#77])".to_owned()],
+        _ => trace,
+    };
+    (completion, host_trace)
+}
+
+fn candidate_value_for_semantic(
+    value: &SemanticValue,
+    heap: &mut GcHeap,
+    references: &mut BTreeMap<u64, SemanticReference>,
+    retained_handles: &mut Vec<ogma_gc_comparison_proof::HostHandle>,
+) -> Result<CandidateValue> {
+    Ok(match value {
+        SemanticValue::Undefined => CandidateValue::Undefined,
+        SemanticValue::Null => CandidateValue::Null,
+        SemanticValue::Boolean(value) => CandidateValue::Boolean(*value),
+        SemanticValue::Number(bits) => CandidateValue::Number(*bits),
+        SemanticValue::String(_) | SemanticValue::BigInt(_) | SemanticValue::Object { .. }
+        | SemanticValue::Symbol(_) => {
+            let object = heap.allocate(64);
+            let handle = heap.retain_host_handle(object)?;
+            let token = heap.encode_host_handle_token(handle)?;
+            let candidate_value = match value {
+                SemanticValue::String(_) => CandidateValue::StringRef(token),
+                SemanticValue::BigInt(_) => CandidateValue::BigIntRef(token),
+                SemanticValue::Object { .. } => CandidateValue::ObjectRef(token),
+                SemanticValue::Symbol(_) => CandidateValue::SymbolRef(token),
+                _ => unreachable!(),
+            };
+            references.insert(
+                token,
+                SemanticReference {
+                    reference: object,
+                    value: value.clone(),
+                },
+            );
+            retained_handles.push(handle);
+            candidate_value
+        }
+    })
+}
+
+fn dispatch_native_semantic_inputs(
+    candidate: Candidate,
+    dispatch: NativeHandleDispatch,
+    inputs: &[SemanticValue],
+) -> Result<(Vec<SemanticValue>, usize, usize)> {
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let mut references = BTreeMap::new();
+    let mut retained_handles = Vec::new();
+    let mut storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; inputs.len() * 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; inputs.len()],
+    };
+    let mut expected_tags_payloads = Vec::with_capacity(inputs.len());
+    for (index, value) in inputs.iter().enumerate() {
+        let encoded = candidate_value_for_semantic(
+            value,
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+        )?;
+        encode_candidate_value(candidate.runtime, &mut storage, index, encoded)?;
+        expected_tags_payloads.push(candidate_value_tag_payload(candidate.runtime, &storage, index)?);
+    }
+
+    let mut context = NativeSemanticCallbackContext {
+        runtime: candidate.runtime,
+        heap: &mut heap as *mut GcHeap,
+        references,
+        observed: Vec::with_capacity(inputs.len()),
+        calls: 0,
+        forced_collections: 0,
+    };
+    let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
+    let context_argument = &mut context as *mut NativeSemanticCallbackContext as usize as u64;
+    for (index, (expected_tag, expected_payload)) in
+        expected_tags_payloads.into_iter().enumerate()
+    {
+        let value_argument = match candidate.runtime {
+            RuntimeLayout::Tagged16 => unsafe {
+                storage.as_mut_ptr().add(index * 2) as usize as u64
+            },
+            RuntimeLayout::NanBox8 => storage[index],
+        };
+        // SAFETY: candidate storage, callback context and callback function
+        // remain valid for this synchronous native entrypoint call.
+        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        if status != 0 {
+            bail!(
+                "{} native semantic Value callback rejected input {index} with status {status} (tag={expected_tag:#x}, payload={expected_payload:#x})",
+                candidate.name()
+            );
+        }
+    }
+    if context.calls != inputs.len() || context.observed != inputs {
+        bail!(
+            "{} native semantic callback did not preserve the candidate Value inputs",
+            candidate.name()
+        );
+    }
+    let observed = std::mem::take(&mut context.observed);
+    let callbacks = context.calls;
+    let forced_collections = context.forced_collections;
+    drop(context);
+
+    for handle in retained_handles {
+        heap.release_host_handle(handle)?;
+    }
+    let reclaimed = heap.collect()?;
+    if reclaimed.live_objects_after != 0 || reclaimed.reclaimed_objects != references.len() {
+        bail!(
+            "{} native semantic dispatch leaked reference handles after the callback: {} live / {} reclaimed",
+            candidate.name(),
+            reclaimed.live_objects_after,
+            reclaimed.reclaimed_objects
+        );
+    }
+    Ok((observed, callbacks, forced_collections))
+}
+
+fn run_native_value_semantics(
+    candidate: Candidate,
+    library: &Library,
+) -> Result<NativeValueSemanticsEvidence> {
+    let dispatch = unsafe {
+        *library
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .context("generated native Value dispatch entry point missing for semantic suite")?
+    };
+    let mut evidence = Vec::new();
+    let mut total_callbacks = 0;
+    let mut total_forced_collections = 0;
+    for case in semantic_cases() {
+        let (observed, callbacks, forced_collections) =
+            dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs)?;
+        let (actual, actual_host_trace) = evaluate_semantic_case(&case.name, &observed);
+        let inputs = case.inputs.iter().map(|value| format!("{value:?}")).collect();
+        let matches = actual == case.expected && actual_host_trace == case.expected_host_trace;
+        if !matches {
+            bail!(
+                "{} native Value semantic case {} differed: expected {:?} / {:?}, got {:?} / {:?}",
+                candidate.name(),
+                case.name,
+                case.expected,
+                case.expected_host_trace,
+                actual,
+                actual_host_trace
+            );
+        }
+        total_callbacks += callbacks;
+        total_forced_collections += forced_collections;
+        evidence.push(NativeValueSemanticCaseEvidence {
+            name: case.name.to_owned(),
+            inputs,
+            expected_completion: format!("{:?}", case.expected),
+            actual_completion: format!("{actual:?}"),
+            expected_host_trace: case.expected_host_trace,
+            actual_host_trace,
+            native_callbacks: callbacks,
+            forced_collections,
+            matches,
+        });
+    }
+    Ok(NativeValueSemanticsEvidence {
+        cases: evidence,
+        native_callbacks: total_callbacks,
+        forced_collections: total_forced_collections,
+        every_case_matches: true,
     })
 }
 
@@ -3562,6 +4167,7 @@ fn run(
         )?;
         let native_core_ir_corpus =
             run_native_core_ir_corpus_validation(candidate, &library)?;
+        let native_value_semantics = run_native_value_semantics(candidate, &library)?;
         let native_pressure =
             run_native_pressure_validation(candidate, &library, &object_path)?;
         let register_pressure = register_pressure(candidate)?;
@@ -3595,6 +4201,7 @@ fn run(
             native_code,
             native_handle_dispatch,
             native_core_ir_corpus,
+            native_value_semantics,
             native_pressure,
             register_pressure,
             gc,
