@@ -1034,11 +1034,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         Linkage::Export,
         &dispatch_signature,
     )?;
-    let pressure_function = module.declare_function(
-        "ogma_value_pressure",
-        Linkage::Export,
-        &pressure_signature,
-    )?;
+    let pressure_function =
+        module.declare_function("ogma_value_pressure", Linkage::Export, &pressure_signature)?;
 
     let mut callback_signature = module.make_signature();
     callback_signature.params.extend(
@@ -1658,12 +1655,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             match candidate.runtime {
                 RuntimeLayout::Tagged16 => {
                     let base_offset = (index * 16) as i32;
-                    let tag = b.ins().load(
-                        types::I64,
-                        MemFlagsData::new(),
-                        parameters[0],
-                        base_offset,
-                    );
+                    let tag =
+                        b.ins()
+                            .load(types::I64, MemFlagsData::new(), parameters[0], base_offset);
                     let payload = b.ins().load(
                         types::I64,
                         MemFlagsData::new(),
@@ -1677,9 +1671,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                         }
                         SsaPolicy::RepresentationAware => {
                             integer_values.push(tag);
-                            float_values.push(
-                                b.ins().bitcast(types::F64, MemFlagsData::new(), payload),
-                            );
+                            float_values.push(b.ins().bitcast(
+                                types::F64,
+                                MemFlagsData::new(),
+                                payload,
+                            ));
                         }
                     }
                 }
@@ -1693,9 +1689,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     match candidate.ssa {
                         SsaPolicy::Boxed => integer_values.push(raw),
                         SsaPolicy::RepresentationAware => {
-                            float_values.push(
-                                b.ins().bitcast(types::F64, MemFlagsData::new(), raw),
-                            );
+                            float_values.push(b.ins().bitcast(
+                                types::F64,
+                                MemFlagsData::new(),
+                                raw,
+                            ));
                         }
                     }
                 }
@@ -2164,7 +2162,10 @@ enum SemanticValue {
 #[derive(Clone, Debug, PartialEq)]
 enum SemanticCompletion {
     Normal(SemanticValue),
-    Throw { name: &'static str, value: Option<SemanticValue> },
+    Throw {
+        name: &'static str,
+        value: Option<SemanticValue>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2405,10 +2406,7 @@ fn semantic_to_number(value: &SemanticValue) -> std::result::Result<f64, &'stati
     }
 }
 
-fn semantic_add(
-    left: &SemanticValue,
-    right: &SemanticValue,
-) -> SemanticCompletion {
+fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletion {
     if matches!(left, SemanticValue::Symbol(_)) || matches!(right, SemanticValue::Symbol(_)) {
         return SemanticCompletion::Throw {
             name: "TypeError",
@@ -2424,9 +2422,13 @@ fn semantic_add(
             value: None,
         };
     }
-    if matches!(left, SemanticValue::String(_) | SemanticValue::Object { .. })
-        || matches!(right, SemanticValue::String(_) | SemanticValue::Object { .. })
-    {
+    if matches!(
+        left,
+        SemanticValue::String(_) | SemanticValue::Object { .. }
+    ) || matches!(
+        right,
+        SemanticValue::String(_) | SemanticValue::Object { .. }
+    ) {
         let left = semantic_to_string(left).unwrap_or_else(|_| "[symbol]".to_owned());
         let right = semantic_to_string(right).unwrap_or_else(|_| "[symbol]".to_owned());
         return SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")));
@@ -2454,7 +2456,9 @@ fn semantic_strict_equal(left: &SemanticValue, right: &SemanticValue) -> bool {
         (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) => left == right,
         (
             SemanticValue::Object { identity: left, .. },
-            SemanticValue::Object { identity: right, .. },
+            SemanticValue::Object {
+                identity: right, ..
+            },
         ) => left == right,
         (SemanticValue::Symbol(left), SemanticValue::Symbol(right)) => left == right,
         _ => false,
@@ -2490,10 +2494,7 @@ fn semantic_cases() -> Vec<SemanticCase> {
         },
         SemanticCase {
             name: "string-concat",
-            inputs: vec![
-                SemanticValue::String("item=".to_owned()),
-                number_5.clone(),
-            ],
+            inputs: vec![SemanticValue::String("item=".to_owned()), number_5.clone()],
             expected: SemanticCompletion::Normal(SemanticValue::String("item=5".to_owned())),
             expected_host_trace: vec![],
         },
@@ -2512,7 +2513,10 @@ fn semantic_cases() -> Vec<SemanticCase> {
         SemanticCase {
             name: "symbol-add-throws",
             inputs: vec![SemanticValue::Symbol(7), number_5.clone()],
-            expected: SemanticCompletion::Throw { name: "TypeError", value: None },
+            expected: SemanticCompletion::Throw {
+                name: "TypeError",
+                value: None,
+            },
             expected_host_trace: vec![],
         },
         SemanticCase {
@@ -2608,18 +2612,23 @@ fn evaluate_semantic_case(
 ) -> (SemanticCompletion, Vec<String>) {
     let trace = Vec::new();
     let completion = match name {
-        "number-add" | "string-concat" | "bigint-add" | "object-to-primitive-add"
+        "number-add"
+        | "string-concat"
+        | "bigint-add"
+        | "object-to-primitive-add"
         | "symbol-add-throws" => semantic_add(&values[0], &values[1]),
         "bigint-to-number-throws" => match semantic_to_number(&values[0]) {
             Ok(value) => SemanticCompletion::Normal(semantic_number(value)),
             Err(name) => SemanticCompletion::Throw { name, value: None },
         },
-        "nan-strict-equality" | "signed-zero-strict-equality" | "object-identity-same"
-        | "object-identity-distinct" | "symbol-identity-same" | "symbol-identity-distinct" => {
-            SemanticCompletion::Normal(SemanticValue::Boolean(semantic_strict_equal(
-                &values[0], &values[1],
-            )))
-        }
+        "nan-strict-equality"
+        | "signed-zero-strict-equality"
+        | "object-identity-same"
+        | "object-identity-distinct"
+        | "symbol-identity-same"
+        | "symbol-identity-distinct" => SemanticCompletion::Normal(SemanticValue::Boolean(
+            semantic_strict_equal(&values[0], &values[1]),
+        )),
         "type-transition-number-to-string" => {
             // Verify that a mutable binding changes from the first input's
             // representation to the second, then reload the stored value.
@@ -2634,16 +2643,18 @@ fn evaluate_semantic_case(
             } else {
                 SemanticCompletion::Normal(transitioned_value)
             }
-        },
+        }
         "exception-passthrough" => SemanticCompletion::Throw {
             name: "UserThrown",
             value: Some(values[0].clone()),
         },
-        "host-call-normal" => (
-            SemanticCompletion::Normal(values[0].clone()),
-            vec!["benchmark.host.echo([31])".to_owned()],
-        )
-            .0,
+        "host-call-normal" => {
+            (
+                SemanticCompletion::Normal(values[0].clone()),
+                vec!["benchmark.host.echo([31])".to_owned()],
+            )
+                .0
+        }
         "host-call-throw" => SemanticCompletion::Throw {
             name: "HostException",
             value: None,
@@ -2651,11 +2662,15 @@ fn evaluate_semantic_case(
         other => {
             return (
                 SemanticCompletion::Throw {
-                    name: if other.is_empty() { "UnknownOperation" } else { "UnsupportedOperation" },
+                    name: if other.is_empty() {
+                        "UnknownOperation"
+                    } else {
+                        "UnsupportedOperation"
+                    },
                     value: None,
                 },
                 trace,
-            )
+            );
         }
     };
     let host_trace = match name {
@@ -2677,7 +2692,9 @@ fn candidate_value_for_semantic(
         SemanticValue::Null => CandidateValue::Null,
         SemanticValue::Boolean(value) => CandidateValue::Boolean(*value),
         SemanticValue::Number(bits) => CandidateValue::Number(*bits),
-        SemanticValue::String(_) | SemanticValue::BigInt(_) | SemanticValue::Object { .. }
+        SemanticValue::String(_)
+        | SemanticValue::BigInt(_)
+        | SemanticValue::Object { .. }
         | SemanticValue::Symbol(_) => {
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
@@ -2725,7 +2742,11 @@ fn dispatch_native_semantic_inputs(
         let encoded =
             candidate_value_for_semantic(value, &mut heap, &mut references, &mut retained_handles)?;
         encode_candidate_value(candidate.runtime, &mut storage, index, encoded)?;
-        expected_tags_payloads.push(candidate_value_tag_payload(candidate.runtime, &storage, index)?);
+        expected_tags_payloads.push(candidate_value_tag_payload(
+            candidate.runtime,
+            &storage,
+            index,
+        )?);
     }
 
     let reference_count = references.len();
@@ -2752,9 +2773,7 @@ fn dispatch_native_semantic_inputs(
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
     let context_argument = &mut context as *mut NativeSemanticCallbackContext as usize as u64;
-    for (index, (expected_tag, expected_payload)) in
-        expected_tags_payloads.into_iter().enumerate()
-    {
+    for (index, (expected_tag, expected_payload)) in expected_tags_payloads.into_iter().enumerate() {
         let value_argument = match candidate.runtime {
             RuntimeLayout::Tagged16 => unsafe {
                 storage.as_mut_ptr().add(index * 2) as usize as u64
@@ -2851,7 +2870,11 @@ fn run_native_value_semantics(
                 ),
             };
         }
-        let inputs = case.inputs.iter().map(|value| format!("{value:?}")).collect();
+        let inputs = case
+            .inputs
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect();
         let matches = actual == case.expected && actual_host_trace == case.expected_host_trace;
         if !matches {
             bail!(
@@ -3010,9 +3033,8 @@ fn core_ir_representations(document: &JsonValue) -> BTreeSet<String> {
                 }
             }
             JsonValue::Object(fields) => {
-                if let Some(representation) = fields
-                    .get("representation")
-                    .and_then(JsonValue::as_str)
+                if let Some(representation) =
+                    fields.get("representation").and_then(JsonValue::as_str)
                 {
                     representations.insert(representation.to_owned());
                 }
@@ -3033,7 +3055,10 @@ fn dispatch_candidate_corpus_value(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
     heap: &mut GcHeap,
-    retained_handles: &mut Vec<(ogma_gc_comparison_proof::HostHandle, ogma_gc_comparison_proof::GcRef)>,
+    retained_handles: &mut Vec<(
+        ogma_gc_comparison_proof::HostHandle,
+        ogma_gc_comparison_proof::GcRef,
+    )>,
     value: CandidateValue,
 ) -> Result<bool> {
     let reference_tag = match value {
@@ -3130,12 +3155,12 @@ fn run_native_core_ir_corpus_validation(
             .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
             .context("generated native Value dispatch entry point missing for Core IR corpus")?
     };
-    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/core-ir/manifest.json");
-    let manifest: JsonValue = serde_json::from_str(
-        &fs::read_to_string(&manifest_path)
-            .with_context(|| format!("read accepted Core IR manifest {}", manifest_path.display()))?,
-    )?;
+    let manifest_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/core-ir/manifest.json");
+    let manifest: JsonValue =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).with_context(|| {
+            format!("read accepted Core IR manifest {}", manifest_path.display())
+        })?)?;
     if manifest["contract"] != "ogma.core-ir" || manifest["version"] != "1.0.0" {
         bail!("OGM-38 native corpus requires canonical ogma.core-ir/1.0.0 manifest");
     }
@@ -3162,10 +3187,10 @@ fn run_native_core_ir_corpus_validation(
             bail!("accepted Core IR fixture path is outside the canonical fixture directory");
         }
         let fixture_path = repository_root.join(relative_path);
-        let document: JsonValue = serde_json::from_str(
-            &fs::read_to_string(&fixture_path)
-                .with_context(|| format!("read accepted Core IR fixture {}", fixture_path.display()))?,
-        )?;
+        let document: JsonValue =
+            serde_json::from_str(&fs::read_to_string(&fixture_path).with_context(|| {
+                format!("read accepted Core IR fixture {}", fixture_path.display())
+            })?)?;
         let representations = core_ir_representations(&document);
         if representations.is_empty() {
             bail!("accepted Core IR fixture {relative_path} has no Value representations");
@@ -4384,11 +4409,7 @@ fn run_native_pressure_validation(
             (index as f64) + 0.25,
         )?;
     }
-    let (tag, payload) = candidate_value_tag_payload(
-        candidate.runtime,
-        &storage,
-        0,
-    )?;
+    let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &storage, 0)?;
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut callback_context = NativeHandleCallbackContext {
         heap: &mut heap as *mut GcHeap,
@@ -4468,8 +4489,7 @@ fn run(
             warmups,
             samples,
         )?;
-        let native_core_ir_corpus =
-            run_native_core_ir_corpus_validation(candidate, &library)?;
+        let native_core_ir_corpus = run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_value_semantics = run_native_value_semantics(candidate, &library)?;
         let semantic_reference_count = semantic_cases()
             .iter()
@@ -4486,8 +4506,7 @@ fn run(
             .count();
         let native_shadow_roots =
             run_native_shadow_root_validation(candidate, semantic_reference_count)?;
-        let native_pressure =
-            run_native_pressure_validation(candidate, &library, &object_path)?;
+        let native_pressure = run_native_pressure_validation(candidate, &library, &object_path)?;
         let register_pressure = register_pressure(candidate)?;
         let gc = gc_evidence(candidate, warmups, samples, GC_OBJECT_COUNT)?;
         candidates.push(CandidateEvidence {
