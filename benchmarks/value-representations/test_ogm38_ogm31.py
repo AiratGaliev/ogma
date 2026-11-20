@@ -55,9 +55,31 @@ def make_reports():
         native["candidates"].append({
             "name": name,
             "native_core_ir_corpus": {
-                "canonical_fixture_count": len(proof.EXPECTED_FIXTURES),
+                "canonical_fixture_count": len(proof.EXPECTED_FIXTURE_PATHS),
+                "fixtures": [
+                    {
+                        "fixture": fixture,
+                        "path": path,
+                        "native_value_dispatches": 1,
+                        "reference_values_resolved_after_forced_gc": 1,
+                    }
+                    for fixture, path in proof.EXPECTED_FIXTURE_PATHS.items()
+                ],
+                "native_value_dispatches": len(proof.EXPECTED_FIXTURE_PATHS),
+                "reference_values_resolved_after_forced_gc": len(proof.EXPECTED_FIXTURE_PATHS),
+                "all_values_roundtripped_and_dispatched": True,
+            },
+            "native_code": {
+                "symbol": "ogma_value_loop",
+                "numeric_conversion_instructions": 2,
+                "call_instructions": 0,
             },
             "native_core_ir_execution": {
+                "strict_equal_native_code": {
+                    "symbol": "ogma_value_strict_equal",
+                    "numeric_conversion_instructions": 0,
+                    "call_instructions": 0,
+                },
                 "branch_equal_result_bits": proof.number_to_bits(7.0),
                 "branch_unequal_result_bits": proof.number_to_bits(8.0),
                 "loop_integer_result_bits": proof.number_to_bits(5.0),
@@ -70,6 +92,132 @@ def make_reports():
             "native_value_semantics": {
                 "every_case_matches": True,
                 "cases": [
+                    {
+                        "name": "nan-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "signed-zero-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "object-identity-same",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "object-identity-distinct",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "symbol-identity-same",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "symbol-identity-distinct",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "undefined-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "null-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "undefined-null-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "boolean-strict-equality-same",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "boolean-strict-equality-distinct",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "positive-infinity-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "negative-infinity-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "opposite-infinity-strict-equality",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "string-strict-equality-same",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "string-strict-equality-distinct",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "bigint-strict-equality-same",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "bigint-strict-equality-distinct",
+                        "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
                     {
                         "name": "object-identity-same",
                         "matches": True,
@@ -97,6 +245,8 @@ def make_reports():
                     {
                         "name": "call-boundary",
                         "matches": True,
+                        "native_strict_equal_executed": True,
+                        "native_reference_equality_result": True,
                         "actual_host_trace": ["benchmark.host.call_target([2,\"item=5\"])"],
                         "native_host_callback": {
                             "callee_resolved": True,
