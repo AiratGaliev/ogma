@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import math
 import unittest
+from pathlib import Path
 
 import validate_ogm38_ogm31 as proof
 
@@ -260,6 +263,58 @@ def make_reports():
 
 
 class Ogm38Ogm31ValidationTests(unittest.TestCase):
+    def test_committed_primary_native_samples_are_complete_and_pinned(self):
+        path = (
+            Path(__file__).parent
+            / "results"
+            / "ogm38-primary-benchmark-samples.json"
+        )
+        report = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual("ogma.ogm38.primary-benchmark-samples", report["schema"])
+        self.assertEqual(1, report["version"])
+        self.assertEqual(
+            "dfea7ebc25eec61665c93cfff5470251e00519df",
+            report["source_revision"],
+        )
+        self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(101, report["samples_per_metric"])
+        self.assertEqual(3, report["warmups"])
+        self.assertEqual(1000, report["iterations_per_throughput_sample"])
+        self.assertEqual("x86_64-unknown-linux-gnu", report["target"])
+
+        expected_candidates = {
+            "tagged-16-boxed",
+            "tagged-16-representation-aware",
+            "nanbox-8-boxed",
+            "nanbox-8-representation-aware",
+        }
+        candidates = report["candidates"]
+        self.assertEqual(
+            expected_candidates,
+            {candidate["name"] for candidate in candidates},
+        )
+        self.assertEqual(4, len(candidates))
+        for candidate in candidates:
+            with self.subTest(candidate=candidate["name"]):
+                for metric in ("compile_ns", "native_loop_ns_per_call"):
+                    samples = candidate[metric]
+                    self.assertEqual(101, len(samples), metric)
+                    self.assertTrue(
+                        all(
+                            isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                            and math.isfinite(value)
+                            and value > 0
+                            for value in samples
+                        ),
+                        metric,
+                    )
+
+        self.assertTrue(report["run_url"].endswith("/44730458468"))
+        self.assertIn("/artifacts/14625194465", report["full_report_artifact_url"])
+        self.assertEqual(64, len(report["full_report_sha256"]))
+
     def test_all_four_candidates_match_the_same_ogm31_oracle(self):
         native, dual = make_reports()
         result = proof.validate_reports(native, dual)
