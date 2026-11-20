@@ -2969,9 +2969,9 @@ fn run_native_shadow_root_validation(
         persistent_handles.push(providers.persistent.retain(&heap, reference)?);
     }
 
-    let entry = providers.collect(&mut heap).map_err(|error| {
-        anyhow!("OGM-27 entry safepoint collection failed: {error:?}")
-    })?;
+    let entry = providers
+        .collect(&mut heap)
+        .map_err(|error| anyhow!("OGM-27 entry safepoint collection failed: {error:?}"))?;
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
         || entry.roots_scanned != managed_roots * 3
@@ -2989,9 +2989,9 @@ fn run_native_shadow_root_validation(
         .native
         .current_mut(native_frame)?
         .set_safepoint(SafepointId(1), &slots)?;
-    let call_boundary = providers.collect(&mut heap).map_err(|error| {
-        anyhow!("OGM-27 call-boundary collection failed: {error:?}")
-    })?;
+    let call_boundary = providers
+        .collect(&mut heap)
+        .map_err(|error| anyhow!("OGM-27 call-boundary collection failed: {error:?}"))?;
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
         || call_boundary.roots_scanned != managed_roots * 3
@@ -3013,9 +3013,9 @@ fn run_native_shadow_root_validation(
     for handle in persistent_handles.iter().copied() {
         providers.persistent.release(handle)?;
     }
-    let cleanup = providers.collect(&mut heap).map_err(|error| {
-        anyhow!("OGM-27 cleanup collection failed: {error:?}")
-    })?;
+    let cleanup = providers
+        .collect(&mut heap)
+        .map_err(|error| anyhow!("OGM-27 cleanup collection failed: {error:?}"))?;
     if cleanup.objects_live != 0 || cleanup.objects_reclaimed != managed_roots {
         bail!(
             "{} OGM-27 roots were not reclaimed after native-frame and persistent-handle release (live={}, reclaimed={}/{})",
