@@ -2198,7 +2198,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             RuntimeLayout::Tagged16 => 16,
             RuntimeLayout::NanBox8 => 8,
         };
-        let byte_offset = b.ins().imul_imm_u(index_param, stride as u64);
+        let byte_offset = b.ins().imul_imm_u(index_param, stride as i64);
         let slot_address = b.ins().iadd(parameters[0], byte_offset);
         let value_argument = match candidate.runtime {
             RuntimeLayout::Tagged16 => slot_address,
