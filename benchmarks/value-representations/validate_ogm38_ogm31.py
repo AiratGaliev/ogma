@@ -160,9 +160,29 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         value_semantics = candidate.get("native_value_semantics")
         if not isinstance(value_semantics, dict) or value_semantics.get("every_case_matches") is not True:
             raise RuntimeError(f"{name}: native Value semantic matrix did not pass")
-        semantic_cases = {
-            item.get("name"): item for item in value_semantics.get("cases", [])
-        }
+        semantic_case_items = value_semantics.get("cases")
+        if (
+            not isinstance(semantic_case_items, list)
+            or any(
+                not isinstance(item, dict) or not isinstance(item.get("name"), str)
+                for item in semantic_case_items
+            )
+        ):
+            raise RuntimeError(f"{name}: native Value semantic case list is malformed")
+        semantic_case_names = [item["name"] for item in semantic_case_items]
+        duplicate_case_names = sorted(
+            {
+                case_name
+                for case_name in semantic_case_names
+                if semantic_case_names.count(case_name) > 1
+            }
+        )
+        if duplicate_case_names:
+            raise RuntimeError(
+                f"{name}: native Value semantic case names are duplicated: "
+                f"{duplicate_case_names}"
+            )
+        semantic_cases = {item["name"]: item for item in semantic_case_items}
         for case_name, expected_equal in STRICT_EQUALITY_CASES.items():
             equality_case = semantic_cases.get(case_name)
             if (

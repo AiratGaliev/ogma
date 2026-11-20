@@ -221,30 +221,6 @@ def make_reports():
                         "native_reference_equality_result": False,
                     },
                     {
-                        "name": "object-identity-same",
-                        "matches": True,
-                        "native_reference_identity_preserved": True,
-                        "native_reference_equality_result": True,
-                    },
-                    {
-                        "name": "object-identity-distinct",
-                        "matches": True,
-                        "native_reference_identity_preserved": True,
-                        "native_reference_equality_result": False,
-                    },
-                    {
-                        "name": "symbol-identity-same",
-                        "matches": True,
-                        "native_reference_identity_preserved": True,
-                        "native_reference_equality_result": True,
-                    },
-                    {
-                        "name": "symbol-identity-distinct",
-                        "matches": True,
-                        "native_reference_identity_preserved": True,
-                        "native_reference_equality_result": False,
-                    },
-                    {
                         "name": "call-boundary",
                         "matches": True,
                         "native_strict_equal_executed": True,
@@ -327,6 +303,13 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "symbol"
         ] = "not-generated"
         with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_duplicate_semantic_case_names(self):
+        native, dual = make_reports()
+        cases = native["candidates"][0]["native_value_semantics"]["cases"]
+        cases.append(dict(cases[0]))
+        with self.assertRaisesRegex(RuntimeError, "semantic case names are duplicated"):
             proof.validate_reports(native, dual)
 
     def test_rejects_unbalanced_native_roots(self):
