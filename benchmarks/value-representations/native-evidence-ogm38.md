@@ -24,8 +24,9 @@ All four candidates use the same accepted Core IR v1 contract and the five-fixtu
 - Source revision and tested revision: e145f6b4cd8a175d43cb8fb96bc8667f315a3c7d.
 - Environment: GitHub-hosted Linux x86_64; Rust 1.100.0; Cranelift 0.137.2; target x86_64-unknown-linux-gnu; Intel Xeon Platinum 8573C.
 - Sampling: 3 warmups and 101 measurements per candidate; 1,000 native calls per throughput sample.
-- Raw JSON: 1,657,812 bytes; SHA-256 7487fb6c393a6f2a24763f6d091b02e0d5de58ba7721e4a52713bbb01cd51783.
-- Committed deterministic gzip report: results/ogm38-native-value-ssa-report.json.gz; 77,417 bytes; SHA-256 f31c573c65baf758e2fb9119484524941cba19b58123c948b7e03d1d09baff0d.
+- Full CI JSON: 1,657,812 bytes; SHA-256 7487fb6c393a6f2a24763f6d091b02e0d5de58ba7721e4a52713bbb01cd51783 (preserved in artifact 14623748867).
+- Committed lossless compact projection: results/ogm38-native-value-ssa-report.json.gz; expanded JSON 274,526 bytes, SHA-256 5ee1271406470ef037c60fb96bc86b4e2c025cd817ab403eac5fd6b132d13c645 (see the exact complete digest below); gzip 43,422 bytes; SHA-256 d7fb852bfc623c45e05c4d5becc1f5c61c8d2aea2045c714c6681e4c6fccbad5.
+- The compact projection retains all 101 raw sample values for compile time, native throughput, handle helper, both collectors (build/collection/root-scan/cleanup and per-sample topology) and all three allocator strategies. GC and allocator sample records use an ordered field-name array plus positional sample rows to avoid repeated JSON keys. Semantic cases, fixture dispatches, generated-code metrics, root evidence and aggregate percentiles are retained. The unprojected report remains available from the linked CI artifact.
 
 The report stores all compile, native-loop, callback, GC and allocator samples, not just aggregate percentiles. The CI artifact additionally preserves the complete OGM-31 differential report, Core IR verifier report, generated portable/native artifacts and resolved dependency lock.
 
