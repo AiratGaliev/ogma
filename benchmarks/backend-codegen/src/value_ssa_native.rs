@@ -1282,8 +1282,12 @@ fn define_candidate_strict_equal(
                 b.ins().return_(&[result]);
 
                 b.switch_to_block(numeric);
-                let left_number = b.ins().bitcast(types::F64, MemFlagsData::new(), left_payload);
-                let right_number = b.ins().bitcast(types::F64, MemFlagsData::new(), right_payload);
+                let left_number = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), left_payload);
+                let right_number = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), right_payload);
                 let equal = b.ins().fcmp(
                     cranelift_codegen::ir::condcodes::FloatCC::Equal,
                     left_number,
@@ -1323,20 +1327,15 @@ fn define_candidate_strict_equal(
                 b.ins().return_(&[result]);
 
                 b.switch_to_block(non_numeric);
-                let left_tag = b
-                    .ins()
-                    .ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64);
-                let right_tag = b
-                    .ins()
-                    .ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64);
+                let left_tag = b.ins().ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64);
+                let right_tag = b.ins().ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64);
                 let tags_match = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
                     left_tag,
                     right_tag,
                 );
                 let tagged_value = b.create_block();
-                b.ins()
-                    .brif(tags_match, tagged_value, &[], mismatch, &[]);
+                b.ins().brif(tags_match, tagged_value, &[], mismatch, &[]);
 
                 b.switch_to_block(tagged_value);
                 let string_tag = b.ins().iconst(types::I64, NANBOX_STRING_TAG as i64);
@@ -1353,13 +1352,8 @@ fn define_candidate_strict_equal(
                 );
                 let is_primitive_value = b.ins().bor(is_string, is_bigint);
                 let compare_words = b.create_block();
-                b.ins().brif(
-                    is_primitive_value,
-                    primitive_value,
-                    &[],
-                    compare_words,
-                    &[],
-                );
+                b.ins()
+                    .brif(is_primitive_value, primitive_value, &[], compare_words, &[]);
 
                 b.switch_to_block(compare_words);
                 let equal = b.ins().icmp(
