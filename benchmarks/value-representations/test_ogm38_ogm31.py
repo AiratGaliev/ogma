@@ -73,7 +73,7 @@ def make_reports():
                     {
                         "name": "call-boundary",
                         "matches": True,
-                        "actual_host_trace": ["benchmark.host.call_target([2,\\"item=5\\"])"],
+                        "actual_host_trace": ["benchmark.host.call_target([2,\"item=5\"])"],
                         "native_host_callback": {
                             "callee_resolved": True,
                             "receiver": 2.0,
