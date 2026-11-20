@@ -3062,6 +3062,93 @@ fn semantic_cases() -> Vec<SemanticCase> {
             expected_host_trace: vec![],
         },
         SemanticCase {
+            name: "undefined-strict-equality",
+            inputs: vec![SemanticValue::Undefined, SemanticValue::Undefined],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "null-strict-equality",
+            inputs: vec![SemanticValue::Null, SemanticValue::Null],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "undefined-null-strict-equality",
+            inputs: vec![SemanticValue::Undefined, SemanticValue::Null],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "boolean-strict-equality-same",
+            inputs: vec![SemanticValue::Boolean(true), SemanticValue::Boolean(true)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "boolean-strict-equality-distinct",
+            inputs: vec![SemanticValue::Boolean(false), SemanticValue::Boolean(true)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "positive-infinity-strict-equality",
+            inputs: vec![
+                semantic_number(f64::INFINITY),
+                semantic_number(f64::INFINITY),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "negative-infinity-strict-equality",
+            inputs: vec![
+                semantic_number(f64::NEG_INFINITY),
+                semantic_number(f64::NEG_INFINITY),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "opposite-infinity-strict-equality",
+            inputs: vec![
+                semantic_number(f64::INFINITY),
+                semantic_number(f64::NEG_INFINITY),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "string-strict-equality-same",
+            inputs: vec![
+                SemanticValue::String("same primitive".to_owned()),
+                SemanticValue::String("same primitive".to_owned()),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "string-strict-equality-distinct",
+            inputs: vec![
+                SemanticValue::String("left primitive".to_owned()),
+                SemanticValue::String("right primitive".to_owned()),
+            ],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "bigint-strict-equality-same",
+            inputs: vec![SemanticValue::BigInt(42), SemanticValue::BigInt(42)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(true)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
+            name: "bigint-strict-equality-distinct",
+            inputs: vec![SemanticValue::BigInt(42), SemanticValue::BigInt(43)],
+            expected: SemanticCompletion::Normal(SemanticValue::Boolean(false)),
+            expected_host_trace: vec![],
+        },
+        SemanticCase {
             name: "type-transition-number-to-string",
             inputs: vec![number_4, SemanticValue::String("changed".to_owned())],
             expected: SemanticCompletion::Normal(SemanticValue::String("changed".to_owned())),
@@ -3148,7 +3235,19 @@ fn evaluate_semantic_case(
         | "object-identity-same"
         | "object-identity-distinct"
         | "symbol-identity-same"
-        | "symbol-identity-distinct" => SemanticCompletion::Normal(SemanticValue::Boolean(
+        | "symbol-identity-distinct"
+        | "undefined-strict-equality"
+        | "null-strict-equality"
+        | "undefined-null-strict-equality"
+        | "boolean-strict-equality-same"
+        | "boolean-strict-equality-distinct"
+        | "positive-infinity-strict-equality"
+        | "negative-infinity-strict-equality"
+        | "opposite-infinity-strict-equality"
+        | "string-strict-equality-same"
+        | "string-strict-equality-distinct"
+        | "bigint-strict-equality-same"
+        | "bigint-strict-equality-distinct" => SemanticCompletion::Normal(SemanticValue::Boolean(
             semantic_strict_equal(&values[0], &values[1]),
         )),
         "type-transition-number-to-string" => {
@@ -3509,7 +3608,19 @@ fn run_native_value_semantics(
             | "object-identity-same"
             | "object-identity-distinct"
             | "symbol-identity-same"
-            | "symbol-identity-distinct" => Some((0, 1)),
+            | "symbol-identity-distinct"
+            | "undefined-strict-equality"
+            | "null-strict-equality"
+            | "undefined-null-strict-equality"
+            | "boolean-strict-equality-same"
+            | "boolean-strict-equality-distinct"
+            | "positive-infinity-strict-equality"
+            | "negative-infinity-strict-equality"
+            | "opposite-infinity-strict-equality"
+            | "string-strict-equality-same"
+            | "string-strict-equality-distinct"
+            | "bigint-strict-equality-same"
+            | "bigint-strict-equality-distinct" => Some((0, 1)),
             "call-boundary" => Some((3, 4)),
             _ => None,
         };
@@ -3560,6 +3671,18 @@ fn run_native_value_semantics(
                 | "object-identity-distinct"
                 | "symbol-identity-same"
                 | "symbol-identity-distinct"
+                | "undefined-strict-equality"
+                | "null-strict-equality"
+                | "undefined-null-strict-equality"
+                | "boolean-strict-equality-same"
+                | "boolean-strict-equality-distinct"
+                | "positive-infinity-strict-equality"
+                | "negative-infinity-strict-equality"
+                | "opposite-infinity-strict-equality"
+                | "string-strict-equality-same"
+                | "string-strict-equality-distinct"
+                | "bigint-strict-equality-same"
+                | "bigint-strict-equality-distinct"
         );
         if equality_case {
             let equality_result = native_strict_equal_result.context(
