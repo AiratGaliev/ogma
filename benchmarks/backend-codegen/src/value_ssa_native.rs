@@ -1068,26 +1068,15 @@ fn define_candidate_numeric_binary(
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[1], 0);
                 let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
-                let left_valid = b.ins().icmp(
-                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                let invalid_left = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::NotEqual,
                     left_tag,
                     number_tag,
                 );
-                let right_valid = b.ins().icmp(
-                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                let invalid_right = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::NotEqual,
                     right_tag,
                     number_tag,
-                );
-                let false_value = b.ins().iconst(types::I8, 0);
-                let invalid_left = b.ins().icmp(
-                    cranelift_codegen::ir::condcodes::IntCC::Equal,
-                    left_valid,
-                    false_value,
-                );
-                let invalid_right = b.ins().icmp(
-                    cranelift_codegen::ir::condcodes::IntCC::Equal,
-                    right_valid,
-                    false_value,
                 );
                 let left_bits = b
                     .ins()
@@ -1130,13 +1119,23 @@ fn define_candidate_numeric_binary(
                     left,
                     right,
                 );
-                match candidate.ssa {
-                    SsaPolicy::Boxed => b.ins().select(equal, left_bits, right_bits),
-                    SsaPolicy::RepresentationAware => {
-                        let selected = b.ins().select(equal, left, right);
-                        b.ins().bitcast(types::I64, MemFlagsData::new(), selected)
-                    }
-                }
+                let equal_block = b.create_block();
+                let unequal_block = b.create_block();
+                let merge_block = b.create_block();
+                b.append_block_param(merge_block, types::I64);
+                b.ins()
+                    .brif(equal, equal_block, &[], unequal_block, &[]);
+
+                b.switch_to_block(equal_block);
+                b.ins()
+                    .jump(merge_block, &[BlockArg::Value(left_bits)]);
+
+                b.switch_to_block(unequal_block);
+                b.ins()
+                    .jump(merge_block, &[BlockArg::Value(right_bits)]);
+
+                b.switch_to_block(merge_block);
+                b.block_params(merge_block)[0]
             }
             "dynamic_add" => {
                 let sum = b.ins().fadd(left, right);
