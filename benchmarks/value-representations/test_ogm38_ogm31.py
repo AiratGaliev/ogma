@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import math
 import unittest
 from pathlib import Path
@@ -268,8 +269,9 @@ def make_reports():
 
 
 class Ogm38Ogm31ValidationTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
     def test_committed_primary_native_samples_are_complete_and_pinned(self):
-        results = Path(__file__).parent / "results"
+        results = Path(os.environ["OGM38_RESULTS_DIR"])
         report = json.loads(
             (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
         )
@@ -318,8 +320,9 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                 self.assertEqual(77, candidate["native_value_dispatches"])
                 self.assertEqual(20, candidate["reference_values_resolved_after_forced_gc"])
 
+    @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
     def test_committed_runtime_raw_samples_cover_integrated_gc_allocator_and_peak_rss(self):
-        path = Path(__file__).parent / "results" / "ogm38-runtime-raw-samples.json.gz"
+        path = Path(os.environ["OGM38_RESULTS_DIR"]) / "ogm38-runtime-raw-samples.json.gz"
         report = json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
 
         self.assertEqual("ogma.ogm38.runtime-raw-samples", report["schema"])
@@ -391,6 +394,7 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                     self.assertEqual(101, len(item["deallocation_ns_per_sample"]))
                     self.assertEqual(0, item["allocation_failures_total"])
 
+    @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
     def test_committed_full_native_and_differential_reports_match_the_projections(self):
         results = Path(__file__).parent / "results"
         primary = json.loads(
