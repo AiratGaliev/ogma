@@ -75,6 +75,7 @@ type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 type NativeValueBinary = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativeStrictEqual = unsafe extern "C" fn(u64, u64, u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
+type NativeBatchHandleDispatch = unsafe extern "C" fn(u64, u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
 
@@ -1489,6 +1490,18 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         Linkage::Export,
         &dispatch_signature,
     )?;
+    let mut batch_dispatch_signature = module.make_signature();
+    batch_dispatch_signature.params.extend(
+        [types::I64, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    batch_dispatch_signature.returns.push(AbiParam::new(types::I32));
+    let batch_dispatch_function = module.declare_function(
+        "ogma_value_batch_handle_dispatch",
+        Linkage::Export,
+        &batch_dispatch_signature,
+    )?;
     let mut callback_signature = module.make_signature();
     callback_signature.params.extend(
         [types::I64, types::I64, types::I64]
@@ -2099,6 +2112,75 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     }
 
     module.define_function(dispatch_function, &mut context)?;
+    module.clear_context(&mut context);
+
+    // Native batch dispatcher used by the canonical Core IR corpus proof.
+    // The loop and each indirect Value helper call execute inside generated
+    // Cranelift code, rather than making one Rust -> native transition per
+    // fixture Value.
+    context.func.signature = batch_dispatch_signature;
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let parameters = b.block_params(entry).to_vec();
+        let loop_block = b.create_block();
+        let body_block = b.create_block();
+        let invalid_block = b.create_block();
+        let done_block = b.create_block();
+        let index_param = b.append_block_param(loop_block, types::I64);
+        b.switch_to_block(entry);
+        b.ins().jump(loop_block, &[b.ins().iconst(types::I64, 0)]);
+        b.switch_to_block(loop_block);
+        let finished = b.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            index_param,
+            parameters[1],
+        );
+        b.ins().brif(finished, done_block, &[], body_block, &[]);
+        b.switch_to_block(body_block);
+        let stride = match candidate.runtime {
+            RuntimeLayout::Tagged16 => 16,
+            RuntimeLayout::NanBox8 => 8,
+        };
+        let byte_offset = b.ins().imul_imm(index_param, stride);
+        let slot_address = b.ins().iadd(parameters[0], byte_offset);
+        let value_argument = match candidate.runtime {
+            RuntimeLayout::Tagged16 => slot_address,
+            RuntimeLayout::NanBox8 => {
+                b.ins().load(types::I64, MemFlagsData::new(), slot_address, 0)
+            }
+        };
+        let dispatch_ref = module.declare_func_in_func(dispatch_function, b.func);
+        let dispatch_call = b.ins().call(
+            dispatch_ref,
+            &[value_argument, parameters[2], parameters[3]],
+        );
+        let dispatch_status = b.inst_results(dispatch_call)[0];
+        let accepted = b.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            dispatch_status,
+            0,
+        );
+        let incremented = b.ins().iadd_imm(index_param, 1);
+        let loop_argument = b.block_params(loop_block).to_vec();
+        debug_assert_eq!(loop_argument.len(), 1);
+        b.ins().brif(
+            accepted,
+            loop_block,
+            &[incremented],
+            invalid_block,
+            &[],
+        );
+        b.switch_to_block(invalid_block);
+        b.ins().return_(&[dispatch_status]);
+        b.switch_to_block(done_block);
+        let ok = b.ins().iconst(types::I32, 0);
+        b.ins().return_(&[ok]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(batch_dispatch_function, &mut context)?;
     module.clear_context(&mut context);
 
     // A second, deliberately high-liveness native function measures physical
