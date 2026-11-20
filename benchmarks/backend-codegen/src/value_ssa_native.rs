@@ -3564,8 +3564,8 @@ fn run_native_value_semantics(
             let equality_result = native_strict_equal_result.context(
                 "native strict-equality case did not execute its generated candidate function",
             )?;
-            let expected = match case.expected {
-                SemanticCompletion::Normal(SemanticValue::Boolean(value)) => value,
+            let expected = match &case.expected {
+                SemanticCompletion::Normal(SemanticValue::Boolean(value)) => *value,
                 _ => bail!("{} expected strict-equality case has no boolean completion", case.name),
             };
             if equality_result != expected {
