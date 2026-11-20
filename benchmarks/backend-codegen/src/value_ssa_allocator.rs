@@ -78,27 +78,15 @@ fn layout(size: usize) -> Result<Layout> {
 fn allocate_round(
     allocator: &mut IsolateAllocator,
     payload_layout: Layout,
-    value_layout: Layout,
     object_count: usize,
 ) -> Result<Vec<ogma_isolate_allocator_proof::Allocation>> {
-    let mut allocations = Vec::with_capacity(object_count + 1);
-    let value_storage = allocator
-        .allocate(value_layout)
-        .map_err(|error| anyhow::anyhow!("OGM-24 Value backing allocation failed: {error:?}"))?;
-    // Touch the full buffer: reserved-memory measurements must not count only
-    // untouched virtual allocations.
-    unsafe {
-        value_storage
-            .as_non_null()
-            .as_ptr()
-            .write_bytes(0xA5, value_layout.size());
-    }
-    allocations.push(value_storage);
-
+    let mut allocations = Vec::with_capacity(object_count);
     for index in 0..object_count {
         let allocation = allocator.allocate(payload_layout).map_err(|error| {
-            anyhow::anyhow!("OGM-24 object payload allocation {index} failed: {error:?}")
+            anyhow::anyhow!("OGM-24 Value payload allocation {index} failed: {error:?}")
         })?;
+        // Touch each object's complete Value storage so the physical allocator
+        // measurement observes the same per-object slots represented in OGM-26.
         unsafe {
             allocation
                 .as_non_null()
@@ -131,11 +119,10 @@ fn sample(
     quota_bytes: usize,
 ) -> Result<AllocatorSample> {
     let payload_layout = layout(payload_bytes_per_object)?;
-    let value_layout = layout(value_storage_bytes)?;
     let mut allocator = IsolateAllocator::new(strategy, quota_bytes);
 
     let allocation_start = Instant::now();
-    let first = allocate_round(&mut allocator, payload_layout, value_layout, object_count)?;
+    let first = allocate_round(&mut allocator, payload_layout, object_count)?;
     let first_allocation_ns = allocation_start.elapsed().as_nanos();
     let first_stats = allocator.stats();
 
@@ -146,7 +133,7 @@ fn sample(
     // The second identical allocation round makes reuse observable for
     // PerIsolateReuse and SizeClassPool, while System remains the baseline.
     let allocation_start = Instant::now();
-    let second = allocate_round(&mut allocator, payload_layout, value_layout, object_count)?;
+    let second = allocate_round(&mut allocator, payload_layout, object_count)?;
     let second_allocation_ns = allocation_start.elapsed().as_nanos();
     let second_stats = allocator.stats();
 
@@ -217,12 +204,8 @@ pub fn run_allocator_evidence(
     let payload_bytes_per_object = value_slots_per_object
         .checked_mul(value_bytes_per_slot)
         .context("OGM-24 per-object payload size overflow")?;
-    let one_round_bytes = value_storage_bytes
-        .checked_add(
-            object_count
-                .checked_mul(payload_bytes_per_object)
-                .context("OGM-24 object payload total overflow")?,
-        )
+    let one_round_bytes = object_count
+        .checked_mul(payload_bytes_per_object)
         .context("OGM-24 total allocation size overflow")?;
     // Allow two simultaneously live rounds only transiently; quota tracks the
     // first round after it has been returned to the cache.
