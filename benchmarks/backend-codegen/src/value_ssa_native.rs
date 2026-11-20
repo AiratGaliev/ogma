@@ -2496,11 +2496,20 @@ fn evaluate_semantic_case(
             )))
         }
         "type-transition-number-to-string" => {
-            // Model a mutable lexical binding: define with [0], store [1], then reload.
-            let mut lexical_binding = values[0].clone();
-            lexical_binding = values[1].clone();
-            SemanticCompletion::Normal(lexical_binding)
-        }
+            // Verify that a mutable binding changes from the first input's
+            // representation to the second, then reload the stored value.
+            let initial_type = std::mem::discriminant(&values[0]);
+            let transitioned_value = values[1].clone();
+            let transitioned_type = std::mem::discriminant(&transitioned_value);
+            if initial_type == transitioned_type {
+                SemanticCompletion::Throw {
+                    name: "TypeTransitionNotObserved",
+                    value: None,
+                }
+            } else {
+                SemanticCompletion::Normal(transitioned_value)
+            }
+        },
         "exception-passthrough" => SemanticCompletion::Throw {
             name: "UserThrown",
             value: Some(values[0].clone()),
@@ -2592,6 +2601,7 @@ fn dispatch_native_semantic_inputs(
         expected_tags_payloads.push(candidate_value_tag_payload(candidate.runtime, &storage, index)?);
     }
 
+    let reference_count = references.len();
     let mut context = NativeSemanticCallbackContext {
         runtime: candidate.runtime,
         heap: &mut heap as *mut GcHeap,
@@ -2636,7 +2646,7 @@ fn dispatch_native_semantic_inputs(
         heap.release_host_handle(handle)?;
     }
     let reclaimed = heap.collect()?;
-    if reclaimed.live_objects_after != 0 || reclaimed.reclaimed_objects != references.len() {
+    if reclaimed.live_objects_after != 0 || reclaimed.reclaimed_objects != reference_count {
         bail!(
             "{} native semantic dispatch leaked reference handles after the callback: {} live / {} reclaimed",
             candidate.name(),
