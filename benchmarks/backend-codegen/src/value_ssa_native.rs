@@ -1208,8 +1208,7 @@ fn define_candidate_strict_equal(
                     left_tag,
                     right_tag,
                 );
-                b.ins()
-                    .brif(tags_match, matching_class, &[], mismatch, &[]);
+                b.ins().brif(tags_match, matching_class, &[], mismatch, &[]);
 
                 b.switch_to_block(matching_class);
                 let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
@@ -1222,16 +1221,14 @@ fn define_candidate_strict_equal(
                     .brif(both_are_numbers, numeric, &[], non_numeric, &[]);
 
                 b.switch_to_block(numeric);
-                let left_bits =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
-                let right_bits =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
-                let left_number =
-                    b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits);
-                let right_number =
-                    b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits);
+                let left_bits = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_bits = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let left_number = b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits);
+                let right_number = b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits);
                 let equal = b.ins().fcmp(
                     cranelift_codegen::ir::condcodes::FloatCC::Equal,
                     left_number,
@@ -1240,12 +1237,12 @@ fn define_candidate_strict_equal(
                 b.ins().jump(merge, &[BlockArg::Value(equal)]);
 
                 b.switch_to_block(non_numeric);
-                let left_payload =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
-                let right_payload =
-                    b.ins()
-                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let left_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let equal = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
                     left_payload,
@@ -1265,19 +1262,16 @@ fn define_candidate_strict_equal(
                     .brif(same_value_class, matching_class, &[], mismatch, &[]);
 
                 b.switch_to_block(matching_class);
-                b.ins().brif(
-                    left_is_non_number,
-                    non_numeric,
-                    &[],
-                    numeric,
-                    &[],
-                );
+                b.ins()
+                    .brif(left_is_non_number, non_numeric, &[], numeric, &[]);
 
                 b.switch_to_block(numeric);
-                let left_number =
-                    b.ins().bitcast(types::F64, MemFlagsData::new(), parameters[0]);
-                let right_number =
-                    b.ins().bitcast(types::F64, MemFlagsData::new(), parameters[1]);
+                let left_number = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), parameters[0]);
+                let right_number = b
+                    .ins()
+                    .bitcast(types::F64, MemFlagsData::new(), parameters[1]);
                 let equal = b.ins().fcmp(
                     cranelift_codegen::ir::condcodes::FloatCC::Equal,
                     left_number,
@@ -1352,7 +1346,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     strict_equal_signature
         .params
         .extend([types::I64, types::I64].into_iter().map(AbiParam::new));
-    strict_equal_signature.returns.push(AbiParam::new(types::I32));
+    strict_equal_signature
+        .returns
+        .push(AbiParam::new(types::I32));
     let strict_equal_function = module.declare_function(
         "ogma_value_strict_equal",
         Linkage::Export,
