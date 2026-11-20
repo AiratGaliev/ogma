@@ -3469,17 +3469,15 @@ fn candidate_value_for_semantic(
             if matches!(
                 value,
                 SemanticValue::Object { .. } | SemanticValue::Symbol(_)
-            ) {
-                if let Some((token, _)) = references
-                    .iter()
-                    .find(|(_, reference)| reference.value == *value)
-                {
-                    return Ok(match value {
-                        SemanticValue::Object { .. } => CandidateValue::ObjectRef(*token),
-                        SemanticValue::Symbol(_) => CandidateValue::SymbolRef(*token),
-                        _ => unreachable!(),
-                    });
-                }
+            ) && let Some((token, _)) = references
+                .iter()
+                .find(|(_, reference)| reference.value == *value)
+            {
+                return Ok(match value {
+                    SemanticValue::Object { .. } => CandidateValue::ObjectRef(*token),
+                    SemanticValue::Symbol(_) => CandidateValue::SymbolRef(*token),
+                    _ => unreachable!(),
+                });
             }
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
