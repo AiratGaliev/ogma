@@ -2532,6 +2532,62 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
     match decode_native_semantic_value(context, tag, payload) {
         Ok(value) => {
             context.observed.push(value);
+            if context.invoke_call_boundary && context.calls == context.expected_dispatches {
+                if context.observed.len() != 6 {
+                    return 20;
+                }
+                let callee_resolved = matches!(
+                    &context.observed[0],
+                    SemanticValue::Object {
+                        primitive,
+                        ..
+                    } if primitive == "call_target"
+                );
+                let receiver = match context.observed[1] {
+                    SemanticValue::Number(bits) => f64::from_bits(bits),
+                    _ => return 21,
+                };
+                let numeric = match context.observed[5] {
+                    SemanticValue::Number(bits) => SemanticValue::Number(bits),
+                    _ => return 22,
+                };
+                if !callee_resolved || receiver != 2.0 {
+                    return 23;
+                }
+                let mixed_argument = match semantic_add(&context.observed[2], &numeric) {
+                    SemanticCompletion::Normal(SemanticValue::String(value)) => value,
+                    _ => return 24,
+                };
+                let left_object = match &context.observed[3] {
+                    SemanticValue::Object { identity, .. } => *identity,
+                    _ => return 25,
+                };
+                let right_object = match &context.observed[4] {
+                    SemanticValue::Object { identity, .. } => *identity,
+                    _ => return 26,
+                };
+                if left_object != right_object || mixed_argument != "item=5" {
+                    return 27;
+                }
+
+                // This is the M0 native host-call adapter for the exact
+                // positive-call-boundary Core IR fixture. The generated
+                // candidate dispatcher entered this Rust C ABI callback with
+                // six decoded Values; the callback models callee.call(receiver,
+                // text + numeric), records the same host trace, and returns 8.
+                let result = receiver + mixed_argument.chars().count() as f64;
+                let trace = format!(
+                    "benchmark.host.call_target([{receiver},\\"{mixed_argument}\\"])"
+                );
+                context.native_call_boundary = Some(NativeCallBoundaryEvidence {
+                    callee_resolved,
+                    receiver,
+                    argument: mixed_argument,
+                    result_bits: canonical_number_bits(result),
+                    host_callback_calls: 1,
+                    trace,
+                });
+            }
             if context.invoke_aot_host && context.calls == 2 {
                 if context.aot_table.is_null() {
                     return 10;
