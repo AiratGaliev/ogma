@@ -621,6 +621,7 @@ struct NativeSemanticCase {
 struct NativeSemanticValidation {
     numeric_edge_cases: Vec<NativeSemanticCase>,
     invalid_tag_rejected: bool,
+    noncanonical_nan_payload_rejected: bool,
     noncanonical_nanbox_words_rejected: Option<bool>,
 }
 
@@ -653,6 +654,7 @@ struct NativeHandleDispatchEvidence {
     throughput_ns_per_call: Distribution,
     supported_reference_tags: Vec<NativeHandleTagEvidence>,
     primitive_values: Vec<NativePrimitiveValueEvidence>,
+    invalid_value_encodings_rejected: usize,
     native_code: NativeCodeMetrics,
     all_callbacks_resolved_expected_handles: bool,
 }
@@ -881,6 +883,36 @@ fn candidate_output_path(root: &Path, candidate: Candidate, extension: &str) -> 
     root.join(format!("{}.{}", candidate.name(), extension))
 }
 
+fn is_noncanonical_nan_bits(builder: &mut FunctionBuilder<'_>, bits: Value) -> Value {
+    let exponent_mask = builder
+        .ins()
+        .iconst(types::I64, 0x7ff0_0000_0000_0000_u64 as i64);
+    let fraction_mask = builder
+        .ins()
+        .iconst(types::I64, 0x000f_ffff_ffff_ffff_u64 as i64);
+    let exponent = builder.ins().band(bits, exponent_mask);
+    let fraction = builder.ins().band(bits, fraction_mask);
+    let exponent_all_ones = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::Equal,
+        exponent,
+        exponent_mask,
+    );
+    let zero = builder.ins().iconst(types::I64, 0);
+    let fraction_nonzero = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+        fraction,
+        zero,
+    );
+    let is_nan = builder.ins().band(exponent_all_ones, fraction_nonzero);
+    let canonical_nan = builder.ins().iconst(types::I64, CANONICAL_NAN_BITS as i64);
+    let is_not_canonical_nan = builder.ins().icmp(
+        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+        bits,
+        canonical_nan,
+    );
+    builder.ins().band(is_nan, is_not_canonical_nan)
+}
+
 fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> Value {
     let reserved_min = builder
         .ins()
@@ -899,34 +931,7 @@ fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> 
         reserved_max,
     );
     let reserved_tag = builder.ins().band(reserved_ge, reserved_le);
-
-    let exponent_mask = builder
-        .ins()
-        .iconst(types::I64, 0x7ff0_0000_0000_0000_u64 as i64);
-    let fraction_mask = builder
-        .ins()
-        .iconst(types::I64, 0x000f_ffff_ffff_ffff_u64 as i64);
-    let exponent = builder.ins().band(word, exponent_mask);
-    let fraction = builder.ins().band(word, fraction_mask);
-    let exponent_all_ones = builder.ins().icmp(
-        cranelift_codegen::ir::condcodes::IntCC::Equal,
-        exponent,
-        exponent_mask,
-    );
-    let zero = builder.ins().iconst(types::I64, 0);
-    let fraction_nonzero = builder.ins().icmp(
-        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
-        fraction,
-        zero,
-    );
-    let is_nan = builder.ins().band(exponent_all_ones, fraction_nonzero);
-    let canonical_nan = builder.ins().iconst(types::I64, CANONICAL_NAN_BITS as i64);
-    let is_not_canonical_nan = builder.ins().icmp(
-        cranelift_codegen::ir::condcodes::IntCC::NotEqual,
-        word,
-        canonical_nan,
-    );
-    let noncanonical_nan = builder.ins().band(is_nan, is_not_canonical_nan);
+    let noncanonical_nan = is_noncanonical_nan_bits(builder, word);
     builder.ins().bor(reserved_tag, noncanonical_nan)
 }
 
@@ -982,6 +987,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         let loop_block = b.create_block();
         let body_block = b.create_block();
+        let validate_tagged_numbers = b.create_block();
         let add_block = b.create_block();
         let done_block = b.create_block();
         let exhausted_block = b.create_block();
@@ -1054,7 +1060,25 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 number_tag,
             );
             b.ins()
-                .brif(step_is_number, initial_state, &[], invalid_block, &[]);
+                .brif(step_is_number, validate_tagged_numbers, &[], invalid_block, &[]);
+
+            b.switch_to_block(validate_tagged_numbers);
+            let start_bits = b
+                .ins()
+                .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+            let limit_bits = b
+                .ins()
+                .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+            let step_bits = b
+                .ins()
+                .load(types::I64, MemFlagsData::new(), parameters[2], 8);
+            let start_noncanonical = is_noncanonical_nan_bits(&mut b, start_bits);
+            let limit_noncanonical = is_noncanonical_nan_bits(&mut b, limit_bits);
+            let step_noncanonical = is_noncanonical_nan_bits(&mut b, step_bits);
+            let any_noncanonical = b.ins().bor(start_noncanonical, limit_noncanonical);
+            let any_noncanonical = b.ins().bor(any_noncanonical, step_noncanonical);
+            b.ins()
+                .brif(any_noncanonical, invalid_block, &[], initial_state, &[]);
         } else {
             // OGM-17's NaN-box format reserves 0x7ff9..=0x7fff for non-number
             // tags and accepts only the canonical positive NaN bit pattern.
@@ -1334,13 +1358,100 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             );
             is_supported_value = b.ins().bor(is_supported_value, matches);
         }
-        if candidate.runtime == RuntimeLayout::NanBox8 {
-            // Non-tagged words are valid Number values except non-canonical NaN
-            // payloads; canonical NaN, infinities and signed zero pass through.
-            let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
-            let valid_number = b.ins().bnot(invalid_number);
-            is_supported_value = b.ins().bor(is_supported_value, valid_number);
-        }
+        let payload_is_zero = b.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            payload,
+            b.ins().iconst(types::I64, 0),
+        );
+        let payload_is_nonzero = b.ins().bnot(payload_is_zero);
+        let payload_is_boolean = b.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+            payload,
+            b.ins().iconst(types::I64, 1),
+        );
+
+        let valid_value_payload = match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let tag_is = |builder: &mut FunctionBuilder<'_>, expected: u64| {
+                    let expected = builder.ins().iconst(types::I64, expected as i64);
+                    builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        tag,
+                        expected,
+                    )
+                };
+                let undefined_or_null = b
+                    .ins()
+                    .bor(tag_is(&mut b, UNDEFINED_TAG), tag_is(&mut b, NULL_TAG));
+                let valid_immediate = b.ins().band(undefined_or_null, payload_is_zero);
+                let valid_boolean = b
+                    .ins()
+                    .band(tag_is(&mut b, BOOLEAN_TAG), payload_is_boolean);
+                let number_tag = tag_is(&mut b, NUMBER_TAG);
+                let number_is_canonical = b
+                    .ins()
+                    .bnot(is_noncanonical_nan_bits(&mut b, payload));
+                let valid_number = b.ins().band(number_tag, number_is_canonical);
+                let reference_tags = [
+                    STRING_TAG,
+                    BIGINT_TAG,
+                    OBJECT_TAG,
+                    SYMBOL_TAG,
+                ];
+                let mut is_reference = tag_is(&mut b, reference_tags[0]);
+                for expected_tag in reference_tags.iter().copied().skip(1) {
+                    let matches = tag_is(&mut b, expected_tag);
+                    is_reference = b.ins().bor(is_reference, matches);
+                }
+                let payload_fits = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+                    payload,
+                    b.ins().iconst(types::I64, MAX_PAYLOAD as i64),
+                );
+                let valid_reference_payload = b.ins().band(payload_is_nonzero, payload_fits);
+                let valid_reference = b.ins().band(is_reference, valid_reference_payload);
+                let valid_immediate_or_boolean = b.ins().bor(valid_immediate, valid_boolean);
+                let valid_number_or_reference = b.ins().bor(valid_number, valid_reference);
+                b.ins().bor(valid_immediate_or_boolean, valid_number_or_reference)
+            }
+            RuntimeLayout::NanBox8 => {
+                let tag_is = |builder: &mut FunctionBuilder<'_>, expected: u64| {
+                    let expected = builder.ins().iconst(types::I64, expected as i64);
+                    builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        tag,
+                        expected,
+                    )
+                };
+                let undefined_or_null = b.ins().bor(
+                    tag_is(&mut b, NANBOX_UNDEFINED_TAG),
+                    tag_is(&mut b, NANBOX_NULL_TAG),
+                );
+                let valid_immediate = b.ins().band(undefined_or_null, payload_is_zero);
+                let valid_boolean =
+                    b.ins().band(tag_is(&mut b, NANBOX_BOOLEAN_TAG), payload_is_boolean);
+                let reference_tags = [
+                    NANBOX_STRING_TAG,
+                    NANBOX_BIGINT_TAG,
+                    NANBOX_OBJECT_TAG,
+                    NANBOX_SYMBOL_TAG,
+                ];
+                let mut is_reference = tag_is(&mut b, reference_tags[0]);
+                for expected_tag in reference_tags.iter().copied().skip(1) {
+                    let matches = tag_is(&mut b, expected_tag);
+                    is_reference = b.ins().bor(is_reference, matches);
+                }
+                let valid_reference = b.ins().band(is_reference, payload_is_nonzero);
+                let valid_special = b.ins().bor(
+                    b.ins().bor(valid_immediate, valid_boolean),
+                    valid_reference,
+                );
+                let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
+                let valid_number = b.ins().bnot(invalid_number);
+                b.ins().bor(valid_special, valid_number)
+            }
+        };
+        is_supported_value = b.ins().band(is_supported_value, valid_value_payload);
 
         let dispatch_block = b.create_block();
         let invalid_block = b.create_block();
@@ -1609,6 +1720,62 @@ fn run_native_handle_dispatch_validation(
         });
     }
 
+    // Reject malformed encodings at the generated native ABI boundary before
+    // invoking a host callback. These cases mirror the Rust codec invariants.
+    let invalid_value_cases: Vec<(&str, Vec<u64>)> = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![
+            ("undefined-nonzero-payload", vec![UNDEFINED_TAG, 1]),
+            ("boolean-out-of-range", vec![BOOLEAN_TAG, 2]),
+            ("reference-zero-handle", vec![OBJECT_TAG, 0]),
+            ("reference-token-over-48-bits", vec![STRING_TAG, MAX_PAYLOAD + 1]),
+            ("noncanonical-number-nan", vec![NUMBER_TAG, 0x7ff8_0000_0000_0001]),
+        ],
+        RuntimeLayout::NanBox8 => vec![
+            (
+                "undefined-nonzero-payload",
+                vec![(NANBOX_UNDEFINED_TAG << NAN_TAG_SHIFT) | 1],
+            ),
+            (
+                "boolean-out-of-range",
+                vec![(NANBOX_BOOLEAN_TAG << NAN_TAG_SHIFT) | 2],
+            ),
+            (
+                "reference-zero-handle",
+                vec![NANBOX_OBJECT_TAG << NAN_TAG_SHIFT],
+            ),
+        ],
+    };
+    let mut invalid_value_encodings_rejected = 0;
+    for (label, mut invalid_storage) in invalid_value_cases {
+        let value_argument = match candidate.runtime {
+            RuntimeLayout::Tagged16 => invalid_storage.as_mut_ptr() as usize as u64,
+            RuntimeLayout::NanBox8 => invalid_storage[0],
+        };
+        let mut callback_context = NativeHandleCallbackContext {
+            heap: &mut heap as *mut GcHeap,
+            expected_object: None,
+            expected_payload: 0,
+            expected_tag: 0,
+            calls: 0,
+            collections: 0,
+            force_collection: false,
+        };
+        let context_argument =
+            &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+        // SAFETY: invalid storage and callback context remain live for this
+        // synchronous call; a rejected value must not invoke the callback.
+        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        if status != 1 || callback_context.calls != 0 || callback_context.collections != 0 {
+            bail!(
+                "{} native helper accepted malformed {} encoding (status={status}, callbacks={})",
+                candidate.name(),
+                label,
+                callback_context.calls
+            );
+        }
+        invalid_value_encodings_rejected += 1;
+    }
+
     // Measure the native indirect-call/helper path without collecting on
     // every timing sample. Each callback resolves the payload through the
     // live generation-checked OGM-26 HostHandle registry.
@@ -1702,6 +1869,7 @@ fn run_native_handle_dispatch_validation(
         throughput_ns_per_call: distribution(timings),
         supported_reference_tags: tag_evidence,
         primitive_values: primitive_value_evidence,
+        invalid_value_encodings_rejected,
         native_code: native_code_metrics(object_path, "ogma_value_handle_dispatch")?,
         all_callbacks_resolved_expected_handles: true,
     })
@@ -1927,44 +2095,65 @@ fn run_native_candidate(
             candidate.name()
         );
     }
-    let noncanonical_nanbox_words_rejected = match candidate.runtime {
-        RuntimeLayout::Tagged16 => None,
-        RuntimeLayout::NanBox8 => {
-            let positive_noncanonical_nan = 0x7ff8_0000_0000_0001_u64;
-            let negative_noncanonical_nan = 0xfff8_0000_0000_0001_u64;
-            // SAFETY: NaN-box arguments are passed as raw words under the
-            // generated candidate's fixed native entry ABI.
-            let positive_status = unsafe {
-                function(
-                    positive_noncanonical_nan,
-                    b,
-                    c,
-                    output_pointer,
-                    max_iterations,
-                )
-            };
-            // SAFETY: same native ABI; negative NaNs must also be rejected.
-            let negative_status = unsafe {
-                function(
-                    negative_noncanonical_nan,
-                    b,
-                    c,
-                    output_pointer,
-                    max_iterations,
-                )
-            };
-            Some(positive_status == 1 && negative_status == 1)
-        }
-    };
-    if noncanonical_nanbox_words_rejected == Some(false) {
+    let (noncanonical_nan_payload_rejected, noncanonical_nanbox_words_rejected) =
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let mut invalid_nan_start = TaggedValue {
+                    tag: NUMBER_TAG,
+                    payload: 0x7ff8_0000_0000_0001,
+                };
+                let invalid_nan_start_ptr =
+                    (&mut invalid_nan_start as *mut TaggedValue) as usize as u64;
+                // SAFETY: the pointer addresses a live repr(C) tagged Value.
+                let status = unsafe {
+                    function(
+                        invalid_nan_start_ptr,
+                        b,
+                        c,
+                        output_pointer,
+                        max_iterations,
+                    )
+                };
+                (status == 1, None)
+            }
+            RuntimeLayout::NanBox8 => {
+                let positive_noncanonical_nan = 0x7ff8_0000_0000_0001_u64;
+                let negative_noncanonical_nan = 0xfff8_0000_0000_0001_u64;
+                // SAFETY: NaN-box arguments are passed as raw words under the
+                // generated candidate's fixed native entry ABI.
+                let positive_status = unsafe {
+                    function(
+                        positive_noncanonical_nan,
+                        b,
+                        c,
+                        output_pointer,
+                        max_iterations,
+                    )
+                };
+                // SAFETY: same native ABI; negative NaNs must also be rejected.
+                let negative_status = unsafe {
+                    function(
+                        negative_noncanonical_nan,
+                        b,
+                        c,
+                        output_pointer,
+                        max_iterations,
+                    )
+                };
+                let rejected = positive_status == 1 && negative_status == 1;
+                (rejected, Some(rejected))
+            }
+        };
+    if !noncanonical_nan_payload_rejected {
         bail!(
-            "{} accepted a non-canonical NaN-box numeric word",
+            "{} accepted a non-canonical NaN Value payload",
             candidate.name()
         );
     }
     let semantic_validation = NativeSemanticValidation {
         numeric_edge_cases: semantic_cases,
         invalid_tag_rejected,
+        noncanonical_nan_payload_rejected,
         noncanonical_nanbox_words_rejected,
     };
 
