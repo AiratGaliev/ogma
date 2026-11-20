@@ -931,8 +931,6 @@ impl GcHeap {
         }
         Ok(())
     }
-
-
 }
 
 fn hash_u64(hash: &mut u64, value: u64) {
