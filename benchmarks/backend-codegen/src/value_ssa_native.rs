@@ -636,6 +636,25 @@ struct NativePrimitiveValueEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeCoreIrFixtureEvidence {
+    fixture: String,
+    path: String,
+    representations: Vec<String>,
+    native_value_dispatches: usize,
+    reference_values_resolved_after_forced_gc: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NativeCoreIrCorpusEvidence {
+    manifest: &'static str,
+    accepted_fixture_count: usize,
+    fixtures: Vec<NativeCoreIrFixtureEvidence>,
+    native_value_dispatches: usize,
+    reference_values_resolved_after_forced_gc: usize,
+    all_values_roundtripped_and_dispatched: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeHandleDispatchEvidence {
     helper_calls_per_sample: u64,
     warmup_rounds: usize,
@@ -681,6 +700,7 @@ struct CandidateEvidence {
     native_semantic_validation: NativeSemanticValidation,
     native_code: NativeCodeMetrics,
     native_handle_dispatch: NativeHandleDispatchEvidence,
+    native_core_ir_corpus: NativeCoreIrCorpusEvidence,
     /// Real x86-64 disassembly of the Cranelift-generated live-value stress
     /// function. Stack-relative loads/stores are native spill traffic, unlike
     /// the separate regalloc2 pressure model below.
@@ -2073,6 +2093,276 @@ fn run_native_handle_dispatch_validation(
     })
 }
 
+fn core_ir_representations(document: &JsonValue) -> BTreeSet<String> {
+    fn visit(value: &JsonValue, representations: &mut BTreeSet<String>) {
+        match value {
+            JsonValue::Array(items) => {
+                for item in items {
+                    visit(item, representations);
+                }
+            }
+            JsonValue::Object(fields) => {
+                if let Some(representation) = fields
+                    .get("representation")
+                    .and_then(JsonValue::as_str)
+                {
+                    representations.insert(representation.to_owned());
+                }
+                for item in fields.values() {
+                    visit(item, representations);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut representations = BTreeSet::new();
+    visit(document, &mut representations);
+    representations
+}
+
+fn dispatch_candidate_corpus_value(
+    candidate: Candidate,
+    dispatch: NativeHandleDispatch,
+    heap: &mut GcHeap,
+    retained_handles: &mut Vec<(ogma_gc_comparison_proof::HostHandle, ogma_gc_comparison_proof::GcRef)>,
+    value: CandidateValue,
+) -> Result<bool> {
+    let reference_tag = match value {
+        CandidateValue::StringRef(_) => Some(STRING_TAG),
+        CandidateValue::BigIntRef(_) => Some(BIGINT_TAG),
+        CandidateValue::ObjectRef(_) => Some(OBJECT_TAG),
+        CandidateValue::SymbolRef(_) => Some(SYMBOL_TAG),
+        _ => None,
+    };
+    let (value, expected_object, expected_token) = if let Some(tag) = reference_tag {
+        let object = heap.allocate(48);
+        let handle = heap.retain_host_handle(object)?;
+        let token = heap.encode_host_handle_token(handle)?;
+        let reference_value = match tag {
+            STRING_TAG => CandidateValue::StringRef(token),
+            BIGINT_TAG => CandidateValue::BigIntRef(token),
+            OBJECT_TAG => CandidateValue::ObjectRef(token),
+            SYMBOL_TAG => CandidateValue::SymbolRef(token),
+            _ => unreachable!(),
+        };
+        retained_handles.push((handle, object));
+        (reference_value, Some(object), Some(token))
+    } else {
+        (value, None, None)
+    };
+
+    let mut storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; 1],
+    };
+    encode_candidate_value(candidate.runtime, &mut storage, 0, value)?;
+    let decoded = decode_candidate_value(candidate.runtime, &storage, 0)?;
+    if decoded != value {
+        bail!(
+            "{} {} candidate Value did not round-trip through the native corpus codec",
+            candidate.name(),
+            format!("{value:?}")
+        );
+    }
+    let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &storage, 0)?;
+    let value_argument = match candidate.runtime {
+        RuntimeLayout::Tagged16 => storage.as_mut_ptr() as usize as u64,
+        RuntimeLayout::NanBox8 => storage[0],
+    };
+    let mut callback_context = NativeHandleCallbackContext {
+        heap: heap as *mut GcHeap,
+        expected_object,
+        expected_payload: expected_token.unwrap_or(payload),
+        expected_tag: tag,
+        calls: 0,
+        collections: 0,
+        force_collection: expected_object.is_some(),
+        last_tag: 0,
+        last_token: 0,
+    };
+    let callback_address = resolve_native_handle_callback as *const () as usize as u64;
+    let context_argument =
+        &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+    // SAFETY: the candidate storage, callback and GC context remain valid for
+    // the full synchronous native C ABI call.
+    let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+    if status != 0
+        || callback_context.calls != 1
+        || callback_context.collections != u64::from(expected_object.is_some())
+        || callback_context.last_tag != tag
+        || callback_context.last_token != payload
+    {
+        bail!(
+            "{} native Core IR corpus Value dispatch failed (status={status}, calls={}, collections={}, tag={:#x}, payload={:#x})",
+            candidate.name(),
+            callback_context.calls,
+            callback_context.collections,
+            callback_context.last_tag,
+            callback_context.last_token
+        );
+    }
+    if let (Some(object), Some(token)) = (expected_object, expected_token) {
+        if heap.resolve_host_handle_token(token)? != object || !heap.is_alive(object) {
+            bail!(
+                "{} candidate layout lost a rooted Core IR reference across native callback collection",
+                candidate.name()
+            );
+        }
+    }
+    Ok(expected_object.is_some())
+}
+
+fn run_native_core_ir_corpus_validation(
+    candidate: Candidate,
+    library: &Library,
+) -> Result<NativeCoreIrCorpusEvidence> {
+    let dispatch = unsafe {
+        *library
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .context("generated native Value dispatch entry point missing for Core IR corpus")?
+    };
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/core-ir/manifest.json");
+    let manifest: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .with_context(|| format!("read accepted Core IR manifest {}", manifest_path.display()))?,
+    )?;
+    if manifest["contract"] != "ogma.core-ir" || manifest["version"] != "1.0.0" {
+        bail!("OGM-38 native corpus requires canonical ogma.core-ir/1.0.0 manifest");
+    }
+    let fixtures = manifest["fixtures"]
+        .as_array()
+        .context("canonical Core IR manifest fixtures array missing")?;
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let mut retained_handles = Vec::new();
+    let mut fixture_evidence = Vec::new();
+    let mut total_dispatches = 0_usize;
+    let mut total_reference_resolutions = 0_usize;
+
+    for fixture in fixtures
+        .iter()
+        .filter(|fixture| fixture["expect"].as_str() == Some("accepted"))
+    {
+        let relative_path = fixture["path"]
+            .as_str()
+            .context("accepted Core IR fixture path missing")?;
+        if !relative_path.starts_with("tests/core-ir/fixtures/")
+            || relative_path.split('/').any(|component| component == "..")
+        {
+            bail!("accepted Core IR fixture path is outside the canonical fixture directory");
+        }
+        let fixture_path = repository_root.join(relative_path);
+        let document: JsonValue = serde_json::from_str(
+            &fs::read_to_string(&fixture_path)
+                .with_context(|| format!("read accepted Core IR fixture {}", fixture_path.display()))?,
+        )?;
+        let representations = core_ir_representations(&document);
+        if representations.is_empty() {
+            bail!("accepted Core IR fixture {relative_path} has no Value representations");
+        }
+
+        let before_dispatches = total_dispatches;
+        let before_references = total_reference_resolutions;
+        for representation in &representations {
+            let values = match representation.as_str() {
+                "f64" | "i32" | "u32" => vec![
+                    CandidateValue::Number(0.0_f64.to_bits()),
+                    CandidateValue::Number((-0.0_f64).to_bits()),
+                    CandidateValue::Number(CANONICAL_NAN_BITS),
+                    CandidateValue::Number(f64::INFINITY.to_bits()),
+                    CandidateValue::Number(f64::NEG_INFINITY.to_bits()),
+                ],
+                "i1" => vec![
+                    CandidateValue::Boolean(false),
+                    CandidateValue::Boolean(true),
+                ],
+                "string_ref" => vec![CandidateValue::StringRef(0)],
+                "bigint_ref" => vec![CandidateValue::BigIntRef(0)],
+                "object_ref" | "function_ref" | "exception_ref" | "array_ref" => {
+                    vec![CandidateValue::ObjectRef(0)]
+                }
+                "symbol_ref" => vec![CandidateValue::SymbolRef(0)],
+                "boxed" => vec![
+                    CandidateValue::Undefined,
+                    CandidateValue::Null,
+                    CandidateValue::Boolean(false),
+                    CandidateValue::Boolean(true),
+                    CandidateValue::Number(0.0_f64.to_bits()),
+                    CandidateValue::Number((-0.0_f64).to_bits()),
+                    CandidateValue::Number(CANONICAL_NAN_BITS),
+                    CandidateValue::Number(f64::INFINITY.to_bits()),
+                    CandidateValue::Number(f64::NEG_INFINITY.to_bits()),
+                    CandidateValue::StringRef(0),
+                    CandidateValue::BigIntRef(0),
+                    CandidateValue::ObjectRef(0),
+                    CandidateValue::SymbolRef(0),
+                ],
+                other => bail!(
+                    "{} native corpus has no candidate Value adapter for Core IR representation {other:?} in {relative_path}",
+                    candidate.name()
+                ),
+            };
+            for value in values {
+                if dispatch_candidate_corpus_value(
+                    candidate,
+                    dispatch,
+                    &mut heap,
+                    &mut retained_handles,
+                    value,
+                )? {
+                    total_reference_resolutions += 1;
+                }
+                total_dispatches += 1;
+            }
+        }
+
+        let fixture_name = Path::new(relative_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("Core IR fixture name is not valid UTF-8")?
+            .to_owned();
+        fixture_evidence.push(NativeCoreIrFixtureEvidence {
+            fixture: fixture_name,
+            path: relative_path.to_owned(),
+            representations: representations.into_iter().collect(),
+            native_value_dispatches: total_dispatches - before_dispatches,
+            reference_values_resolved_after_forced_gc: total_reference_resolutions
+                - before_references,
+        });
+    }
+
+    if fixture_evidence.len() != 7 {
+        bail!(
+            "OGM-38 expected all seven accepted Core IR fixtures, executed {}",
+            fixture_evidence.len()
+        );
+    }
+    let retained_objects = retained_handles.len();
+    for (handle, _) in retained_handles {
+        heap.release_host_handle(handle)?;
+    }
+    let cleanup = heap.collect()?;
+    if cleanup.live_objects_after != 0 || cleanup.reclaimed_objects != retained_objects {
+        bail!(
+            "{} Core IR corpus leaked native candidate handles after cleanup: {} live / {} reclaimed",
+            candidate.name(),
+            cleanup.live_objects_after,
+            cleanup.reclaimed_objects
+        );
+    }
+
+    Ok(NativeCoreIrCorpusEvidence {
+        manifest: "tests/core-ir/manifest.json (ogma.core-ir/1.0.0; all accepted entries)",
+        accepted_fixture_count: fixture_evidence.len(),
+        fixtures: fixture_evidence,
+        native_value_dispatches: total_dispatches,
+        reference_values_resolved_after_forced_gc: total_reference_resolutions,
+        all_values_roundtripped_and_dispatched: true,
+    })
+}
+
 fn run_native_candidate(
     candidate: Candidate,
     library: &Library,
@@ -3270,6 +3560,8 @@ fn run(
             warmups,
             samples,
         )?;
+        let native_core_ir_corpus =
+            run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_pressure =
             run_native_pressure_validation(candidate, &library, &object_path)?;
         let register_pressure = register_pressure(candidate)?;
@@ -3302,6 +3594,7 @@ fn run(
             native_semantic_validation,
             native_code,
             native_handle_dispatch,
+            native_core_ir_corpus,
             native_pressure,
             register_pressure,
             gc,
