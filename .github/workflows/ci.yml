@@ -307,6 +307,16 @@ jobs:
             --ogm31-report "$RUNNER_TEMP/ogm38-dual-backend-report.json" \
             --output "$RUNNER_TEMP/ogm38-ogm31-differential-report.json"
 
+      - name: Export and validate committed-format OGM-38 raw evidence
+        run: |
+          set -euo pipefail
+          python benchmarks/value-representations/export_ogm38_raw_samples.py \
+            --native-report "$RUNNER_TEMP/ogm38-native-value-ssa-report.json" \
+            --differential-report "$RUNNER_TEMP/ogm38-ogm31-differential-report.json" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --artifact-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --output-dir "$RUNNER_TEMP/ogm38-committed-results"
+
       - name: Upload OGM-38 raw measurements and dependency lock
         if: always()
         uses: actions/upload-artifact@v4
@@ -319,6 +329,7 @@ jobs:
             ${{ runner.temp }}/ogm38-ogm31-differential-report.json
             ${{ runner.temp }}/ogm38-dual-backend-artifacts
             ${{ runner.temp }}/ogm38-Cargo.lock
+            ${{ runner.temp }}/ogm38-committed-results
           if-no-files-found: warn
           retention-days: 90
 
