@@ -74,6 +74,8 @@ def make_reports():
                 "numeric_conversion_instructions": 2,
                 "call_instructions": 0,
             },
+            "modeled_ir_value_conversion_ops_per_loop_iteration": 5,
+            "modeled_ir_value_conversion_ops_per_invocation": 0,
             "native_core_ir_execution": {
                 "strict_equal_native_code": {
                     "symbol": "ogma_value_strict_equal",
