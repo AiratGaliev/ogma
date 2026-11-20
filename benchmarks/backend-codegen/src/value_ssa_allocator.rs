@@ -1,4 +1,4 @@
-//! OGM-29 allocator measurements for the OGM-38 candidate heap workload.
+//! OGM-24 allocator measurements for the OGM-38 candidate heap workload.
 //!
 //! The OGM-26 collector proof owns graph topology and reachability. This module
 //! supplies real per-isolate backing allocations with the same candidate Value
@@ -84,7 +84,7 @@ fn allocate_round(
     let mut allocations = Vec::with_capacity(object_count + 1);
     let value_storage = allocator
         .allocate(value_layout)
-        .map_err(|error| anyhow::anyhow!("OGM-29 Value backing allocation failed: {error:?}"))?;
+        .map_err(|error| anyhow::anyhow!("OGM-24 Value backing allocation failed: {error:?}"))?;
     // Touch the full buffer: reserved-memory measurements must not count only
     // untouched virtual allocations.
     unsafe {
@@ -97,7 +97,7 @@ fn allocate_round(
 
     for index in 0..object_count {
         let allocation = allocator.allocate(payload_layout).map_err(|error| {
-            anyhow::anyhow!("OGM-29 object payload allocation {index} failed: {error:?}")
+            anyhow::anyhow!("OGM-24 object payload allocation {index} failed: {error:?}")
         })?;
         unsafe {
             allocation
@@ -117,7 +117,7 @@ fn deallocate_round(
 ) -> Result<()> {
     for allocation in allocations.into_iter().rev() {
         allocator.deallocate(allocation).map_err(|error| {
-            anyhow::anyhow!("OGM-29 backing deallocation failed: {:?}", error.kind())
+            anyhow::anyhow!("OGM-24 backing deallocation failed: {:?}", error.kind())
         })?;
     }
     Ok(())
@@ -159,7 +159,7 @@ fn sample(
 
     if final_stats.live_requested_bytes != 0 || final_stats.live_backing_bytes != 0 {
         bail!(
-            "OGM-29 {} left live backing allocations after release: requested={} backing={}",
+            "OGM-24 {} left live backing allocations after release: requested={} backing={}",
             strategy.name(),
             final_stats.live_requested_bytes,
             final_stats.live_backing_bytes
@@ -167,7 +167,7 @@ fn sample(
     }
     if final_stats.allocation_failures != 0 {
         bail!(
-            "OGM-29 {} unexpectedly failed {} allocations",
+            "OGM-24 {} unexpectedly failed {} allocations",
             strategy.name(),
             final_stats.allocation_failures
         );
@@ -204,32 +204,32 @@ pub fn run_allocator_evidence(
     measurements: usize,
 ) -> Result<Vec<AllocatorStrategyEvidence>> {
     if object_count == 0 || value_bytes_per_slot == 0 || value_slots_per_object == 0 {
-        bail!("OGM-29 allocator workload dimensions must be non-zero");
+        bail!("OGM-24 allocator workload dimensions must be non-zero");
     }
     if measurements < 1 {
-        bail!("OGM-29 allocator workload requires at least one measurement");
+        bail!("OGM-24 allocator workload requires at least one measurement");
     }
 
     let value_storage_bytes = object_count
         .checked_mul(value_slots_per_object)
         .and_then(|slots| slots.checked_mul(value_bytes_per_slot))
-        .context("OGM-29 candidate Value backing size overflow")?;
+        .context("OGM-24 candidate Value backing size overflow")?;
     let payload_bytes_per_object = value_slots_per_object
         .checked_mul(value_bytes_per_slot)
-        .context("OGM-29 per-object payload size overflow")?;
+        .context("OGM-24 per-object payload size overflow")?;
     let one_round_bytes = value_storage_bytes
         .checked_add(
             object_count
                 .checked_mul(payload_bytes_per_object)
-                .context("OGM-29 object payload total overflow")?,
+                .context("OGM-24 object payload total overflow")?,
         )
-        .context("OGM-29 total allocation size overflow")?;
+        .context("OGM-24 total allocation size overflow")?;
     // Allow two simultaneously live rounds only transiently; quota tracks the
     // first round after it has been returned to the cache.
     let quota_bytes = one_round_bytes
         .checked_mul(2)
         .and_then(|bytes| bytes.checked_add(1024 * 1024))
-        .context("OGM-29 allocator quota overflow")?;
+        .context("OGM-24 allocator quota overflow")?;
 
     let mut evidence = Vec::with_capacity(AllocatorStrategy::ALL.len());
     for strategy in AllocatorStrategy::ALL {
