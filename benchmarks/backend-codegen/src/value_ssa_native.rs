@@ -3346,22 +3346,23 @@ fn dispatch_native_semantic_inputs(
     }
 
     let reference_count = references.len();
-    let native_strict_equal_result = if let Some((left_slot, right_slot)) = options.strict_equal_slots {
-        let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
-        let right = native_value_argument_for_slot(candidate, &storage, right_slot)?;
-        // SAFETY: both arguments use the candidate layout emitted together
-        // with the native strict-equality function pointer.
-        match unsafe { strict_equal(left, right) } {
-            0 => Some(false),
-            1 => Some(true),
-            status => bail!(
-                "{} generated native strict equality returned invalid boolean status {status}",
-                candidate.name()
-            ),
-        }
-    } else {
-        None
-    };
+    let native_strict_equal_result =
+        if let Some((left_slot, right_slot)) = options.strict_equal_slots {
+            let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
+            let right = native_value_argument_for_slot(candidate, &storage, right_slot)?;
+            // SAFETY: both arguments use the candidate layout emitted together
+            // with the native strict-equality function pointer.
+            match unsafe { strict_equal(left, right) } {
+                0 => Some(false),
+                1 => Some(true),
+                status => bail!(
+                    "{} generated native strict equality returned invalid boolean status {status}",
+                    candidate.name()
+                ),
+            }
+        } else {
+            None
+        };
 
     if options.perform_native_transition {
         if inputs.len() != 2
@@ -3566,7 +3567,10 @@ fn run_native_value_semantics(
             )?;
             let expected = match &case.expected {
                 SemanticCompletion::Normal(SemanticValue::Boolean(value)) => *value,
-                _ => bail!("{} expected strict-equality case has no boolean completion", case.name),
+                _ => bail!(
+                    "{} expected strict-equality case has no boolean completion",
+                    case.name
+                ),
             };
             if equality_result != expected {
                 bail!(
