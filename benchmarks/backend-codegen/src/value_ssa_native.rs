@@ -6,7 +6,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
     ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
-    isa::TargetIsa,
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
