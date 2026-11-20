@@ -6471,14 +6471,14 @@ fn run(
             ),
             (
                 "gc_and_heap",
-                "OGM-26 RcCycleRemoval and MarkSweep graphs/roots with generation-checked GcRef and HostHandle lifetimes; candidate Value slots reside in each OGM-26 object's actual OGM-24 IsolateAllocator-backed payload allocation. The same graph is measured across System, exact-reuse and size-class strategies. Allocator peak/reserved metrics are allocator accounting, while process VmRSS snapshots are process-wide observations.",
+                "OGM-26 RcCycleRemoval and MarkSweep graphs/roots with generation-checked GcRef and HostHandle lifetimes; candidate Value slots reside in each OGM-26 object's actual OGM-24 IsolateAllocator-backed payload allocation. The same graph is measured across System, exact-reuse and size-class strategies. Each candidate x collector x allocator combination runs in its own child process. Linux VmHWM baseline is sampled before the 3 warmups and 101 measured workloads; peak high-water mark and delta are sampled after them. VmHWM includes the worker executable, code mappings, Rust runtime and allocator state; it is process peak memory, not a heap-only or per-object counter.",
             ),
         ]),
         unsupported_native_semantics: vec![
             "The native OGM-38 fast loop is a Number-only Core IR specialization; BigInt arithmetic, string concatenation, object ToPrimitive and general ECMAScript operator lowering remain in the OGM-31 interpreter/native backend semantic proof rather than this four-layout Cranelift loop",
             "OGM-26 collector reachability and OGM-24 physical allocator backing are exercised together: OGM-24 allocations back OGM-26 object-cell Value payloads and are reclaimed by the selected collector. This is an integrated M0 proof heap, not a production Runtime allocator or production object model.",
             "OGM-27 shadow-frame/root-map and OGM-19/32 ABI behavior are M0 executable models; no production machine stack-map encoder or production Runtime is claimed",
-            "Process VmRSS is sampled before and after each graph build, but it is the whole benchmark process snapshot (including prior candidate/strategy runs), not an isolated per-candidate process peak; zero RSS delta is possible when allocations reuse resident pages. Candidate-specific peak live/reserved bytes and allocator-accounted fragmentation are reported directly from the integrated OGM-24 allocator, alongside OGM-26 logical peak heap bytes.",
+            "Process peak memory is collected from Linux VmHWM in one isolated child process per candidate x collector x allocator strategy. Each worker records its process high-water baseline before the 3 warmups and the peak after 101 measured graph lifecycles, then reports the delta. The measure includes the executable, mappings, Rust runtime and allocator state; it is not an isolated heap-only RSS measurement. Candidate-specific peak live/reserved bytes and allocator-accounted fragmentation are reported from the integrated OGM-24 allocator, alongside OGM-26 logical peak heap bytes.",
         ],
     };
     let output_path = output.to_path_buf();
