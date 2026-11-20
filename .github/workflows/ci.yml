@@ -197,7 +197,6 @@ jobs:
 
       - name: Run Value semantic fixtures and Core IR-driven SSA proof
         run: |
-          python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
           python benchmarks/value-representations/run.py --output "$RUNNER_TEMP/ogm-17-value-ssa-report.json"
 
       - name: Upload OGM-17 proof report
@@ -316,6 +315,8 @@ jobs:
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --artifact-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
             --output-dir "$RUNNER_TEMP/ogm38-committed-results"
+          OGM38_RESULTS_DIR="$RUNNER_TEMP/ogm38-committed-results" \
+            python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
 
       - name: Upload OGM-38 raw measurements and dependency lock
         if: always()
