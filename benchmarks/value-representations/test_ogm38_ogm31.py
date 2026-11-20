@@ -1,0 +1,100 @@
+"""Tests for the OGM-38 / OGM-31 machine-report comparison."""
+
+from __future__ import annotations
+
+import unittest
+
+import validate_ogm38_ogm31 as proof
+
+
+def make_reports():
+    native = {
+        "task": "OGM-38",
+        "schema_version": 1,
+        "tested_revision": "candidate-revision",
+        "candidates": [],
+    }
+    expected = {
+        "branch_equal": 7.0,
+        "branch_unequal": 8.0,
+        "loop_integer": 5.0,
+        "loop_fractional": 3.5,
+        "dynamic_add_normal": 15.0,
+    }
+    dual = {
+        "task": "OGM-31",
+        "schema": "ogma.dual-backend-proof-report",
+        "tested_revision": "oracle-revision",
+        "source_fixtures": [{"id": item} for item in sorted(proof.EXPECTED_FIXTURES)],
+        "differential_observations": {
+            "all_equal": True,
+            "portable_register": {
+                **{name: {"return": value, "host_trace": []} for name, value in expected.items()},
+                "dynamic_add_throw": {
+                    "throw": "TypeError: Cannot convert a Symbol value to a number",
+                    "host_trace": [],
+                },
+            },
+        },
+    }
+    for name in sorted(proof.EXPECTED_CANDIDATES):
+        native["candidates"].append({
+            "name": name,
+            "native_core_ir_corpus": {
+                "canonical_fixture_count": len(proof.EXPECTED_FIXTURES),
+            },
+            "native_core_ir_execution": {
+                "branch_equal_result_bits": proof.number_to_bits(7.0),
+                "branch_unequal_result_bits": proof.number_to_bits(8.0),
+                "loop_integer_result_bits": proof.number_to_bits(5.0),
+                "loop_fractional_result_bits": proof.number_to_bits(3.5),
+                "dynamic_add_result_bits": proof.number_to_bits(15.0),
+                "dynamic_add_throw_status": 2,
+                "symbol_handle_survived_forced_collection": True,
+                "all_native_fixture_cases_match_expected": True,
+            },
+            "native_value_semantics": {"every_case_matches": True},
+            "native_shadow_roots": {
+                "all_roots_survived": True,
+                "all_roots_reclaimed": True,
+            },
+        })
+    return native, dual
+
+
+class Ogm38Ogm31ValidationTests(unittest.TestCase):
+    def test_all_four_candidates_match_the_same_ogm31_oracle(self):
+        native, dual = make_reports()
+        result = proof.validate_reports(native, dual)
+        self.assertTrue(result["all_candidates_match_portable_ogm31_oracle"])
+        self.assertEqual(4, result["candidate_count"])
+        self.assertEqual("oracle-revision", result["oracle_revision"])
+
+    def test_rejects_native_result_that_differs_from_portable_oracle(self):
+        native, dual = make_reports()
+        native["candidates"][0]["native_core_ir_execution"]["branch_equal_result_bits"] = (
+            proof.number_to_bits(8.0)
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not match OGM-31"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_a_missing_candidate_or_fixture(self):
+        native, dual = make_reports()
+        native["candidates"].pop()
+        with self.assertRaisesRegex(RuntimeError, "candidate matrix differs"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        dual["source_fixtures"].pop()
+        with self.assertRaisesRegex(RuntimeError, "fixture set drifted"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_unbalanced_native_roots(self):
+        native, dual = make_reports()
+        native["candidates"][0]["native_shadow_roots"]["all_roots_reclaimed"] = False
+        with self.assertRaisesRegex(RuntimeError, "roots were not balanced"):
+            proof.validate_reports(native, dual)
+
+
+if __name__ == "__main__":
+    unittest.main()
