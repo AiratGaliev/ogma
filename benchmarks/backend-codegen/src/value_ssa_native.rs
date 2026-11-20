@@ -664,18 +664,20 @@ struct NativeValueSemanticCaseEvidence {
     native_callbacks: usize,
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
+    native_call_boundary: Option<NativeCallBoundaryEvidence>,
     native_reference_identity_preserved: bool,
     native_store_load_transition: bool,
     matches: bool,
 }
 
-type NativeSemanticDispatchResult = (
-    Vec<SemanticValue>,
-    usize,
-    usize,
-    Option<NativeAotHostCallEvidence>,
-    Vec<Option<u64>>,
-);
+struct NativeSemanticDispatchResult {
+    observed: Vec<SemanticValue>,
+    callbacks: usize,
+    forced_collections: usize,
+    aot_host_call: Option<NativeAotHostCallEvidence>,
+    native_call_boundary: Option<NativeCallBoundaryEvidence>,
+    reference_tokens: Vec<Option<u64>>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 struct NativeValueSemanticsEvidence {
@@ -2426,15 +2428,28 @@ struct SemanticReference {
     value: SemanticValue,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct NativeCallBoundaryEvidence {
+    callee_resolved: bool,
+    receiver: f64,
+    argument: String,
+    result_bits: u64,
+    host_callback_calls: usize,
+    trace: String,
+}
+
 struct NativeSemanticCallbackContext {
     runtime: RuntimeLayout,
     heap: *mut GcHeap,
     references: BTreeMap<u64, SemanticReference>,
     observed: Vec<SemanticValue>,
     calls: usize,
+    expected_dispatches: usize,
     forced_collections: usize,
     aot_table: *const crate::aot_host_abi::AotHostFunctionTable,
     invoke_aot_host: bool,
+    invoke_call_boundary: bool,
+    native_call_boundary: Option<NativeCallBoundaryEvidence>,
     aot_host_call: Option<NativeAotHostCallEvidence>,
 }
 
@@ -2834,6 +2849,30 @@ fn semantic_cases() -> Vec<SemanticCase> {
             expected_host_trace: vec![],
         },
         SemanticCase {
+            name: "call-boundary",
+            inputs: vec![
+                SemanticValue::Object {
+                    identity: 99,
+                    primitive: "call_target".to_owned(),
+                },
+                semantic_number(2.0),
+                SemanticValue::String("item=".to_owned()),
+                SemanticValue::Object {
+                    identity: 10,
+                    primitive: "shared".to_owned(),
+                },
+                SemanticValue::Object {
+                    identity: 10,
+                    primitive: "shared".to_owned(),
+                },
+                number_5.clone(),
+            ],
+            expected: SemanticCompletion::Normal(semantic_number(8.0)),
+            expected_host_trace: vec![
+                "benchmark.host.call_target([2,\"item=5\"])".to_owned(),
+            ],
+        },
+        SemanticCase {
             name: "host-call-normal",
             inputs: vec![number_31.clone(), semantic_number(11.0)],
             expected: SemanticCompletion::Normal(semantic_number(42.0)),
@@ -2998,6 +3037,7 @@ fn dispatch_native_semantic_inputs(
     dispatch: NativeHandleDispatch,
     inputs: &[SemanticValue],
     invoke_aot_host: bool,
+    invoke_call_boundary: bool,
     perform_native_transition: bool,
     value_move: NativeValueMove,
 ) -> Result<NativeSemanticDispatchResult> {
@@ -3063,9 +3103,12 @@ fn dispatch_native_semantic_inputs(
         references,
         observed: Vec::with_capacity(inputs.len()),
         calls: 0,
+        expected_dispatches: inputs.len(),
         forced_collections: 0,
         aot_table: aot_table_pointer,
         invoke_aot_host,
+        invoke_call_boundary,
+        native_call_boundary: None,
         aot_host_call: None,
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
@@ -3098,6 +3141,7 @@ fn dispatch_native_semantic_inputs(
     let callbacks = context.calls;
     let forced_collections = context.forced_collections;
     let aot_host_call = context.aot_host_call.take();
+    let context_native_call_boundary = context.native_call_boundary.take();
     drop(context);
     drop(aot_table);
 
@@ -3113,13 +3157,14 @@ fn dispatch_native_semantic_inputs(
             reclaimed.reclaimed_objects
         );
     }
-    Ok((
+    Ok(NativeSemanticDispatchResult {
         observed,
         callbacks,
         forced_collections,
         aot_host_call,
+        native_call_boundary: context_native_call_boundary,
         reference_tokens,
-    ))
+    })
 }
 fn run_native_value_semantics(
     candidate: Candidate,
@@ -3140,17 +3185,34 @@ fn run_native_value_semantics(
     let mut total_forced_collections = 0;
     for case in semantic_cases() {
         let invoke_aot_host = case.name.starts_with("host-call");
-        let (observed, callbacks, forced_collections, aot_host_call, reference_tokens) =
-            dispatch_native_semantic_inputs(
-                candidate,
-                dispatch,
-                &case.inputs,
-                invoke_aot_host,
-                case.name == "type-transition-number-to-string",
-                value_move,
-            )?;
+        let invoke_call_boundary = case.name == "call-boundary";
+        let dispatched = dispatch_native_semantic_inputs(
+            candidate,
+            dispatch,
+            &case.inputs,
+            invoke_aot_host,
+            invoke_call_boundary,
+            case.name == "type-transition-number-to-string",
+            value_move,
+        )?;
+        let NativeSemanticDispatchResult {
+            observed,
+            callbacks,
+            forced_collections,
+            aot_host_call,
+            native_call_boundary,
+            reference_tokens,
+        } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
+        if let Some(boundary) = &native_call_boundary {
+            actual = SemanticCompletion::Normal(SemanticValue::Number(boundary.result_bits));
+            actual_host_trace = vec![boundary.trace.clone()];
+        }
         let native_reference_identity_preserved = match case.name {
+            "call-boundary" => {
+                reference_tokens.get(3).copied().flatten().is_some()
+                    && reference_tokens.get(3) == reference_tokens.get(4)
+            }
             "object-identity-same" | "symbol-identity-same" => {
                 reference_tokens.first().copied().flatten().is_some()
                     && reference_tokens.first() == reference_tokens.get(1)
@@ -3164,7 +3226,8 @@ fn run_native_value_semantics(
         };
         if matches!(
             case.name,
-            "object-identity-same"
+            "call-boundary"
+                | "object-identity-same"
                 | "symbol-identity-same"
                 | "object-identity-distinct"
                 | "symbol-identity-distinct"
@@ -3256,6 +3319,7 @@ fn run_native_value_semantics(
             native_callbacks: callbacks,
             forced_collections,
             aot_host_call,
+            native_call_boundary,
             native_reference_identity_preserved,
             native_store_load_transition,
             matches,
