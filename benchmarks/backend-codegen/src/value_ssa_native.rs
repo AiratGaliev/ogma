@@ -1123,16 +1123,13 @@ fn define_candidate_numeric_binary(
                 let unequal_block = b.create_block();
                 let merge_block = b.create_block();
                 b.append_block_param(merge_block, types::I64);
-                b.ins()
-                    .brif(equal, equal_block, &[], unequal_block, &[]);
+                b.ins().brif(equal, equal_block, &[], unequal_block, &[]);
 
                 b.switch_to_block(equal_block);
-                b.ins()
-                    .jump(merge_block, &[BlockArg::Value(left_bits)]);
+                b.ins().jump(merge_block, &[BlockArg::Value(left_bits)]);
 
                 b.switch_to_block(unequal_block);
-                b.ins()
-                    .jump(merge_block, &[BlockArg::Value(right_bits)]);
+                b.ins().jump(merge_block, &[BlockArg::Value(right_bits)]);
 
                 b.switch_to_block(merge_block);
                 b.block_params(merge_block)[0]
