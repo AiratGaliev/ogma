@@ -2114,41 +2114,41 @@ fn run_native_candidate(
                 tag: NUMBER_TAG,
                 payload: 0x7ff8_0000_0000_0001,
             };
-                let invalid_nan_start_ptr =
-                    (&mut invalid_nan_start as *mut TaggedValue) as usize as u64;
-                // SAFETY: the pointer addresses a live repr(C) tagged Value.
-                let status =
-                    unsafe { function(invalid_nan_start_ptr, b, c, output_pointer, max_iterations) };
-                (status == 1, None)
-            }
-            RuntimeLayout::NanBox8 => {
-                let positive_noncanonical_nan = 0x7ff8_0000_0000_0001_u64;
-                let negative_noncanonical_nan = 0xfff8_0000_0000_0001_u64;
-                // SAFETY: NaN-box arguments are passed as raw words under the
-                // generated candidate's fixed native entry ABI.
-                let positive_status = unsafe {
-                    function(
-                        positive_noncanonical_nan,
-                        b,
-                        c,
-                        output_pointer,
-                        max_iterations,
-                    )
-                };
-                // SAFETY: same native ABI; negative NaNs must also be rejected.
-                let negative_status = unsafe {
-                    function(
-                        negative_noncanonical_nan,
-                        b,
-                        c,
-                        output_pointer,
-                        max_iterations,
-                    )
-                };
-                let rejected = positive_status == 1 && negative_status == 1;
-                (rejected, Some(rejected))
-            }
-        };
+            let invalid_nan_start_ptr =
+                (&mut invalid_nan_start as *mut TaggedValue) as usize as u64;
+            // SAFETY: the pointer addresses a live repr(C) tagged Value.
+            let status =
+                unsafe { function(invalid_nan_start_ptr, b, c, output_pointer, max_iterations) };
+            (status == 1, None)
+        }
+        RuntimeLayout::NanBox8 => {
+            let positive_noncanonical_nan = 0x7ff8_0000_0000_0001_u64;
+            let negative_noncanonical_nan = 0xfff8_0000_0000_0001_u64;
+            // SAFETY: NaN-box arguments are passed as raw words under the
+            // generated candidate's fixed native entry ABI.
+            let positive_status = unsafe {
+                function(
+                    positive_noncanonical_nan,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
+            // SAFETY: same native ABI; negative NaNs must also be rejected.
+            let negative_status = unsafe {
+                function(
+                    negative_noncanonical_nan,
+                    b,
+                    c,
+                    output_pointer,
+                    max_iterations,
+                )
+            };
+            let rejected = positive_status == 1 && negative_status == 1;
+            (rejected, Some(rejected))
+        }
+    };
     if !noncanonical_nan_payload_rejected {
         bail!(
             "{} accepted a non-canonical NaN Value payload",
