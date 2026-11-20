@@ -91,6 +91,55 @@ struct NativeHandleCallbackContext {
     last_token: u64,
 }
 
+#[derive(Clone, Copy)]
+struct NativeBatchExpectedValue {
+    tag: u64,
+    payload: u64,
+    object: Option<ogma_gc_comparison_proof::GcRef>,
+}
+
+struct NativeBatchHandleCallbackContext {
+    heap: *mut GcHeap,
+    expected: Vec<NativeBatchExpectedValue>,
+    calls: usize,
+    collections: usize,
+}
+
+unsafe extern "C" fn resolve_native_batch_handle_callback(
+    context_pointer: u64,
+    tag: u64,
+    payload: u64,
+) -> i32 {
+    if context_pointer == 0 {
+        return 1;
+    }
+    // SAFETY: the generated batch dispatcher calls synchronously with the
+    // uniquely borrowed context alive for the whole native invocation.
+    let context =
+        unsafe { &mut *(context_pointer as *mut NativeBatchHandleCallbackContext) };
+    let Some(expected) = context.expected.get(context.calls).copied() else {
+        return 2;
+    };
+    if expected.tag != tag || expected.payload != payload || context.heap.is_null() {
+        return 3;
+    }
+    context.calls += 1;
+    // SAFETY: heap points to the live GcHeap owned by the native corpus runner.
+    let heap = unsafe { &mut *context.heap };
+    if let Some(object) = expected.object {
+        if heap.collect().is_err() {
+            return 4;
+        }
+        context.collections += 1;
+        match heap.resolve_host_handle_token(payload) {
+            Ok(reference) if reference == object && heap.is_alive(object) => 0,
+            _ => 5,
+        }
+    } else {
+        0
+    }
+}
+
 // SAFETY: the function pointer is called only by this synchronous native
 // benchmark with a live, uniquely borrowed context on the same thread.
 unsafe extern "C" fn resolve_native_handle_callback(
@@ -4269,99 +4318,104 @@ fn core_ir_representations(document: &JsonValue) -> BTreeSet<String> {
     representations
 }
 
-fn dispatch_candidate_corpus_value(
+fn dispatch_candidate_corpus_values(
     candidate: Candidate,
-    dispatch: NativeHandleDispatch,
+    dispatch: NativeBatchHandleDispatch,
     heap: &mut GcHeap,
     retained_handles: &mut Vec<(
         ogma_gc_comparison_proof::HostHandle,
         ogma_gc_comparison_proof::GcRef,
     )>,
-    value: CandidateValue,
-) -> Result<bool> {
-    let reference_tag = match value {
-        CandidateValue::StringRef(_) => Some(STRING_TAG),
-        CandidateValue::BigIntRef(_) => Some(BIGINT_TAG),
-        CandidateValue::ObjectRef(_) => Some(OBJECT_TAG),
-        CandidateValue::SymbolRef(_) => Some(SYMBOL_TAG),
-        _ => None,
+    values: &[CandidateValue],
+) -> Result<usize> {
+    let words_per_value = match candidate.runtime {
+        RuntimeLayout::Tagged16 => 2,
+        RuntimeLayout::NanBox8 => 1,
     };
-    let (value, expected_object, expected_token) = if let Some(tag) = reference_tag {
-        let object = heap.allocate(48);
-        let handle = heap.retain_host_handle(object)?;
-        let token = heap.encode_host_handle_token(handle)?;
-        let reference_value = match tag {
-            STRING_TAG => CandidateValue::StringRef(token),
-            BIGINT_TAG => CandidateValue::BigIntRef(token),
-            OBJECT_TAG => CandidateValue::ObjectRef(token),
-            SYMBOL_TAG => CandidateValue::SymbolRef(token),
-            _ => unreachable!(),
-        };
-        retained_handles.push((handle, object));
-        (reference_value, Some(object), Some(token))
-    } else {
-        (value, None, None)
-    };
+    let mut storage = vec![0_u64; values.len() * words_per_value];
+    let mut expected = Vec::with_capacity(values.len());
+    let mut reference_count = 0;
 
-    let mut storage = match candidate.runtime {
-        RuntimeLayout::Tagged16 => vec![0_u64; 2],
-        RuntimeLayout::NanBox8 => vec![0_u64; 1],
-    };
-    encode_candidate_value(candidate.runtime, &mut storage, 0, value)?;
-    let decoded = decode_candidate_value(candidate.runtime, &storage, 0)?;
-    if decoded != value {
-        bail!(
-            "{} {value:?} candidate Value did not round-trip through the native corpus codec",
-            candidate.name()
-        );
+    for (slot_index, value) in values.iter().copied().enumerate() {
+        let reference_tag = match value {
+            CandidateValue::StringRef(_) => Some(STRING_TAG),
+            CandidateValue::BigIntRef(_) => Some(BIGINT_TAG),
+            CandidateValue::ObjectRef(_) => Some(OBJECT_TAG),
+            CandidateValue::SymbolRef(_) => Some(SYMBOL_TAG),
+            _ => None,
+        };
+        let (encoded, expected_object) = if let Some(tag) = reference_tag {
+            let object = heap.allocate(48);
+            let handle = heap.retain_host_handle(object)?;
+            let token = heap.encode_host_handle_token(handle)?;
+            let reference_value = match tag {
+                STRING_TAG => CandidateValue::StringRef(token),
+                BIGINT_TAG => CandidateValue::BigIntRef(token),
+                OBJECT_TAG => CandidateValue::ObjectRef(token),
+                SYMBOL_TAG => CandidateValue::SymbolRef(token),
+                _ => unreachable!(),
+            };
+            retained_handles.push((handle, object));
+            reference_count += 1;
+            (reference_value, Some(object))
+        } else {
+            (value, None)
+        };
+
+        encode_candidate_value(candidate.runtime, &mut storage, slot_index, encoded)?;
+        let decoded = decode_candidate_value(candidate.runtime, &storage, slot_index)?;
+        if decoded != encoded {
+            bail!(
+                "{} {encoded:?} candidate Value did not round-trip through the native batch codec",
+                candidate.name()
+            );
+        }
+        let (tag, payload) =
+            candidate_value_tag_payload(candidate.runtime, &storage, slot_index)?;
+        expected.push(NativeBatchExpectedValue {
+            tag,
+            payload,
+            object: expected_object,
+        });
     }
-    let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &storage, 0)?;
-    let value_argument = match candidate.runtime {
-        RuntimeLayout::Tagged16 => storage.as_mut_ptr() as usize as u64,
-        RuntimeLayout::NanBox8 => storage[0],
-    };
-    let mut callback_context = NativeHandleCallbackContext {
+
+    let mut callback_context = NativeBatchHandleCallbackContext {
         heap: heap as *mut GcHeap,
-        expected_object,
-        expected_payload: expected_token.unwrap_or(payload),
-        expected_tag: tag,
+        expected,
         calls: 0,
         collections: 0,
-        force_collection: expected_object.is_some(),
-        last_tag: 0,
-        last_token: 0,
     };
-    let callback_address = resolve_native_handle_callback as *const () as usize as u64;
+    let callback_address =
+        resolve_native_batch_handle_callback as *const () as usize as u64;
     let context_argument =
-        &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
-    // SAFETY: the candidate storage, callback and GC context remain valid for
-    // the full synchronous native C ABI call.
-    let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
+        &mut callback_context as *mut NativeBatchHandleCallbackContext as usize as u64;
+    // SAFETY: candidate storage and context outlive the synchronous native
+    // function; the native loop bounds-checks the exact Value count and calls
+    // the generated Value dispatcher once per in-bounds slot.
+    let status = unsafe {
+        dispatch(
+            storage.as_ptr() as usize as u64,
+            values.len() as u64,
+            callback_address,
+            context_argument,
+        )
+    };
     if status != 0
-        || callback_context.calls != 1
-        || callback_context.collections != u64::from(expected_object.is_some())
-        || callback_context.last_tag != tag
-        || callback_context.last_token != payload
+        || callback_context.calls != values.len()
+        || callback_context.collections != reference_count
     {
         bail!(
-            "{} native Core IR corpus Value dispatch failed (status={status}, calls={}, collections={}, tag={:#x}, payload={:#x})",
+            "{} generated native batch dispatch failed (status={status}, calls={}, expected={}, collections={}, expected reference collections={})",
             candidate.name(),
             callback_context.calls,
+            values.len(),
             callback_context.collections,
-            callback_context.last_tag,
-            callback_context.last_token
+            reference_count
         );
     }
-    if let (Some(object), Some(token)) = (expected_object, expected_token)
-        && (heap.resolve_host_handle_token(token)? != object || !heap.is_alive(object))
-    {
-        bail!(
-            "{} candidate layout lost a rooted Core IR reference across native callback collection",
-            candidate.name()
-        );
-    }
-    Ok(expected_object.is_some())
+    Ok(reference_count)
 }
+
 
 fn run_native_core_ir_corpus_validation(
     candidate: Candidate,
@@ -4471,18 +4525,14 @@ fn run_native_core_ir_corpus_validation(
                     candidate.name()
                 ),
             };
-            for value in values {
-                if dispatch_candidate_corpus_value(
-                    candidate,
-                    dispatch,
-                    &mut heap,
-                    &mut retained_handles,
-                    value,
-                )? {
-                    total_reference_resolutions += 1;
-                }
-                total_dispatches += 1;
-            }
+            total_reference_resolutions += dispatch_candidate_corpus_values(
+                candidate,
+                dispatch,
+                &mut heap,
+                &mut retained_handles,
+                &values,
+            )?;
+            total_dispatches += values.len();
         }
 
         let fixture_name = Path::new(relative_path)
