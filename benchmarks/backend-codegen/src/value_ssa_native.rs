@@ -826,6 +826,7 @@ struct NativeCoreIrFixtureEvidence {
     fixture: String,
     path: String,
     representations: Vec<String>,
+    native_batch_invocations: usize,
     native_value_dispatches: usize,
     reference_values_resolved_after_forced_gc: usize,
 }
@@ -835,6 +836,7 @@ struct NativeCoreIrCorpusEvidence {
     manifest: &'static str,
     canonical_fixture_count: usize,
     fixtures: Vec<NativeCoreIrFixtureEvidence>,
+    native_batch_invocations: usize,
     native_value_dispatches: usize,
     reference_values_resolved_after_forced_gc: usize,
     all_values_roundtripped_and_dispatched: bool,
@@ -2179,7 +2181,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let done_block = b.create_block();
         let index_param = b.append_block_param(loop_block, types::I64);
         b.switch_to_block(entry);
-        b.ins().jump(loop_block, &[b.ins().iconst(types::I64, 0)]);
+        let initial_index = b.ins().iconst(types::I64, 0);
+        b.ins().jump(loop_block, &[initial_index]);
         b.switch_to_block(loop_block);
         let finished = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
@@ -2212,8 +2215,6 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             0,
         );
         let incremented = b.ins().iadd_imm(index_param, 1);
-        let loop_argument = b.block_params(loop_block).to_vec();
-        debug_assert_eq!(loop_argument.len(), 1);
         b.ins().brif(
             accepted,
             loop_block,
@@ -4423,7 +4424,7 @@ fn run_native_core_ir_corpus_validation(
 ) -> Result<NativeCoreIrCorpusEvidence> {
     let dispatch = unsafe {
         *library
-            .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\\0")
+            .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\0")
             .context("generated native batch Value dispatch entry point missing for Core IR corpus")?
     };
     let manifest_path =
@@ -4462,6 +4463,7 @@ fn run_native_core_ir_corpus_validation(
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut retained_handles = Vec::new();
     let mut fixture_evidence = Vec::new();
+    let mut total_batch_invocations = 0_usize;
     let mut total_dispatches = 0_usize;
     let mut total_reference_resolutions = 0_usize;
 
@@ -4484,6 +4486,7 @@ fn run_native_core_ir_corpus_validation(
             bail!("OGM-31 Core IR fixture {relative_path} has no Value representations");
         }
 
+        let before_batches = total_batch_invocations;
         let before_dispatches = total_dispatches;
         let before_references = total_reference_resolutions;
         for representation in &representations {
@@ -4532,6 +4535,7 @@ fn run_native_core_ir_corpus_validation(
                 &mut retained_handles,
                 &values,
             )?;
+            total_batch_invocations += 1;
             total_dispatches += values.len();
         }
 
@@ -4544,6 +4548,7 @@ fn run_native_core_ir_corpus_validation(
             fixture: fixture_name,
             path: relative_path.to_owned(),
             representations: representations.into_iter().collect(),
+            native_batch_invocations: total_batch_invocations - before_batches,
             native_value_dispatches: total_dispatches - before_dispatches,
             reference_values_resolved_after_forced_gc: total_reference_resolutions
                 - before_references,
@@ -4574,6 +4579,7 @@ fn run_native_core_ir_corpus_validation(
         manifest: "benchmarks/dual-backend/manifest.json (OGM-31 canonical five-fixture set)",
         canonical_fixture_count: fixture_evidence.len(),
         fixtures: fixture_evidence,
+        native_batch_invocations: total_batch_invocations,
         native_value_dispatches: total_dispatches,
         reference_values_resolved_after_forced_gc: total_reference_resolutions,
         all_values_roundtripped_and_dispatched: true,
