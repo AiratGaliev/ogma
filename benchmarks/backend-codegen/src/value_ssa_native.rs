@@ -664,7 +664,7 @@ struct NativeValueSemanticCaseEvidence {
     native_callbacks: usize,
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
-    native_call_boundary: Option<NativeCallBoundaryEvidence>,
+    native_host_callback: Option<NativeHostCallbackEvidence>,
     native_reference_identity_preserved: bool,
     native_store_load_transition: bool,
     matches: bool,
@@ -675,7 +675,7 @@ struct NativeSemanticDispatchResult {
     callbacks: usize,
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
-    native_call_boundary: Option<NativeCallBoundaryEvidence>,
+    native_host_callback: Option<NativeHostCallbackEvidence>,
     reference_tokens: Vec<Option<u64>>,
 }
 
@@ -2429,10 +2429,12 @@ struct SemanticReference {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct NativeCallBoundaryEvidence {
+struct NativeHostCallbackEvidence {
+    symbol: String,
+    arguments: Vec<String>,
     callee_resolved: bool,
-    receiver: f64,
-    argument: String,
+    receiver: Option<f64>,
+    argument: Option<String>,
     result_bits: u64,
     host_callback_calls: usize,
     trace: String,
@@ -2449,7 +2451,8 @@ struct NativeSemanticCallbackContext {
     aot_table: *const crate::aot_host_abi::AotHostFunctionTable,
     invoke_aot_host: bool,
     invoke_call_boundary: bool,
-    native_call_boundary: Option<NativeCallBoundaryEvidence>,
+    invoke_host_echo: bool,
+    native_host_callback: Option<NativeHostCallbackEvidence>,
     aot_host_call: Option<NativeAotHostCallEvidence>,
 }
 
@@ -2929,10 +2932,16 @@ fn semantic_cases() -> Vec<SemanticCase> {
             ],
         },
         SemanticCase {
-            name: "host-call-normal",
+            name: "host-call-generic-add",
             inputs: vec![number_31.clone(), semantic_number(11.0)],
             expected: SemanticCompletion::Normal(semantic_number(42.0)),
             expected_host_trace: vec!["benchmark.host.add([31,11])".to_owned()],
+        },
+        SemanticCase {
+            name: "host-call-echo",
+            inputs: vec![number_31],
+            expected: SemanticCompletion::Normal(semantic_number(42.0)),
+            expected_host_trace: vec!["benchmark.host.echo([31])".to_owned()],
         },
         SemanticCase {
             name: "host-call-reentrant",
@@ -2992,13 +3001,8 @@ fn evaluate_semantic_case(
             name: "UserThrown",
             value: Some(values[0].clone()),
         },
-        "host-call-normal" => {
-            (
-                SemanticCompletion::Normal(values[0].clone()),
-                vec!["benchmark.host.echo([31])".to_owned()],
-            )
-                .0
-        }
+        "host-call-generic-add" => SemanticCompletion::Normal(values[0].clone()),
+        "host-call-echo" => SemanticCompletion::Normal(semantic_number(42.0)),
         "host-call-throw" => SemanticCompletion::Throw {
             name: "HostException",
             value: None,
@@ -3018,7 +3022,8 @@ fn evaluate_semantic_case(
         }
     };
     let host_trace = match name {
-        "host-call-normal" => vec!["benchmark.host.echo([31])".to_owned()],
+        "host-call-generic-add" => vec!["benchmark.host.add([31,11])".to_owned()],
+        "host-call-echo" => vec!["benchmark.host.echo([31])".to_owned()],
         "host-call-throw" => vec!["benchmark.host.throw([Symbol#77])".to_owned()],
         _ => trace,
     };
@@ -3094,6 +3099,7 @@ fn dispatch_native_semantic_inputs(
     inputs: &[SemanticValue],
     invoke_aot_host: bool,
     invoke_call_boundary: bool,
+    invoke_host_echo: bool,
     perform_native_transition: bool,
     value_move: NativeValueMove,
 ) -> Result<NativeSemanticDispatchResult> {
@@ -3164,7 +3170,8 @@ fn dispatch_native_semantic_inputs(
         aot_table: aot_table_pointer,
         invoke_aot_host,
         invoke_call_boundary,
-        native_call_boundary: None,
+        invoke_host_echo,
+        native_host_callback: None,
         aot_host_call: None,
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
@@ -3197,7 +3204,7 @@ fn dispatch_native_semantic_inputs(
     let callbacks = context.calls;
     let forced_collections = context.forced_collections;
     let aot_host_call = context.aot_host_call.take();
-    let context_native_call_boundary = context.native_call_boundary.take();
+    let context_native_host_callback = context.native_host_callback.take();
     drop(context);
     drop(aot_table);
 
@@ -3218,7 +3225,7 @@ fn dispatch_native_semantic_inputs(
         callbacks,
         forced_collections,
         aot_host_call,
-        native_call_boundary: context_native_call_boundary,
+        native_host_callback: context_native_host_callback,
         reference_tokens,
     })
 }
@@ -3240,14 +3247,19 @@ fn run_native_value_semantics(
     let mut total_callbacks = 0;
     let mut total_forced_collections = 0;
     for case in semantic_cases() {
-        let invoke_aot_host = case.name.starts_with("host-call");
+        let invoke_aot_host = matches!(
+            case.name,
+            "host-call-generic-add" | "host-call-reentrant" | "host-call-throw"
+        );
         let invoke_call_boundary = case.name == "call-boundary";
+        let invoke_host_echo = case.name == "host-call-echo";
         let dispatched = dispatch_native_semantic_inputs(
             candidate,
             dispatch,
             &case.inputs,
             invoke_aot_host,
             invoke_call_boundary,
+            invoke_host_echo,
             case.name == "type-transition-number-to-string",
             value_move,
         )?;
@@ -3256,13 +3268,13 @@ fn run_native_value_semantics(
             callbacks,
             forced_collections,
             aot_host_call,
-            native_call_boundary,
+            native_host_callback,
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
-        if let Some(boundary) = &native_call_boundary {
-            actual = SemanticCompletion::Normal(SemanticValue::Number(boundary.result_bits));
-            actual_host_trace = vec![boundary.trace.clone()];
+        if let Some(host_callback) = &native_host_callback {
+            actual = SemanticCompletion::Normal(SemanticValue::Number(host_callback.result_bits));
+            actual_host_trace = vec![host_callback.trace.clone()];
         }
         let native_reference_identity_preserved = match case.name {
             "call-boundary" => {
@@ -3375,7 +3387,7 @@ fn run_native_value_semantics(
             native_callbacks: callbacks,
             forced_collections,
             aot_host_call,
-            native_call_boundary,
+            native_host_callback,
             native_reference_identity_preserved,
             native_store_load_transition,
             matches,
