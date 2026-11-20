@@ -6,7 +6,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
     ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
-    isa::TargetIsa,
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -14,6 +13,7 @@ use cranelift_module::{Linkage, Module, default_libcall_names};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use libloading::Library;
 use ogma_gc_comparison_proof::{CollectorKind, FrameKind, GcHeap};
+use ogma_isolate_allocator_proof::AllocatorStrategy;
 use regalloc2::{
     Algorithm, Block, Edit, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand,
     PReg, PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
@@ -554,9 +554,9 @@ struct RegisterPressure {
     allocator: &'static str,
     workload: &'static str,
     machine_env: String,
-    allocatable_integer_registers: usize,
-    allocatable_float_registers: usize,
-    allocatable_vector_registers: usize,
+    abi_integer_register_budget: usize,
+    abi_float_register_budget: usize,
+    abi_vector_register_budget: usize,
     integer_registers_used: usize,
     float_registers_used: usize,
     register_allocations: usize,
@@ -5206,31 +5206,33 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     let isa = cranelift_native::builder()
         .map_err(|error| anyhow!(error))?
         .finish(settings::Flags::new(isa_flags))?;
-    let target_function = cranelift_codegen::ir::Function::new();
-    let allocatable = isa.allocatable_registers(&target_function);
-    let register_info = isa.register_info();
+    let target_triple = isa.triple().to_string();
+    // The pinned Cranelift 0.137.2 public TargetIsa API does not expose its
+    // private allocator's register mask. Model the host ABI register budget
+    // explicitly, and keep actual native register/stack traffic measured from
+    // the generated pressure function and objdump in NativeCodeMetrics.
+    let (abi_integer_register_budget, abi_float_register_budget, abi_vector_register_budget, abi_description) =
+        match target_triple.as_str() {
+            "x86_64-unknown-linux-gnu" => (
+                14_usize,
+                16_usize,
+                16_usize,
+                "System V AMD64: 14 non-reserved GPRs and 16 XMM registers",
+            ),
+            _ => bail!(
+                "regalloc2 ABI liveness model has no reviewed register budget for {target_triple}"
+            ),
+        };
 
     let mut preferred = [PRegSet::empty(), PRegSet::empty(), PRegSet::empty()];
-    for class in register_info.classes.iter().copied() {
-        if class.toprc != class.index {
-            continue;
-        }
-        let regalloc_class = match class.index {
-            0 => RegClass::Int,
-            1 => RegClass::Float,
-            2 => RegClass::Vector,
-            other => bail!("unsupported Cranelift top-level register class index {other}"),
-        };
-        for register_unit in allocatable.iter(class) {
-            let register_index = usize::from(class.index_of(register_unit));
-            preferred[regalloc_class as usize].add(PReg::new(register_index, regalloc_class));
-        }
+    for register in 0..abi_integer_register_budget {
+        preferred[RegClass::Int as usize].add(PReg::new(register, RegClass::Int));
     }
-    let allocatable_integer_registers = preferred[RegClass::Int as usize].len() as usize;
-    let allocatable_float_registers = preferred[RegClass::Float as usize].len() as usize;
-    let allocatable_vector_registers = preferred[RegClass::Vector as usize].len() as usize;
-    if allocatable_integer_registers == 0 || allocatable_float_registers == 0 {
-        bail!("native target ISA did not expose allocatable integer and floating-point registers");
+    for register in 0..abi_float_register_budget {
+        preferred[RegClass::Float as usize].add(PReg::new(register, RegClass::Float));
+    }
+    for register in 0..abi_vector_register_budget {
+        preferred[RegClass::Vector as usize].add(PReg::new(register, RegClass::Vector));
     }
     let machine_env = MachineEnv {
         preferred_regs_by_class: preferred,
@@ -5277,9 +5279,10 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         allocator: "regalloc2 0.15.3 (same crate version resolved by Cranelift 0.137.2)",
         workload: "positive-call-boundary.json parameter/operand/result dataflow profile",
         machine_env: format!(
-            "{} ({}) allocatable target registers; Core IR value liveness model",
+            "{} ({}) ABI register budget: {}; Core IR value liveness model, not Cranelift's private register mask",
             isa.name(),
-            isa.triple()
+            target_triple,
+            abi_description
         ),
         allocatable_integer_registers,
         allocatable_float_registers,
@@ -6362,12 +6365,6 @@ mod tests {
             );
             reports.insert(candidate.name(), evidence);
         }
-        let tagged_boxed = reports
-            .get("tagged-16-boxed")
-            .expect("tagged boxed candidate");
-        let nanbox_boxed = reports
-            .get("nanbox-8-boxed")
-            .expect("NaN-box boxed candidate");
         for evidence in reports.values() {
             assert!(evidence.allocatable_integer_registers > 0);
             assert!(evidence.allocatable_float_registers > 0);
