@@ -563,11 +563,24 @@ struct GcSample {
     encoded_object_values_resolved: usize,
     reclaimed_after_root_release: usize,
     live_objects_after_release: u64,
+    allocator_strategy: &'static str,
+    allocator_live_requested_bytes: usize,
+    allocator_live_backing_bytes: usize,
+    allocator_reserved_bytes_before_collection: usize,
+    allocator_peak_reserved_bytes: usize,
+    allocator_peak_internal_fragmentation_bytes: u64,
+    allocator_reused_allocations: u64,
+    allocator_allocation_failures: u64,
+    allocator_reserved_bytes_after_release: usize,
+    process_rss_before_bytes: u64,
+    process_rss_after_build_bytes: u64,
+    process_rss_delta_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct GcCollectorEvidence {
     collector: &'static str,
+    allocator_strategy: &'static str,
     object_count: usize,
     edge_count: usize,
     interpreter_frame_roots: usize,
@@ -580,6 +593,9 @@ struct GcCollectorEvidence {
     cleanup_collection_ns: Distribution,
     peak_logical_heap_bytes_max: u64,
     actual_value_storage_capacity_bytes: usize,
+    allocator_peak_reserved_bytes_max: usize,
+    allocator_peak_internal_fragmentation_bytes_max: u64,
+    process_rss_delta_bytes: Distribution,
     encoded_object_values_resolved: usize,
     raw_samples: Vec<GcSample>,
 }
@@ -5589,6 +5605,7 @@ fn gc_distribution(samples: &[GcSample], select: impl Fn(&GcSample) -> u128) -> 
 
 fn summarize_gc_collector(
     collector: CollectorKind,
+    allocator_strategy: AllocatorStrategy,
     object_count: usize,
     raw_samples: Vec<GcSample>,
 ) -> Result<GcCollectorEvidence> {
@@ -5603,6 +5620,14 @@ fn summarize_gc_collector(
             || sample.temporary_scope_roots != first.temporary_scope_roots
             || sample.actual_value_storage_capacity_bytes
                 != first.actual_value_storage_capacity_bytes
+            || sample.allocator_strategy != first.allocator_strategy
+            || sample.allocator_live_requested_bytes != first.allocator_live_requested_bytes
+            || sample.allocator_live_backing_bytes != first.allocator_live_backing_bytes
+            || sample.allocator_reserved_bytes_before_collection
+                != first.allocator_reserved_bytes_before_collection
+            || sample.allocator_allocation_failures != first.allocator_allocation_failures
+            || sample.allocator_reserved_bytes_after_release
+                != first.allocator_reserved_bytes_after_release
             || sample.encoded_object_values_resolved != first.encoded_object_values_resolved
     }) {
         bail!(
@@ -5615,8 +5640,19 @@ fn summarize_gc_collector(
         .map(|sample| sample.peak_logical_heap_bytes)
         .max()
         .unwrap_or_default();
+    let allocator_peak_reserved_bytes_max = raw_samples
+        .iter()
+        .map(|sample| sample.allocator_peak_reserved_bytes)
+        .max()
+        .unwrap_or_default();
+    let allocator_peak_internal_fragmentation_bytes_max = raw_samples
+        .iter()
+        .map(|sample| sample.allocator_peak_internal_fragmentation_bytes)
+        .max()
+        .unwrap_or_default();
     Ok(GcCollectorEvidence {
         collector: collector.name(),
+        allocator_strategy: allocator_strategy.name(),
         object_count,
         edge_count: first.graph_edges,
         interpreter_frame_roots: first.interpreter_frame_roots,
@@ -5629,6 +5665,11 @@ fn summarize_gc_collector(
         cleanup_collection_ns: gc_distribution(&raw_samples, |sample| sample.cleanup_collection_ns),
         peak_logical_heap_bytes_max,
         actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
+        allocator_peak_reserved_bytes_max,
+        allocator_peak_internal_fragmentation_bytes_max,
+        process_rss_delta_bytes: gc_distribution(&raw_samples, |sample| {
+            u128::from(sample.process_rss_delta_bytes)
+        }),
         encoded_object_values_resolved: first.encoded_object_values_resolved,
         raw_samples,
     })
@@ -5641,61 +5682,87 @@ fn gc_evidence(
     object_count: usize,
 ) -> Result<GcEvidence> {
     let collectors = CollectorKind::ALL;
-    let mut raw_samples: [Vec<GcSample>; 2] =
-        [Vec::with_capacity(samples), Vec::with_capacity(samples)];
+    let mut collector_comparisons = Vec::with_capacity(
+        AllocatorStrategy::ALL.len() * CollectorKind::ALL.len(),
+    );
 
-    // Alternate collector order for paired samples so the first collector does
-    // not always receive the colder cache/allocator state.
-    for warmup in 0..warmups {
-        let order = if warmup % 2 == 0 { [0, 1] } else { [1, 0] };
-        for index in order {
-            black_box(run_gc_sample(candidate, collectors[index], object_count)?);
-        }
-    }
+    for allocator_strategy in AllocatorStrategy::ALL {
+        let mut raw_samples: [Vec<GcSample>; 2] =
+            [Vec::with_capacity(samples), Vec::with_capacity(samples)];
 
-    for sample_index in 0..samples {
-        let order = if sample_index % 2 == 0 {
-            [0, 1]
-        } else {
-            [1, 0]
-        };
-        let mut pair: [Option<GcSample>; 2] = [None, None];
-        for index in order {
-            pair[index] = Some(run_gc_sample(candidate, collectors[index], object_count)?);
+        // Alternate collector order for paired samples so the first collector
+        // does not always receive the colder cache/allocator state. Both GC
+        // collectors run against the same actual OGM-24 payload allocator.
+        for warmup in 0..warmups {
+            let order = if warmup % 2 == 0 { [0, 1] } else { [1, 0] };
+            for index in order {
+                black_box(run_gc_sample(
+                    candidate,
+                    collectors[index],
+                    allocator_strategy,
+                    object_count,
+                )?);
+            }
         }
-        let first = pair[0].take().context("missing RC-cycle-removal sample")?;
-        let second = pair[1].take().context("missing MarkSweep sample")?;
-        if first.graph_edges != second.graph_edges
-            || first.interpreter_frame_roots != second.interpreter_frame_roots
-            || first.native_frame_roots != second.native_frame_roots
-            || first.persistent_host_handles != second.persistent_host_handles
-            || first.temporary_scope_roots != second.temporary_scope_roots
-            || first.logical_heap_bytes_before_collection
-                != second.logical_heap_bytes_before_collection
-            || first.actual_value_storage_capacity_bytes
-                != second.actual_value_storage_capacity_bytes
-            || first.encoded_object_values_resolved != second.encoded_object_values_resolved
-            || first.reclaimed_after_root_release != second.reclaimed_after_root_release
-            || first.live_objects_after_release != second.live_objects_after_release
-        {
-            bail!("OGM-26 collector pair did not execute an equivalent candidate workload");
-        }
-        raw_samples[0].push(first);
-        raw_samples[1].push(second);
-    }
 
-    let collector_comparisons = vec![
-        summarize_gc_collector(
+        for sample_index in 0..samples {
+            let order = if sample_index % 2 == 0 {
+                [0, 1]
+            } else {
+                [1, 0]
+            };
+            let mut pair: [Option<GcSample>; 2] = [None, None];
+            for index in order {
+                pair[index] = Some(run_gc_sample(
+                    candidate,
+                    collectors[index],
+                    allocator_strategy,
+                    object_count,
+                )?);
+            }
+            let first = pair[0].take().context("missing RC-cycle-removal sample")?;
+            let second = pair[1].take().context("missing MarkSweep sample")?;
+            if first.graph_edges != second.graph_edges
+                || first.interpreter_frame_roots != second.interpreter_frame_roots
+                || first.native_frame_roots != second.native_frame_roots
+                || first.persistent_host_handles != second.persistent_host_handles
+                || first.temporary_scope_roots != second.temporary_scope_roots
+                || first.logical_heap_bytes_before_collection
+                    != second.logical_heap_bytes_before_collection
+                || first.actual_value_storage_capacity_bytes
+                    != second.actual_value_storage_capacity_bytes
+                || first.allocator_live_requested_bytes != second.allocator_live_requested_bytes
+                || first.allocator_live_backing_bytes != second.allocator_live_backing_bytes
+                || first.allocator_reserved_bytes_before_collection
+                    != second.allocator_reserved_bytes_before_collection
+                || first.allocator_reserved_bytes_after_release
+                    != second.allocator_reserved_bytes_after_release
+                || first.reclaimed_after_root_release != second.reclaimed_after_root_release
+                || first.live_objects_after_release != second.live_objects_after_release
+            {
+                bail!(
+                    "OGM-26 collector pair did not execute an equivalent {} candidate workload",
+                    allocator_strategy.name()
+                );
+            }
+            raw_samples[0].push(first);
+            raw_samples[1].push(second);
+        }
+
+        collector_comparisons.push(summarize_gc_collector(
             collectors[0],
+            allocator_strategy,
             object_count,
             std::mem::take(&mut raw_samples[0]),
-        )?,
-        summarize_gc_collector(
+        )?);
+        collector_comparisons.push(summarize_gc_collector(
             collectors[1],
+            allocator_strategy,
             object_count,
             std::mem::take(&mut raw_samples[1]),
-        )?,
-    ];
+        )?);
+    }
+
     let graph_edges = collector_comparisons
         .first()
         .context("GC collector evidence missing")?
