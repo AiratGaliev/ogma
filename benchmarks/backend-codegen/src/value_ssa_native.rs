@@ -5212,18 +5212,22 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     // private allocator's register mask. Model the host ABI register budget
     // explicitly, and keep actual native register/stack traffic measured from
     // the generated pressure function and objdump in NativeCodeMetrics.
-    let (abi_integer_register_budget, abi_float_register_budget, abi_vector_register_budget, abi_description) =
-        match target_triple.as_str() {
-            "x86_64-unknown-linux-gnu" => (
-                14_usize,
-                16_usize,
-                16_usize,
-                "System V AMD64: 14 non-reserved GPRs and 16 XMM registers",
-            ),
-            _ => bail!(
-                "regalloc2 ABI liveness model has no reviewed register budget for {target_triple}"
-            ),
-        };
+    let (
+        abi_integer_register_budget,
+        abi_float_register_budget,
+        abi_vector_register_budget,
+        abi_description,
+    ) = match target_triple.as_str() {
+        "x86_64-unknown-linux-gnu" => (
+            14_usize,
+            16_usize,
+            16_usize,
+            "System V AMD64: 14 non-reserved GPRs and 16 XMM registers",
+        ),
+        _ => bail!(
+            "regalloc2 ABI liveness model has no reviewed register budget for {target_triple}"
+        ),
+    };
 
     let mut preferred = [PRegSet::empty(), PRegSet::empty(), PRegSet::empty()];
     for register in 0..abi_integer_register_budget {
@@ -6371,7 +6375,11 @@ mod tests {
             assert_eq!(evidence.abi_float_register_budget, 16);
             assert_eq!(evidence.abi_vector_register_budget, 16);
             assert!(evidence.machine_env.contains("System V AMD64"));
-            assert!(evidence.machine_env.contains("not Cranelift's private register mask"));
+            assert!(
+                evidence
+                    .machine_env
+                    .contains("not Cranelift's private register mask")
+            );
             if evidence.spill_slots > 0 {
                 assert!(evidence.spill_store_edits > 0);
                 assert!(evidence.spill_reload_edits > 0);
