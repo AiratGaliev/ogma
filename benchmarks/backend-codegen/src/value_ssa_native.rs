@@ -115,8 +115,7 @@ unsafe extern "C" fn resolve_native_batch_handle_callback(
     }
     // SAFETY: the generated batch dispatcher calls synchronously with the
     // uniquely borrowed context alive for the whole native invocation.
-    let context =
-        unsafe { &mut *(context_pointer as *mut NativeBatchHandleCallbackContext) };
+    let context = unsafe { &mut *(context_pointer as *mut NativeBatchHandleCallbackContext) };
     let Some(expected) = context.expected.get(context.calls).copied() else {
         return 2;
     };
@@ -1547,7 +1546,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             .into_iter()
             .map(AbiParam::new),
     );
-    batch_dispatch_signature.returns.push(AbiParam::new(types::I32));
+    batch_dispatch_signature
+        .returns
+        .push(AbiParam::new(types::I32));
     let batch_dispatch_function = module.declare_function(
         "ogma_value_batch_handle_dispatch",
         Linkage::Export,
@@ -2200,7 +2201,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let value_argument = match candidate.runtime {
             RuntimeLayout::Tagged16 => slot_address,
             RuntimeLayout::NanBox8 => {
-                b.ins().load(types::I64, MemFlagsData::new(), slot_address, 0)
+                b.ins()
+                    .load(types::I64, MemFlagsData::new(), slot_address, 0)
             }
         };
         let dispatch_ref = module.declare_func_in_func(dispatch_function, b.func);
@@ -2215,13 +2217,8 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             0,
         );
         let incremented = b.ins().iadd_imm(index_param, 1);
-        b.ins().brif(
-            accepted,
-            loop_block,
-            &[incremented],
-            invalid_block,
-            &[],
-        );
+        b.ins()
+            .brif(accepted, loop_block, &[incremented], invalid_block, &[]);
         b.switch_to_block(invalid_block);
         b.ins().return_(&[dispatch_status]);
         b.switch_to_block(done_block);
@@ -4371,8 +4368,7 @@ fn dispatch_candidate_corpus_values(
                 candidate.name()
             );
         }
-        let (tag, payload) =
-            candidate_value_tag_payload(candidate.runtime, &storage, slot_index)?;
+        let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &storage, slot_index)?;
         expected.push(NativeBatchExpectedValue {
             tag,
             payload,
@@ -4386,8 +4382,7 @@ fn dispatch_candidate_corpus_values(
         calls: 0,
         collections: 0,
     };
-    let callback_address =
-        resolve_native_batch_handle_callback as *const () as usize as u64;
+    let callback_address = resolve_native_batch_handle_callback as *const () as usize as u64;
     let context_argument =
         &mut callback_context as *mut NativeBatchHandleCallbackContext as usize as u64;
     // SAFETY: candidate storage and context outlive the synchronous native
@@ -4417,7 +4412,6 @@ fn dispatch_candidate_corpus_values(
     Ok(reference_count)
 }
 
-
 fn run_native_core_ir_corpus_validation(
     candidate: Candidate,
     library: &Library,
@@ -4425,7 +4419,9 @@ fn run_native_core_ir_corpus_validation(
     let dispatch = unsafe {
         *library
             .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\0")
-            .context("generated native batch Value dispatch entry point missing for Core IR corpus")?
+            .context(
+                "generated native batch Value dispatch entry point missing for Core IR corpus",
+            )?
     };
     let manifest_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/dual-backend/manifest.json");
