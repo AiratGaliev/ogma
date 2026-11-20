@@ -24,8 +24,8 @@ pub struct Distribution {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AllocatorSample {
-    pub allocate_and_touch_ns: u128,
-    pub deallocate_ns: u128,
+    pub allocation_ns: u128,
+    pub deallocation_ns: u128,
     pub peak_reserved_bytes: usize,
     pub peak_live_requested_bytes: usize,
     pub peak_internal_fragmentation_bytes: usize,
@@ -136,17 +136,25 @@ fn sample(
 
     let allocation_start = Instant::now();
     let first = allocate_round(&mut allocator, payload_layout, value_layout, object_count)?;
+    let first_allocation_ns = allocation_start.elapsed().as_nanos();
     let first_stats = allocator.stats();
+
+    let deallocation_start = Instant::now();
     deallocate_round(&mut allocator, first)?;
+    let first_deallocation_ns = deallocation_start.elapsed().as_nanos();
 
     // The second identical allocation round makes reuse observable for
     // PerIsolateReuse and SizeClassPool, while System remains the baseline.
+    let allocation_start = Instant::now();
     let second = allocate_round(&mut allocator, payload_layout, value_layout, object_count)?;
+    let second_allocation_ns = allocation_start.elapsed().as_nanos();
     let second_stats = allocator.stats();
-    let allocate_and_touch_ns = allocation_start.elapsed().as_nanos();
+
     let deallocation_start = Instant::now();
     deallocate_round(&mut allocator, second)?;
-    let deallocate_ns = deallocation_start.elapsed().as_nanos();
+    let second_deallocation_ns = deallocation_start.elapsed().as_nanos();
+    let allocation_ns = first_allocation_ns + second_allocation_ns;
+    let deallocation_ns = first_deallocation_ns + second_deallocation_ns;
     let final_stats = allocator.stats();
 
     if final_stats.live_requested_bytes != 0 || final_stats.live_backing_bytes != 0 {
@@ -166,8 +174,8 @@ fn sample(
     }
 
     Ok(AllocatorSample {
-        allocate_and_touch_ns,
-        deallocate_ns,
+        allocation_ns,
+        deallocation_ns,
         peak_reserved_bytes: first_stats
             .peak_reserved_bytes
             .max(second_stats.peak_reserved_bytes)
@@ -281,13 +289,13 @@ pub fn run_allocator_evidence(
             allocation_ns_per_sample: distribution(
                 raw_samples
                     .iter()
-                    .map(|item| item.allocate_and_touch_ns as f64)
+                    .map(|item| item.allocation_ns as f64)
                     .collect(),
             ),
             deallocation_ns_per_sample: distribution(
                 raw_samples
                     .iter()
-                    .map(|item| item.deallocate_ns as f64)
+                    .map(|item| item.deallocation_ns as f64)
                     .collect(),
             ),
             peak_reserved_bytes_max,
