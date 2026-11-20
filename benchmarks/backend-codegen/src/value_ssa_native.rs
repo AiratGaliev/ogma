@@ -3327,18 +3327,19 @@ fn run_native_value_semantics(
         }
         let (native_reference_identity_preserved, native_reference_equality_result) =
             native_reference_identity_evidence(case.name, &reference_tokens);
-        if matches!(
-            case.name,
-            "nan-strict-equality"
-                | "signed-zero-strict-equality"
-                | "object-identity-same"
-                | "object-identity-distinct"
-                | "symbol-identity-same"
-                | "symbol-identity-distinct"
-        ) {
-            if let Some(equality_result) = native_reference_equality_result {
-                actual = SemanticCompletion::Normal(SemanticValue::Boolean(equality_result));
-            }
+        let equality_completion = native_reference_equality_result.filter(|_| {
+            matches!(
+                case.name,
+                "nan-strict-equality"
+                    | "signed-zero-strict-equality"
+                    | "object-identity-same"
+                    | "object-identity-distinct"
+                    | "symbol-identity-same"
+                    | "symbol-identity-distinct"
+            )
+        });
+        if let Some(equality_result) = equality_completion {
+            actual = SemanticCompletion::Normal(SemanticValue::Boolean(equality_result));
         }
         if invoke_aot_host {
             let host_call = aot_host_call
