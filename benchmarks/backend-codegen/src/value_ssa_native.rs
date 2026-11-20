@@ -2823,7 +2823,7 @@ fn run_native_value_semantics(
 ) -> Result<NativeValueSemanticsEvidence> {
     let dispatch = unsafe {
         *library
-            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
             .context("generated native Value dispatch entry point missing for semantic suite")?
     };
     let mut evidence = Vec::new();
@@ -3167,7 +3167,7 @@ fn run_native_core_ir_corpus_validation(
 ) -> Result<NativeCoreIrCorpusEvidence> {
     let dispatch = unsafe {
         *library
-            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\\0")
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
             .context("generated native Value dispatch entry point missing for Core IR corpus")?
     };
     let manifest_path =
@@ -4409,7 +4409,7 @@ fn run_native_pressure_validation(
 ) -> Result<NativeCodeMetrics> {
     let pressure = unsafe {
         *library
-            .get::<NativePressure>(b"ogma_value_pressure\\0")
+            .get::<NativePressure>(b"ogma_value_pressure\0")
             .context("generated native register-pressure entry point missing")?
     };
     let mut storage = match candidate.runtime {
