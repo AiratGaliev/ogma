@@ -3677,6 +3677,279 @@ fn run_native_core_ir_corpus_validation(
     })
 }
 
+fn invoke_native_numeric_binary(
+    candidate: Candidate,
+    function: NativeValueBinary,
+    left: f64,
+    right: f64,
+) -> Result<u64> {
+    let mut left_tagged = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: canonical_number_bits(left),
+    };
+    let mut right_tagged = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: canonical_number_bits(right),
+    };
+    let mut tagged_output = TaggedValue::default();
+    let mut nanbox_output = 0_u64;
+    let (left_arg, right_arg, output_arg) = match candidate.runtime {
+        RuntimeLayout::Tagged16 => (
+            (&mut left_tagged as *mut TaggedValue) as usize as u64,
+            (&mut right_tagged as *mut TaggedValue) as usize as u64,
+            (&mut tagged_output as *mut TaggedValue) as usize as u64,
+        ),
+        RuntimeLayout::NanBox8 => (
+            canonical_number_bits(left),
+            canonical_number_bits(right),
+            (&mut nanbox_output as *mut u64) as usize as u64,
+        ),
+    };
+    // SAFETY: the function pointer and argument layouts are emitted together
+    // by make_candidate_function for this exact RuntimeLayout.
+    let status = unsafe { function(left_arg, right_arg, output_arg) };
+    if status != 0 {
+        bail!(
+            "{} generated native numeric fixture returned status {status}",
+            candidate.name()
+        );
+    }
+    let result_bits = match candidate.runtime {
+        RuntimeLayout::Tagged16 => {
+            if tagged_output.tag != NUMBER_TAG {
+                bail!("{} generated branch/add fixture returned a non-Number tag", candidate.name());
+            }
+            tagged_output.payload
+        }
+        RuntimeLayout::NanBox8 => nanbox_output,
+    };
+    Ok(canonical_number_bits(f64::from_bits(result_bits)))
+}
+
+fn invoke_native_loop_numbers(
+    candidate: Candidate,
+    function: NativeLoop,
+    start: f64,
+    limit: f64,
+    step: f64,
+) -> Result<u64> {
+    let mut tagged_start = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: canonical_number_bits(start),
+    };
+    let mut tagged_limit = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: canonical_number_bits(limit),
+    };
+    let mut tagged_step = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: canonical_number_bits(step),
+    };
+    let mut tagged_output = TaggedValue::default();
+    let mut nanbox_output = 0_u64;
+    let (a, b, c, output) = match candidate.runtime {
+        RuntimeLayout::Tagged16 => (
+            (&mut tagged_start as *mut TaggedValue) as usize as u64,
+            (&mut tagged_limit as *mut TaggedValue) as usize as u64,
+            (&mut tagged_step as *mut TaggedValue) as usize as u64,
+            (&mut tagged_output as *mut TaggedValue) as usize as u64,
+        ),
+        RuntimeLayout::NanBox8 => (
+            canonical_number_bits(start),
+            canonical_number_bits(limit),
+            canonical_number_bits(step),
+            (&mut nanbox_output as *mut u64) as usize as u64,
+        ),
+    };
+    // SAFETY: all C ABI arguments use the layout selected by the generated
+    // candidate and remain alive through the synchronous native invocation.
+    let status = unsafe { function(a, b, c, output, DEFAULT_MAX_ITERATIONS) };
+    if status != 0 {
+        bail!(
+            "{} generated native loop fixture returned status {status}",
+            candidate.name()
+        );
+    }
+    let bits = match candidate.runtime {
+        RuntimeLayout::Tagged16 => {
+            if tagged_output.tag != NUMBER_TAG {
+                bail!("{} generated native loop returned a non-Number", candidate.name());
+            }
+            tagged_output.payload
+        }
+        RuntimeLayout::NanBox8 => nanbox_output,
+    };
+    Ok(canonical_number_bits(f64::from_bits(bits)))
+}
+
+fn invoke_native_symbol_add_throw(
+    candidate: Candidate,
+    function: NativeValueBinary,
+    dispatch: NativeHandleDispatch,
+) -> Result<(i32, bool)> {
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let expected_object = heap.allocate(64);
+    let handle = heap.retain_host_handle(expected_object)?;
+    let token = heap.encode_host_handle_token(handle)?;
+    let tag = match candidate.runtime {
+        RuntimeLayout::Tagged16 => SYMBOL_TAG,
+        RuntimeLayout::NanBox8 => NANBOX_SYMBOL_TAG,
+    };
+    let mut tagged_symbol = TaggedValue {
+        tag: SYMBOL_TAG,
+        payload: token,
+    };
+    let mut tagged_number = TaggedValue {
+        tag: NUMBER_TAG,
+        payload: 9.0_f64.to_bits(),
+    };
+    let mut tagged_output = TaggedValue::default();
+    let mut nanbox_output = 0_u64;
+    let (symbol_arg, number_arg, output_arg, symbol_value_arg) = match candidate.runtime {
+        RuntimeLayout::Tagged16 => (
+            (&mut tagged_symbol as *mut TaggedValue) as usize as u64,
+            (&mut tagged_number as *mut TaggedValue) as usize as u64,
+            (&mut tagged_output as *mut TaggedValue) as usize as u64,
+            (&mut tagged_symbol as *mut TaggedValue) as usize as u64,
+        ),
+        RuntimeLayout::NanBox8 => {
+            let encoded_symbol = (NANBOX_SYMBOL_TAG << NAN_TAG_SHIFT) | token;
+            (
+                encoded_symbol,
+                9.0_f64.to_bits(),
+                (&mut nanbox_output as *mut u64) as usize as u64,
+                encoded_symbol,
+            )
+        }
+    };
+
+    let mut callback_context = NativeHandleCallbackContext {
+        heap: &mut heap as *mut GcHeap,
+        expected_object: Some(expected_object),
+        expected_payload: token,
+        expected_tag: tag,
+        calls: 0,
+        collections: 0,
+        force_collection: true,
+        last_tag: 0,
+        last_token: 0,
+    };
+    let callback_address = resolve_native_handle_callback as *const () as usize as u64;
+    let context_argument =
+        &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+    // SAFETY: symbol storage, callback context and callback function remain
+    // valid for the synchronous native helper call.
+    let dispatch_status = unsafe {
+        dispatch(
+            symbol_value_arg,
+            callback_address,
+            context_argument,
+        )
+    };
+    let handle_survived = dispatch_status == 0
+        && callback_context.calls == 1
+        && callback_context.collections == 1
+        && callback_context.last_tag == tag
+        && callback_context.last_token == token
+        && heap.resolve_host_handle_token(token)? == expected_object
+        && heap.is_alive(expected_object);
+    if !handle_survived {
+        bail!(
+            "{} Symbol HostHandle did not survive the native callback collection",
+            candidate.name()
+        );
+    }
+    // SAFETY: both candidate Values and the output slot remain live and use
+    // the exact Tagged16/NaNBox ABI expected by the generated native function.
+    let add_status = unsafe { function(symbol_arg, number_arg, output_arg) };
+    if add_status != 2 {
+        bail!(
+            "{} native dynamic-add did not return TypeError status 2 for Symbol + Number (status={add_status})",
+            candidate.name()
+        );
+    }
+
+    heap.release_host_handle(handle)?;
+    let cleanup = heap.collect()?;
+    if cleanup.live_objects_after != 0 || cleanup.reclaimed_objects != 1 {
+        bail!(
+            "{} Symbol handle cleanup did not reclaim its heap object",
+            candidate.name()
+        );
+    }
+    Ok((add_status, handle_survived))
+}
+
+fn run_native_core_ir_execution(
+    candidate: Candidate,
+    library: &Library,
+) -> Result<NativeCoreIrExecutionEvidence> {
+    let branch = unsafe {
+        *library
+            .get::<NativeValueBinary>(b"ogma_value_branch\0")
+            .context("generated native branch fixture entry point missing")?
+    };
+    let dynamic_add = unsafe {
+        *library
+            .get::<NativeValueBinary>(b"ogma_value_dynamic_add\0")
+            .context("generated native dynamic-add fixture entry point missing")?
+    };
+    let loop_function = unsafe {
+        *library
+            .get::<NativeLoop>(b"ogma_value_loop\0")
+            .context("generated native loop fixture entry point missing")?
+    };
+    let dispatch = unsafe {
+        *library
+            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
+            .context("generated native Value dispatch entry point missing for fixture exception")?
+    };
+
+    let branch_equal = invoke_native_numeric_binary(candidate, branch, 7.0, 7.0)?;
+    let branch_unequal = invoke_native_numeric_binary(candidate, branch, 7.0, 8.0)?;
+    let loop_integer = invoke_native_loop_numbers(candidate, loop_function, 0.0, 5.0, 1.0)?;
+    let loop_fractional =
+        invoke_native_loop_numbers(candidate, loop_function, 0.5, 3.5, 0.75)?;
+    let dynamic_add_result = invoke_native_numeric_binary(candidate, dynamic_add, 7.0, 8.0)?;
+    let (dynamic_add_throw_status, symbol_handle_survived_forced_collection) =
+        invoke_native_symbol_add_throw(candidate, dynamic_add, dispatch)?;
+
+    let expected = [
+        canonical_number_bits(7.0),
+        canonical_number_bits(8.0),
+        canonical_number_bits(5.0),
+        canonical_number_bits(3.5),
+        canonical_number_bits(15.0),
+    ];
+    let actual = [
+        branch_equal,
+        branch_unequal,
+        loop_integer,
+        loop_fractional,
+        dynamic_add_result,
+    ];
+    let all_native_fixture_cases_match_expected = actual == expected
+        && dynamic_add_throw_status == 2
+        && symbol_handle_survived_forced_collection;
+    if !all_native_fixture_cases_match_expected {
+        bail!(
+            "{} generated native Core IR fixtures differed from expected observations",
+            candidate.name()
+        );
+    }
+
+    Ok(NativeCoreIrExecutionEvidence {
+        branch_equal_result_bits: branch_equal,
+        branch_unequal_result_bits: branch_unequal,
+        loop_integer_result_bits: loop_integer,
+        loop_fractional_result_bits: loop_fractional,
+        dynamic_add_result_bits: dynamic_add_result,
+        dynamic_add_throw_status,
+        symbol_handle_survived_forced_collection,
+        all_native_fixture_cases_match_expected,
+    })
+}
+
 fn run_native_candidate(
     candidate: Candidate,
     library: &Library,
