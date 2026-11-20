@@ -133,6 +133,22 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         semantic_cases = {
             item.get("name"): item for item in value_semantics.get("cases", [])
         }
+        for case_name, expected_equal in (
+            ("object-identity-same", True),
+            ("object-identity-distinct", False),
+            ("symbol-identity-same", True),
+            ("symbol-identity-distinct", False),
+        ):
+            identity_case = semantic_cases.get(case_name)
+            if (
+                not isinstance(identity_case, dict)
+                or identity_case.get("matches") is not True
+                or identity_case.get("native_reference_identity_preserved") is not True
+                or identity_case.get("native_reference_equality_result") is not expected_equal
+            ):
+                raise RuntimeError(
+                    f"{name}: {case_name} did not preserve reference identity and JS strict equality"
+                )
         call_boundary = semantic_cases.get("call-boundary")
         call_observation = oracle.get("call_boundary", {})
         call_trace = call_observation.get("host_trace", [])
