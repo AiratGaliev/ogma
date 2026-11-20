@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import unittest
@@ -313,8 +314,14 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                     )
 
         self.assertTrue(report["run_url"].endswith("/44730458468"))
-        self.assertIn("/artifacts/14625194465", report["full_report_artifact_url"])
-        self.assertEqual(64, len(report["full_report_sha256"]))
+        self.assertEqual(
+            "https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465",
+            report["full_report_artifact_url"],
+        )
+        self.assertEqual(
+            "05de9c347b24ea27f3a91bae604c5a768519cfd2d92d6e28544b4b44ec2c49a1",
+            report["full_report_sha256"],
+        )
 
     def test_committed_runtime_raw_samples_cover_gc_and_allocator(self):
         path = (
@@ -322,7 +329,12 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             / "results"
             / "ogm38-runtime-raw-samples.json.gz"
         )
-        report = json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
+        raw_bytes = path.read_bytes()
+        self.assertEqual(
+            "e250675df6142ef5c9e21fad0645d4986d9de4bdafd5ad1a2dbfc799c54dd32e",
+            hashlib.sha256(raw_bytes).hexdigest(),
+        )
+        report = json.loads(gzip.decompress(raw_bytes).decode("utf-8"))
 
         self.assertEqual("ogma.ogm38.runtime-raw-samples", report["schema"])
         self.assertEqual(1, report["version"])
