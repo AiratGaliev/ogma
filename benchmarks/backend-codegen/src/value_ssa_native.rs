@@ -1790,6 +1790,8 @@ fn run_native_handle_dispatch_validation(
             calls: 0,
             collections: 0,
             force_collection: false,
+            last_tag: 0,
+            last_token: 0,
         };
         let context_argument =
             &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
