@@ -5842,6 +5842,70 @@ fn summarize_gc_collector(
     })
 }
 
+fn collect_gc_worker_result(
+    candidate: Candidate,
+    collector: CollectorKind,
+    allocator_strategy: AllocatorStrategy,
+    warmups: usize,
+    samples: usize,
+    object_count: usize,
+) -> Result<GcWorkerResult> {
+    if samples == 0 {
+        bail!("GC worker sample count must be positive");
+    }
+
+    let process_peak_rss_before_workload_bytes = process_peak_rss_bytes()?;
+    for _ in 0..warmups {
+        black_box(run_gc_sample(
+            candidate,
+            collector,
+            allocator_strategy,
+            object_count,
+        )?);
+    }
+    let mut raw_samples = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        raw_samples.push(run_gc_sample(
+            candidate,
+            collector,
+            allocator_strategy,
+            object_count,
+        )?);
+    }
+    let process_peak_rss_bytes = process_peak_rss_bytes()?;
+    Ok(GcWorkerResult {
+        samples: raw_samples,
+        process_peak_rss_before_workload_bytes,
+        process_peak_rss_bytes,
+        process_peak_rss_delta_bytes: process_peak_rss_bytes
+            .saturating_sub(process_peak_rss_before_workload_bytes),
+    })
+}
+
+#[cfg(test)]
+fn run_gc_worker_process(
+    candidate: Candidate,
+    collector: CollectorKind,
+    allocator_strategy: AllocatorStrategy,
+    warmups: usize,
+    samples: usize,
+    object_count: usize,
+) -> Result<GcWorkerResult> {
+    // Unit tests execute inside Cargo's test harness, so current_exe() is not
+    // the benchmark CLI and cannot accept the --gc-worker switch. Keep the
+    // workload/lifecycle assertions in-process under cfg(test); production
+    // benchmark runs below use a dedicated child process for isolated VmHWM.
+    collect_gc_worker_result(
+        candidate,
+        collector,
+        allocator_strategy,
+        warmups,
+        samples,
+        object_count,
+    )
+}
+
+#[cfg(not(test))]
 fn run_gc_worker_process(
     candidate: Candidate,
     collector: CollectorKind,
@@ -5915,32 +5979,14 @@ fn run_gc_worker_mode(arguments: &[String]) -> Result<()> {
         bail!("GC worker sample count must be positive");
     }
 
-    let process_peak_rss_before_workload_bytes = process_peak_rss_bytes()?;
-    for _ in 0..warmups {
-        black_box(run_gc_sample(
-            candidate,
-            collector,
-            allocator_strategy,
-            object_count,
-        )?);
-    }
-    let mut raw_samples = Vec::with_capacity(samples);
-    for _ in 0..samples {
-        raw_samples.push(run_gc_sample(
-            candidate,
-            collector,
-            allocator_strategy,
-            object_count,
-        )?);
-    }
-    let process_peak_rss_bytes = process_peak_rss_bytes()?;
-    let result = GcWorkerResult {
-        samples: raw_samples,
-        process_peak_rss_before_workload_bytes,
-        process_peak_rss_bytes,
-        process_peak_rss_delta_bytes: process_peak_rss_bytes
-            .saturating_sub(process_peak_rss_before_workload_bytes),
-    };
+    let result = collect_gc_worker_result(
+        candidate,
+        collector,
+        allocator_strategy,
+        warmups,
+        samples,
+        object_count,
+    )?;
     serde_json::to_writer(std::io::stdout().lock(), &result)
         .context("serialize isolated GC worker report")?;
     println!();
