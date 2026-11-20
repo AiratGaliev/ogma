@@ -72,6 +72,7 @@ fn canonical_number_bits(value: f64) -> u64 {
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 type NativeValueBinary = unsafe extern "C" fn(u64, u64, u64) -> i32;
+type NativeStrictEqual = unsafe extern "C" fn(u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
@@ -667,6 +668,7 @@ struct NativeValueSemanticCaseEvidence {
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_reference_identity_preserved: bool,
     native_reference_equality_result: Option<bool>,
+    native_strict_equal_executed: bool,
     native_store_load_transition: bool,
     matches: bool,
 }
@@ -677,6 +679,7 @@ struct NativeSemanticDispatchOptions {
     invoke_call_boundary: bool,
     invoke_host_echo: bool,
     perform_native_transition: bool,
+    strict_equal_slots: Option<(usize, usize)>,
 }
 
 struct NativeSemanticDispatchResult {
@@ -685,6 +688,7 @@ struct NativeSemanticDispatchResult {
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_host_callback: Option<NativeHostCallbackEvidence>,
+    native_strict_equal_result: Option<bool>,
     reference_tokens: Vec<Option<u64>>,
 }
 
@@ -1169,6 +1173,143 @@ fn define_candidate_numeric_binary(
     Ok(())
 }
 
+fn define_candidate_strict_equal(
+    module: &mut ObjectModule,
+    builder_context: &mut FunctionBuilderContext,
+    candidate: Candidate,
+    signature: &Signature,
+    function: cranelift_module::FuncId,
+) -> Result<()> {
+    let mut context = module.make_context();
+    context.func.signature = signature.clone();
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, builder_context);
+        let entry = b.create_block();
+        let matching_class = b.create_block();
+        let numeric = b.create_block();
+        let non_numeric = b.create_block();
+        let mismatch = b.create_block();
+        let merge = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        b.append_block_param(merge, types::I8);
+        let parameters = b.block_params(entry).to_vec();
+        b.switch_to_block(entry);
+
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let left_tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
+                let right_tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                let tags_match = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    right_tag,
+                );
+                b.ins()
+                    .brif(tags_match, matching_class, &[], mismatch, &[]);
+
+                b.switch_to_block(matching_class);
+                let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
+                let both_are_numbers = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    number_tag,
+                );
+                b.ins()
+                    .brif(both_are_numbers, numeric, &[], non_numeric, &[]);
+
+                b.switch_to_block(numeric);
+                let left_bits =
+                    b.ins()
+                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_bits =
+                    b.ins()
+                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let left_number =
+                    b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits);
+                let right_number =
+                    b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits);
+                let equal = b.ins().fcmp(
+                    cranelift_codegen::ir::condcodes::FloatCC::Equal,
+                    left_number,
+                    right_number,
+                );
+                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+
+                b.switch_to_block(non_numeric);
+                let left_payload =
+                    b.ins()
+                        .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_payload =
+                    b.ins()
+                        .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let equal = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_payload,
+                    right_payload,
+                );
+                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+            }
+            RuntimeLayout::NanBox8 => {
+                let left_is_non_number = nanbox_word_is_non_number(&mut b, parameters[0]);
+                let right_is_non_number = nanbox_word_is_non_number(&mut b, parameters[1]);
+                let same_value_class = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_is_non_number,
+                    right_is_non_number,
+                );
+                b.ins()
+                    .brif(same_value_class, matching_class, &[], mismatch, &[]);
+
+                b.switch_to_block(matching_class);
+                b.ins().brif(
+                    left_is_non_number,
+                    non_numeric,
+                    &[],
+                    numeric,
+                    &[],
+                );
+
+                b.switch_to_block(numeric);
+                let left_number =
+                    b.ins().bitcast(types::F64, MemFlagsData::new(), parameters[0]);
+                let right_number =
+                    b.ins().bitcast(types::F64, MemFlagsData::new(), parameters[1]);
+                let equal = b.ins().fcmp(
+                    cranelift_codegen::ir::condcodes::FloatCC::Equal,
+                    left_number,
+                    right_number,
+                );
+                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+
+                b.switch_to_block(non_numeric);
+                let equal = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    parameters[0],
+                    parameters[1],
+                );
+                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+            }
+        }
+
+        b.switch_to_block(mismatch);
+        let false_value = b.ins().iconst(types::I8, 0);
+        b.ins().jump(merge, &[BlockArg::Value(false_value)]);
+
+        b.switch_to_block(merge);
+        let equal = b.block_params(merge)[0];
+        let result = b.ins().uextend(types::I32, equal);
+        b.ins().return_(&[result]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(function, &mut context)?;
+    Ok(())
+}
+
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -1206,6 +1347,16 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         "ogma_value_dynamic_add",
         Linkage::Export,
         &numeric_binary_signature,
+    )?;
+    let mut strict_equal_signature = module.make_signature();
+    strict_equal_signature
+        .params
+        .extend([types::I64, types::I64].into_iter().map(AbiParam::new));
+    strict_equal_signature.returns.push(AbiParam::new(types::I32));
+    let strict_equal_function = module.declare_function(
+        "ogma_value_strict_equal",
+        Linkage::Export,
+        &strict_equal_signature,
     )?;
 
     let mut dispatch_signature = module.make_signature();
@@ -1601,6 +1752,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         &numeric_binary_signature,
         dynamic_add_function,
         "dynamic_add",
+    )?;
+    define_candidate_strict_equal(
+        &mut module,
+        &mut builder_context,
+        candidate,
+        &strict_equal_signature,
+        strict_equal_function,
     )?;
 
     // The second export is a real native helper boundary for candidate Values.
