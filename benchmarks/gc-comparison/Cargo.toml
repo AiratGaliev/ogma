@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 description = "M0 proof comparing reference counting with cycle removal and non-moving tracing mark-sweep"
 
+[dependencies]
+ogma-isolate-allocator-proof = { path = "../isolate-allocator" }
+
 [lib]
 name = "ogma_gc_comparison_proof"
 path = "src/lib.rs"

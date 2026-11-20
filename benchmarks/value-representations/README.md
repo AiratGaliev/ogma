@@ -68,3 +68,22 @@ The report is written to benchmarks/value-representations/results/value-ssa-repo
 ## Recommendation
 
 Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Preserve representation-aware SSA as the compiler direction and box only at dynamic semantic and external ABI boundaries. Keep NaN-boxing unselected until the Rust heap, GC, ABI and native benchmark prototypes exist.
+
+
+## Native follow-up (OGM-38)
+
+OGM-38 now provides a reproducible M0 native-evidence slice for all four Runtime Value × SSA-policy candidates. Each candidate processes all 77 Value representations extracted from the same five canonical OGM-31 fixtures through generated native batch loops, passes the 31-case semantic matrix, and matches the independent portable/native OGM-31 observations. These batch adapters are not a general lowering of each complete fixture CFG or a production ECMAScript Runtime.
+
+The current measurement run is [#44766826425](https://github.com/AiratGaliev/ogma/actions/runs/44766826425) (source revision `c7da33dc00e0d588ba36b809f17fc06a17559a6e`). Both the OGM-38 native job and fast-checks succeeded. The [CI evidence artifact](https://github.com/AiratGaliev/ogma/actions/runs/44766826425/artifacts/14644153664) contains the full JSON report, OGM-31 differential, verifier reports, generated objects and lockfile.
+
+Unlike the initial M0 estimates, the OGM-24 `IsolateAllocator` now backs the actual candidate Value payload blocks stored in OGM-26 heap objects. The selected RC-cycle-removal or MarkSweep collector returns those backing allocations when objects are reclaimed. Every candidate is measured across the same 2,048-object graph and the six collector × allocator combinations. Each combination runs in an isolated worker process and records Linux `VmHWM` baseline, peak and delta after three warmups and 101 measured lifecycles. The metric includes the worker executable, code mappings, Rust runtime and allocator state; it is not a heap-only counter.
+
+The repository commits:
+- `results/ogm38-primary-benchmark-samples.json`: all 101 compile-time and native-loop latency samples per candidate.
+- `results/ogm38-runtime-raw-samples.json.gz`: all 101 GC and allocator samples for every candidate × collector × allocator combination, including worker VmHWM baseline/peak/delta.
+- `results/ogm38-native-value-ssa-report.json.gz`: complete native machine-readable report.
+- `results/ogm38-ogm31-differential-report.json`: portable/native differential evidence.
+
+The exporter `export_ogm38_raw_samples.py` validates the full native and OGM-31 reports before producing these projections. The OGM-38 CI workflow executes the exporter and uploads its outputs alongside the original artifacts. Regression tests validate revisions, candidate matrices, all 24 worker combinations, 101 sample counts, positive peak-memory values and `peak - baseline = delta`.
+
+The evidence and recommendation are documented in [OGM-38 native Value and SSA evidence](native-evidence-ogm38.md). OGM-38 remains In Progress: the four adapters do not fully lower every Core IR fixture CFG; some operator semantics remain M0 oracle/adapter work; regalloc2 spill estimates are not Cranelift's private spill report; OGM-27 shadow-root proof is not compiler-generated production machine stack maps; and the benchmark heap is not a production Runtime/object model.
