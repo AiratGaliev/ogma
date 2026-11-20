@@ -22,7 +22,34 @@ EXPECTED_CANDIDATES = {
     "nanbox-8-boxed",
     "nanbox-8-representation-aware",
 }
+EXPECTED_FIXTURE_PATHS = {
+    "positive-ssa-branch": "tests/core-ir/fixtures/positive-ssa-branch.json",
+    "positive-loop-carried-values": "tests/core-ir/fixtures/positive-loop-carried-values.json",
+    "positive-dynamic-exception": "tests/core-ir/fixtures/positive-dynamic-exception.json",
+    "positive-call-boundary": "tests/core-ir/fixtures/positive-call-boundary.json",
+    "positive-host-call": "tests/core-ir/fixtures/positive-host-call.json",
+}
 EXPECTED_FIXTURES = {"branch", "loop", "dynamic_exception", "call_boundary", "host_call"}
+STRICT_EQUALITY_CASES = {
+    "nan-strict-equality": False,
+    "signed-zero-strict-equality": True,
+    "object-identity-same": True,
+    "object-identity-distinct": False,
+    "symbol-identity-same": True,
+    "symbol-identity-distinct": False,
+    "undefined-strict-equality": True,
+    "null-strict-equality": True,
+    "undefined-null-strict-equality": False,
+    "boolean-strict-equality-same": True,
+    "boolean-strict-equality-distinct": False,
+    "positive-infinity-strict-equality": True,
+    "negative-infinity-strict-equality": True,
+    "opposite-infinity-strict-equality": False,
+    "string-strict-equality-same": True,
+    "string-strict-equality-distinct": False,
+    "bigint-strict-equality-same": True,
+    "bigint-strict-equality-distinct": False,
+}
 NATIVE_TO_ORACLE_FIELDS = {
     "branch_equal_result_bits": ("branch_equal", 7.0),
     "branch_unequal_result_bits": ("branch_unequal", 8.0),
@@ -133,21 +160,26 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         semantic_cases = {
             item.get("name"): item for item in value_semantics.get("cases", [])
         }
-        for case_name, expected_equal in (
-            ("object-identity-same", True),
-            ("object-identity-distinct", False),
-            ("symbol-identity-same", True),
-            ("symbol-identity-distinct", False),
-        ):
-            identity_case = semantic_cases.get(case_name)
+        for case_name, expected_equal in STRICT_EQUALITY_CASES.items():
+            equality_case = semantic_cases.get(case_name)
             if (
-                not isinstance(identity_case, dict)
-                or identity_case.get("matches") is not True
-                or identity_case.get("native_reference_identity_preserved") is not True
-                or identity_case.get("native_reference_equality_result") is not expected_equal
+                not isinstance(equality_case, dict)
+                or equality_case.get("matches") is not True
+                or equality_case.get("native_strict_equal_executed") is not True
+                or equality_case.get("native_reference_equality_result") is not expected_equal
             ):
                 raise RuntimeError(
-                    f"{name}: {case_name} did not preserve reference identity and JS strict equality"
+                    f"{name}: generated native strict equality for {case_name} "
+                    f"did not return {expected_equal}"
+                )
+            if case_name in {
+                "object-identity-same",
+                "object-identity-distinct",
+                "symbol-identity-same",
+                "symbol-identity-distinct",
+            } and equality_case.get("native_reference_identity_preserved") is not True:
+                raise RuntimeError(
+                    f"{name}: {case_name} did not preserve distinct/same HostHandle identity"
                 )
         call_boundary = semantic_cases.get("call-boundary")
         call_observation = oracle.get("call_boundary", {})
@@ -202,8 +234,59 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
             raise RuntimeError(f"{name}: OGM-27 native/interpreter/persistent roots were not balanced")
 
         corpus = candidate.get("native_core_ir_corpus")
-        if not isinstance(corpus, dict) or corpus.get("canonical_fixture_count") != len(EXPECTED_FIXTURES):
+        if (
+            not isinstance(corpus, dict)
+            or corpus.get("canonical_fixture_count") != len(EXPECTED_FIXTURE_PATHS)
+            or corpus.get("all_values_roundtripped_and_dispatched") is not True
+        ):
             raise RuntimeError(f"{name}: candidate did not cover the OGM-31 canonical fixture manifest")
+        fixture_reports = corpus.get("fixtures")
+        if not isinstance(fixture_reports, list):
+            raise RuntimeError(f"{name}: native Core IR fixture detail list is missing")
+        actual_fixture_paths = {
+            item.get("fixture"): item.get("path")
+            for item in fixture_reports
+            if isinstance(item, dict)
+        }
+        if actual_fixture_paths != EXPECTED_FIXTURE_PATHS or len(fixture_reports) != len(EXPECTED_FIXTURE_PATHS):
+            raise RuntimeError(
+                f"{name}: native Core IR fixture paths differ from the exact OGM-31 set"
+            )
+        summed_dispatches = sum(item.get("native_value_dispatches", 0) for item in fixture_reports)
+        summed_reference_resolutions = sum(
+            item.get("reference_values_resolved_after_forced_gc", 0) for item in fixture_reports
+        )
+        if (
+            corpus.get("native_value_dispatches") != summed_dispatches
+            or corpus.get("reference_values_resolved_after_forced_gc") != summed_reference_resolutions
+            or summed_dispatches <= 0
+            or summed_reference_resolutions <= 0
+        ):
+            raise RuntimeError(f"{name}: native per-fixture dispatch/root counts are inconsistent")
+
+        native_code = candidate.get("native_code")
+        strict_equal_code = execution.get("strict_equal_native_code")
+        for code_metrics, symbol in (
+            (native_code, "ogma_value_loop"),
+            (strict_equal_code, "ogma_value_strict_equal"),
+        ):
+            if (
+                not isinstance(code_metrics, dict)
+                or code_metrics.get("symbol") != symbol
+                or not isinstance(code_metrics.get("numeric_conversion_instructions"), int)
+                or code_metrics.get("numeric_conversion_instructions") < 0
+                or not isinstance(code_metrics.get("call_instructions"), int)
+                or code_metrics.get("call_instructions") < 0
+            ):
+                raise RuntimeError(f"{name}: measured native code metrics are missing for {symbol}")
+
+        for modeled_field in (
+            "modeled_ir_value_conversion_ops_per_loop_iteration",
+            "modeled_ir_value_conversion_ops_per_invocation",
+        ):
+            modeled_count = candidate.get(modeled_field)
+            if not isinstance(modeled_count, int) or modeled_count < 0:
+                raise RuntimeError(f"{name}: modeled IR conversion field {modeled_field} is invalid")
 
         checks.append(
             {
@@ -211,6 +294,10 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
                 "native_fixture_observations": compared,
                 "symbol_type_error_matches_ogm31": True,
                 "native_semantic_matrix_passed": True,
+                "native_strict_equality_cases_passed": len(STRICT_EQUALITY_CASES),
+                "native_core_ir_fixture_dispatches": summed_dispatches,
+                "measured_loop_numeric_conversion_instructions": native_code["numeric_conversion_instructions"],
+                "measured_loop_call_sites": native_code["call_instructions"],
                 "call_boundary_matches_ogm31": True,
                 "host_echo_matches_ogm31": True,
                 "ogm27_roots_balanced": True,
