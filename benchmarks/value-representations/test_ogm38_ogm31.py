@@ -80,7 +80,7 @@ def make_reports():
                 "strict_equal_native_code": {
                     "symbol": "ogma_value_strict_equal",
                     "numeric_conversion_instructions": 0,
-                    "call_instructions": 0,
+                    "call_instructions": 1,
                 },
                 "branch_equal_result_bits": proof.number_to_bits(7.0),
                 "branch_unequal_result_bits": proof.number_to_bits(8.0),

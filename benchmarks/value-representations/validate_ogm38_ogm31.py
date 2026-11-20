@@ -325,6 +325,11 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
             ):
                 raise RuntimeError(f"{name}: measured native code metrics are missing for {symbol}")
 
+        if strict_equal_code.get("call_instructions", 0) < 1:
+            raise RuntimeError(
+                f"{name}: generated native strict equality lacks its String/BigInt value-comparison callback"
+            )
+
         for modeled_field in (
             "modeled_ir_value_conversion_ops_per_loop_iteration",
             "modeled_ir_value_conversion_ops_per_invocation",

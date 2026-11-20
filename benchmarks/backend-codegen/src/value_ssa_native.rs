@@ -2724,10 +2724,10 @@ unsafe extern "C" fn compare_native_primitive_references(
     if tag != string_tag && tag != bigint_tag || context.heap.is_null() {
         return 3;
     }
-    let Some(left) = context.references.get(&left_token) else {
+    let Some(left) = context.references.get(&left_token).cloned() else {
         return 4;
     };
-    let Some(right) = context.references.get(&right_token) else {
+    let Some(right) = context.references.get(&right_token).cloned() else {
         return 4;
     };
     // SAFETY: the caller owns this live heap for the entire native call.
@@ -2762,7 +2762,7 @@ unsafe extern "C" fn compare_native_primitive_references(
         }
         _ => return 7,
     };
-    i32::from(equal)
+    if equal { 1 } else { 0 }
 }
 
 fn decode_semantic_reference(
@@ -3627,7 +3627,7 @@ fn dispatch_native_semantic_inputs(
     let reference_equality_callback =
         compare_native_primitive_references as *const () as usize as u64;
     let reference_equality_context_argument =
-        &mut reference_equality_context as *mut NativeReferenceEqualityCallbackContext as u64;
+        &mut reference_equality_context as *mut NativeReferenceEqualityCallbackContext as usize as u64;
     let native_strict_equal_result =
         if let Some((left_slot, right_slot)) = options.strict_equal_slots {
             let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
