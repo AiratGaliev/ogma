@@ -2926,6 +2926,12 @@ fn run_native_shadow_root_validation(
     let frame = NativeFrame::new(descriptor, frame_values)?;
     let mut providers = RootProviders::default();
     let native_frame = providers.native.enter(frame)?;
+    providers.interpreter.enter(InterpreterFrame::new(
+        format!("ogm38-{}-interpreter", candidate.name()),
+        Vec::new(),
+        references.iter().copied().map(JsValue::Managed).collect(),
+        Vec::new(),
+    ));
     let mut persistent_handles = Vec::with_capacity(managed_roots);
     for reference in references.iter().copied() {
         persistent_handles.push(providers.persistent.retain(&heap, reference)?);
@@ -2934,7 +2940,7 @@ fn run_native_shadow_root_validation(
     let entry = providers.collect(&mut heap)?;
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
-        || entry.roots_scanned != managed_roots * 2
+        || entry.roots_scanned != managed_roots * 3
     {
         bail!(
             "{} OGM-27 entry safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
@@ -2952,7 +2958,7 @@ fn run_native_shadow_root_validation(
     let call_boundary = providers.collect(&mut heap)?;
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
-        || call_boundary.roots_scanned != managed_roots * 2
+        || call_boundary.roots_scanned != managed_roots * 3
     {
         bail!(
             "{} OGM-27 call-boundary safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
@@ -2964,6 +2970,7 @@ fn run_native_shadow_root_validation(
     }
 
     providers.native.leave(native_frame)?;
+    providers.interpreter.leave().context("OGM-27 interpreter frame was not registered")?;
     for handle in persistent_handles.iter().copied() {
         providers.persistent.release(handle)?;
     }
