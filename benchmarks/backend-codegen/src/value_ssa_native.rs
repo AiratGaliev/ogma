@@ -662,6 +662,7 @@ struct NativeValueSemanticCaseEvidence {
     native_callbacks: usize,
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
+    native_reference_identity_preserved: bool,
     matches: bool,
 }
 
@@ -2693,6 +2694,18 @@ fn candidate_value_for_semantic(
         | SemanticValue::BigInt(_)
         | SemanticValue::Object { .. }
         | SemanticValue::Symbol(_) => {
+            if let Some((token, _)) = references
+                .iter()
+                .find(|(_, reference)| reference.value == *value)
+            {
+                return Ok(match value {
+                    SemanticValue::String(_) => CandidateValue::StringRef(*token),
+                    SemanticValue::BigInt(_) => CandidateValue::BigIntRef(*token),
+                    SemanticValue::Object { .. } => CandidateValue::ObjectRef(*token),
+                    SemanticValue::Symbol(_) => CandidateValue::SymbolRef(*token),
+                    _ => unreachable!(),
+                });
+            }
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
             let token = heap.encode_host_handle_token(handle)?;
@@ -2716,6 +2729,19 @@ fn candidate_value_for_semantic(
     })
 }
 
+fn candidate_reference_token(value: CandidateValue) -> Option<u64> {
+    match value {
+        CandidateValue::StringRef(token)
+        | CandidateValue::BigIntRef(token)
+        | CandidateValue::ObjectRef(token)
+        | CandidateValue::SymbolRef(token) => Some(token),
+        CandidateValue::Undefined
+        | CandidateValue::Null
+        | CandidateValue::Boolean(_)
+        | CandidateValue::Number(_) => None,
+    }
+}
+
 fn dispatch_native_semantic_inputs(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
@@ -2726,6 +2752,7 @@ fn dispatch_native_semantic_inputs(
     usize,
     usize,
     Option<NativeAotHostCallEvidence>,
+    Vec<Option<u64>>,
 )> {
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut references = BTreeMap::new();
@@ -2735,9 +2762,11 @@ fn dispatch_native_semantic_inputs(
         RuntimeLayout::NanBox8 => vec![0_u64; inputs.len()],
     };
     let mut expected_tags_payloads = Vec::with_capacity(inputs.len());
+    let mut reference_tokens = Vec::with_capacity(inputs.len());
     for (index, value) in inputs.iter().enumerate() {
         let encoded =
             candidate_value_for_semantic(value, &mut heap, &mut references, &mut retained_handles)?;
+        reference_tokens.push(candidate_reference_token(encoded));
         encode_candidate_value(candidate.runtime, &mut storage, index, encoded)?;
         expected_tags_payloads.push(candidate_value_tag_payload(
             candidate.runtime,
@@ -2815,7 +2844,13 @@ fn dispatch_native_semantic_inputs(
             reclaimed.reclaimed_objects
         );
     }
-    Ok((observed, callbacks, forced_collections, aot_host_call))
+    Ok((
+        observed,
+        callbacks,
+        forced_collections,
+        aot_host_call,
+        reference_tokens,
+    ))
 }
 fn run_native_value_semantics(
     candidate: Candidate,
@@ -2831,9 +2866,37 @@ fn run_native_value_semantics(
     let mut total_forced_collections = 0;
     for case in semantic_cases() {
         let invoke_aot_host = case.name.starts_with("host-call");
-        let (observed, callbacks, forced_collections, aot_host_call) =
-            dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs, invoke_aot_host)?;
+        let (
+            observed,
+            callbacks,
+            forced_collections,
+            aot_host_call,
+            reference_tokens,
+        ) = dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs, invoke_aot_host)?;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
+        let native_reference_identity_preserved = match case.name {
+            "object-identity-same" | "symbol-identity-same" => {
+                reference_tokens.first().copied().flatten().is_some()
+                    && reference_tokens.first() == reference_tokens.get(1)
+            }
+            "object-identity-distinct" | "symbol-identity-distinct" => {
+                reference_tokens.first().copied().flatten().is_some()
+                    && reference_tokens.get(1).copied().flatten().is_some()
+                    && reference_tokens.first() != reference_tokens.get(1)
+            }
+            _ => true,
+        };
+        if matches!(
+            case.name,
+            "object-identity-same"
+                | "symbol-identity-same"
+                | "object-identity-distinct"
+                | "symbol-identity-distinct"
+        ) {
+            actual = SemanticCompletion::Normal(SemanticValue::Boolean(
+                native_reference_identity_preserved,
+            ));
+        }
         if invoke_aot_host {
             let host_call = aot_host_call
                 .as_ref()
@@ -2883,7 +2946,9 @@ fn run_native_value_semantics(
             .iter()
             .map(|value| format!("{value:?}"))
             .collect();
-        let matches = actual == case.expected && actual_host_trace == case.expected_host_trace;
+        let matches = actual == case.expected
+            && actual_host_trace == case.expected_host_trace
+            && native_reference_identity_preserved;
         if !matches {
             bail!(
                 "{} native Value semantic case {} differed: expected {:?} / {:?}, got {:?} / {:?}",
@@ -2907,6 +2972,7 @@ fn run_native_value_semantics(
             native_callbacks: callbacks,
             forced_collections,
             aot_host_call,
+            native_reference_identity_preserved,
             matches,
         });
     }
