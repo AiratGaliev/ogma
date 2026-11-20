@@ -71,6 +71,30 @@ def make_reports():
                 "every_case_matches": True,
                 "cases": [
                     {
+                        "name": "object-identity-same",
+                        "matches": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "object-identity-distinct",
+                        "matches": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
+                        "name": "symbol-identity-same",
+                        "matches": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": True,
+                    },
+                    {
+                        "name": "symbol-identity-distinct",
+                        "matches": True,
+                        "native_reference_identity_preserved": True,
+                        "native_reference_equality_result": False,
+                    },
+                    {
                         "name": "call-boundary",
                         "matches": True,
                         "actual_host_trace": ["benchmark.host.call_target([2,\"item=5\"])"],
