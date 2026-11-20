@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import unittest
@@ -314,6 +315,69 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         self.assertTrue(report["run_url"].endswith("/44730458468"))
         self.assertIn("/artifacts/14625194465", report["full_report_artifact_url"])
         self.assertEqual(64, len(report["full_report_sha256"]))
+
+    def test_committed_runtime_raw_samples_cover_gc_and_allocator(self):
+        path = (
+            Path(__file__).parent
+            / "results"
+            / "ogm38-runtime-raw-samples.json.gz"
+        )
+        report = json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
+
+        self.assertEqual("ogma.ogm38.runtime-raw-samples", report["schema"])
+        self.assertEqual(1, report["version"])
+        self.assertEqual(
+            "dfea7ebc25eec61665c93cfff5470251e00519df",
+            report["source_revision"],
+        )
+        self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(101, report["sample_count"])
+        self.assertEqual(3, report["warmups"])
+        self.assertEqual("x86_64-unknown-linux-gnu", report["target"])
+
+        expected_candidates = {
+            "tagged-16-boxed",
+            "tagged-16-representation-aware",
+            "nanbox-8-boxed",
+            "nanbox-8-representation-aware",
+        }
+        candidates = report["candidates"]
+        self.assertEqual(expected_candidates, {item["name"] for item in candidates})
+        self.assertEqual(4, len(candidates))
+
+        expected_collectors = {"non-moving-mark-sweep", "rc-cycle-removal"}
+        expected_allocators = {
+            "system-allocator",
+            "per-isolate-exact-reuse",
+            "per-isolate-size-class-pool",
+        }
+        for candidate in candidates:
+            with self.subTest(candidate=candidate["name"]):
+                self.assertEqual(expected_collectors, set(candidate["gc"]))
+                self.assertEqual(expected_allocators, set(candidate["allocator"]))
+
+                for collector, metrics in candidate["gc"].items():
+                    for metric in (
+                        "collection_ns",
+                        "root_scan_ns",
+                        "release_collection_ns",
+                    ):
+                        samples = metrics[metric]
+                        self.assertEqual(101, len(samples), f"{collector}.{metric}")
+                        self.assertTrue(all(value > 0 for value in samples))
+                    self.assertGreater(metrics["peak_logical_heap_bytes"], 0)
+
+                for strategy, metrics in candidate["allocator"].items():
+                    for metric in ("allocation_ns", "deallocation_ns"):
+                        samples = metrics[metric]
+                        self.assertEqual(101, len(samples), f"{strategy}.{metric}")
+                        self.assertTrue(all(value > 0 for value in samples))
+                    self.assertEqual(0, metrics["allocation_failures"])
+                    self.assertGreater(metrics["peak_reserved_bytes"], 0)
+                    self.assertGreaterEqual(
+                        metrics["peak_internal_fragmentation_bytes"],
+                        0,
+                    )
 
     def test_all_four_candidates_match_the_same_ogm31_oracle(self):
         native, dual = make_reports()
