@@ -1631,25 +1631,23 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
         let mut integer_values = Vec::new();
         let mut float_values = Vec::new();
-        let first_tag;
-        let first_payload;
-        match candidate.runtime {
-            RuntimeLayout::Tagged16 => {
-                first_tag = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
-                first_payload = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
-            }
+        let (first_tag, first_payload) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => (
+                b.ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0),
+                b.ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8),
+            ),
             RuntimeLayout::NanBox8 => {
                 let first_word = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[0], 0);
-                first_tag = b.ins().ushr_imm_u(first_word, NAN_TAG_SHIFT as i64);
-                first_payload = b.ins().band_imm_u(first_word, MAX_PAYLOAD as i64);
+                (
+                    b.ins().ushr_imm_u(first_word, NAN_TAG_SHIFT as i64),
+                    b.ins().band_imm_u(first_word, MAX_PAYLOAD as i64),
+                )
             }
-        }
+        };
 
         for index in 0..PRESSURE_VALUE_COUNT {
             match candidate.runtime {
@@ -2835,7 +2833,7 @@ fn run_native_value_semantics(
         let invoke_aot_host = case.name.starts_with("host-call");
         let (observed, callbacks, forced_collections, aot_host_call) =
             dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs, invoke_aot_host)?;
-        let (mut actual, mut actual_host_trace) = evaluate_semantic_case(&case.name, &observed);
+        let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
         if invoke_aot_host {
             let host_call = aot_host_call
                 .as_ref()
@@ -3111,9 +3109,8 @@ fn dispatch_candidate_corpus_value(
     let decoded = decode_candidate_value(candidate.runtime, &storage, 0)?;
     if decoded != value {
         bail!(
-            "{} {} candidate Value did not round-trip through the native corpus codec",
-            candidate.name(),
-            format!("{value:?}")
+            "{} {value:?} candidate Value did not round-trip through the native corpus codec",
+            candidate.name()
         );
     }
     let (tag, payload) = candidate_value_tag_payload(candidate.runtime, &storage, 0)?;
@@ -3153,13 +3150,13 @@ fn dispatch_candidate_corpus_value(
             callback_context.last_token
         );
     }
-    if let (Some(object), Some(token)) = (expected_object, expected_token) {
-        if heap.resolve_host_handle_token(token)? != object || !heap.is_alive(object) {
-            bail!(
-                "{} candidate layout lost a rooted Core IR reference across native callback collection",
-                candidate.name()
-            );
-        }
+    if let (Some(object), Some(token)) = (expected_object, expected_token)
+        && (heap.resolve_host_handle_token(token)? != object || !heap.is_alive(object))
+    {
+        bail!(
+            "{} candidate layout lost a rooted Core IR reference across native callback collection",
+            candidate.name()
+        );
     }
     Ok(expected_object.is_some())
 }
