@@ -6531,15 +6531,32 @@ mod tests {
             );
             assert_eq!(
                 evidence.collector_comparisons.len(),
-                CollectorKind::ALL.len()
+                CollectorKind::ALL.len() * AllocatorStrategy::ALL.len()
             );
             assert_eq!(evidence.encoded_object_values_resolved, 17);
             for collector in evidence.collector_comparisons {
                 assert_eq!(collector.object_count, 64);
                 assert_eq!(collector.encoded_object_values_resolved, 17);
-                assert!(
-                    collector.actual_value_storage_capacity_bytes >= evidence.value_storage_bytes
+                assert!(AllocatorStrategy::ALL
+                    .iter()
+                    .any(|strategy| strategy.name() == collector.allocator_strategy));
+                assert_eq!(
+                    collector.actual_value_storage_capacity_bytes,
+                    evidence.value_storage_bytes
                 );
+                assert_eq!(
+                    collector.raw_samples[0].allocator_live_requested_bytes,
+                    evidence.value_storage_bytes
+                );
+                assert_eq!(
+                    collector.raw_samples[0].allocator_live_backing_bytes,
+                    evidence.value_storage_bytes
+                );
+                assert_eq!(
+                    collector.raw_samples[0].allocator_allocation_failures,
+                    0
+                );
+                assert!(collector.process_rss_delta_bytes.p50_ns >= 0.0);
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
                 assert!(collector.raw_samples[0].roots_scanned > 0);
