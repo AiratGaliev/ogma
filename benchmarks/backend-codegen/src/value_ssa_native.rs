@@ -1056,7 +1056,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     let pressure_function =
         module.declare_function("ogma_value_pressure", Linkage::Export, &pressure_signature)?;
     let mut move_signature = module.make_signature();
-    move_signature.params.extend([types::I64, types::I64].into_iter().map(AbiParam::new));
+    move_signature
+        .params
+        .extend([types::I64, types::I64].into_iter().map(AbiParam::new));
     move_signature.returns.push(AbiParam::new(types::I32));
     let move_function =
         module.declare_function("ogma_value_move", Linkage::Export, &move_signature)?;
@@ -1740,13 +1742,20 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         b.switch_to_block(entry);
         match candidate.runtime {
             RuntimeLayout::Tagged16 => {
-                let tag = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0);
-                let payload = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                let payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 b.ins().store(MemFlagsData::new(), tag, parameters[0], 0);
-                b.ins().store(MemFlagsData::new(), payload, parameters[0], 8);
+                b.ins()
+                    .store(MemFlagsData::new(), payload, parameters[0], 8);
             }
             RuntimeLayout::NanBox8 => {
-                let word = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                let word = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0);
                 b.ins().store(MemFlagsData::new(), word, parameters[0], 0);
             }
         }
@@ -2827,7 +2836,10 @@ fn dispatch_native_semantic_inputs(
         // SAFETY: source and destination are live candidate-layout slots.
         let status = unsafe { value_move(destination, source) };
         if status != 0 {
-            bail!("{} generated native Value move returned status {status}", candidate.name());
+            bail!(
+                "{} generated native Value move returned status {status}",
+                candidate.name()
+            );
         }
     }
     let aot_table = if invoke_aot_host {
@@ -2925,20 +2937,15 @@ fn run_native_value_semantics(
     let mut total_forced_collections = 0;
     for case in semantic_cases() {
         let invoke_aot_host = case.name.starts_with("host-call");
-        let (
-            observed,
-            callbacks,
-            forced_collections,
-            aot_host_call,
-            reference_tokens,
-        ) = dispatch_native_semantic_inputs(
-            candidate,
-            dispatch,
-            &case.inputs,
-            invoke_aot_host,
-            case.name == "type-transition-number-to-string",
-            value_move,
-        )?;
+        let (observed, callbacks, forced_collections, aot_host_call, reference_tokens) =
+            dispatch_native_semantic_inputs(
+                candidate,
+                dispatch,
+                &case.inputs,
+                invoke_aot_host,
+                case.name == "type-transition-number-to-string",
+                value_move,
+            )?;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
         let native_reference_identity_preserved = match case.name {
             "object-identity-same" | "symbol-identity-same" => {
@@ -3315,7 +3322,10 @@ fn run_native_core_ir_corpus_validation(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/dual-backend/manifest.json");
     let manifest: JsonValue =
         serde_json::from_str(&fs::read_to_string(&manifest_path).with_context(|| {
-            format!("read canonical OGM-31 fixture manifest {}", manifest_path.display())
+            format!(
+                "read canonical OGM-31 fixture manifest {}",
+                manifest_path.display()
+            )
         })?)?;
     if manifest["schema"] != "ogma.dual-backend-proof"
         || manifest["version"] != "1.0.0"
