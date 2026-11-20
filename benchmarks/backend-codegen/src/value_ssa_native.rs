@@ -670,6 +670,14 @@ struct NativeValueSemanticCaseEvidence {
     matches: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct NativeSemanticDispatchOptions {
+    invoke_aot_host: bool,
+    invoke_call_boundary: bool,
+    invoke_host_echo: bool,
+    perform_native_transition: bool,
+}
+
 struct NativeSemanticDispatchResult {
     observed: Vec<SemanticValue>,
     callbacks: usize,
@@ -3105,10 +3113,7 @@ fn dispatch_native_semantic_inputs(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
     inputs: &[SemanticValue],
-    invoke_aot_host: bool,
-    invoke_call_boundary: bool,
-    invoke_host_echo: bool,
-    perform_native_transition: bool,
+    options: NativeSemanticDispatchOptions,
     value_move: NativeValueMove,
 ) -> Result<NativeSemanticDispatchResult> {
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
@@ -3133,7 +3138,7 @@ fn dispatch_native_semantic_inputs(
     }
 
     let reference_count = references.len();
-    if perform_native_transition {
+    if options.perform_native_transition {
         if inputs.len() != 2
             || !matches!(inputs[0], SemanticValue::Number(_))
             || !matches!(inputs[1], SemanticValue::String(_))
@@ -3155,7 +3160,7 @@ fn dispatch_native_semantic_inputs(
             );
         }
     }
-    let aot_table = if invoke_aot_host {
+    let aot_table = if options.invoke_aot_host {
         let table = crate::aot_host_abi::AotHostFunctionTable::new(
             ogma_native_runtime_boundary_proof::CancellationToken::default(),
         )
@@ -3176,9 +3181,9 @@ fn dispatch_native_semantic_inputs(
         expected_dispatches: inputs.len(),
         forced_collections: 0,
         aot_table: aot_table_pointer,
-        invoke_aot_host,
-        invoke_call_boundary,
-        invoke_host_echo,
+        invoke_aot_host: options.invoke_aot_host,
+        invoke_call_boundary: options.invoke_call_boundary,
+        invoke_host_echo: options.invoke_host_echo,
         native_host_callback: None,
         aot_host_call: None,
     };
@@ -3265,10 +3270,12 @@ fn run_native_value_semantics(
             candidate,
             dispatch,
             &case.inputs,
-            invoke_aot_host,
-            invoke_call_boundary,
-            invoke_host_echo,
-            case.name == "type-transition-number-to-string",
+            NativeSemanticDispatchOptions {
+                invoke_aot_host,
+                invoke_call_boundary,
+                invoke_host_echo,
+                perform_native_transition: case.name == "type-transition-number-to-string",
+            },
             value_move,
         )?;
         let NativeSemanticDispatchResult {
