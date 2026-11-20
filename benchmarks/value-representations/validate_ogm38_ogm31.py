@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import struct
 from pathlib import Path
 from typing import Any
@@ -131,6 +130,56 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         value_semantics = candidate.get("native_value_semantics")
         if not isinstance(value_semantics, dict) or value_semantics.get("every_case_matches") is not True:
             raise RuntimeError(f"{name}: native Value semantic matrix did not pass")
+        semantic_cases = {
+            item.get("name"): item for item in value_semantics.get("cases", [])
+        }
+        call_boundary = semantic_cases.get("call-boundary")
+        call_observation = oracle.get("call_boundary", {})
+        call_trace = call_observation.get("host_trace", [])
+        if (
+            not isinstance(call_boundary, dict)
+            or call_boundary.get("matches") is not True
+            or call_boundary.get("actual_host_trace")
+            != ["benchmark.host.call_target([2,\"item=5\"])"]
+            or not isinstance(call_trace, list)
+            or len(call_trace) != 1
+            or call_trace[0].get("symbol") != "benchmark.host.call_target"
+            or call_trace[0].get("args") != [2, "item=5"]
+        ):
+            raise RuntimeError(f"{name}: call-boundary value/callback trace differs from OGM-31")
+        call_callback = call_boundary.get("native_host_callback")
+        if (
+            not isinstance(call_callback, dict)
+            or call_callback.get("callee_resolved") is not True
+            or call_callback.get("receiver") != 2.0
+            or call_callback.get("argument") != "item=5"
+            or call_callback.get("result_bits") != number_to_bits(8.0)
+            or call_callback.get("host_callback_calls") != 1
+        ):
+            raise RuntimeError(f"{name}: generated native call-boundary callback evidence is incomplete")
+
+        host_echo = semantic_cases.get("host-call-echo")
+        host_observation = oracle.get("host_call", {})
+        host_trace = host_observation.get("host_trace", [])
+        if (
+            not isinstance(host_echo, dict)
+            or host_echo.get("matches") is not True
+            or host_echo.get("actual_host_trace") != ["benchmark.host.echo([31])"]
+            or not isinstance(host_trace, list)
+            or len(host_trace) != 1
+            or host_trace[0].get("symbol") != "benchmark.host.echo"
+            or host_trace[0].get("args") != [31]
+        ):
+            raise RuntimeError(f"{name}: host-call value/trace differs from OGM-31")
+        echo_callback = host_echo.get("native_host_callback")
+        if (
+            not isinstance(echo_callback, dict)
+            or echo_callback.get("symbol") != "benchmark.host.echo"
+            or echo_callback.get("arguments") != ["31"]
+            or echo_callback.get("result_bits") != number_to_bits(42.0)
+            or echo_callback.get("host_callback_calls") != 1
+        ):
+            raise RuntimeError(f"{name}: generated native host.echo callback evidence is incomplete")
 
         roots = candidate.get("native_shadow_roots")
         if not isinstance(roots, dict) or roots.get("all_roots_survived") is not True or roots.get("all_roots_reclaimed") is not True:
@@ -146,6 +195,8 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
                 "native_fixture_observations": compared,
                 "symbol_type_error_matches_ogm31": True,
                 "native_semantic_matrix_passed": True,
+                "call_boundary_matches_ogm31": True,
+                "host_echo_matches_ogm31": True,
                 "ogm27_roots_balanced": True,
                 "ogm31_fixture_set_matches": True,
             }
