@@ -1398,8 +1398,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             tag,
             undefined_tag_value,
         );
-        b.ins()
-            .brif(is_undefined_tag, undefined_payload_block, &[], null_check_block, &[]);
+        b.ins().brif(
+            is_undefined_tag,
+            undefined_payload_block,
+            &[],
+            null_check_block,
+            &[],
+        );
 
         // Keep every tagged immediate in its own validation branch. A malformed
         // special tag must never fall through to the Number encoding.
@@ -1414,8 +1419,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             tag,
             null_tag_value,
         );
-        b.ins()
-            .brif(is_null_tag, null_payload_block, &[], boolean_check_block, &[]);
+        b.ins().brif(
+            is_null_tag,
+            null_payload_block,
+            &[],
+            boolean_check_block,
+            &[],
+        );
 
         b.switch_to_block(null_payload_block);
         b.ins()
@@ -1495,35 +1505,17 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     number_tag,
                 );
                 let number_check_block = b.create_block();
-                b.ins().brif(
-                    is_number_tag,
-                    number_check_block,
-                    &[],
-                    invalid_block,
-                    &[],
-                );
+                b.ins().brif(is_number_tag, number_check_block, &[], invalid_block, &[]);
                 b.switch_to_block(number_check_block);
                 let noncanonical_nan = is_noncanonical_nan_bits(&mut b, payload);
-                b.ins().brif(
-                    noncanonical_nan,
-                    invalid_block,
-                    &[],
-                    dispatch_block,
-                    &[],
-                );
+                b.ins().brif(noncanonical_nan, invalid_block, &[], dispatch_block, &[]);
             }
             RuntimeLayout::NanBox8 => {
                 // Any tag not handled above is a Number candidate only when the
                 // raw word is outside all reserved tag ranges and is a canonical
                 // IEEE-754 NaN (or an ordinary finite/infinite number).
                 let non_number = nanbox_word_is_non_number(&mut b, parameters[0]);
-                b.ins().brif(
-                    non_number,
-                    invalid_block,
-                    &[],
-                    dispatch_block,
-                    &[],
-                );
+                b.ins().brif(non_number, invalid_block, &[], dispatch_block, &[]);
             }
         }
 
