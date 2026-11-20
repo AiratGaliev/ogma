@@ -60,6 +60,7 @@ const CANONICAL_NAN_BITS: u64 = 0x7ff8_0000_0000_0000;
 const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000;
 const GC_OBJECT_COUNT: usize = 2_048;
 const GC_VALUE_SLOTS_PER_OBJECT: usize = 16;
+const PRESSURE_VALUE_COUNT: usize = 32;
 
 fn canonical_number_bits(value: f64) -> u64 {
     if value.is_nan() {
@@ -71,6 +72,7 @@ fn canonical_number_bits(value: f64) -> u64 {
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
+type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 
 struct NativeHandleCallbackContext {
     heap: *mut GcHeap,
@@ -679,6 +681,10 @@ struct CandidateEvidence {
     native_semantic_validation: NativeSemanticValidation,
     native_code: NativeCodeMetrics,
     native_handle_dispatch: NativeHandleDispatchEvidence,
+    /// Real x86-64 disassembly of the Cranelift-generated live-value stress
+    /// function. Stack-relative loads/stores are native spill traffic, unlike
+    /// the separate regalloc2 pressure model below.
+    native_pressure: NativeCodeMetrics,
     register_pressure: RegisterPressure,
     gc: GcEvidence,
 }
@@ -952,6 +958,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         Linkage::Export,
         &dispatch_signature,
     )?;
+    let pressure_function = module.declare_function(
+        "ogma_value_pressure",
+        Linkage::Export,
+        &pressure_signature,
+    )?;
 
     let mut callback_signature = module.make_signature();
     callback_signature.params.extend(
@@ -960,6 +971,14 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             .map(AbiParam::new),
     );
     callback_signature.returns.push(AbiParam::new(types::I32));
+
+    let mut pressure_signature = module.make_signature();
+    pressure_signature.params.extend(
+        [types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    pressure_signature.returns.push(AbiParam::new(types::I64));
 
     let mut context = module.make_context();
     context.func.signature = signature;
@@ -1522,6 +1541,115 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
     module.define_function(dispatch_function, &mut context)?;
     module.clear_context(&mut context);
+
+    // A second, deliberately high-liveness native function measures physical
+    // register pressure in Cranelift's real x86-64 allocation. It loads the
+    // same encoded Number Value array for all four candidates, keeps 32 values
+    // live across an indirect C ABI callback, then consumes every value after
+    // the call. Boxed candidates keep encoded words; representation-aware
+    // candidates keep F64 SSA values (and Tagged16's explicit tag words).
+    context.func.signature = pressure_signature;
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let parameters = b.block_params(entry).to_vec();
+        b.switch_to_block(entry);
+
+        let mut integer_values = Vec::new();
+        let mut float_values = Vec::new();
+        let first_tag;
+        let first_payload;
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                first_tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
+                first_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+            }
+            RuntimeLayout::NanBox8 => {
+                let first_word = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
+                first_tag = b.ins().ushr_imm_u(first_word, NAN_TAG_SHIFT as i64);
+                first_payload = b.ins().band_imm_u(first_word, MAX_PAYLOAD as i64);
+            }
+        }
+
+        for index in 0..PRESSURE_VALUE_COUNT {
+            match candidate.runtime {
+                RuntimeLayout::Tagged16 => {
+                    let base_offset = (index * 16) as i32;
+                    let tag = b.ins().load(
+                        types::I64,
+                        MemFlagsData::new(),
+                        parameters[0],
+                        base_offset,
+                    );
+                    let payload = b.ins().load(
+                        types::I64,
+                        MemFlagsData::new(),
+                        parameters[0],
+                        base_offset + 8,
+                    );
+                    match candidate.ssa {
+                        SsaPolicy::Boxed => {
+                            integer_values.push(tag);
+                            integer_values.push(payload);
+                        }
+                        SsaPolicy::RepresentationAware => {
+                            integer_values.push(tag);
+                            float_values.push(
+                                b.ins().bitcast(types::F64, MemFlagsData::new(), payload),
+                            );
+                        }
+                    }
+                }
+                RuntimeLayout::NanBox8 => {
+                    let raw = b.ins().load(
+                        types::I64,
+                        MemFlagsData::new(),
+                        parameters[0],
+                        (index * 8) as i32,
+                    );
+                    match candidate.ssa {
+                        SsaPolicy::Boxed => integer_values.push(raw),
+                        SsaPolicy::RepresentationAware => {
+                            float_values.push(
+                                b.ins().bitcast(types::F64, MemFlagsData::new(), raw),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let callback_sig = b.import_signature(callback_signature.clone());
+        let invoked = b.ins().call_indirect(
+            callback_sig,
+            parameters[1],
+            &[parameters[2], first_tag, first_payload],
+        );
+        let callback_status = b.inst_results(invoked)[0];
+        let mut checksum = b.ins().iconst(types::I64, 0);
+        for value in integer_values {
+            checksum = b.ins().bxor(checksum, value);
+        }
+        for value in float_values {
+            let bits = b.ins().bitcast(types::I64, MemFlagsData::new(), value);
+            checksum = b.ins().bxor(checksum, bits);
+        }
+        let status_bits = b.ins().uextend(types::I64, callback_status);
+        checksum = b.ins().bxor(checksum, status_bits);
+        b.ins().return_(&[checksum]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(pressure_function, &mut context)?;
+    module.clear_context(&mut context);
+
     let product = module.finish();
     fs::write(object_path, product.emit()?)?;
     Ok(start.elapsed().as_nanos() as u64)
@@ -3036,6 +3164,76 @@ fn native_code_metrics(object_path: &Path, symbol: &'static str) -> Result<Nativ
     parse_native_disassembly(&disassembly, symbol)
 }
 
+fn run_native_pressure_validation(
+    candidate: Candidate,
+    library: &Library,
+    object_path: &Path,
+) -> Result<NativeCodeMetrics> {
+    let pressure = unsafe {
+        *library
+            .get::<NativePressure>(b"ogma_value_pressure\\0")
+            .context("generated native register-pressure entry point missing")?
+    };
+    let mut storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; PRESSURE_VALUE_COUNT * 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; PRESSURE_VALUE_COUNT],
+    };
+    for index in 0..PRESSURE_VALUE_COUNT {
+        encode_candidate_number_value(
+            candidate.runtime,
+            &mut storage,
+            index,
+            (index as f64) + 0.25,
+        )?;
+    }
+    let (tag, payload) = candidate_value_tag_payload(
+        candidate.runtime,
+        &storage,
+        0,
+    )?;
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let mut callback_context = NativeHandleCallbackContext {
+        heap: &mut heap as *mut GcHeap,
+        expected_object: None,
+        expected_payload: payload,
+        expected_tag: tag,
+        calls: 0,
+        collections: 0,
+        force_collection: false,
+        last_tag: 0,
+        last_token: 0,
+    };
+    let callback_address = resolve_native_handle_callback as *const () as usize as u64;
+    let context_argument =
+        &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
+    let value_argument = storage.as_mut_ptr() as usize as u64;
+    // SAFETY: the encoded array, callback and context remain live until the
+    // generated Cranelift function returns; the callback uses the C ABI.
+    let checksum = unsafe { pressure(value_argument, callback_address, context_argument) };
+    black_box(checksum);
+    if callback_context.calls != 1
+        || callback_context.collections != 0
+        || callback_context.last_tag != tag
+        || callback_context.last_token != payload
+    {
+        bail!(
+            "{} generated pressure function did not preserve the native callback boundary",
+            candidate.name()
+        );
+    }
+
+    let metrics = native_code_metrics(object_path, "ogma_value_pressure")?;
+    if metrics.stack_relative_stores == 0 || metrics.stack_relative_loads == 0 {
+        bail!(
+            "{} generated pressure function did not produce measurable spill stores and reloads (stores={}, loads={})",
+            candidate.name(),
+            metrics.stack_relative_stores,
+            metrics.stack_relative_loads
+        );
+    }
+    Ok(metrics)
+}
+
 fn run(
     output: &Path,
     revision: &str,
@@ -3072,6 +3270,8 @@ fn run(
             warmups,
             samples,
         )?;
+        let native_pressure =
+            run_native_pressure_validation(candidate, &library, &object_path)?;
         let register_pressure = register_pressure(candidate)?;
         let gc = gc_evidence(candidate, warmups, samples, GC_OBJECT_COUNT)?;
         candidates.push(CandidateEvidence {
@@ -3102,6 +3302,7 @@ fn run(
             native_semantic_validation,
             native_code,
             native_handle_dispatch,
+            native_pressure,
             register_pressure,
             gc,
         });
