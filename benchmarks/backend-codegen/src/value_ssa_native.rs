@@ -18,7 +18,7 @@ use regalloc2::{
     Algorithm, Block, Edit, Function as RegallocFunction, Inst, InstRange, MachineEnv, Operand,
     PReg, PRegSet, RegClass, RegallocOptions, VReg, run as run_regalloc,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -615,7 +615,7 @@ struct RegisterPressure {
     spill_bytes: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct GcSample {
     build_ns: u128,
     collection_ns: u128,
@@ -634,7 +634,7 @@ struct GcSample {
     encoded_object_values_resolved: usize,
     reclaimed_after_root_release: usize,
     live_objects_after_release: u64,
-    allocator_strategy: &'static str,
+    allocator_strategy: String,
     allocator_live_requested_bytes: usize,
     allocator_live_backing_bytes: usize,
     allocator_reserved_bytes_before_collection: usize,
@@ -643,9 +643,14 @@ struct GcSample {
     allocator_reused_allocations: u64,
     allocator_allocation_failures: u64,
     allocator_reserved_bytes_after_release: usize,
-    process_rss_before_bytes: u64,
-    process_rss_after_build_bytes: u64,
-    process_rss_delta_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GcWorkerResult {
+    samples: Vec<GcSample>,
+    process_peak_rss_before_workload_bytes: u64,
+    process_peak_rss_bytes: u64,
+    process_peak_rss_delta_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -666,9 +671,8 @@ struct GcCollectorEvidence {
     actual_value_storage_capacity_bytes: usize,
     allocator_peak_reserved_bytes_max: usize,
     allocator_peak_internal_fragmentation_bytes_max: u64,
-    process_rss_before_bytes: ByteDistribution,
-    process_rss_after_build_bytes: ByteDistribution,
-    process_rss_delta_bytes: ByteDistribution,
+    process_peak_rss_bytes: u64,
+    process_peak_rss_delta_bytes: u64,
     encoded_object_values_resolved: usize,
     raw_samples: Vec<GcSample>,
 }
@@ -5450,16 +5454,16 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     })
 }
 
-fn process_rss_bytes() -> Result<u64> {
+fn process_peak_rss_bytes() -> Result<u64> {
     let status = fs::read_to_string("/proc/self/status")
-        .context("read Linux process RSS from /proc/self/status")?;
+        .context("read Linux process peak RSS from /proc/self/status")?;
     let kilobytes = status
         .lines()
-        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .find_map(|line| line.strip_prefix("VmHWM:"))
         .and_then(|value| value.split_whitespace().next())
-        .context("Linux process VmRSS entry missing")?
+        .context("Linux process VmHWM entry missing")?
         .parse::<u64>()
-        .context("parse Linux process VmRSS")?;
+        .context("parse Linux process VmHWM")?;
     Ok(kilobytes.saturating_mul(1024))
 }
 
@@ -5531,7 +5535,6 @@ fn run_gc_sample(
         bail!("GC workload object count must be >=12 and divisible by four");
     }
 
-    let process_rss_before_bytes = process_rss_bytes()?;
     let build_start = Instant::now();
     let payload_bytes = GC_VALUE_SLOTS_PER_OBJECT * candidate.runtime.value_bytes();
     let one_round_bytes = object_count
@@ -5677,9 +5680,6 @@ fn run_gc_sample(
     let temporary_scope_roots = graph.roots.temporary_scope_roots;
     let before = heap.stats();
     let allocator_before = heap.allocator_stats();
-    let process_rss_after_build_bytes = process_rss_bytes()?;
-    let process_rss_delta_bytes =
-        process_rss_after_build_bytes.saturating_sub(process_rss_before_bytes);
     let build_ns = build_start.elapsed().as_nanos();
     let retained = heap.collect()?;
     if retained.reclaimed_objects != 0 || retained.live_objects_after != object_count as u64 {
@@ -5765,7 +5765,7 @@ fn run_gc_sample(
         encoded_object_values_resolved,
         reclaimed_after_root_release: released.reclaimed_objects,
         live_objects_after_release: stats.live_objects,
-        allocator_strategy: allocator_strategy.name(),
+        allocator_strategy: allocator_strategy.name().to_owned(),
         allocator_live_requested_bytes: allocator_before.live_requested_bytes,
         allocator_live_backing_bytes: allocator_before.live_backing_bytes,
         allocator_reserved_bytes_before_collection: allocator_before.reserved_bytes,
@@ -5776,9 +5776,6 @@ fn run_gc_sample(
         allocator_reused_allocations: allocator_before.reused_allocations,
         allocator_allocation_failures: allocator_before.allocation_failures,
         allocator_reserved_bytes_after_release: allocator_after_release.reserved_bytes,
-        process_rss_before_bytes,
-        process_rss_after_build_bytes,
-        process_rss_delta_bytes,
     })
 }
 
@@ -5790,8 +5787,11 @@ fn summarize_gc_collector(
     collector: CollectorKind,
     allocator_strategy: AllocatorStrategy,
     object_count: usize,
-    raw_samples: Vec<GcSample>,
+    worker_result: GcWorkerResult,
 ) -> Result<GcCollectorEvidence> {
+    let process_peak_rss_bytes = worker_result.process_peak_rss_bytes;
+    let process_peak_rss_delta_bytes = worker_result.process_peak_rss_delta_bytes;
+    let raw_samples = worker_result.samples;
     let first = raw_samples
         .first()
         .context("GC measurement samples missing")?;
@@ -5835,7 +5835,7 @@ fn summarize_gc_collector(
         .unwrap_or_default();
     Ok(GcCollectorEvidence {
         collector: collector.name(),
-        allocator_strategy: allocator_strategy.name(),
+        allocator_strategy: allocator_strategy.name().to_owned(),
         object_count,
         edge_count: first.graph_edges,
         interpreter_frame_roots: first.interpreter_frame_roots,
@@ -5850,27 +5850,110 @@ fn summarize_gc_collector(
         actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
         allocator_peak_reserved_bytes_max,
         allocator_peak_internal_fragmentation_bytes_max,
-        process_rss_before_bytes: byte_distribution(
-            raw_samples
-                .iter()
-                .map(|sample| sample.process_rss_before_bytes as f64)
-                .collect(),
-        ),
-        process_rss_after_build_bytes: byte_distribution(
-            raw_samples
-                .iter()
-                .map(|sample| sample.process_rss_after_build_bytes as f64)
-                .collect(),
-        ),
-        process_rss_delta_bytes: byte_distribution(
-            raw_samples
-                .iter()
-                .map(|sample| sample.process_rss_delta_bytes as f64)
-                .collect(),
-        ),
+        process_peak_rss_bytes,
+        process_peak_rss_delta_bytes,
         encoded_object_values_resolved: first.encoded_object_values_resolved,
         raw_samples,
     })
+}
+
+fn run_gc_worker_process(
+    candidate: Candidate,
+    collector: CollectorKind,
+    allocator_strategy: AllocatorStrategy,
+    warmups: usize,
+    samples: usize,
+    object_count: usize,
+) -> Result<GcWorkerResult> {
+    let executable = env::current_exe().context("resolve OGM-38 benchmark executable")?;
+    let candidate_name = candidate.name();
+    let output = Command::new(executable)
+        .arg("--gc-worker")
+        .arg(&candidate_name)
+        .arg(collector.name())
+        .arg(allocator_strategy.name())
+        .arg(warmups.to_string())
+        .arg(samples.to_string())
+        .arg(object_count.to_string())
+        .output()
+        .with_context(|| {
+            format!(
+                "launch isolated OGM-26 peak-memory worker for {candidate_name}/{} / {}",
+                collector.name(),
+                allocator_strategy.name()
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "isolated OGM-26 worker failed for {candidate_name}/{} / {}: {}{}",
+            collector.name(),
+            allocator_strategy.name(),
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    serde_json::from_slice(&output.stdout).with_context(|| {
+        format!(
+            "parse isolated OGM-26 worker report for {candidate_name}/{} / {}",
+            collector.name(),
+            allocator_strategy.name()
+        )
+    })
+}
+
+fn run_gc_worker_mode(arguments: &[String]) -> Result<()> {
+    if arguments.len() != 7 {
+        bail!(
+            "GC worker expects --gc-worker <candidate> <collector> <allocator> <warmups> <samples> <objects>"
+        );
+    }
+    let candidate = Candidate::ALL
+        .into_iter()
+        .find(|candidate| candidate.name() == arguments[1])
+        .context("unknown OGM-38 GC worker candidate")?;
+    let collector = CollectorKind::ALL
+        .into_iter()
+        .find(|collector| collector.name() == arguments[2])
+        .context("unknown OGM-26 GC worker collector")?;
+    let allocator_strategy = AllocatorStrategy::parse(&arguments[3])
+        .context("unknown OGM-24 GC worker allocator strategy")?;
+    let warmups = arguments[4].parse::<usize>().context("invalid GC worker warmup count")?;
+    let samples = arguments[5].parse::<usize>().context("invalid GC worker sample count")?;
+    let object_count = arguments[6].parse::<usize>().context("invalid GC worker object count")?;
+    if samples == 0 {
+        bail!("GC worker sample count must be positive");
+    }
+
+    let process_peak_rss_before_workload_bytes = process_peak_rss_bytes()?;
+    for _ in 0..warmups {
+        black_box(run_gc_sample(
+            candidate,
+            collector,
+            allocator_strategy,
+            object_count,
+        )?);
+    }
+    let mut raw_samples = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        raw_samples.push(run_gc_sample(
+            candidate,
+            collector,
+            allocator_strategy,
+            object_count,
+        )?);
+    }
+    let process_peak_rss_bytes = process_peak_rss_bytes()?;
+    let result = GcWorkerResult {
+        samples: raw_samples,
+        process_peak_rss_before_workload_bytes,
+        process_peak_rss_bytes,
+        process_peak_rss_delta_bytes: process_peak_rss_bytes
+            .saturating_sub(process_peak_rss_before_workload_bytes),
+    };
+    serde_json::to_writer(std::io::stdout().lock(), &result)
+        .context("serialize isolated GC worker report")?;
+    println!();
+    Ok(())
 }
 
 fn gc_evidence(
@@ -5879,85 +5962,64 @@ fn gc_evidence(
     samples: usize,
     object_count: usize,
 ) -> Result<GcEvidence> {
-    let collectors = CollectorKind::ALL;
     let mut collector_comparisons =
         Vec::with_capacity(AllocatorStrategy::ALL.len() * CollectorKind::ALL.len());
 
     for allocator_strategy in AllocatorStrategy::ALL {
-        let mut raw_samples: [Vec<GcSample>; 2] =
-            [Vec::with_capacity(samples), Vec::with_capacity(samples)];
-
-        // Alternate collector order for paired samples so the first collector
-        // does not always receive the colder cache/allocator state. Both GC
-        // collectors run against the same actual OGM-24 payload allocator.
-        for warmup in 0..warmups {
-            let order = if warmup % 2 == 0 { [0, 1] } else { [1, 0] };
-            for index in order {
-                black_box(run_gc_sample(
-                    candidate,
-                    collectors[index],
-                    allocator_strategy,
-                    object_count,
-                )?);
-            }
+        let mut worker_results = Vec::with_capacity(CollectorKind::ALL.len());
+        for collector in CollectorKind::ALL {
+            worker_results.push(run_gc_worker_process(
+                candidate,
+                collector,
+                allocator_strategy,
+                warmups,
+                samples,
+                object_count,
+            )?);
         }
 
-        for sample_index in 0..samples {
-            let order = if sample_index % 2 == 0 {
-                [0, 1]
-            } else {
-                [1, 0]
-            };
-            let mut pair: [Option<GcSample>; 2] = [None, None];
-            for index in order {
-                pair[index] = Some(run_gc_sample(
-                    candidate,
-                    collectors[index],
-                    allocator_strategy,
-                    object_count,
-                )?);
-            }
-            let first = pair[0].take().context("missing RC-cycle-removal sample")?;
-            let second = pair[1].take().context("missing MarkSweep sample")?;
-            if first.graph_edges != second.graph_edges
-                || first.interpreter_frame_roots != second.interpreter_frame_roots
-                || first.native_frame_roots != second.native_frame_roots
-                || first.persistent_host_handles != second.persistent_host_handles
-                || first.temporary_scope_roots != second.temporary_scope_roots
-                || first.logical_heap_bytes_before_collection
-                    != second.logical_heap_bytes_before_collection
-                || first.actual_value_storage_capacity_bytes
-                    != second.actual_value_storage_capacity_bytes
-                || first.allocator_live_requested_bytes != second.allocator_live_requested_bytes
-                || first.allocator_live_backing_bytes != second.allocator_live_backing_bytes
-                || first.allocator_reserved_bytes_before_collection
-                    != second.allocator_reserved_bytes_before_collection
-                || first.allocator_reserved_bytes_after_release
-                    != second.allocator_reserved_bytes_after_release
-                || first.reclaimed_after_root_release != second.reclaimed_after_root_release
-                || first.live_objects_after_release != second.live_objects_after_release
-            {
-                bail!(
-                    "OGM-26 collector pair did not execute an equivalent {} candidate workload",
-                    allocator_strategy.name()
-                );
-            }
-            raw_samples[0].push(first);
-            raw_samples[1].push(second);
+        let first = worker_results
+            .first()
+            .and_then(|worker| worker.samples.first())
+            .context("RC cycle-removal worker returned no samples")?;
+        let second = worker_results
+            .get(1)
+            .and_then(|worker| worker.samples.first())
+            .context("MarkSweep worker returned no samples")?;
+        if first.graph_edges != second.graph_edges
+            || first.interpreter_frame_roots != second.interpreter_frame_roots
+            || first.native_frame_roots != second.native_frame_roots
+            || first.persistent_host_handles != second.persistent_host_handles
+            || first.temporary_scope_roots != second.temporary_scope_roots
+            || first.logical_heap_bytes_before_collection
+                != second.logical_heap_bytes_before_collection
+            || first.actual_value_storage_capacity_bytes
+                != second.actual_value_storage_capacity_bytes
+            || first.allocator_live_requested_bytes != second.allocator_live_requested_bytes
+            || first.allocator_live_backing_bytes != second.allocator_live_backing_bytes
+            || first.allocator_reserved_bytes_before_collection
+                != second.allocator_reserved_bytes_before_collection
+            || first.allocator_reserved_bytes_after_release
+                != second.allocator_reserved_bytes_after_release
+            || first.reclaimed_after_root_release != second.reclaimed_after_root_release
+            || first.live_objects_after_release != second.live_objects_after_release
+        {
+            bail!(
+                "OGM-26 collectors did not execute an equivalent {} candidate workload",
+                allocator_strategy.name()
+            );
         }
 
-        collector_comparisons.push(summarize_gc_collector(
-            collectors[0],
-            allocator_strategy,
-            object_count,
-            std::mem::take(&mut raw_samples[0]),
-        )?);
-        collector_comparisons.push(summarize_gc_collector(
-            collectors[1],
-            allocator_strategy,
-            object_count,
-            std::mem::take(&mut raw_samples[1]),
-        )?);
+        for (collector, worker_result) in
+            CollectorKind::ALL.into_iter().zip(worker_results.into_iter())
+        {
+            collector_comparisons.push(summarize_gc_collector(
+                collector,
+                allocator_strategy,
+                object_count,
+                worker_result,
+            )?);
+        }
     }
 
     let graph_edges = collector_comparisons
@@ -5975,7 +6037,7 @@ fn gc_evidence(
     )?;
 
     Ok(GcEvidence {
-        collector_implementation: "OGM-26 RcCycleRemoval and MarkSweep",
+        collector_implementation: "OGM-26 RcCycleRemoval and MarkSweep with OGM-24 IsolateAllocator",
         object_count,
         graph_edges,
         value_slots_per_object: GC_VALUE_SLOTS_PER_OBJECT,
@@ -6395,12 +6457,16 @@ fn run(
 }
 
 pub fn parse_args_and_run() -> Result<()> {
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if arguments.first().is_some_and(|argument| argument == "--gc-worker") {
+        return run_gc_worker_mode(&arguments);
+    }
     let mut output = PathBuf::from("ogm38-native-value-ssa-report.json");
     let mut revision = env::var("GITHUB_SHA").unwrap_or_else(|_| "working-tree".to_owned());
     let mut iterations = 1_000_u64;
     let mut warmups = 3_usize;
     let mut samples = 101_usize;
-    let mut args = env::args().skip(1);
+    let mut args = arguments.into_iter();
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--output" => output = PathBuf::from(args.next().context("missing output path")?),
