@@ -408,6 +408,7 @@ dependencies = [
  "inkwell",
  "libloading",
  "ogma-gc-comparison-proof",
+ "ogma-isolate-allocator-proof",
  "ogma-host-execution-scope-proof",
  "ogma-native-runtime-boundary-proof",
  "ogma-rust-abi-proof",
@@ -424,6 +425,10 @@ version = "0.1.0"
 
 [[package]]
 name = "ogma-host-execution-scope-proof"
+version = "0.1.0"
+
+[[package]]
+name = "ogma-isolate-allocator-proof"
 version = "0.1.0"
 
 [[package]]
