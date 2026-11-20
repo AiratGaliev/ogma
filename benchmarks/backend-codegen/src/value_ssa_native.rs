@@ -5,7 +5,7 @@
 //! production ECMAScript Runtime or a general Core IR compiler.
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
-    ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Value, types},
+    ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
