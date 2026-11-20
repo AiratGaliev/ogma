@@ -1041,7 +1041,7 @@ fn define_candidate_numeric_binary(
     {
         let mut b = FunctionBuilder::new(&mut context.func, builder_context);
         let entry = b.create_block();
-        let invalid = b.create_block();
+        let invalid_block = b.create_block();
         let body = b.create_block();
         b.append_block_params_for_function_params(entry);
         let parameters = b.block_params(entry).to_vec();
@@ -1072,10 +1072,17 @@ fn define_candidate_numeric_binary(
                     right_tag,
                     number_tag,
                 );
-                let invalid_left =
-                    b.ins().bnot(left_valid);
-                let invalid_right =
-                    b.ins().bnot(right_valid);
+                let false_value = b.ins().iconst(types::I8, 0);
+                let invalid_left = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_valid,
+                    false_value,
+                );
+                let invalid_right = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    right_valid,
+                    false_value,
+                );
                 let left_bits = b.ins().load(
                     types::I64,
                     MemFlagsData::new(),
@@ -1088,6 +1095,10 @@ fn define_candidate_numeric_binary(
                     parameters[1],
                     8,
                 );
+                let left_noncanonical = is_noncanonical_nan_bits(&mut b, left_bits);
+                let right_noncanonical = is_noncanonical_nan_bits(&mut b, right_bits);
+                let invalid_left = b.ins().bor(invalid_left, left_noncanonical);
+                let invalid_right = b.ins().bor(invalid_right, right_noncanonical);
                 (left_bits, right_bits, invalid_left, invalid_right)
             }
             RuntimeLayout::NanBox8 => {
@@ -1101,8 +1112,9 @@ fn define_candidate_numeric_binary(
                 )
             }
         };
-        let invalid = b.ins().bor(invalid_left, invalid_right);
-        b.ins().brif(invalid, invalid_block, &[], body, &[]);
+        let invalid_condition = b.ins().bor(invalid_left, invalid_right);
+        b.ins()
+            .brif(invalid_condition, invalid_block, &[], body, &[]);
 
         b.switch_to_block(body);
         let (left, right) = match candidate.ssa {
