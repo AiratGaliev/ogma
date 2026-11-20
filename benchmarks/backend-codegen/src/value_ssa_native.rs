@@ -666,6 +666,8 @@ struct GcCollectorEvidence {
     actual_value_storage_capacity_bytes: usize,
     allocator_peak_reserved_bytes_max: usize,
     allocator_peak_internal_fragmentation_bytes_max: u64,
+    process_rss_before_bytes: ByteDistribution,
+    process_rss_after_build_bytes: ByteDistribution,
     process_rss_delta_bytes: ByteDistribution,
     encoded_object_values_resolved: usize,
     raw_samples: Vec<GcSample>,
@@ -5840,6 +5842,18 @@ fn summarize_gc_collector(
         actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
         allocator_peak_reserved_bytes_max,
         allocator_peak_internal_fragmentation_bytes_max,
+        process_rss_before_bytes: byte_distribution(
+            raw_samples
+                .iter()
+                .map(|sample| sample.process_rss_before_bytes as f64)
+                .collect(),
+        ),
+        process_rss_after_build_bytes: byte_distribution(
+            raw_samples
+                .iter()
+                .map(|sample| sample.process_rss_after_build_bytes as f64)
+                .collect(),
+        ),
         process_rss_delta_bytes: byte_distribution(
             raw_samples
                 .iter()
