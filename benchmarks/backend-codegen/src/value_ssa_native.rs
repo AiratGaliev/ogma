@@ -3296,9 +3296,34 @@ fn native_reference_identity_evidence(
     }
 }
 
+fn native_value_argument_for_slot(
+    candidate: Candidate,
+    storage: &[u64],
+    slot_index: usize,
+) -> Result<u64> {
+    match candidate.runtime {
+        RuntimeLayout::Tagged16 => {
+            let word_index = slot_index
+                .checked_mul(2)
+                .context("native Tagged16 slot index overflow")?;
+            storage
+                .get(word_index..word_index + 2)
+                .context("native Tagged16 Value slot out of bounds")?;
+            // SAFETY: the two-word slot was bounds-checked above and remains
+            // within the live storage allocation for the synchronous call.
+            Ok(unsafe { storage.as_ptr().add(word_index) as usize as u64 })
+        }
+        RuntimeLayout::NanBox8 => storage
+            .get(slot_index)
+            .copied()
+            .context("native NaNBox Value slot out of bounds"),
+    }
+}
+
 fn dispatch_native_semantic_inputs(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
+    strict_equal: NativeStrictEqual,
     inputs: &[SemanticValue],
     options: NativeSemanticDispatchOptions,
     value_move: NativeValueMove,
@@ -3325,6 +3350,23 @@ fn dispatch_native_semantic_inputs(
     }
 
     let reference_count = references.len();
+    let native_strict_equal_result = if let Some((left_slot, right_slot)) = options.strict_equal_slots {
+        let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
+        let right = native_value_argument_for_slot(candidate, &storage, right_slot)?;
+        // SAFETY: both arguments use the candidate layout emitted together
+        // with the native strict-equality function pointer.
+        match unsafe { strict_equal(left, right) } {
+            0 => Some(false),
+            1 => Some(true),
+            status => bail!(
+                "{} generated native strict equality returned invalid boolean status {status}",
+                candidate.name()
+            ),
+        }
+    } else {
+        None
+    };
+
     if options.perform_native_transition {
         if inputs.len() != 2
             || !matches!(inputs[0], SemanticValue::Number(_))
@@ -3431,6 +3473,7 @@ fn dispatch_native_semantic_inputs(
         forced_collections,
         aot_host_call,
         native_host_callback: context_native_host_callback,
+        native_strict_equal_result,
         reference_tokens,
     })
 }
@@ -3448,6 +3491,11 @@ fn run_native_value_semantics(
             .get::<NativeValueMove>(b"ogma_value_move\0")
             .context("generated native Value slot-move entry point missing")?
     };
+    let strict_equal = unsafe {
+        *library
+            .get::<NativeStrictEqual>(b"ogma_value_strict_equal\0")
+            .context("generated native strict-equality entry point missing")?
+    };
     let mut evidence = Vec::new();
     let mut total_callbacks = 0;
     let mut total_forced_collections = 0;
@@ -3458,15 +3506,27 @@ fn run_native_value_semantics(
         );
         let invoke_call_boundary = case.name == "call-boundary";
         let invoke_host_echo = case.name == "host-call-echo";
+        let strict_equal_slots = match case.name {
+            "nan-strict-equality"
+            | "signed-zero-strict-equality"
+            | "object-identity-same"
+            | "object-identity-distinct"
+            | "symbol-identity-same"
+            | "symbol-identity-distinct" => Some((0, 1)),
+            "call-boundary" => Some((3, 4)),
+            _ => None,
+        };
         let dispatched = dispatch_native_semantic_inputs(
             candidate,
             dispatch,
+            strict_equal,
             &case.inputs,
             NativeSemanticDispatchOptions {
                 invoke_aot_host,
                 invoke_call_boundary,
                 invoke_host_echo,
                 perform_native_transition: case.name == "type-transition-number-to-string",
+                strict_equal_slots,
             },
             value_move,
         )?;
@@ -3476,6 +3536,7 @@ fn run_native_value_semantics(
             forced_collections,
             aot_host_call,
             native_host_callback,
+            native_strict_equal_result,
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
@@ -3483,20 +3544,41 @@ fn run_native_value_semantics(
             actual = SemanticCompletion::Normal(SemanticValue::Number(host_callback.result_bits));
             actual_host_trace = vec![host_callback.trace.clone()];
         }
-        let (native_reference_identity_preserved, native_reference_equality_result) =
+        let (native_reference_identity_preserved, expected_reference_equality) =
             native_reference_identity_evidence(case.name, &reference_tokens);
-        let equality_completion = native_reference_equality_result.filter(|_| {
-            matches!(
-                case.name,
-                "nan-strict-equality"
-                    | "signed-zero-strict-equality"
-                    | "object-identity-same"
-                    | "object-identity-distinct"
-                    | "symbol-identity-same"
-                    | "symbol-identity-distinct"
-            )
-        });
-        if let Some(equality_result) = equality_completion {
+        if let Some(expected_equal) = expected_reference_equality {
+            if native_strict_equal_result != Some(expected_equal) {
+                bail!(
+                    "{} generated native strict equality disagreed with encoded HostHandle identity for {}",
+                    candidate.name(),
+                    case.name
+                );
+            }
+        }
+        let equality_case = matches!(
+            case.name,
+            "nan-strict-equality"
+                | "signed-zero-strict-equality"
+                | "object-identity-same"
+                | "object-identity-distinct"
+                | "symbol-identity-same"
+                | "symbol-identity-distinct"
+        );
+        if equality_case {
+            let equality_result = native_strict_equal_result.context(
+                "native strict-equality case did not execute its generated candidate function",
+            )?;
+            let expected = match case.expected {
+                SemanticCompletion::Normal(SemanticValue::Boolean(value)) => value,
+                _ => bail!("{} expected strict-equality case has no boolean completion", case.name),
+            };
+            if equality_result != expected {
+                bail!(
+                    "{} generated native strict equality returned {equality_result} for {}, expected {expected}",
+                    candidate.name(),
+                    case.name
+                );
+            }
             actual = SemanticCompletion::Normal(SemanticValue::Boolean(equality_result));
         }
         if invoke_aot_host {
@@ -3586,7 +3668,8 @@ fn run_native_value_semantics(
             aot_host_call,
             native_host_callback,
             native_reference_identity_preserved,
-            native_reference_equality_result,
+            native_reference_equality_result: native_strict_equal_result,
+            native_strict_equal_executed: native_strict_equal_result.is_some(),
             native_store_load_transition,
             matches,
         });
