@@ -1339,7 +1339,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             RuntimeLayout::NanBox8 => (&NANBOX_VALUE_TAGS, NANBOX_VALUE_TAGS.len()),
         };
         let first_tag = b.ins().iconst(types::I64, allowed_tags[0] as i64);
-        let mut is_supported_value = b.ins().icmp(
+        let mut has_known_tag = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             tag,
             first_tag,
@@ -1356,7 +1356,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 tag,
                 expected_tag,
             );
-            is_supported_value = b.ins().bor(is_supported_value, matches);
+            has_known_tag = b.ins().bor(has_known_tag, matches);
         }
         let zero = b.ins().iconst(types::I64, 0);
         let one = b.ins().iconst(types::I64, 1);
@@ -1415,7 +1415,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     valid_immediate_or_boolean,
                     valid_number_or_reference,
                 );
-                b.ins().band(is_supported_value, valid_payload)
+                b.ins().band(has_known_tag, valid_payload)
             }
             RuntimeLayout::NanBox8 => {
                 let tag_is = |builder: &mut FunctionBuilder<'_>, expected: u64| {
@@ -1449,7 +1449,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let valid_special_payload =
                     b.ins().bor(valid_immediate_or_boolean, valid_reference);
                 let valid_special =
-                    b.ins().band(is_supported_value, valid_special_payload);
+                    b.ins().band(has_known_tag, valid_special_payload);
                 let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
                 let valid_number = b.ins().bnot(invalid_number);
                 b.ins().bor(valid_special, valid_number)
