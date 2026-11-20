@@ -9,6 +9,7 @@ import math
 import unittest
 from pathlib import Path
 
+import export_ogm38_raw_samples as exporter
 import validate_ogm38_ogm31 as proof
 
 
@@ -268,24 +269,23 @@ def make_reports():
 
 class Ogm38Ogm31ValidationTests(unittest.TestCase):
     def test_committed_primary_native_samples_are_complete_and_pinned(self):
-        path = (
-            Path(__file__).parent
-            / "results"
-            / "ogm38-primary-benchmark-samples.json"
+        results = Path(__file__).parent / "results"
+        report = json.loads(
+            (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
         )
-        report = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertEqual("ogma.ogm38.primary-benchmark-samples", report["schema"])
-        self.assertEqual(1, report["version"])
-        self.assertEqual(
-            "dfea7ebc25eec61665c93cfff5470251e00519df",
-            report["source_revision"],
-        )
+        self.assertEqual(2, report["version"])
         self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(40, len(report["source_revision"]))
         self.assertEqual(101, report["samples_per_metric"])
         self.assertEqual(3, report["warmups"])
         self.assertEqual(1000, report["iterations_per_throughput_sample"])
         self.assertEqual("x86_64-unknown-linux-gnu", report["target"])
+        self.assertTrue(report["run_url"].startswith("https://github.com/AiratGaliev/ogma/actions/runs/"))
+        self.assertTrue(report["full_report_artifact_url"].startswith("https://github.com/AiratGaliev/ogma/actions/runs/"))
+        self.assertEqual(64, len(report["full_report_sha256"]))
+        self.assertEqual(64, len(report["differential_report_sha256"]))
 
         expected_candidates = {
             "tagged-16-boxed",
@@ -294,13 +294,11 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "nanbox-8-representation-aware",
         }
         candidates = report["candidates"]
-        self.assertEqual(
-            expected_candidates,
-            {candidate["name"] for candidate in candidates},
-        )
+        self.assertEqual(expected_candidates, {candidate["name"] for candidate in candidates})
         self.assertEqual(4, len(candidates))
         for candidate in candidates:
             with self.subTest(candidate=candidate["name"]):
+                self.assertIn(candidate["runtime_value_bytes"], (8, 16))
                 for metric in ("compile_ns", "native_loop_ns_per_call"):
                     samples = candidate[metric]
                     self.assertEqual(101, len(samples), metric)
@@ -314,40 +312,25 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                         ),
                         metric,
                     )
+                self.assertTrue(candidate["all_semantic_cases_match"])
+                self.assertEqual(31, candidate["semantic_cases_passed"])
+                self.assertEqual(5, candidate["native_batch_invocations"])
+                self.assertEqual(77, candidate["native_value_dispatches"])
+                self.assertEqual(20, candidate["reference_values_resolved_after_forced_gc"])
 
-        self.assertTrue(report["run_url"].endswith("/44730458468"))
-        self.assertEqual(
-            "https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465",
-            report["full_report_artifact_url"],
-        )
-        self.assertEqual(
-            "05de9c347b24ea27f3a91bae604c5a768519cfd2d92d6e28544b4b44ec2c49a1",
-            report["full_report_sha256"],
-        )
-
-    def test_committed_runtime_raw_samples_cover_gc_and_allocator(self):
-        path = (
-            Path(__file__).parent
-            / "results"
-            / "ogm38-runtime-raw-samples.json.gz"
-        )
-        raw_bytes = path.read_bytes()
-        self.assertEqual(
-            "e250675df6142ef5c9e21fad0645d4986d9de4bdafd5ad1a2dbfc799c54dd32e",
-            hashlib.sha256(raw_bytes).hexdigest(),
-        )
-        report = json.loads(gzip.decompress(raw_bytes).decode("utf-8"))
+    def test_committed_runtime_raw_samples_cover_integrated_gc_allocator_and_peak_rss(self):
+        path = Path(__file__).parent / "results" / "ogm38-runtime-raw-samples.json.gz"
+        report = json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
 
         self.assertEqual("ogma.ogm38.runtime-raw-samples", report["schema"])
-        self.assertEqual(1, report["version"])
-        self.assertEqual(
-            "dfea7ebc25eec61665c93cfff5470251e00519df",
-            report["source_revision"],
-        )
+        self.assertEqual(2, report["version"])
         self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(40, len(report["source_revision"]))
         self.assertEqual(101, report["sample_count"])
         self.assertEqual(3, report["warmups"])
         self.assertEqual("x86_64-unknown-linux-gnu", report["target"])
+        self.assertIn("VmHWM", report["rss_method"])
+        self.assertIn("isolated child", report["rss_method"])
 
         expected_candidates = {
             "tagged-16-boxed",
@@ -355,44 +338,80 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "nanbox-8-boxed",
             "nanbox-8-representation-aware",
         }
+        expected_pairs = {
+            (collector, allocator)
+            for collector in ("rc-cycle-removal", "non-moving-mark-sweep")
+            for allocator in (
+                "system-allocator",
+                "per-isolate-exact-reuse",
+                "per-isolate-size-class-pool",
+            )
+        }
         candidates = report["candidates"]
         self.assertEqual(expected_candidates, {item["name"] for item in candidates})
         self.assertEqual(4, len(candidates))
-
-        expected_collectors = {"non-moving-mark-sweep", "rc-cycle-removal"}
-        expected_allocators = {
-            "system-allocator",
-            "per-isolate-exact-reuse",
-            "per-isolate-size-class-pool",
-        }
         for candidate in candidates:
             with self.subTest(candidate=candidate["name"]):
-                self.assertEqual(expected_collectors, set(candidate["gc"]))
-                self.assertEqual(expected_allocators, set(candidate["allocator"]))
-
-                for collector, metrics in candidate["gc"].items():
-                    for metric in (
-                        "collection_ns",
-                        "root_scan_ns",
-                        "release_collection_ns",
-                    ):
-                        samples = metrics[metric]
-                        self.assertEqual(101, len(samples), f"{collector}.{metric}")
-                        self.assertTrue(all(value > 0 for value in samples))
-                    self.assertGreater(metrics["peak_logical_heap_bytes"], 0)
-
-                for strategy, metrics in candidate["allocator"].items():
-                    for metric in ("allocation_ns", "deallocation_ns"):
-                        samples = metrics[metric]
-                        self.assertEqual(101, len(samples), f"{strategy}.{metric}")
-                        self.assertTrue(all(value > 0 for value in samples))
-                    self.assertEqual(0, metrics["allocation_failures"])
-                    self.assertGreater(metrics["peak_reserved_bytes"], 0)
+                comparisons = candidate["collector_comparisons"]
+                self.assertEqual(6, len(comparisons))
+                self.assertEqual(
+                    expected_pairs,
+                    {(item["collector"], item["allocator_strategy"]) for item in comparisons},
+                )
+                for item in comparisons:
+                    self.assertEqual(101, len(item["raw_samples"]))
+                    self.assertGreater(item["process_peak_rss_baseline_bytes"], 0)
+                    self.assertGreater(item["process_peak_rss_bytes"], 0)
                     self.assertGreaterEqual(
-                        metrics["peak_internal_fragmentation_bytes"],
-                        0,
+                        item["process_peak_rss_bytes"],
+                        item["process_peak_rss_baseline_bytes"],
                     )
+                    self.assertEqual(
+                        item["process_peak_rss_bytes"] - item["process_peak_rss_baseline_bytes"],
+                        item["process_peak_rss_delta_bytes"],
+                    )
+                    self.assertEqual(101, len(item["build_ns"]))
+                    self.assertEqual(101, len(item["collection_ns"]))
+                    self.assertEqual(101, len(item["root_scan_ns"]))
+                    self.assertEqual(101, len(item["cleanup_collection_ns"]))
+                    self.assertGreater(item["actual_value_storage_capacity_bytes"], 0)
 
+                allocator = candidate["allocator_comparisons"]
+                self.assertEqual(
+                    {
+                        "system-allocator",
+                        "per-isolate-exact-reuse",
+                        "per-isolate-size-class-pool",
+                    },
+                    {item["strategy"] for item in allocator},
+                )
+                for item in allocator:
+                    self.assertEqual(101, len(item["raw_samples"]))
+                    self.assertEqual(101, len(item["allocation_ns_per_sample"]))
+                    self.assertEqual(101, len(item["deallocation_ns_per_sample"]))
+                    self.assertEqual(0, item["allocation_failures_total"])
+
+    def test_committed_full_native_and_differential_reports_match_the_projections(self):
+        results = Path(__file__).parent / "results"
+        primary = json.loads(
+            (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
+        )
+        native_bytes = gzip.decompress(
+            (results / "ogm38-native-value-ssa-report.json.gz").read_bytes()
+        )
+        differential_bytes = (
+            results / "ogm38-ogm31-differential-report.json"
+        ).read_bytes()
+        self.assertEqual(primary["full_report_sha256"], hashlib.sha256(native_bytes).hexdigest())
+        self.assertEqual(
+            primary["differential_report_sha256"],
+            hashlib.sha256(differential_bytes).hexdigest(),
+        )
+        native = json.loads(native_bytes.decode("utf-8"))
+        differential = json.loads(differential_bytes.decode("utf-8"))
+        exporter.validate_reports(native, differential)
+        self.assertEqual(primary["source_revision"], native["source_revision"])
+        self.assertEqual(primary["source_revision"], differential["native_revision"])
     def test_all_four_candidates_match_the_same_ogm31_oracle(self):
         native, dual = make_reports()
         result = proof.validate_reports(native, dual)
