@@ -6001,10 +6001,7 @@ fn gc_evidence(
             );
         }
 
-        for (collector, worker_result) in CollectorKind::ALL
-            .into_iter()
-            .zip(worker_results)
-        {
+        for (collector, worker_result) in CollectorKind::ALL.into_iter().zip(worker_results) {
             collector_comparisons.push(summarize_gc_collector(
                 collector,
                 allocator_strategy,
