@@ -4587,14 +4587,14 @@ fn run(
             ),
             (
                 "gc_and_heap",
-                "OGM-26 RcCycleRemoval and MarkSweep graph/roots with generation-checked GcRef and HostHandle lifetimes; OGM-29 separately allocates matching Value-storage and per-object payload backing blocks with System, exact-reuse and size-class strategies; allocator peaks are not process RSS",
+                "OGM-26 RcCycleRemoval and MarkSweep graph/roots with generation-checked GcRef and HostHandle lifetimes; OGM-24 separately allocates matching Value-storage and per-object payload backing blocks with System, exact-reuse and size-class strategies; allocator peaks are not process RSS",
             ),
         ]),
         unsupported_native_semantics: vec![
             "The native OGM-38 fast loop is a Number-only Core IR specialization; BigInt arithmetic, string concatenation, object ToPrimitive and general ECMAScript operator lowering remain in the OGM-31 interpreter/native backend semantic proof rather than this four-layout Cranelift loop",
-            "OGM-26 collector reachability and OGM-29 physical allocator backing are measured as equivalent M0 workloads, but OGM-29 sidecar payload blocks are not wired into a production Runtime object-cell allocator",
+            "OGM-26 collector reachability and OGM-24 physical allocator backing are measured as equivalent M0 workloads, but OGM-24 sidecar payload blocks are not wired into a production Runtime object-cell allocator",
             "OGM-27 shadow-frame/root-map and OGM-19/32 ABI behavior are M0 executable models; no production machine stack-map encoder or production Runtime is claimed",
-            "OS process RSS and allocator fragmentation external to the OGM-29 allocator are not attributed per candidate; reported peak reserved/live/fragmentation counters are the allocator's exact M0 accounting",
+            "OS process RSS and allocator fragmentation external to the OGM-24 allocator are not attributed per candidate; reported peak reserved/live/fragmentation counters are the allocator's exact M0 accounting",
         ],
     };
     let output_path = output.to_path_buf();
