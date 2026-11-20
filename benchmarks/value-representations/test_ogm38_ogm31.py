@@ -304,6 +304,29 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "fixture set drifted"):
             proof.validate_reports(native, dual)
 
+    def test_rejects_non_native_strict_equality_or_fixture_drift(self):
+        native, dual = make_reports()
+        first = native["candidates"][0]
+        first["native_value_semantics"]["cases"][0]["native_strict_equal_executed"] = False
+        with self.assertRaisesRegex(RuntimeError, "generated native strict equality"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        first = native["candidates"][0]
+        first["native_core_ir_corpus"]["fixtures"][0]["path"] = (
+            "tests/core-ir/fixtures/unrelated.json"
+        )
+        with self.assertRaisesRegex(RuntimeError, "exact OGM-31 set"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        first = native["candidates"][0]
+        first["native_core_ir_execution"]["strict_equal_native_code"][
+            "symbol"
+        ] = "not-generated"
+        with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
     def test_rejects_unbalanced_native_roots(self):
         native, dual = make_reports()
         native["candidates"][0]["native_shadow_roots"]["all_roots_reclaimed"] = False
