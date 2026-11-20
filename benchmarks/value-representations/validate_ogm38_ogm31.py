@@ -95,8 +95,11 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
     differential = dual.get("differential_observations")
     if not isinstance(differential, dict) or differential.get("all_equal") is not True:
         raise RuntimeError("OGM-31 did not prove equal portable/Cranelift/LLVM observations")
-    fixture_ids = {item.get("id") for item in dual.get("source_fixtures", [])}
-    if fixture_ids != EXPECTED_FIXTURES:
+    source_fixtures = dual.get("source_fixtures", [])
+    fixture_ids = {
+        item.get("id") for item in source_fixtures if isinstance(item, dict)
+    }
+    if len(source_fixtures) != len(EXPECTED_FIXTURES) or fixture_ids != EXPECTED_FIXTURES:
         raise RuntimeError(
             f"OGM-31 fixture set drifted: expected {sorted(EXPECTED_FIXTURES)}, got {sorted(fixture_ids)}"
         )
@@ -252,10 +255,23 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
             raise RuntimeError(
                 f"{name}: native Core IR fixture paths differ from the exact OGM-31 set"
             )
-        summed_dispatches = sum(item.get("native_value_dispatches", 0) for item in fixture_reports)
-        summed_reference_resolutions = sum(
-            item.get("reference_values_resolved_after_forced_gc", 0) for item in fixture_reports
-        )
+        fixture_dispatch_counts = [item.get("native_value_dispatches") for item in fixture_reports]
+        fixture_reference_counts = [
+            item.get("reference_values_resolved_after_forced_gc") for item in fixture_reports
+        ]
+        if (
+            any(
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+                for value in fixture_dispatch_counts
+            )
+            or any(
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+                for value in fixture_reference_counts
+            )
+        ):
+            raise RuntimeError(f"{name}: native per-fixture dispatch/root counts are invalid")
+        summed_dispatches = sum(fixture_dispatch_counts)
+        summed_reference_resolutions = sum(fixture_reference_counts)
         if (
             corpus.get("native_value_dispatches") != summed_dispatches
             or corpus.get("reference_values_resolved_after_forced_gc") != summed_reference_resolutions
