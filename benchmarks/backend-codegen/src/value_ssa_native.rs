@@ -73,6 +73,7 @@ fn canonical_number_bits(value: f64) -> u64 {
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
+type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
 
 struct NativeHandleCallbackContext {
     heap: *mut GcHeap,
@@ -663,6 +664,7 @@ struct NativeValueSemanticCaseEvidence {
     forced_collections: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_reference_identity_preserved: bool,
+    native_store_load_transition: bool,
     matches: bool,
 }
 
@@ -1053,6 +1055,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
     let pressure_function =
         module.declare_function("ogma_value_pressure", Linkage::Export, &pressure_signature)?;
+    let mut move_signature = module.make_signature();
+    move_signature.params.extend([types::I64, types::I64].into_iter().map(AbiParam::new));
+    move_signature.returns.push(AbiParam::new(types::I32));
+    let move_function =
+        module.declare_function("ogma_value_move", Linkage::Export, &move_signature)?;
 
     let mut context = module.make_context();
     context.func.signature = signature;
@@ -1721,6 +1728,34 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         b.finalize(module.target_config());
     }
     module.define_function(pressure_function, &mut context)?;
+    module.clear_context(&mut context);
+
+    // Replace one complete candidate Value slot through generated native code.
+    context.func.signature = move_signature;
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, &mut builder_context);
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let parameters = b.block_params(entry).to_vec();
+        b.switch_to_block(entry);
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let tag = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                let payload = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                b.ins().store(MemFlagsData::new(), tag, parameters[0], 0);
+                b.ins().store(MemFlagsData::new(), payload, parameters[0], 8);
+            }
+            RuntimeLayout::NanBox8 => {
+                let word = b.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                b.ins().store(MemFlagsData::new(), word, parameters[0], 0);
+            }
+        }
+        let ok = b.ins().iconst(types::I32, 0);
+        b.ins().return_(&[ok]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(move_function, &mut context)?;
     module.clear_context(&mut context);
 
     let product = module.finish();
@@ -2628,18 +2663,16 @@ fn evaluate_semantic_case(
             semantic_strict_equal(&values[0], &values[1]),
         )),
         "type-transition-number-to-string" => {
-            // Verify that a mutable binding changes from the first input's
-            // representation to the second, then reload the stored value.
-            let initial_type = std::mem::discriminant(&values[0]);
-            let transitioned_value = values[1].clone();
-            let transitioned_type = std::mem::discriminant(&transitioned_value);
-            if initial_type == transitioned_type {
+            if matches!(
+                (&values[0], &values[1]),
+                (SemanticValue::String(left), SemanticValue::String(right)) if left == right
+            ) {
+                SemanticCompletion::Normal(values[0].clone())
+            } else {
                 SemanticCompletion::Throw {
-                    name: "TypeTransitionNotObserved",
+                    name: "NativeTypeTransitionNotObserved",
                     value: None,
                 }
-            } else {
-                SemanticCompletion::Normal(transitioned_value)
             }
         }
         "exception-passthrough" => SemanticCompletion::Throw {
@@ -2747,6 +2780,8 @@ fn dispatch_native_semantic_inputs(
     dispatch: NativeHandleDispatch,
     inputs: &[SemanticValue],
     invoke_aot_host: bool,
+    perform_native_transition: bool,
+    value_move: NativeValueMove,
 ) -> Result<(
     Vec<SemanticValue>,
     usize,
@@ -2776,6 +2811,25 @@ fn dispatch_native_semantic_inputs(
     }
 
     let reference_count = references.len();
+    if perform_native_transition {
+        if inputs.len() != 2
+            || !matches!(inputs[0], SemanticValue::Number(_))
+            || !matches!(inputs[1], SemanticValue::String(_))
+        {
+            bail!("native type-transition fixture must replace Number with String");
+        }
+        let stride = match candidate.runtime {
+            RuntimeLayout::Tagged16 => 2,
+            RuntimeLayout::NanBox8 => 1,
+        };
+        let destination = storage.as_mut_ptr() as usize as u64;
+        let source = unsafe { storage.as_mut_ptr().add(stride) as usize as u64 };
+        // SAFETY: source and destination are live candidate-layout slots.
+        let status = unsafe { value_move(destination, source) };
+        if status != 0 {
+            bail!("{} generated native Value move returned status {status}", candidate.name());
+        }
+    }
     let aot_table = if invoke_aot_host {
         let table = crate::aot_host_abi::AotHostFunctionTable::new(
             ogma_native_runtime_boundary_proof::CancellationToken::default(),
@@ -2861,6 +2915,11 @@ fn run_native_value_semantics(
             .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
             .context("generated native Value dispatch entry point missing for semantic suite")?
     };
+    let value_move = unsafe {
+        *library
+            .get::<NativeValueMove>(b"ogma_value_move\0")
+            .context("generated native Value slot-move entry point missing")?
+    };
     let mut evidence = Vec::new();
     let mut total_callbacks = 0;
     let mut total_forced_collections = 0;
@@ -2872,7 +2931,14 @@ fn run_native_value_semantics(
             forced_collections,
             aot_host_call,
             reference_tokens,
-        ) = dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs, invoke_aot_host)?;
+        ) = dispatch_native_semantic_inputs(
+            candidate,
+            dispatch,
+            &case.inputs,
+            invoke_aot_host,
+            case.name == "type-transition-number-to-string",
+            value_move,
+        )?;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
         let native_reference_identity_preserved = match case.name {
             "object-identity-same" | "symbol-identity-same" => {
@@ -2946,9 +3012,17 @@ fn run_native_value_semantics(
             .iter()
             .map(|value| format!("{value:?}"))
             .collect();
+        let native_store_load_transition = case.name != "type-transition-number-to-string"
+            || (matches!(case.inputs[0], SemanticValue::Number(_))
+                && matches!(case.inputs[1], SemanticValue::String(_))
+                && matches!(
+                    (&observed[0], &observed[1]),
+                    (SemanticValue::String(left), SemanticValue::String(right)) if left == right
+                ));
         let matches = actual == case.expected
             && actual_host_trace == case.expected_host_trace
-            && native_reference_identity_preserved;
+            && native_reference_identity_preserved
+            && native_store_load_transition;
         if !matches {
             bail!(
                 "{} native Value semantic case {} differed: expected {:?} / {:?}, got {:?} / {:?}",
@@ -2973,6 +3047,7 @@ fn run_native_value_semantics(
             forced_collections,
             aot_host_call,
             native_reference_identity_preserved,
+            native_store_load_transition,
             matches,
         });
     }
