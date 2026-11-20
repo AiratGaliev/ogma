@@ -99,6 +99,8 @@ struct NativeHandleCallbackContext {
     calls: u64,
     collections: u64,
     force_collection: bool,
+    last_tag: u64,
+    last_token: u64,
 }
 
 // SAFETY: the function pointer is called only by this synchronous native
@@ -115,6 +117,8 @@ unsafe extern "C" fn resolve_native_handle_callback(
     // the entire synchronous native call; no concurrent access is performed.
     let context = unsafe { &mut *(context_pointer as *mut NativeHandleCallbackContext) };
     context.calls += 1;
+    context.last_tag = tag;
+    context.last_token = token;
     if tag != context.expected_tag || context.heap.is_null() {
         return 2;
     }
@@ -1613,6 +1617,8 @@ fn run_native_handle_dispatch_validation(
             calls: 0,
             collections: 0,
             force_collection: true,
+            last_tag: 0,
+            last_token: 0,
         };
         let context_argument =
             &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
@@ -1697,6 +1703,8 @@ fn run_native_handle_dispatch_validation(
             calls: 0,
             collections: 0,
             force_collection: false,
+            last_tag: 0,
+            last_token: 0,
         };
         let context_argument =
             &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
@@ -1790,10 +1798,12 @@ fn run_native_handle_dispatch_validation(
         let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
         if status != 1 || callback_context.calls != 0 || callback_context.collections != 0 {
             bail!(
-                "{} native helper accepted malformed {} encoding (status={status}, callbacks={})",
+                "{} native helper accepted malformed {} encoding (status={status}, callbacks={}, callback_tag={:#x}, callback_token={:#x})",
                 candidate.name(),
                 label,
-                callback_context.calls
+                callback_context.calls,
+                callback_context.last_tag,
+                callback_context.last_token
             );
         }
         invalid_value_encodings_rejected += 1;
@@ -1829,6 +1839,8 @@ fn run_native_handle_dispatch_validation(
         calls: 0,
         collections: 0,
         force_collection: false,
+        last_tag: 0,
+        last_token: 0,
     };
     let context_argument =
         &mut callback_context as *mut NativeHandleCallbackContext as usize as u64;
