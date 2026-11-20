@@ -1053,18 +1053,12 @@ fn define_candidate_numeric_binary(
 
         let (left_bits, right_bits, invalid_left, invalid_right) = match candidate.runtime {
             RuntimeLayout::Tagged16 => {
-                let left_tag = b.ins().load(
-                    types::I64,
-                    MemFlagsData::new(),
-                    parameters[0],
-                    0,
-                );
-                let right_tag = b.ins().load(
-                    types::I64,
-                    MemFlagsData::new(),
-                    parameters[1],
-                    0,
-                );
+                let left_tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0);
+                let right_tag = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0);
                 let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
                 let left_valid = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
@@ -1087,18 +1081,12 @@ fn define_candidate_numeric_binary(
                     right_valid,
                     false_value,
                 );
-                let left_bits = b.ins().load(
-                    types::I64,
-                    MemFlagsData::new(),
-                    parameters[0],
-                    8,
-                );
-                let right_bits = b.ins().load(
-                    types::I64,
-                    MemFlagsData::new(),
-                    parameters[1],
-                    8,
-                );
+                let left_bits = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_bits = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let left_noncanonical = is_noncanonical_nan_bits(&mut b, left_bits);
                 let right_noncanonical = is_noncanonical_nan_bits(&mut b, right_bits);
                 let invalid_left = b.ins().bor(invalid_left, left_noncanonical);
@@ -1108,12 +1096,7 @@ fn define_candidate_numeric_binary(
             RuntimeLayout::NanBox8 => {
                 let invalid_left = nanbox_word_is_non_number(&mut b, parameters[0]);
                 let invalid_right = nanbox_word_is_non_number(&mut b, parameters[1]);
-                (
-                    parameters[0],
-                    parameters[1],
-                    invalid_left,
-                    invalid_right,
-                )
+                (parameters[0], parameters[1], invalid_left, invalid_right)
             }
         };
         let invalid_condition = b.ins().bor(invalid_left, invalid_right);
@@ -1170,10 +1153,9 @@ fn define_candidate_numeric_binary(
         b.ins().return_(&[ok]);
 
         b.switch_to_block(invalid_block);
-        let status = b.ins().iconst(
-            types::I32,
-            if operation == "dynamic_add" { 2 } else { 1 },
-        );
+        let status = b
+            .ins()
+            .iconst(types::I32, if operation == "dynamic_add" { 2 } else { 1 });
         b.ins().return_(&[status]);
         b.seal_all_blocks();
         b.finalize(module.target_config());
@@ -1207,7 +1189,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             .into_iter()
             .map(AbiParam::new),
     );
-    numeric_binary_signature.returns.push(AbiParam::new(types::I32));
+    numeric_binary_signature
+        .returns
+        .push(AbiParam::new(types::I32));
     let branch_function = module.declare_function(
         "ogma_value_branch",
         Linkage::Export,
@@ -2579,8 +2563,7 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
                 // six decoded Values; the callback models callee.call(receiver,
                 // text + numeric), records the same host trace, and returns 8.
                 let result = receiver + mixed_argument.chars().count() as f64;
-                let trace =
-                    format!("benchmark.host.call_target([{receiver},{mixed_argument:?}])");
+                let trace = format!("benchmark.host.call_target([{receiver},{mixed_argument:?}])");
                 context.native_host_callback = Some(NativeHostCallbackEvidence {
                     symbol: "benchmark.host.call_target".to_owned(),
                     arguments: vec![receiver.to_string(), mixed_argument.clone()],
@@ -2954,9 +2937,7 @@ fn semantic_cases() -> Vec<SemanticCase> {
                 number_5.clone(),
             ],
             expected: SemanticCompletion::Normal(semantic_number(8.0)),
-            expected_host_trace: vec![
-                "benchmark.host.call_target([2,\"item=5\"])".to_owned(),
-            ],
+            expected_host_trace: vec!["benchmark.host.call_target([2,\"item=5\"])".to_owned()],
         },
         SemanticCase {
             name: "host-call-generic-add",
