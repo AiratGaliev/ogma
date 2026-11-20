@@ -1358,46 +1358,43 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             );
             is_supported_value = b.ins().bor(is_supported_value, matches);
         }
+        let zero = b.ins().iconst(types::I64, 0);
+        let one = b.ins().iconst(types::I64, 1);
+        let max_payload = b.ins().iconst(types::I64, MAX_PAYLOAD as i64);
         let payload_is_zero = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             payload,
-            b.ins().iconst(types::I64, 0),
+            zero,
         );
         let payload_is_nonzero = b.ins().bnot(payload_is_zero);
         let payload_is_boolean = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
             payload,
-            b.ins().iconst(types::I64, 1),
+            one,
         );
 
-        let valid_value_payload = match candidate.runtime {
+        let is_supported_value = match candidate.runtime {
             RuntimeLayout::Tagged16 => {
                 let tag_is = |builder: &mut FunctionBuilder<'_>, expected: u64| {
-                    let expected = builder.ins().iconst(types::I64, expected as i64);
+                    let expected_value = builder.ins().iconst(types::I64, expected as i64);
                     builder.ins().icmp(
                         cranelift_codegen::ir::condcodes::IntCC::Equal,
                         tag,
-                        expected,
+                        expected_value,
                     )
                 };
-                let undefined_or_null = b
-                    .ins()
-                    .bor(tag_is(&mut b, UNDEFINED_TAG), tag_is(&mut b, NULL_TAG));
+                let undefined = tag_is(&mut b, UNDEFINED_TAG);
+                let null = tag_is(&mut b, NULL_TAG);
+                let undefined_or_null = b.ins().bor(undefined, null);
                 let valid_immediate = b.ins().band(undefined_or_null, payload_is_zero);
-                let valid_boolean = b
-                    .ins()
-                    .band(tag_is(&mut b, BOOLEAN_TAG), payload_is_boolean);
+                let boolean_tag = tag_is(&mut b, BOOLEAN_TAG);
+                let valid_boolean = b.ins().band(boolean_tag, payload_is_boolean);
                 let number_tag = tag_is(&mut b, NUMBER_TAG);
-                let number_is_canonical = b
-                    .ins()
-                    .bnot(is_noncanonical_nan_bits(&mut b, payload));
+                let number_is_noncanonical = is_noncanonical_nan_bits(&mut b, payload);
+                let number_is_canonical = b.ins().bnot(number_is_noncanonical);
                 let valid_number = b.ins().band(number_tag, number_is_canonical);
-                let reference_tags = [
-                    STRING_TAG,
-                    BIGINT_TAG,
-                    OBJECT_TAG,
-                    SYMBOL_TAG,
-                ];
+
+                let reference_tags = [STRING_TAG, BIGINT_TAG, OBJECT_TAG, SYMBOL_TAG];
                 let mut is_reference = tag_is(&mut b, reference_tags[0]);
                 for expected_tag in reference_tags.iter().copied().skip(1) {
                     let matches = tag_is(&mut b, expected_tag);
@@ -1406,30 +1403,36 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let payload_fits = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThanOrEqual,
                     payload,
-                    b.ins().iconst(types::I64, MAX_PAYLOAD as i64),
+                    max_payload,
                 );
-                let valid_reference_payload = b.ins().band(payload_is_nonzero, payload_fits);
+                let valid_reference_payload =
+                    b.ins().band(payload_is_nonzero, payload_fits);
                 let valid_reference = b.ins().band(is_reference, valid_reference_payload);
+
                 let valid_immediate_or_boolean = b.ins().bor(valid_immediate, valid_boolean);
                 let valid_number_or_reference = b.ins().bor(valid_number, valid_reference);
-                b.ins().bor(valid_immediate_or_boolean, valid_number_or_reference)
+                let valid_payload = b.ins().bor(
+                    valid_immediate_or_boolean,
+                    valid_number_or_reference,
+                );
+                b.ins().band(is_supported_value, valid_payload)
             }
             RuntimeLayout::NanBox8 => {
                 let tag_is = |builder: &mut FunctionBuilder<'_>, expected: u64| {
-                    let expected = builder.ins().iconst(types::I64, expected as i64);
+                    let expected_value = builder.ins().iconst(types::I64, expected as i64);
                     builder.ins().icmp(
                         cranelift_codegen::ir::condcodes::IntCC::Equal,
                         tag,
-                        expected,
+                        expected_value,
                     )
                 };
-                let undefined_or_null = b.ins().bor(
-                    tag_is(&mut b, NANBOX_UNDEFINED_TAG),
-                    tag_is(&mut b, NANBOX_NULL_TAG),
-                );
+                let undefined = tag_is(&mut b, NANBOX_UNDEFINED_TAG);
+                let null = tag_is(&mut b, NANBOX_NULL_TAG);
+                let undefined_or_null = b.ins().bor(undefined, null);
                 let valid_immediate = b.ins().band(undefined_or_null, payload_is_zero);
-                let valid_boolean =
-                    b.ins().band(tag_is(&mut b, NANBOX_BOOLEAN_TAG), payload_is_boolean);
+                let boolean_tag = tag_is(&mut b, NANBOX_BOOLEAN_TAG);
+                let valid_boolean = b.ins().band(boolean_tag, payload_is_boolean);
+
                 let reference_tags = [
                     NANBOX_STRING_TAG,
                     NANBOX_BIGINT_TAG,
@@ -1442,16 +1445,16 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                     is_reference = b.ins().bor(is_reference, matches);
                 }
                 let valid_reference = b.ins().band(is_reference, payload_is_nonzero);
-                let valid_special = b.ins().bor(
-                    b.ins().bor(valid_immediate, valid_boolean),
-                    valid_reference,
-                );
+                let valid_immediate_or_boolean = b.ins().bor(valid_immediate, valid_boolean);
+                let valid_special_payload =
+                    b.ins().bor(valid_immediate_or_boolean, valid_reference);
+                let valid_special =
+                    b.ins().band(is_supported_value, valid_special_payload);
                 let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
                 let valid_number = b.ins().bnot(invalid_number);
                 b.ins().bor(valid_special, valid_number)
             }
         };
-        is_supported_value = b.ins().band(is_supported_value, valid_value_payload);
 
         let dispatch_block = b.create_block();
         let invalid_block = b.create_block();
