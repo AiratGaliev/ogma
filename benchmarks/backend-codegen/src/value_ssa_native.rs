@@ -531,6 +531,24 @@ struct Distribution {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ByteDistribution {
+    p50_bytes: f64,
+    p95_bytes: f64,
+    p99_bytes: f64,
+    raw_samples_bytes: Vec<f64>,
+}
+
+fn byte_distribution(samples: Vec<f64>) -> ByteDistribution {
+    let values = distribution(samples);
+    ByteDistribution {
+        p50_bytes: values.p50_ns,
+        p95_bytes: values.p95_ns,
+        p99_bytes: values.p99_ns,
+        raw_samples_bytes: values.raw_samples_ns,
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct RegisterPressure {
     allocator: &'static str,
     workload: &'static str,
@@ -595,7 +613,7 @@ struct GcCollectorEvidence {
     actual_value_storage_capacity_bytes: usize,
     allocator_peak_reserved_bytes_max: usize,
     allocator_peak_internal_fragmentation_bytes_max: u64,
-    process_rss_delta_bytes: Distribution,
+    process_rss_delta_bytes: ByteDistribution,
     encoded_object_values_resolved: usize,
     raw_samples: Vec<GcSample>,
 }
@@ -5667,9 +5685,12 @@ fn summarize_gc_collector(
         actual_value_storage_capacity_bytes: first.actual_value_storage_capacity_bytes,
         allocator_peak_reserved_bytes_max,
         allocator_peak_internal_fragmentation_bytes_max,
-        process_rss_delta_bytes: gc_distribution(&raw_samples, |sample| {
-            u128::from(sample.process_rss_delta_bytes)
-        }),
+        process_rss_delta_bytes: byte_distribution(
+            raw_samples
+                .iter()
+                .map(|sample| sample.process_rss_delta_bytes as f64)
+                .collect(),
+        ),
         encoded_object_values_resolved: first.encoded_object_values_resolved,
         raw_samples,
     })
@@ -6556,7 +6577,7 @@ mod tests {
                     collector.raw_samples[0].allocator_allocation_failures,
                     0
                 );
-                assert!(collector.process_rss_delta_bytes.p50_ns >= 0.0);
+                assert!(collector.process_rss_delta_bytes.p50_bytes >= 0.0);
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
                 assert!(collector.raw_samples[0].roots_scanned > 0);
