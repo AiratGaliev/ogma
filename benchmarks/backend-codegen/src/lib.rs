@@ -2,3 +2,4 @@
 pub mod value_ssa_native;
 
 pub mod value_ssa_allocator;
+pub mod aot_host_abi;
