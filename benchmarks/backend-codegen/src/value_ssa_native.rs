@@ -2579,16 +2579,43 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
                 // six decoded Values; the callback models callee.call(receiver,
                 // text + numeric), records the same host trace, and returns 8.
                 let result = receiver + mixed_argument.chars().count() as f64;
-                let trace = format!(
-                    "benchmark.host.call_target([{receiver},\\"{mixed_argument}\\"])"
-                );
-                context.native_call_boundary = Some(NativeCallBoundaryEvidence {
+                let trace =
+                    format!("benchmark.host.call_target([{receiver},{mixed_argument:?}])");
+                context.native_host_callback = Some(NativeHostCallbackEvidence {
+                    symbol: "benchmark.host.call_target".to_owned(),
+                    arguments: vec![receiver.to_string(), mixed_argument.clone()],
                     callee_resolved,
-                    receiver,
-                    argument: mixed_argument,
+                    receiver: Some(receiver),
+                    argument: Some(mixed_argument),
                     result_bits: canonical_number_bits(result),
                     host_callback_calls: 1,
                     trace,
+                });
+            }
+            if context.invoke_host_echo && context.calls == context.expected_dispatches {
+                if context.observed.len() != 1 {
+                    return 28;
+                }
+                let input = match context.observed[0] {
+                    SemanticValue::Number(bits) => f64::from_bits(bits),
+                    _ => return 29,
+                };
+                if input != 31.0 {
+                    return 30;
+                }
+                // Match OGM-31's exact mock host capability: host.echo(31)
+                // returns 31 + 11 and executes from the generated Value
+                // dispatch's C ABI callback, not from a post-call assertion.
+                let result = input + 11.0;
+                context.native_host_callback = Some(NativeHostCallbackEvidence {
+                    symbol: "benchmark.host.echo".to_owned(),
+                    arguments: vec![input.to_string()],
+                    callee_resolved: true,
+                    receiver: None,
+                    argument: None,
+                    result_bits: canonical_number_bits(result),
+                    host_callback_calls: 1,
+                    trace: "benchmark.host.echo([31])".to_owned(),
                 });
             }
             if context.invoke_aot_host && context.calls == 2 {
