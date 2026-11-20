@@ -65,11 +65,13 @@ def make_reports():
                     {
                         "fixture": fixture,
                         "path": path,
+                        "native_batch_invocations": 1,
                         "native_value_dispatches": 1,
                         "reference_values_resolved_after_forced_gc": 1,
                     }
                     for fixture, path in proof.EXPECTED_FIXTURE_PATHS.items()
                 ],
+                "native_batch_invocations": len(proof.EXPECTED_FIXTURE_PATHS),
                 "native_value_dispatches": len(proof.EXPECTED_FIXTURE_PATHS),
                 "reference_values_resolved_after_forced_gc": len(proof.EXPECTED_FIXTURE_PATHS),
                 "all_values_roundtripped_and_dispatched": True,
