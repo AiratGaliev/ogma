@@ -6366,18 +6366,22 @@ fn run(
             ),
             (
                 "register_pressure",
-                "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a fixed register budget; spill stores/reloads count Output.edits stack moves; not Cranelift's private allocation dump or host ISA register map",
+                "regalloc2 0.15.3 allocates VRegs mapped from canonical call-boundary Core IR value representations under a reviewed x86-64 System V ABI budget (14 non-reserved GPRs and 16 XMM registers); Output.edits reports modeled spill moves, not Cranelift's private allocation dump. Actual generated pressure-function stack-relative loads/stores are separately disassembled from the native object.",
+            ),
+            (
+                "native_core_ir_corpus",
+                "Each of the five canonical OGM-31 Core IR fixtures contributes its declared Value representations to one native batch per fixture. Generated Cranelift control flow iterates every encoded slot and dispatches the candidate Value helper; this is a native representation/handle/GC boundary proof, not a general lowering of every instruction in each fixture CFG.",
             ),
             (
                 "gc_and_heap",
-                "OGM-26 RcCycleRemoval and MarkSweep graph/roots with generation-checked GcRef and HostHandle lifetimes; OGM-24 separately allocates matching Value-storage and per-object payload backing blocks with System, exact-reuse and size-class strategies; allocator peaks are not process RSS",
+                "OGM-26 RcCycleRemoval and MarkSweep graphs/roots with generation-checked GcRef and HostHandle lifetimes; candidate Value slots reside in each OGM-26 object's actual OGM-24 IsolateAllocator-backed payload allocation. The same graph is measured across System, exact-reuse and size-class strategies. Allocator peak/reserved metrics are allocator accounting, while process VmRSS snapshots are process-wide observations.",
             ),
         ]),
         unsupported_native_semantics: vec![
             "The native OGM-38 fast loop is a Number-only Core IR specialization; BigInt arithmetic, string concatenation, object ToPrimitive and general ECMAScript operator lowering remain in the OGM-31 interpreter/native backend semantic proof rather than this four-layout Cranelift loop",
-            "OGM-26 collector reachability and OGM-24 physical allocator backing are measured as equivalent M0 workloads, but OGM-24 sidecar payload blocks are not wired into a production Runtime object-cell allocator",
+            "OGM-26 collector reachability and OGM-24 physical allocator backing are exercised together: OGM-24 allocations back OGM-26 object-cell Value payloads and are reclaimed by the selected collector. This is an integrated M0 proof heap, not a production Runtime allocator or production object model.",
             "OGM-27 shadow-frame/root-map and OGM-19/32 ABI behavior are M0 executable models; no production machine stack-map encoder or production Runtime is claimed",
-            "OS process RSS and allocator fragmentation external to the OGM-24 allocator are not attributed per candidate; reported peak reserved/live/fragmentation counters are the allocator's exact M0 accounting",
+            "Process VmRSS is sampled before and after each graph build, but it is the whole benchmark process snapshot (including prior candidate/strategy runs), not an isolated per-candidate process peak; zero RSS delta is possible when allocations reuse resident pages. Candidate-specific peak live/reserved bytes and allocator-accounted fragmentation are reported directly from the integrated OGM-24 allocator, alongside OGM-26 logical peak heap bytes.",
         ],
     };
     let output_path = output.to_path_buf();
