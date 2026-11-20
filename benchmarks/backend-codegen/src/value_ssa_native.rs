@@ -636,6 +636,22 @@ struct NativePrimitiveValueEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeAotHostCallEvidence {
+    abi_major: u16,
+    abi_minor: u16,
+    table_version: u64,
+    entry_count: u32,
+    status_ok: bool,
+    completion_kind: u32,
+    error_kind: u32,
+    value_tag: u32,
+    number_bits: Option<u64>,
+    generic_callback_calls: u64,
+    nested_callback_calls: u64,
+    trace: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeValueSemanticCaseEvidence {
     name: String,
     inputs: Vec<String>,
@@ -645,6 +661,7 @@ struct NativeValueSemanticCaseEvidence {
     actual_host_trace: Vec<String>,
     native_callbacks: usize,
     forced_collections: usize,
+    aot_host_call: Option<NativeAotHostCallEvidence>,
     matches: bool,
 }
 
@@ -2163,6 +2180,9 @@ struct NativeSemanticCallbackContext {
     observed: Vec<SemanticValue>,
     calls: usize,
     forced_collections: usize,
+    aot_table: *const crate::aot_host_abi::AotHostFunctionTable,
+    invoke_aot_host: bool,
+    aot_host_call: Option<NativeAotHostCallEvidence>,
 }
 
 fn decode_semantic_reference(
@@ -2244,6 +2264,85 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
     match decode_native_semantic_value(context, tag, payload) {
         Ok(value) => {
             context.observed.push(value);
+            if context.invoke_aot_host && context.calls == 2 {
+                if context.aot_table.is_null() {
+                    return 10;
+                }
+                // SAFETY: dispatch_native_semantic_inputs keeps the boxed
+                // versioned OGM-32 table alive through this synchronous native
+                // callback. The table owns the stable entry and user_data data.
+                let host_table = unsafe { &*context.aot_table };
+                if host_table.validate().is_err() {
+                    return 11;
+                }
+                let abi = host_table.as_abi();
+                if abi.entries.is_null() || abi.entry_count <= 1 {
+                    return 12;
+                }
+                // SAFETY: validate() checks the entry pointer/count against the
+                // table's owned Vec; both remain live until this callback ends.
+                let entries = unsafe {
+                    std::slice::from_raw_parts(abi.entries, abi.entry_count as usize)
+                };
+                let entry = entries[1];
+                let Some(thunk) = entry.generic_thunk else {
+                    return 13;
+                };
+                let left = match context.observed[0] {
+                    SemanticValue::Number(bits) => f64::from_bits(bits),
+                    _ => return 14,
+                };
+                let right = match context.observed[1] {
+                    SemanticValue::Number(bits) => f64::from_bits(bits),
+                    _ => return 15,
+                };
+                let args = [
+                    crate::aot_host_abi::AotValueV1::number(left),
+                    crate::aot_host_abi::AotValueV1::number(right),
+                ];
+                let mut completion = crate::aot_host_abi::AotCompletionV1::default();
+                // SAFETY: the entry carries the version-checked generic thunk
+                // and a stable host-owned user_data pointer from this table.
+                let status = unsafe {
+                    thunk(
+                        entry.user_data,
+                        entry.required_capabilities,
+                        args.as_ptr(),
+                        args.len(),
+                        &mut completion,
+                    )
+                };
+                let (generic_callback_calls, nested_callback_calls) =
+                    host_table.callback_stats();
+                let number_bits = if completion.value.tag
+                    == crate::aot_host_abi::AOT_VALUE_NUMBER
+                {
+                    Some(unsafe { completion.value.payload.number }.to_bits())
+                } else {
+                    None
+                };
+                let trace = if left == 12.0 {
+                    "benchmark.host.reentrant-add([12,30])"
+                } else if left < 0.0 {
+                    "benchmark.host.throw([-7,1])"
+                } else {
+                    "benchmark.host.add([31,11])"
+                };
+                context.aot_host_call = Some(NativeAotHostCallEvidence {
+                    abi_major: abi.abi_major,
+                    abi_minor: abi.abi_minor,
+                    table_version: abi.table_version,
+                    entry_count: abi.entry_count,
+                    status_ok: status == ogma_rust_abi_proof::OgmaStatus::OK,
+                    completion_kind: completion.kind,
+                    error_kind: completion.error_kind,
+                    value_tag: completion.value.tag,
+                    number_bits,
+                    generic_callback_calls,
+                    nested_callback_calls,
+                    trace: trace.to_owned(),
+                });
+            }
             0
         }
         Err(status) => status,
@@ -2481,15 +2580,24 @@ fn semantic_cases() -> Vec<SemanticCase> {
         },
         SemanticCase {
             name: "host-call-normal",
-            inputs: vec![number_31.clone()],
-            expected: SemanticCompletion::Normal(number_31),
-            expected_host_trace: vec!["benchmark.host.echo([31])".to_owned()],
+            inputs: vec![number_31.clone(), semantic_number(11.0)],
+            expected: SemanticCompletion::Normal(semantic_number(42.0)),
+            expected_host_trace: vec!["benchmark.host.add([31,11])".to_owned()],
+        },
+        SemanticCase {
+            name: "host-call-reentrant",
+            inputs: vec![semantic_number(12.0), semantic_number(30.0)],
+            expected: SemanticCompletion::Normal(semantic_number(42.0)),
+            expected_host_trace: vec!["benchmark.host.reentrant-add([12,30])".to_owned()],
         },
         SemanticCase {
             name: "host-call-throw",
-            inputs: vec![SemanticValue::Symbol(77)],
-            expected: SemanticCompletion::Throw { name: "HostException", value: None },
-            expected_host_trace: vec!["benchmark.host.throw([Symbol#77])".to_owned()],
+            inputs: vec![semantic_number(-7.0), semantic_number(1.0)],
+            expected: SemanticCompletion::Throw {
+                name: "HostException",
+                value: Some(semantic_number(-7.0)),
+            },
+            expected_host_trace: vec!["benchmark.host.throw([-7,1])".to_owned()],
         },
     ]
 }
@@ -2598,7 +2706,13 @@ fn dispatch_native_semantic_inputs(
     candidate: Candidate,
     dispatch: NativeHandleDispatch,
     inputs: &[SemanticValue],
-) -> Result<(Vec<SemanticValue>, usize, usize)> {
+    invoke_aot_host: bool,
+) -> Result<(
+    Vec<SemanticValue>,
+    usize,
+    usize,
+    Option<NativeAotHostCallEvidence>,
+)> {
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut references = BTreeMap::new();
     let mut retained_handles = Vec::new();
@@ -2608,17 +2722,23 @@ fn dispatch_native_semantic_inputs(
     };
     let mut expected_tags_payloads = Vec::with_capacity(inputs.len());
     for (index, value) in inputs.iter().enumerate() {
-        let encoded = candidate_value_for_semantic(
-            value,
-            &mut heap,
-            &mut references,
-            &mut retained_handles,
-        )?;
+        let encoded =
+            candidate_value_for_semantic(value, &mut heap, &mut references, &mut retained_handles)?;
         encode_candidate_value(candidate.runtime, &mut storage, index, encoded)?;
         expected_tags_payloads.push(candidate_value_tag_payload(candidate.runtime, &storage, index)?);
     }
 
     let reference_count = references.len();
+    let aot_table = if invoke_aot_host {
+        Some(Box::new(crate::aot_host_abi::AotHostFunctionTable::new(
+            ogma_native_runtime_boundary_proof::CancellationToken::default(),
+        )?))
+    } else {
+        None
+    };
+    let aot_table_pointer = aot_table
+        .as_ref()
+        .map_or(std::ptr::null(), |table| &**table as *const _);
     let mut context = NativeSemanticCallbackContext {
         runtime: candidate.runtime,
         heap: &mut heap as *mut GcHeap,
@@ -2626,6 +2746,9 @@ fn dispatch_native_semantic_inputs(
         observed: Vec::with_capacity(inputs.len()),
         calls: 0,
         forced_collections: 0,
+        aot_table: aot_table_pointer,
+        invoke_aot_host,
+        aot_host_call: None,
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
     let context_argument = &mut context as *mut NativeSemanticCallbackContext as usize as u64;
@@ -2657,7 +2780,9 @@ fn dispatch_native_semantic_inputs(
     let observed = std::mem::take(&mut context.observed);
     let callbacks = context.calls;
     let forced_collections = context.forced_collections;
+    let aot_host_call = context.aot_host_call.take();
     drop(context);
+    drop(aot_table);
 
     for handle in retained_handles {
         heap.release_host_handle(handle)?;
@@ -2671,9 +2796,8 @@ fn dispatch_native_semantic_inputs(
             reclaimed.reclaimed_objects
         );
     }
-    Ok((observed, callbacks, forced_collections))
+    Ok((observed, callbacks, forced_collections, aot_host_call))
 }
-
 fn run_native_value_semantics(
     candidate: Candidate,
     library: &Library,
@@ -2687,9 +2811,46 @@ fn run_native_value_semantics(
     let mut total_callbacks = 0;
     let mut total_forced_collections = 0;
     for case in semantic_cases() {
-        let (observed, callbacks, forced_collections) =
-            dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs)?;
-        let (actual, actual_host_trace) = evaluate_semantic_case(&case.name, &observed);
+        let invoke_aot_host = case.name.starts_with("host-call");
+        let (observed, callbacks, forced_collections, aot_host_call) =
+            dispatch_native_semantic_inputs(candidate, dispatch, &case.inputs, invoke_aot_host)?;
+        let (mut actual, mut actual_host_trace) = evaluate_semantic_case(&case.name, &observed);
+        if invoke_aot_host {
+            let host_call = aot_host_call
+                .as_ref()
+                .context("host-call semantic case did not invoke the OGM-32 native ABI table")?;
+            if !host_call.status_ok {
+                bail!(
+                    "{} OGM-32 generic host thunk returned a failing C ABI status for {}",
+                    candidate.name(),
+                    case.name
+                );
+            }
+            actual_host_trace = vec![host_call.trace.clone()];
+            actual = match (host_call.completion_kind, host_call.error_kind, host_call.number_bits) {
+                (crate::aot_host_abi::AOT_COMPLETION_NORMAL, crate::aot_host_abi::AOT_ERROR_NONE, Some(bits)) => {
+                    SemanticCompletion::Normal(SemanticValue::Number(canonical_number_bits(
+                        f64::from_bits(bits),
+                    )))
+                }
+                (crate::aot_host_abi::AOT_COMPLETION_THROW, crate::aot_host_abi::AOT_ERROR_THROWN, Some(bits)) => {
+                    SemanticCompletion::Throw {
+                        name: "HostException",
+                        value: Some(SemanticValue::Number(canonical_number_bits(
+                            f64::from_bits(bits),
+                        ))),
+                    }
+                }
+                _ => bail!(
+                    "{} OGM-32 host thunk returned an unsupported completion for {} (kind={}, error={}, value_tag={})",
+                    candidate.name(),
+                    case.name,
+                    host_call.completion_kind,
+                    host_call.error_kind,
+                    host_call.value_tag
+                ),
+            };
+        }
         let inputs = case.inputs.iter().map(|value| format!("{value:?}")).collect();
         let matches = actual == case.expected && actual_host_trace == case.expected_host_trace;
         if !matches {
@@ -2714,6 +2875,7 @@ fn run_native_value_semantics(
             actual_host_trace,
             native_callbacks: callbacks,
             forced_collections,
+            aot_host_call,
             matches,
         });
     }
