@@ -284,12 +284,17 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
             raise RuntimeError(
                 f"{name}: native Core IR fixture paths differ from the exact OGM-31 set"
             )
+        fixture_batch_counts = [item.get("native_batch_invocations") for item in fixture_reports]
         fixture_dispatch_counts = [item.get("native_value_dispatches") for item in fixture_reports]
         fixture_reference_counts = [
             item.get("reference_values_resolved_after_forced_gc") for item in fixture_reports
         ]
         if (
             any(
+                not isinstance(value, int) or isinstance(value, bool) or value != 1
+                for value in fixture_batch_counts
+            )
+            or any(
                 not isinstance(value, int) or isinstance(value, bool) or value <= 0
                 for value in fixture_dispatch_counts
             )
@@ -302,7 +307,9 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         summed_dispatches = sum(fixture_dispatch_counts)
         summed_reference_resolutions = sum(fixture_reference_counts)
         if (
-            corpus.get("native_value_dispatches") != summed_dispatches
+            corpus.get("native_batch_invocations") != sum(fixture_batch_counts)
+            or corpus.get("native_batch_invocations") != len(EXPECTED_FIXTURE_PATHS)
+            or corpus.get("native_value_dispatches") != summed_dispatches
             or corpus.get("reference_values_resolved_after_forced_gc") != summed_reference_resolutions
             or summed_dispatches <= 0
             or summed_reference_resolutions <= 0
