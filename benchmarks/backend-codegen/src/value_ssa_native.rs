@@ -1034,9 +1034,6 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         Linkage::Export,
         &dispatch_signature,
     )?;
-    let pressure_function =
-        module.declare_function("ogma_value_pressure", Linkage::Export, &pressure_signature)?;
-
     let mut callback_signature = module.make_signature();
     callback_signature.params.extend(
         [types::I64, types::I64, types::I64]
@@ -1052,6 +1049,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             .map(AbiParam::new),
     );
     pressure_signature.returns.push(AbiParam::new(types::I64));
+
+    let pressure_function =
+        module.declare_function("ogma_value_pressure", Linkage::Export, &pressure_signature)?;
 
     let mut context = module.make_context();
     context.func.signature = signature;
@@ -2750,9 +2750,11 @@ fn dispatch_native_semantic_inputs(
 
     let reference_count = references.len();
     let aot_table = if invoke_aot_host {
-        Some(Box::new(crate::aot_host_abi::AotHostFunctionTable::new(
+        let table = crate::aot_host_abi::AotHostFunctionTable::new(
             ogma_native_runtime_boundary_proof::CancellationToken::default(),
-        )?))
+        )
+        .map_err(|error| anyhow!("create OGM-32 host function table: {error:?}"))?;
+        Some(Box::new(table))
     } else {
         None
     };
@@ -2967,7 +2969,9 @@ fn run_native_shadow_root_validation(
         persistent_handles.push(providers.persistent.retain(&heap, reference)?);
     }
 
-    let entry = providers.collect(&mut heap)?;
+    let entry = providers.collect(&mut heap).map_err(|error| {
+        anyhow!("OGM-27 entry safepoint collection failed: {error:?}")
+    })?;
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
         || entry.roots_scanned != managed_roots * 3
@@ -2985,7 +2989,9 @@ fn run_native_shadow_root_validation(
         .native
         .current_mut(native_frame)?
         .set_safepoint(SafepointId(1), &slots)?;
-    let call_boundary = providers.collect(&mut heap)?;
+    let call_boundary = providers.collect(&mut heap).map_err(|error| {
+        anyhow!("OGM-27 call-boundary collection failed: {error:?}")
+    })?;
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
         || call_boundary.roots_scanned != managed_roots * 3
@@ -3007,7 +3013,9 @@ fn run_native_shadow_root_validation(
     for handle in persistent_handles.iter().copied() {
         providers.persistent.release(handle)?;
     }
-    let cleanup = providers.collect(&mut heap)?;
+    let cleanup = providers.collect(&mut heap).map_err(|error| {
+        anyhow!("OGM-27 cleanup collection failed: {error:?}")
+    })?;
     if cleanup.objects_live != 0 || cleanup.objects_reclaimed != managed_roots {
         bail!(
             "{} OGM-27 roots were not reclaimed after native-frame and persistent-handle release (live={}, reclaimed={}/{})",
