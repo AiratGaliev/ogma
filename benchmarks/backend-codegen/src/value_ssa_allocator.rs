@@ -96,9 +96,9 @@ fn allocate_round(
     allocations.push(value_storage);
 
     for index in 0..object_count {
-        let allocation = allocator
-            .allocate(payload_layout)
-            .map_err(|error| anyhow::anyhow!("OGM-29 object payload allocation {index} failed: {error:?}"))?;
+        let allocation = allocator.allocate(payload_layout).map_err(|error| {
+            anyhow::anyhow!("OGM-29 object payload allocation {index} failed: {error:?}")
+        })?;
         unsafe {
             allocation
                 .as_non_null()
@@ -116,9 +116,9 @@ fn deallocate_round(
     allocations: Vec<ogma_isolate_allocator_proof::Allocation>,
 ) -> Result<()> {
     for allocation in allocations.into_iter().rev() {
-        allocator
-            .deallocate(allocation)
-            .map_err(|error| anyhow::anyhow!("OGM-29 backing deallocation failed: {:?}", error.kind()))?;
+        allocator.deallocate(allocation).map_err(|error| {
+            anyhow::anyhow!("OGM-29 backing deallocation failed: {:?}", error.kind())
+        })?;
     }
     Ok(())
 }
@@ -267,14 +267,8 @@ pub fn run_allocator_evidence(
             .map(|item| item.peak_internal_fragmentation_bytes)
             .max()
             .unwrap_or_default();
-        let reused_allocations_total = raw_samples
-            .iter()
-            .map(|item| item.reused_allocations)
-            .sum();
-        let cache_evictions_total = raw_samples
-            .iter()
-            .map(|item| item.cache_evictions)
-            .sum();
+        let reused_allocations_total = raw_samples.iter().map(|item| item.reused_allocations).sum();
+        let cache_evictions_total = raw_samples.iter().map(|item| item.cache_evictions).sum();
         let allocation_failures_total = raw_samples
             .iter()
             .map(|item| item.allocation_failures)
@@ -326,13 +320,21 @@ mod tests {
             assert_eq!(item.allocation_failures_total, 0);
             assert!(item.peak_reserved_bytes_max >= item.peak_live_requested_bytes_max);
             assert!(item.raw_samples.iter().all(|sample| {
-                sample.live_requested_bytes_after_release == 0
-                    && sample.allocation_failures == 0
+                sample.live_requested_bytes_after_release == 0 && sample.allocation_failures == 0
             }));
         }
-        let system = evidence.iter().find(|item| item.strategy == "system-allocator").unwrap();
-        let reuse = evidence.iter().find(|item| item.strategy == "per-isolate-exact-reuse").unwrap();
-        let size_class = evidence.iter().find(|item| item.strategy == "per-isolate-size-class-pool").unwrap();
+        let system = evidence
+            .iter()
+            .find(|item| item.strategy == "system-allocator")
+            .unwrap();
+        let reuse = evidence
+            .iter()
+            .find(|item| item.strategy == "per-isolate-exact-reuse")
+            .unwrap();
+        let size_class = evidence
+            .iter()
+            .find(|item| item.strategy == "per-isolate-size-class-pool")
+            .unwrap();
         assert_eq!(system.reused_allocations_total, 0);
         assert!(reuse.reused_allocations_total > 0);
         assert!(size_class.reused_allocations_total > 0);
