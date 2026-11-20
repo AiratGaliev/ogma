@@ -72,9 +72,9 @@ Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Pr
 
 ## Native follow-up (OGM-38)
 
-The native follow-up is documented separately in [OGM-38 native Value/SSA evidence](native-evidence-ogm38.md). It builds and executes four Cranelift native numeric-loop candidates, measures native compile/object/throughput costs, runs a regalloc2 pressure probe over the canonical call-boundary dataflow, and validates roots against the real OGM-26 GcHeap/HostHandle API.
+The native follow-up is documented separately in [OGM-38 native Value/SSA evidence](native-evidence-ogm38.md). The verified M0 slice builds and executes four Cranelift native numeric-loop candidates, measures compile/object/throughput costs, runs a separate controlled regalloc2 pressure profile, validates malformed and valid Value encodings through a native helper, and compares equivalent OGM-26 heap/roots workloads across both Value layouts and SSA policies.
 
-The OGM-38 report does not turn the M0 prototypes into a production Runtime. Its exact semantic, allocation, GC and process-memory boundaries are stated in the report and companion document.
+The OGM-38 report does not turn the M0 prototypes into a production Runtime. Its exact semantic, allocator, GC, stack-map and process-memory boundaries are stated in the companion document. The latest native benchmark is successful, but OGM-38 remains In Progress because the four candidates do not yet execute the full accepted Core IR corpus or provide the full requested differential/production memory evidence.
 
-- Authoritative native CI evidence: [OGM-38 run #44569693384](https://github.com/AiratGaliev/ogma/actions/runs/44569693384), tested source revision `d9b76aae822c87ce66902fb460dcc3d588f7f700`.
-- Committed raw report: `benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz`. It contains 101 compile and 101 throughput samples for each of the four candidates; the companion OGM-38 document records the aggregate measurements and exact limitations.
+- Authoritative native CI evidence: [OGM-38 run #44683606257](https://github.com/AiratGaliev/ogma/actions/runs/44683606257), tested source revision `b98ef1ed2441306803d7c537ca59a6d9696a7e25`.
+- Committed raw report: `benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz`. It contains 101 compile, native-loop and helper-throughput samples per candidate, paired GC samples for both collectors, and environment/revision metadata. The uncompressed JSON SHA-256 and aggregate results are recorded in the companion document.
