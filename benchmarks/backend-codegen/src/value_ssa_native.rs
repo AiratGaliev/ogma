@@ -2185,7 +2185,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         let index_param = b.append_block_param(loop_block, types::I64);
         b.switch_to_block(entry);
         let initial_index = b.ins().iconst(types::I64, 0);
-        b.ins().jump(loop_block, &[initial_index]);
+        b.ins().jump(loop_block, &[BlockArg::Value(initial_index)]);
         b.switch_to_block(loop_block);
         let finished = b.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
@@ -2198,7 +2198,7 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             RuntimeLayout::Tagged16 => 16,
             RuntimeLayout::NanBox8 => 8,
         };
-        let byte_offset = b.ins().imul_imm(index_param, stride);
+        let byte_offset = b.ins().imul_imm_u(index_param, stride as u64);
         let slot_address = b.ins().iadd(parameters[0], byte_offset);
         let value_argument = match candidate.runtime {
             RuntimeLayout::Tagged16 => slot_address,
@@ -2213,14 +2213,20 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             &[value_argument, parameters[2], parameters[3]],
         );
         let dispatch_status = b.inst_results(dispatch_call)[0];
-        let accepted = b.ins().icmp_imm(
+        let accepted = b.ins().icmp_imm_u(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             dispatch_status,
             0,
         );
-        let incremented = b.ins().iadd_imm(index_param, 1);
+        let incremented = b.ins().iadd_imm_u(index_param, 1);
         b.ins()
-            .brif(accepted, loop_block, &[incremented], invalid_block, &[]);
+            .brif(
+                accepted,
+                loop_block,
+                &[BlockArg::Value(incremented)],
+                invalid_block,
+                &[],
+            );
         b.switch_to_block(invalid_block);
         b.ins().return_(&[dispatch_status]);
         b.switch_to_block(done_block);
