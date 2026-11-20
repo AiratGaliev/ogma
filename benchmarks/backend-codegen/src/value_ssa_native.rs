@@ -3207,9 +3207,14 @@ fn dispatch_native_semantic_inputs(
             );
         }
     }
-    if context.calls != inputs.len() || context.observed != inputs {
+    let expected_native_values = if options.perform_native_transition {
+        vec![inputs[1].clone(), inputs[1].clone()]
+    } else {
+        inputs.to_vec()
+    };
+    if context.calls != inputs.len() || context.observed != expected_native_values {
         bail!(
-            "{} native semantic callback did not preserve the candidate Value inputs",
+            "{} native semantic callback did not preserve the expected candidate Value state",
             candidate.name()
         );
     }
