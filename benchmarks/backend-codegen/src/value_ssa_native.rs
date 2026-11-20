@@ -6,6 +6,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
     ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
+    isa::TargetIsa,
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -5284,9 +5285,9 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
             target_triple,
             abi_description
         ),
-        allocatable_integer_registers,
-        allocatable_float_registers,
-        allocatable_vector_registers,
+        abi_integer_register_budget,
+        abi_float_register_budget,
+        abi_vector_register_budget,
         integer_registers_used: integer_registers.len() as usize,
         float_registers_used: float_registers.len() as usize,
         register_allocations,
@@ -6366,14 +6367,11 @@ mod tests {
             reports.insert(candidate.name(), evidence);
         }
         for evidence in reports.values() {
-            assert!(evidence.allocatable_integer_registers > 0);
-            assert!(evidence.allocatable_float_registers > 0);
-            assert!(
-                !evidence.machine_env.contains("controlled 6 GPR")
-                    && evidence
-                        .machine_env
-                        .contains("allocatable target registers")
-            );
+            assert_eq!(evidence.abi_integer_register_budget, 14);
+            assert_eq!(evidence.abi_float_register_budget, 16);
+            assert_eq!(evidence.abi_vector_register_budget, 16);
+            assert!(evidence.machine_env.contains("System V AMD64"));
+            assert!(evidence.machine_env.contains("not Cranelift's private register mask"));
             if evidence.spill_slots > 0 {
                 assert!(evidence.spill_store_edits > 0);
                 assert!(evidence.spill_reload_edits > 0);
