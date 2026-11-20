@@ -248,8 +248,8 @@ def build_runtime_projection(
                 "reused_allocations_total": item["reused_allocations_total"],
                 "cache_evictions_total": item["cache_evictions_total"],
                 "allocation_failures_total": item["allocation_failures_total"],
-                "allocation_ns_per_sample": item["allocation_ns_per_sample"]["raw_samples_ns"],
-                "deallocation_ns_per_sample": item["deallocation_ns_per_sample"]["raw_samples_ns"],
+                "allocation_ns_per_sample": item["allocation_ns_per_sample"]["samples"],
+                "deallocation_ns_per_sample": item["deallocation_ns_per_sample"]["samples"],
                 "raw_samples": item["raw_samples"],
             }
             for item in gc["allocator_comparisons"]
