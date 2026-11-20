@@ -3,8 +3,13 @@
 //! OGM-26 M0 comparison harness. This is a model heap, not a JS Runtime.
 
 use std::fmt;
-use std::mem::size_of;
+use std::alloc::Layout;
+use std::mem::{align_of, size_of};
 use std::time::Instant;
+
+use ogma_isolate_allocator_proof::{
+    Allocation, AllocatorError, AllocatorStats, AllocatorStrategy, IsolateAllocator,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollectorKind {
@@ -58,6 +63,8 @@ pub enum GcError {
     InvalidScope,
     RootStackOrder,
     TokenSpaceExhausted,
+    AllocatorFailure,
+    InvalidPayloadLayout,
 }
 
 impl fmt::Display for GcError {
@@ -122,27 +129,29 @@ pub struct CollectionReport {
     pub live_bytes_after: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ObjectCell {
     edges: Vec<GcRef>,
     ref_count: u64,
     payload_bytes: usize,
     logical_bytes: u64,
+    backing: Allocation,
 }
 
 impl ObjectCell {
-    fn new(payload_bytes: usize) -> Self {
+    fn new(payload_bytes: usize, backing: Allocation) -> Self {
         let logical_bytes = (size_of::<Self>() + payload_bytes) as u64;
         Self {
             edges: Vec::new(),
             ref_count: 0,
             payload_bytes,
             logical_bytes,
+            backing,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ObjectSlot {
     generation: u64,
     cell: Option<ObjectCell>,
@@ -187,10 +196,19 @@ pub struct GcHeap {
     free_host_slots: Vec<usize>,
     next_token: u64,
     stats: HeapStats,
+    allocator: IsolateAllocator,
 }
 
 impl GcHeap {
     pub fn new(collector: CollectorKind) -> Self {
+        Self::new_with_allocator(collector, AllocatorStrategy::System, usize::MAX)
+    }
+
+    pub fn new_with_allocator(
+        collector: CollectorKind,
+        strategy: AllocatorStrategy,
+        quota_bytes: usize,
+    ) -> Self {
         Self {
             collector,
             slots: Vec::new(),
@@ -201,7 +219,30 @@ impl GcHeap {
             free_host_slots: Vec::new(),
             next_token: 1,
             stats: HeapStats::default(),
+            allocator: IsolateAllocator::new(strategy, quota_bytes),
         }
+    }
+
+    pub fn allocator_strategy(&self) -> AllocatorStrategy {
+        self.allocator.strategy()
+    }
+
+    pub fn allocator_stats(&self) -> AllocatorStats {
+        self.allocator.stats()
+    }
+
+    pub fn payload_words(&self, reference: GcRef) -> Result<&[u64], GcError> {
+        self.cell(reference)?
+            .backing
+            .as_words()
+            .ok_or(GcError::InvalidPayloadLayout)
+    }
+
+    pub fn payload_words_mut(&mut self, reference: GcRef) -> Result<&mut [u64], GcError> {
+        self.cell_mut(reference)?
+            .backing
+            .as_words_mut()
+            .ok_or(GcError::InvalidPayloadLayout)
     }
 
     pub fn collector(&self) -> CollectorKind {
@@ -213,7 +254,18 @@ impl GcHeap {
     }
 
     pub fn allocate(&mut self, payload_bytes: usize) -> GcRef {
-        let cell = ObjectCell::new(payload_bytes);
+        self.try_allocate(payload_bytes)
+            .expect("OGM-26 object payload allocation failed")
+    }
+
+    pub fn try_allocate(&mut self, payload_bytes: usize) -> Result<GcRef, GcError> {
+        let layout = Layout::from_size_align(payload_bytes, align_of::<u64>())
+            .map_err(|_| GcError::InvalidPayloadLayout)?;
+        let backing = self
+            .allocator
+            .allocate(layout)
+            .map_err(|_| GcError::AllocatorFailure)?;
+        let cell = ObjectCell::new(payload_bytes, backing);
         let logical_bytes = cell.logical_bytes;
 
         let index = if let Some(index) = self.free_slots.pop() {
@@ -239,7 +291,7 @@ impl GcHeap {
         self.stats.peak_live_objects = self.stats.peak_live_objects.max(self.stats.live_objects);
         self.stats.peak_heap_bytes = self.stats.peak_heap_bytes.max(self.stats.live_bytes);
 
-        GcRef { index, generation }
+        Ok(GcRef { index, generation })
     }
 
     pub fn add_edge(&mut self, from: GcRef, to: GcRef) -> Result<(), GcError> {
@@ -589,7 +641,7 @@ impl GcHeap {
             dead[index] = slot.cell.is_some() && !marked[index];
         }
 
-        let (reclaimed_objects, reclaimed_bytes) = self.sweep(&dead);
+        let (reclaimed_objects, reclaimed_bytes) = self.sweep(&dead)?;
         if let Some(root_counts) = root_counts.as_deref() {
             self.recompute_ref_counts(root_counts)?;
         }
@@ -705,7 +757,11 @@ impl GcHeap {
                 if reusable {
                     self.free_slots.push(current.index);
                 }
-                pending.extend(reclaimed.edges);
+                let ObjectCell { edges, backing, .. } = reclaimed;
+                self.allocator
+                    .deallocate(backing)
+                    .map_err(|_| GcError::AllocatorFailure)?;
+                pending.extend(edges);
             }
         }
         self.stats.root_operations += 1;
@@ -782,7 +838,7 @@ impl GcHeap {
         Ok((marked, marked_objects, edges_examined))
     }
 
-    fn sweep(&mut self, dead: &[bool]) -> (usize, u64) {
+    fn sweep(&mut self, dead: &[bool]) -> Result<(usize, u64), GcError> {
         let mut reclaimed_objects = 0_usize;
         let mut reclaimed_bytes = 0_u64;
 
@@ -790,14 +846,23 @@ impl GcHeap {
             if !is_dead {
                 continue;
             }
-            let slot = &mut self.slots[index];
-            if let Some(cell) = slot.cell.take() {
+            let reclaimed = {
+                let slot = &mut self.slots[index];
+                let cell = slot.cell.take();
+                if cell.is_some() {
+                    slot.generation = slot.generation.saturating_add(1);
+                    if slot.generation != u64::MAX {
+                        self.free_slots.push(index);
+                    }
+                }
+                cell
+            };
+            if let Some(cell) = reclaimed {
                 reclaimed_objects += 1;
                 reclaimed_bytes += cell.logical_bytes;
-                slot.generation = slot.generation.saturating_add(1);
-                if slot.generation != u64::MAX {
-                    self.free_slots.push(index);
-                }
+                self.allocator
+                    .deallocate(cell.backing)
+                    .map_err(|_| GcError::AllocatorFailure)?;
             }
         }
 
@@ -806,7 +871,7 @@ impl GcHeap {
         self.stats.reclaimed_objects += reclaimed_objects as u64;
         self.stats.reclaimed_bytes += reclaimed_bytes;
 
-        (reclaimed_objects, reclaimed_bytes)
+        Ok((reclaimed_objects, reclaimed_bytes))
     }
 
     fn recompute_ref_counts(&mut self, root_counts: &[u64]) -> Result<(), GcError> {
