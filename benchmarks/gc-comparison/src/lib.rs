@@ -2,8 +2,8 @@
 
 //! OGM-26 M0 comparison harness. This is a model heap, not a JS Runtime.
 
-use std::fmt;
 use std::alloc::Layout;
+use std::fmt;
 use std::mem::{align_of, size_of};
 use std::time::Instant;
 
@@ -935,11 +935,7 @@ impl GcHeap {
     #[test]
     fn heap_payload_words_are_backed_and_reclaimed_by_all_allocator_strategies() {
         for strategy in AllocatorStrategy::ALL {
-            let mut heap = GcHeap::new_with_allocator(
-                CollectorKind::MarkSweep,
-                strategy,
-                4096,
-            );
+            let mut heap = GcHeap::new_with_allocator(CollectorKind::MarkSweep, strategy, 4096);
             let object = heap.try_allocate(64).expect("allocate object payload");
             assert_eq!(heap.payload_words(object).unwrap().len(), 8);
             {
@@ -975,11 +971,8 @@ impl GcHeap {
     #[test]
     fn heap_payload_storage_is_part_of_the_real_rooted_gc_lifecycle() {
         for collector in CollectorKind::ALL {
-            let mut heap = GcHeap::new_with_allocator(
-                collector,
-                AllocatorStrategy::PerIsolateReuse,
-                4096,
-            );
+            let mut heap =
+                GcHeap::new_with_allocator(collector, AllocatorStrategy::PerIsolateReuse, 4096);
             let object = heap.try_allocate(128).unwrap();
             heap.payload_words_mut(object).unwrap()[3] = 0xfeed_beef;
             let frame = heap.begin_frame(FrameKind::NativePrototype).unwrap();
@@ -996,7 +989,6 @@ impl GcHeap {
             assert_eq!(stats.reused_allocations, 0);
         }
     }
-
 }
 
 fn hash_u64(hash: &mut u64, value: u64) {
