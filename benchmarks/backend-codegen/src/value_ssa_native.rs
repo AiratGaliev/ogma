@@ -1393,7 +1393,6 @@ fn define_candidate_strict_equal(
     Ok(())
 }
 
-
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -2713,15 +2712,13 @@ unsafe extern "C" fn compare_native_primitive_references(
     }
     // SAFETY: generated native strict equality invokes the callback
     // synchronously with a live, uniquely borrowed context.
-    let context = unsafe {
-        &mut *(context_pointer as *mut NativeReferenceEqualityCallbackContext)
-    };
+    let context = unsafe { &mut *(context_pointer as *mut NativeReferenceEqualityCallbackContext) };
     context.calls += 1;
     let (string_tag, bigint_tag) = match context.runtime {
         RuntimeLayout::Tagged16 => (STRING_TAG, BIGINT_TAG),
         RuntimeLayout::NanBox8 => (NANBOX_STRING_TAG, NANBOX_BIGINT_TAG),
     };
-    if tag != string_tag && tag != bigint_tag || context.heap.is_null() {
+    if (tag != string_tag && tag != bigint_tag) || context.heap.is_null() {
         return 3;
     }
     let Some(left) = context.references.get(&left_token).cloned() else {
@@ -2750,14 +2747,10 @@ unsafe extern "C" fn compare_native_primitive_references(
     context.forced_collections += 1;
 
     let equal = match (tag, &left.value, &right.value) {
-        (tag, SemanticValue::String(left), SemanticValue::String(right))
-            if tag == string_tag =>
-        {
+        (tag, SemanticValue::String(left), SemanticValue::String(right)) if tag == string_tag => {
             left == right
         }
-        (tag, SemanticValue::BigInt(left), SemanticValue::BigInt(right))
-            if tag == bigint_tag =>
-        {
+        (tag, SemanticValue::BigInt(left), SemanticValue::BigInt(right)) if tag == bigint_tag => {
             left == right
         }
         _ => return 7,
@@ -3626,8 +3619,9 @@ fn dispatch_native_semantic_inputs(
     };
     let reference_equality_callback =
         compare_native_primitive_references as *const () as usize as u64;
-    let reference_equality_context_argument =
-        &mut reference_equality_context as *mut NativeReferenceEqualityCallbackContext as usize as u64;
+    let reference_equality_context_argument = &mut reference_equality_context
+        as *mut NativeReferenceEqualityCallbackContext
+        as usize as u64;
     let native_strict_equal_result =
         if let Some((left_slot, right_slot)) = options.strict_equal_slots {
             let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
@@ -3652,8 +3646,7 @@ fn dispatch_native_semantic_inputs(
         } else {
             None
         };
-    let native_reference_value_comparison_executed =
-        reference_equality_context.calls != 0;
+    let native_reference_value_comparison_executed = reference_equality_context.calls != 0;
     let reference_equality_collections = reference_equality_context.forced_collections;
     drop(reference_equality_context);
 
@@ -6247,12 +6240,19 @@ mod tests {
         assert!(matches!(string_right, CandidateValue::StringRef(_)));
         assert!(matches!(bigint_left, CandidateValue::BigIntRef(_)));
         assert!(matches!(bigint_right, CandidateValue::BigIntRef(_)));
-        assert_ne!(candidate_reference_token(string_left), candidate_reference_token(string_right));
-        assert_ne!(candidate_reference_token(bigint_left), candidate_reference_token(bigint_right));
+        assert_ne!(
+            candidate_reference_token(string_left),
+            candidate_reference_token(string_right)
+        );
+        assert_ne!(
+            candidate_reference_token(bigint_left),
+            candidate_reference_token(bigint_right)
+        );
         assert_eq!(retained_handles.len(), 4);
 
         for handle in retained_handles {
-            heap.release_host_handle(handle).expect("release primitive handle");
+            heap.release_host_handle(handle)
+                .expect("release primitive handle");
         }
         let cleanup = heap.collect().expect("collect primitive handle cleanup");
         assert_eq!(cleanup.live_objects_after, 0);
