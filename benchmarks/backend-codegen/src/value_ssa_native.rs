@@ -4423,8 +4423,8 @@ fn run_native_core_ir_corpus_validation(
 ) -> Result<NativeCoreIrCorpusEvidence> {
     let dispatch = unsafe {
         *library
-            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
-            .context("generated native Value dispatch entry point missing for Core IR corpus")?
+            .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\\0")
+            .context("generated native batch Value dispatch entry point missing for Core IR corpus")?
     };
     let manifest_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/dual-backend/manifest.json");
