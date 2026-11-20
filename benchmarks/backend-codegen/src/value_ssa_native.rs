@@ -4485,6 +4485,7 @@ fn run_native_core_ir_corpus_validation(
         let before_batches = total_batch_invocations;
         let before_dispatches = total_dispatches;
         let before_references = total_reference_resolutions;
+        let mut fixture_values = Vec::new();
         for representation in &representations {
             let values = match representation.as_str() {
                 "f64" | "i32" | "u32" => vec![
@@ -4524,16 +4525,20 @@ fn run_native_core_ir_corpus_validation(
                     candidate.name()
                 ),
             };
-            total_reference_resolutions += dispatch_candidate_corpus_values(
-                candidate,
-                dispatch,
-                &mut heap,
-                &mut retained_handles,
-                &values,
-            )?;
-            total_batch_invocations += 1;
-            total_dispatches += values.len();
+            fixture_values.extend(values);
         }
+        if fixture_values.is_empty() {
+            bail!("{} Core IR fixture {relative_path} has no native Value inputs", candidate.name());
+        }
+        total_reference_resolutions += dispatch_candidate_corpus_values(
+            candidate,
+            dispatch,
+            &mut heap,
+            &mut retained_handles,
+            &fixture_values,
+        )?;
+        total_batch_invocations += 1;
+        total_dispatches += fixture_values.len();
 
         let fixture_name = Path::new(relative_path)
             .file_stem()
