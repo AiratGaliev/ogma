@@ -720,6 +720,7 @@ struct NativeShadowRootEvidence {
 struct NativeCoreIrExecutionEvidence {
     branch_native_code: NativeCodeMetrics,
     dynamic_add_native_code: NativeCodeMetrics,
+    strict_equal_native_code: NativeCodeMetrics,
     branch_equal_result_bits: u64,
     branch_unequal_result_bits: u64,
     loop_integer_result_bits: u64,
@@ -767,6 +768,7 @@ struct NativeCodeMetrics {
     symbol: &'static str,
     instruction_count: usize,
     function_code_bytes: usize,
+    numeric_conversion_instructions: usize,
     integer_registers: Vec<String>,
     vector_registers: Vec<String>,
     stack_relative_memory_instructions: usize,
@@ -779,9 +781,8 @@ struct NativeCodeMetrics {
 struct CandidateEvidence {
     name: String,
     runtime_value_bytes: usize,
-    native_ir_value_conversion_ops_per_loop_iteration: u32,
-    native_ir_value_conversion_ops_per_invocation: u32,
-    native_helper_calls_per_loop_iteration: u32,
+    modeled_ir_value_conversion_ops_per_loop_iteration: u32,
+    modeled_ir_value_conversion_ops_per_invocation: u32,
     compile_first_ns: u64,
     compile_ns: Distribution,
     object_bytes: u64,
@@ -4446,6 +4447,7 @@ fn run_native_core_ir_execution(
 
     let branch_native_code = native_code_metrics(object_path, "ogma_value_branch")?;
     let dynamic_add_native_code = native_code_metrics(object_path, "ogma_value_dynamic_add")?;
+    let strict_equal_native_code = native_code_metrics(object_path, "ogma_value_strict_equal")?;
     let branch_equal = invoke_native_numeric_binary(candidate, branch, 7.0, 7.0)?;
     let branch_unequal = invoke_native_numeric_binary(candidate, branch, 7.0, 8.0)?;
     let loop_integer = invoke_native_loop_numbers(candidate, loop_function, 0.0, 5.0, 1.0)?;
@@ -4481,6 +4483,7 @@ fn run_native_core_ir_execution(
     Ok(NativeCoreIrExecutionEvidence {
         branch_native_code,
         dynamic_add_native_code,
+        strict_equal_native_code,
         branch_equal_result_bits: branch_equal,
         branch_unequal_result_bits: branch_unequal,
         loop_integer_result_bits: loop_integer,
@@ -5483,6 +5486,7 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
     let mut stack_relative_loads = 0_usize;
     let mut stack_relative_stores = 0_usize;
     let mut call_instructions = 0_usize;
+    let mut numeric_conversion_instructions = 0_usize;
 
     for line in disassembly.lines() {
         let trimmed = line.trim();
@@ -5519,6 +5523,9 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
         if mnemonic.starts_with("call") {
             call_instructions += 1;
         }
+        if mnemonic.starts_with("cvt") || mnemonic.starts_with("vcvt") {
+            numeric_conversion_instructions += 1;
+        }
         let stack_access = operands.contains("[rsp")
             || operands.contains("[rbp")
             || mnemonic == "push"
@@ -5551,6 +5558,7 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
         symbol,
         instruction_count,
         function_code_bytes,
+        numeric_conversion_instructions,
         integer_registers: integer_registers.into_iter().collect(),
         vector_registers: vector_registers.into_iter().collect(),
         stack_relative_memory_instructions,
@@ -5710,18 +5718,17 @@ fn run(
         candidates.push(CandidateEvidence {
             name: candidate.name(),
             runtime_value_bytes: candidate.runtime.value_bytes(),
-            native_ir_value_conversion_ops_per_loop_iteration: if candidate.ssa == SsaPolicy::Boxed
+            modeled_ir_value_conversion_ops_per_loop_iteration: if candidate.ssa == SsaPolicy::Boxed
             {
                 5
             } else {
                 0
             },
-            native_ir_value_conversion_ops_per_invocation: if candidate.ssa == SsaPolicy::Boxed {
+            modeled_ir_value_conversion_ops_per_invocation: if candidate.ssa == SsaPolicy::Boxed {
                 0
             } else {
                 4
             },
-            native_helper_calls_per_loop_iteration: 0,
             compile_first_ns,
             compile_ns,
             object_bytes: fs::metadata(&object_path)?.len(),
@@ -5846,12 +5853,26 @@ mod tests {
             parse_native_disassembly(disassembly, "ogma_value_loop").expect("parse objdump");
         assert_eq!(metrics.instruction_count, 4);
         assert_eq!(metrics.function_code_bytes, 15);
+        assert_eq!(metrics.numeric_conversion_instructions, 0);
         assert!(metrics.integer_registers.contains(&"rax".to_owned()));
         assert!(metrics.integer_registers.contains(&"rdi".to_owned()));
         assert!(metrics.vector_registers.contains(&"xmm0".to_owned()));
         assert_eq!(metrics.stack_relative_memory_instructions, 2);
         assert_eq!(metrics.stack_relative_loads, 1);
         assert_eq!(metrics.stack_relative_stores, 1);
+    }
+
+    #[test]
+    fn objdump_parser_counts_real_scalar_numeric_conversion_instructions() {
+        let disassembly = r#"
+0000000000000000 <ogma_value_conversion_probe>:
+   0: f2 48 0f 2a c7       cvtsi2sd xmm0,rdi
+   5: f2 48 0f 2d c0       cvttsd2si rax,xmm0
+   a: c3                   ret
+"#;
+        let metrics = parse_native_disassembly(disassembly, "ogma_value_conversion_probe")
+            .expect("parse native conversion instructions");
+        assert_eq!(metrics.numeric_conversion_instructions, 2);
     }
 
     #[test]
