@@ -703,6 +703,8 @@ struct NativeShadowRootEvidence {
 
 #[derive(Clone, Debug, Serialize)]
 struct NativeCoreIrExecutionEvidence {
+    branch_native_code: NativeCodeMetrics,
+    dynamic_add_native_code: NativeCodeMetrics,
     branch_equal_result_bits: u64,
     branch_unequal_result_bits: u64,
     loop_integer_result_bits: u64,
@@ -3883,6 +3885,7 @@ fn invoke_native_symbol_add_throw(
 fn run_native_core_ir_execution(
     candidate: Candidate,
     library: &Library,
+    object_path: &Path,
 ) -> Result<NativeCoreIrExecutionEvidence> {
     let branch = unsafe {
         *library
@@ -3905,6 +3908,8 @@ fn run_native_core_ir_execution(
             .context("generated native Value dispatch entry point missing for fixture exception")?
     };
 
+    let branch_native_code = native_code_metrics(object_path, "ogma_value_branch")?;
+    let dynamic_add_native_code = native_code_metrics(object_path, "ogma_value_dynamic_add")?;
     let branch_equal = invoke_native_numeric_binary(candidate, branch, 7.0, 7.0)?;
     let branch_unequal = invoke_native_numeric_binary(candidate, branch, 7.0, 8.0)?;
     let loop_integer = invoke_native_loop_numbers(candidate, loop_function, 0.0, 5.0, 1.0)?;
@@ -3938,6 +3943,8 @@ fn run_native_core_ir_execution(
     }
 
     Ok(NativeCoreIrExecutionEvidence {
+        branch_native_code,
+        dynamic_add_native_code,
         branch_equal_result_bits: branch_equal,
         branch_unequal_result_bits: branch_unequal,
         loop_integer_result_bits: loop_integer,
@@ -5143,6 +5150,8 @@ fn run(
             samples,
         )?;
         let native_core_ir_corpus = run_native_core_ir_corpus_validation(candidate, &library)?;
+        let native_core_ir_execution =
+            run_native_core_ir_execution(candidate, &library, &object_path)?;
         let native_value_semantics = run_native_value_semantics(candidate, &library)?;
         let semantic_reference_count = semantic_cases()
             .iter()
@@ -5191,6 +5200,7 @@ fn run(
             native_code,
             native_handle_dispatch,
             native_core_ir_corpus,
+            native_core_ir_execution,
             native_value_semantics,
             native_shadow_roots,
             native_pressure,
