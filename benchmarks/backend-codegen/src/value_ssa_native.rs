@@ -2282,9 +2282,8 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
                 }
                 // SAFETY: validate() checks the entry pointer/count against the
                 // table's owned Vec; both remain live until this callback ends.
-                let entries = unsafe {
-                    std::slice::from_raw_parts(abi.entries, abi.entry_count as usize)
-                };
+                let entries =
+                    unsafe { std::slice::from_raw_parts(abi.entries, abi.entry_count as usize) };
                 let entry = entries[1];
                 let Some(thunk) = entry.generic_thunk else {
                     return 13;
@@ -2313,11 +2312,8 @@ unsafe extern "C" fn decode_native_semantic_value_callback(
                         &mut completion,
                     )
                 };
-                let (generic_callback_calls, nested_callback_calls) =
-                    host_table.callback_stats();
-                let number_bits = if completion.value.tag
-                    == crate::aot_host_abi::AOT_VALUE_NUMBER
-                {
+                let (generic_callback_calls, nested_callback_calls) = host_table.callback_stats();
+                let number_bits = if completion.value.tag == crate::aot_host_abi::AOT_VALUE_NUMBER {
                     Some(unsafe { completion.value.payload.number }.to_bits())
                 } else {
                     None
@@ -2522,7 +2518,10 @@ fn semantic_cases() -> Vec<SemanticCase> {
         SemanticCase {
             name: "bigint-to-number-throws",
             inputs: vec![SemanticValue::BigInt(7)],
-            expected: SemanticCompletion::Throw { name: "TypeError", value: None },
+            expected: SemanticCompletion::Throw {
+                name: "TypeError",
+                value: None,
+            },
             expected_host_trace: vec![],
         },
         SemanticCase {
@@ -2773,7 +2772,8 @@ fn dispatch_native_semantic_inputs(
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
     let context_argument = &mut context as *mut NativeSemanticCallbackContext as usize as u64;
-    for (index, (expected_tag, expected_payload)) in expected_tags_payloads.into_iter().enumerate() {
+    for (index, (expected_tag, expected_payload)) in expected_tags_payloads.into_iter().enumerate()
+    {
         let value_argument = match candidate.runtime {
             RuntimeLayout::Tagged16 => unsafe {
                 storage.as_mut_ptr().add(index * 2) as usize as u64
@@ -2846,20 +2846,28 @@ fn run_native_value_semantics(
                 );
             }
             actual_host_trace = vec![host_call.trace.clone()];
-            actual = match (host_call.completion_kind, host_call.error_kind, host_call.number_bits) {
-                (crate::aot_host_abi::AOT_COMPLETION_NORMAL, crate::aot_host_abi::AOT_ERROR_NONE, Some(bits)) => {
-                    SemanticCompletion::Normal(SemanticValue::Number(canonical_number_bits(
+            actual = match (
+                host_call.completion_kind,
+                host_call.error_kind,
+                host_call.number_bits,
+            ) {
+                (
+                    crate::aot_host_abi::AOT_COMPLETION_NORMAL,
+                    crate::aot_host_abi::AOT_ERROR_NONE,
+                    Some(bits),
+                ) => SemanticCompletion::Normal(SemanticValue::Number(canonical_number_bits(
+                    f64::from_bits(bits),
+                ))),
+                (
+                    crate::aot_host_abi::AOT_COMPLETION_THROW,
+                    crate::aot_host_abi::AOT_ERROR_THROWN,
+                    Some(bits),
+                ) => SemanticCompletion::Throw {
+                    name: "HostException",
+                    value: Some(SemanticValue::Number(canonical_number_bits(
                         f64::from_bits(bits),
-                    )))
-                }
-                (crate::aot_host_abi::AOT_COMPLETION_THROW, crate::aot_host_abi::AOT_ERROR_THROWN, Some(bits)) => {
-                    SemanticCompletion::Throw {
-                        name: "HostException",
-                        value: Some(SemanticValue::Number(canonical_number_bits(
-                            f64::from_bits(bits),
-                        ))),
-                    }
-                }
+                    ))),
+                },
                 _ => bail!(
                     "{} OGM-32 host thunk returned an unsupported completion for {} (kind={}, error={}, value_tag={})",
                     candidate.name(),
@@ -2920,7 +2928,10 @@ fn run_native_shadow_root_validation(
     };
 
     if managed_roots == 0 {
-        bail!("{} shadow-root workload must contain managed values", candidate.name());
+        bail!(
+            "{} shadow-root workload must contain managed values",
+            candidate.name()
+        );
     }
 
     let mut heap = ogma_native_runtime_boundary_proof::GcHeap::default();
@@ -2941,11 +2952,7 @@ fn run_native_shadow_root_validation(
             },
         ],
     )?;
-    let frame_values = references
-        .iter()
-        .copied()
-        .map(JsValue::Managed)
-        .collect();
+    let frame_values = references.iter().copied().map(JsValue::Managed).collect();
     let frame = NativeFrame::new(descriptor, frame_values)?;
     let mut providers = RootProviders::default();
     let native_frame = providers.native.enter(frame)?;
@@ -2993,7 +3000,10 @@ fn run_native_shadow_root_validation(
     }
 
     providers.native.leave(native_frame)?;
-    providers.interpreter.leave().context("OGM-27 interpreter frame was not registered")?;
+    providers
+        .interpreter
+        .leave()
+        .context("OGM-27 interpreter frame was not registered")?;
     for handle in persistent_handles.iter().copied() {
         providers.persistent.release(handle)?;
     }
