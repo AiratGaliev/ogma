@@ -1452,8 +1452,12 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
                 let valid_special_payload =
                     b.ins().bor(valid_immediate_or_boolean, valid_reference);
                 let valid_special = b.ins().band(has_known_tag, valid_special_payload);
+                // A known special tag must never fall through to the Number
+                // representation when its tag-specific payload is malformed.
+                let is_number_tag = b.ins().bnot(has_known_tag);
                 let invalid_number = nanbox_word_is_non_number(&mut b, parameters[0]);
-                let valid_number = b.ins().bnot(invalid_number);
+                let number_is_canonical = b.ins().bnot(invalid_number);
+                let valid_number = b.ins().band(is_number_tag, number_is_canonical);
                 b.ins().bor(valid_special, valid_number)
             }
         };
@@ -1753,6 +1757,14 @@ fn run_native_handle_dispatch_validation(
             (
                 "reference-zero-handle",
                 vec![NANBOX_OBJECT_TAG << NAN_TAG_SHIFT],
+            ),
+            (
+                "positive-noncanonical-number-nan",
+                vec![0x7ff8_0000_0000_0001],
+            ),
+            (
+                "negative-noncanonical-number-nan",
+                vec![0xfff8_0000_0000_0001],
             ),
         ],
     };
