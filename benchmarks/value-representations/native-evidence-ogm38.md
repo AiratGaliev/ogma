@@ -1,88 +1,103 @@
 # OGM-38 — Native Value and SSA evidence
 
-**Status:** verified M0 evidence slice; OGM-38 remains In Progress because several acceptance criteria are only partially covered. No production Runtime ABI or NaN-boxing decision is made.
+**Status: In Progress.** The committed M0 evidence now measures all four candidates with generated native code, an allocator-backed OGM-26 heap, isolated process peak-memory workers and an independent OGM-31 differential. It does not close every OGM-38 acceptance criterion and is not a production Runtime/ABI decision.
 
 ## Question and candidates
 
-OGM-38 revalidates two independent choices using native execution evidence:
+OGM-38 independently evaluates two axes:
 
 | Runtime Value layout | SSA policy | Candidate |
 |---|---|---|
-| Explicit tagged 16-byte value | Boxed | tagged-16-boxed |
-| Explicit tagged 16-byte value | Representation-aware | tagged-16-representation-aware |
-| 8-byte NaN-box word | Boxed | nanbox-8-boxed |
-| 8-byte NaN-box word | Representation-aware | nanbox-8-representation-aware |
+| Explicit tagged 16-byte value | Boxed | `tagged-16-boxed` |
+| Explicit tagged 16-byte value | Representation-aware | `tagged-16-representation-aware` |
+| 8-byte NaN-box word | Boxed | `nanbox-8-boxed` |
+| 8-byte NaN-box word | Representation-aware | `nanbox-8-representation-aware` |
 
-All four candidates use the same accepted Core IR v1 contract and the five-fixture OGM-31 corpus. Runtime layout and SSA policy remain independent axes. This report does not select a public Runtime ABI based on width alone.
+All four use the same Core IR v1 contract, the same five canonical OGM-31 fixtures, and the same semantic matrix. Runtime representation and internal SSA policy remain separate choices.
 
-## Reproducible CI run
+## Reproducible CI run and committed data
 
-- CI run: [OGM-38 run #44730458468](https://github.com/AiratGaliev/ogma/actions/runs/44730458468) — success.
-- OGM-38 native job: success (format, Clippy with warnings denied, OGM-26/27/backend tests, all four native candidates and OGM-31 differential proof).
-- Repository fast-checks: success.
-- Raw CI artifact: [ogm38-native-value-ssa-evidence, artifact 14625194465](https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465).
-- Source revision and tested revision: e145f6b4cd8a175d43cb8fb96bc8667f315a3c7d.
-- Environment: GitHub-hosted Linux x86_64; Rust 1.100.0; Cranelift 0.137.2; target x86_64-unknown-linux-gnu; Intel Xeon Platinum 8573C.
-- Sampling: 3 warmups and 101 measurements per candidate; 1,000 native calls per throughput sample.
-- Full CI JSON: 1,657,526 bytes; SHA-256 05de9c347b24ea27f3a91bae604c5a768519cfd2d92d6e28544b4b44ec2c49a1 (preserved in artifact 14625194465).
-- The repository's previously tracked `results/ogm38-native-value-ssa-report.json.gz` is an older evidence run, not the report for revision e145f6b4cd8a175d43cb8fb96bc8667f315a3c7d. It is not used for any table or conclusion in this document.
-- A lossless compact projection of the current run was generated and locally checksum-verified (expanded JSON 274,526 bytes; gzip 43,422 bytes). It retains all 101 raw sample values for compile time, native throughput, handle helper, both collectors (build/collection/root-scan/cleanup and per-sample topology) and all three allocator strategies. GC and allocator sample records use an ordered field-name array plus positional sample rows; semantic cases, fixture dispatches, generated-code metrics, root evidence and aggregate percentiles are retained. This compact projection was not committed to the PR; the full authoritative report remains in the linked CI artifact, whose retention currently expires on 2027-02-18. Consequently, the raw-measurements-committed criterion is still open.
+- Successful CI run: [#44766826425](https://github.com/AiratGaliev/ogma/actions/runs/44766826425).
+- Tested source revision: `c7da33dc00e0d588ba36b809f17fc06a17559a6e`.
+- Both `OGM-38 native Value and SSA representation evidence` and `fast-checks` passed. The native job completed formatting, Clippy (`-D warnings`), OGM-26/27/backend Rust tests, all four candidate executions, OGM-31 differential validation and evidence upload.
+- Full run artifact: [ogm38-native-value-ssa-evidence, artifact 14644153664](https://github.com/AiratGaliev/ogma/actions/runs/44766826425/artifacts/14644153664). It preserves the native JSON, OGM-31 differential, Core IR reports, generated portable/native objects and lockfile. The artifact expires on 2027-02-18.
+- Target: `x86_64-unknown-linux-gnu`; Rust 1.100.0; Cranelift 0.137.2; Linux x86-64 hosted runner; Intel Xeon Platinum 6975P-C.
+- Sampling: three warmups, 101 measured samples per metric and 1,000 native calls per throughput sample.
+- The repository commits the raw primary compile/throughput samples, the complete GC/allocator sample matrix, the complete machine-readable native report and the OGM-31 differential report under `benchmarks/value-representations/results/`. Every committed projection pins source/tested revision `c7da33dc00e0d588ba36b809f17fc06a17559a6e` and the SHA-256 of the complete report/differential.
+- `export_ogm38_raw_samples.py` validates the CI native/differential reports and regenerates the committed-format JSON/gzip projections. The focused CI workflow executes this exporter on every OGM-38 run and uploads its output with the authoritative report.
+- The older tracked report from earlier OGM-38 attempts is not the source of the current measurements.
 
-The report stores all compile, native-loop, callback, GC and allocator samples, not just aggregate percentiles. The CI artifact additionally preserves the complete OGM-31 differential report, Core IR verifier report, generated portable/native artifacts and resolved dependency lock.
+The full report has a small post-run correction to two descriptive boundary strings: the raw values and samples are unchanged, but the report now describes the actual isolated VmHWM workers and the integrated heap allocator accurately.
 
 ## Native code generation and throughput
 
-The current Cranelift ObjectModule prototype compiles and links candidate-specific host-native functions. The primary throughput workload is a strict-equality-controlled Number loop specialized from the canonical loop fixture (js.add and js.to_number). It is deliberately narrow and must not be interpreted as representative JavaScript application throughput.
+The generated Cranelift ObjectModule functions are loaded and invoked as native code. The principal throughput workload is a strict-equality-controlled, Number-only loop specialization from the canonical loop fixture (`js.add` + `js.to_number`). It is a deliberately narrow compiler/runtime probe, not representative JavaScript application throughput.
 
-| Candidate | Value bytes | Compile p50 (ms) | Native loop p50 / p95 / p99 (ns) | Object bytes | Loop code bytes | Modeled conversions |
-|---|---:|---:|---:|---:|---:|---|
-| tagged-16-boxed | 16 | 4.076 | 346.397 / 367.117 / 378.112 | 3,720 | 336 | 5 per iteration |
-| tagged-16-representation-aware | 16 | 3.948 | 110.520 / 120.532 / 131.800 | 4,048 | 336 | 4 at invocation boundary |
-| nanbox-8-boxed | 8 | 3.054 | 345.160 / 353.427 / 356.208 | 3,280 | 392 | 5 per iteration |
-| nanbox-8-representation-aware | 8 | 3.026 | 123.657 / 144.154 / 149.841 | 3,584 | 384 | 4 at invocation boundary |
+| Candidate | Value bytes | Compile p50 (ms) | Compile p95 (ms) | Loop p50 / p95 / p99 (ns) | Object bytes | Loop code bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| tagged-16-boxed | 16 | 1.372 | 1.574 | 282.339 / 294.212 / 296.498 | 4,040 | 336 |
+| tagged-16-representation-aware | 16 | 1.519 | 1.666 | 92.865 / 102.077 / 103.491 | 4,368 | 336 |
+| nanbox-8-boxed | 8 | 1.268 | 1.446 | 282.077 / 292.020 / 293.274 | 3,600 | 392 |
+| nanbox-8-representation-aware | 8 | 1.387 | 1.546 | 85.526 / 94.528 / 97.133 | 3,904 | 384 |
 
-All four generated shared libraries are 15,128 bytes in this run. Loop function code sizes and instruction counts are measured from the generated object; complete object sizes also include the other generated helpers. Compile p50 is the Cranelift candidate function compilation measurement, not whole-program or production compiler startup.
+All four shared libraries are 15,256 bytes in this run. Complete object size includes helper functions in addition to the Number loop. Compile p50 is candidate Cranelift function compilation, not whole-program compile/startup time.
 
-On this Number-only workload, representation-aware SSA lowers p50 loop latency by about 3.13× for Tagged16 and 2.79× for NaN-box compared with boxed SSA. This is useful evidence for keeping representation-aware SSA as the compiler direction, not a universal runtime performance claim. NaN-box representation-aware is slower than Tagged16 representation-aware in this sample (123.657 ns versus 110.520 ns p50), despite its nominally smaller Value word.
+On this Number-only workload, representation-aware SSA reduces p50 latency by about 3.04× for Tagged16 and 3.30× for NaN-box compared with boxed SSA. This supports representation-aware internal SSA as a direction for further compiler work; it is not a universal runtime performance claim. NaN-box representation-aware is faster in this particular loop, but that does not establish that NaN-box should be the public Runtime ABI.
 
-## Same-corpus dispatch and differential observations
+## Canonical Core IR corpus and differential
 
-Every candidate consumes all Value representations extracted from the five canonical OGM-31 fixtures:
+For every candidate the generated native batch dispatcher executes five batches, one for each canonical fixture, covering all 77 Value representations extracted from the five OGM-31 documents. All 77 inputs round-trip through the candidate codec and are dispatched by a generated Cranelift loop. Twenty reference Values are resolved through generation-checked OGM-26 handles after forced GC.
 
-| Canonical fixture | Native Value dispatches per candidate | Reference Values resolved after forced GC |
+| Canonical fixture | Native Value dispatches | Reference Values resolved after forced GC |
 |---|---:|---:|
 | positive-ssa-branch | 7 | 0 |
 | positive-loop-carried-values | 20 | 4 |
 | positive-dynamic-exception | 14 | 5 |
 | positive-call-boundary | 23 | 7 |
 | positive-host-call | 13 | 4 |
-| **Total** | **77** | **20** |
+| **Total per candidate** | **77** | **20** |
 
-For every candidate the report verifies that all 77 Value inputs round-trip through its candidate codec, are dispatched through the generated native Value helper and that the 20 reference Values resolve to their expected generation-checked OGM-26 objects after forced collection.
+The separate OGM-31 portable/native comparison reports `all_candidates_match_portable_ogm31_oracle = true` for all four candidates and all five fixture IDs. It covers branch/loop/dynamic-number observations, 18 strict-equality cases, call-boundary, host echo, the Symbol TypeError observation and balanced OGM-27 roots.
 
-The candidate-specific Cranelift functions execute branch equal/unequal, integer and fractional loop cases, Number dynamic addition, and the Symbol-add TypeError path. Call-boundary and host-call observations use the candidate native Value dispatcher and the existing M0 host/ABI adapters. The independent OGM-31 differential run reports all_candidates_match_portable_ogm31_oracle = true for all four candidates and all five fixture IDs; each candidate passes 18 strict-equality checks, call-boundary and host-echo checks, the Symbol TypeError observation and OGM-27 root-balance checks.
+**Execution boundary:** this does not mean the four candidates fully lower and execute every instruction and control-flow path of all five complete Core IR functions. They execute a generated native batch loop over the fixture Value corpus and a candidate-specific subset of branch, loop, Number dynamic addition, strict equality and related helpers. Call-boundary and host-call observations use candidate native dispatch plus M0 host/ABI adapters. OGM-31 is an independent portable/native oracle proof; the repository still does not contain a general production Core IR-to-native compiler.
 
-**Important boundary:** this does not mean each of the four candidate backends fully lowers and executes every instruction and control-flow path from all five complete Core IR functions. The candidate adapters execute a native subset and dispatch the complete fixture Value representation corpus. The OGM-31 portable/native fixture oracle is a separate, narrower M0 backend proof. The repository still does not have a general production Core IR-to-native compiler.
+## Value semantics and equality
 
-## Value semantics and strict equality regression
+Every candidate passes the same 31-case matrix. It covers Number/String/BigInt observations, Symbol and BigInt/Number errors, NaN, signed zero, infinities, undefined/null/booleans, object and Symbol identity, String and BigInt strict equality, type transitions, completion/exception passthrough, call-boundary and host-call behavior. Each candidate records 63 native callbacks and 33 forced collections.
 
-Each candidate passes the same 31-case semantic matrix. The matrix includes Number, String and BigInt addition observations; Symbol and BigInt/Number error cases; NaN, signed zero and infinities; undefined, null and booleans; object and Symbol identity; String and BigInt strict equality; type transition; exception passthrough; call-boundary and host-call cases. Each candidate records 63 native callbacks and 33 forced collections in this run.
+The strict-equality regression is important: equal Strings and equal BigInts are allocated into distinct generation-checked handles, yet generated native strict equality compares their semantic values and returns true. Distinct Strings/BigInts compare false. Object and Symbol strict equality remains identity-based. The primitive comparison callback resolves both tokens through OGM-26, forces collection while handles remain retained, verifies the expected objects and compares the actual String/BigInt values.
 
-The matrix exercises generated native strict equality for the strict-equality cases. The regression suite specifically verifies JavaScript primitive semantics that a handle-identity comparison would get wrong:
+**Boundary:** String concatenation, BigInt arithmetic, object ToPrimitive and some completion observations are still M0 oracle/adapter work rather than general generated native operator implementations. The 31-case pass is not a claim that the full ECMAScript operator set has been lowered.
 
-- Equal String values held in two different generation-checked handles compare true.
-- Distinct String values held in different handles compare false.
-- Equal BigInt values held in two different handles compare true.
-- Distinct BigInt values held in different handles compare false.
-- Object and Symbol strict equality continues to use identity.
+## Heap, allocator, GC, roots and peak process memory
 
-The generated Tagged16 and NaN-box strict-equality functions call a checked native host callback only for String and BigInt payload comparison. The callback resolves both HostHandle tokens through OGM-26, forces collection while they remain retained, verifies both handles still resolve to their expected objects, and then compares their semantic String/BigInt values. The native report asserts that this callback path was actually executed for all four primitive cases. A Rust regression test verifies that equal String and BigInt inputs are allocated into distinct handles and are fully reclaimed after release.
+The OGM-26 heap uses the OGM-24 `IsolateAllocator` for actual object payload backing blocks. Each object cell owns its allocation; its candidate Value slots are stored in that block and are exposed through checked word-slice accessors. When RC-cycle-removal or MarkSweep reclaims an object, its backing allocation is returned to the selected allocator strategy. Unit tests exercise System, exact-reuse and size-class strategies under both collectors, including payload contents surviving roots/collection and storage reclamation after roots are released.
 
-The 31-case matrix is not a claim that all ECMAScript operators are lowered to machine code. In particular, String concatenation, BigInt arithmetic, object ToPrimitive and some completion observations are evaluated by the M0 semantic oracle around native Value dispatch; they are not production-native operator implementations. The native Number path, strict equality, native helper dispatch and AOT host/ABI adapter paths are exercised independently.
+Each candidate is measured with the same OGM-26 object graph under both collectors and all three allocator strategies: 2,048 objects, 2,121 edges, 544 encoded object-reference Values and the same root topology (171 interpreter-frame roots, 171 native-frame roots, 170 persistent handles and 32 temporary-scope roots).
 
-## Native register-pressure observations
+| Value layout | Value payload capacity | Peak logical heap |
+|---|---:|---:|
+| Tagged16 (both SSA policies) | 524,288 B | 787,600 B |
+| NaN-box (both SSA policies) | 262,144 B | 525,456 B |
 
-The Cranelift prototype emits a 32-live-Value pressure function per candidate and the CI runner disassembles the actual object with GNU objdump. The table reports observed stack-relative memory traffic in that generated pressure function, not an inferred spill count:
+Each of the 24 candidate × collector × allocator combinations runs in its own child process. The worker reads Linux `/proc/self/status` `VmHWM` before warmups and after three warmups plus 101 measured graph lifecycles. The baseline, absolute peak and delta are recorded per worker. The metric includes the worker executable, code mappings, Rust runtime and allocator state; it is peak process memory, not a heap-only RSS measurement.
+
+| Candidate | Peak worker VmHWM across its six GC/allocator combinations |
+|---|---:|
+| tagged-16-boxed | 4.633–4.863 MiB |
+| tagged-16-representation-aware | 4.672–4.836 MiB |
+| nanbox-8-boxed | 4.398–4.566 MiB |
+| nanbox-8-representation-aware | 4.465–4.598 MiB |
+
+The worker report stores baseline/peak/delta for every combination, not only the range shown here. The exporter and regression tests verify that all 24 combinations exist, each has 101 raw samples, and `peak >= baseline` with `delta = peak - baseline`.
+
+The direct OGM-24 allocator microbenchmark is also retained separately for each candidate. In this run the exact-reuse and size-class strategies each recorded 12,928 reuses and zero allocation failures across the samples. Maximum allocator-accounted internal fragmentation was 32,768 B for Tagged16 payloads and 16,384 B for NaN-box payloads; System reported zero. Allocator accounting and VmHWM are distinct measures and must not be conflated.
+
+OGM-27 shadow-root evidence exercises entry/call-boundary roots, persistent handles, forced collections and cleanup. All modeled roots survive collection and all objects are reclaimed after release. This remains an executable M0 root-map/frame model, not compiler-generated production machine stack maps or a fully integrated production OGM-19 Runtime ABI.
+
+## Register pressure, spill and conversion evidence
+
+The Cranelift-generated 32-live-Value pressure function is disassembled with GNU objdump. The following are actual stack-relative memory instructions in the generated native function, not inferred allocator spill counts:
 
 | Candidate | Pressure function code bytes | Stack-relative loads | Stack-relative stores |
 |---|---:|---:|---:|
@@ -91,69 +106,42 @@ The Cranelift prototype emits a 32-live-Value pressure function per candidate an
 | nanbox-8-boxed | 727 | 33 | 33 |
 | nanbox-8-representation-aware | 1,039 | 33 | 33 |
 
-A separate regalloc2 0.15.3 profile maps the canonical call-boundary Core IR parameter/operand/result liveness to VRegs under a controlled 6 GPR / 6 FPR / 6 vector-register budget:
-
-| Candidate | Register allocations | Modeled spill slots | Modeled spill bytes | Spill-store / reload edits |
-|---|---:|---:|---:|---:|
-| tagged-16-boxed | 34 | 6 | 48 | 6 / 6 |
-| tagged-16-representation-aware | 23 | 0 | 0 | 0 / 0 |
-| nanbox-8-boxed | 17 | 0 | 0 | 0 / 0 |
-| nanbox-8-representation-aware | 17 | 0 | 0 | 0 / 0 |
-
-These regalloc2 spill figures are a controlled liveness-model result, not Cranelift's private register-allocation dump, not the host ISA's physical spill-slot map and not a substitute for a general backend register-pressure benchmark. Similarly, objdump stack-relative loads/stores are actual generated machine instructions, but the counter does not classify every such access as a compiler spill.
-
-## Heap, GC, allocator and roots
-
-The OGM-26 workload compares RC cycle-removal and non-moving MarkSweep on equivalent graphs: 2,048 objects, 2,121 edges, 544 encoded object-reference Values and the same root topology for all candidates (171 interpreter-frame roots, 171 native-frame roots, 170 persistent handles and 32 temporary-scope roots). Both collectors preserve the reachable graph and reclaim the objects after all roots and handles are released.
-
-| Value layout | Value storage capacity | Peak logical heap bytes | MarkSweep collection p50 (ns) | RC cycle-removal collection p50 (ns) |
-|---|---:|---:|---:|---:|
-| tagged-16 (both SSA policies) | 524,288 | 656,528 | 20,829–20,992 | 37,809–37,929 |
-| nanbox-8 (both SSA policies) | 262,144 | 394,384 | 20,435–20,989 | 37,722–37,805 |
-
-The OGM-24 allocator proof also performs real backing allocations for a matching number and size of per-object Value payload blocks, under System, per-isolate exact-reuse and per-isolate size-class-pool strategies. It measures allocation/deallocation time, peak reserved/live requested bytes, allocator-accounted internal fragmentation, reuse, evictions and failures. In this run the reuse pools performed 12,928 reused allocations per candidate across the samples, with zero allocation failures; peak allocator-accounted internal fragmentation was 32,768 bytes for Tagged16 payloads and 16,384 bytes for NaN-box payloads, while System reported zero.
-
-**Boundary:** the OGM-24 allocator is a measured sidecar with payload dimensions matching OGM-26's candidate heap. It does not back OGM-26's object cells and is not a production Runtime allocator integration. Peak logical heap and the allocator's reserved/live/fragmentation counters are not OS process RSS, external fragmentation or total process memory. Thus the evidence is stronger than a logical Value-width estimate, but it does not close the integrated allocator/GC/peak-process-memory criterion.
-
-OGM-27 shadow-root evidence also executes entry and call-boundary safepoints with 28 managed roots, interpreter/native frame providers, persistent handles and cleanup. All roots survive collection and all objects are reclaimed after release. This is an executable M0 root-map/frame model; it is not a production compiler-generated machine stack-map encoder or a full OGM-19 ABI integration.
+A separate regalloc2 0.15.3 liveness profile maps canonical call-boundary Core IR parameter/operand/result representations to VRegs under a documented System V AMD64 register budget (14 non-reserved GPRs and 16 XMM/FPR registers, plus 16 vector registers). Its reported spill slots/moves are a controlled liveness-model result, **not Cranelift's private physical register allocation or spill dump**. The pinned Cranelift 0.137.2 public API does not expose its private register mask; the report states that boundary explicitly. The objdump stack-relative counter also does not classify every stack access as a spill.
 
 ## Reproduction
 
-Run on the documented x86_64 Linux target with Rust 1.100.0, LLVM 18 development packages, Clang 18, GNU binutils and Python 3.12:
+The OGM-38 focused CI workflow runs the same sequence. From the repository root on the documented x86-64 Linux target with Rust 1.100.0, LLVM/Clang 18, GNU binutils and Python 3.12:
 
 ~~~sh
 python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json
-python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
+cargo fmt --manifest-path benchmarks/gc-comparison/Cargo.toml --all -- --check
+cargo fmt --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all -- --check
 cargo fmt --manifest-path benchmarks/backend-codegen/Cargo.toml --all -- --check
+cargo clippy --manifest-path benchmarks/gc-comparison/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo clippy --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-targets --all-features --locked -- -D warnings
 cargo clippy --manifest-path benchmarks/backend-codegen/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo test --manifest-path benchmarks/gc-comparison/Cargo.toml --all-features --locked
+cargo test --manifest-path benchmarks/native-runtime-boundary/Cargo.toml --all-features --locked
 cargo test --manifest-path benchmarks/backend-codegen/Cargo.toml --all-features --locked
-cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release --bin ogm38-value-ssa --   --iterations 1000 --warmups 3 --samples 101   --revision "$(git rev-parse HEAD)"   --output /tmp/ogm38-native-value-ssa-report.json
+cargo run --manifest-path benchmarks/backend-codegen/Cargo.toml --locked --release --bin ogm38-value-ssa -- --iterations 1000 --warmups 3 --samples 101 --revision "$(git rev-parse HEAD)" --output /tmp/ogm38-native-value-ssa-report.json
 python -m unittest discover -s benchmarks/dual-backend -p "test_*.py" -v
-python benchmarks/dual-backend/run.py   --output /tmp/ogm38-dual-backend-report.json   --artifact-dir /tmp/ogm38-dual-backend-artifacts   --iterations 1000
-python benchmarks/value-representations/validate_ogm38_ogm31.py   --native-report /tmp/ogm38-native-value-ssa-report.json   --ogm31-report /tmp/ogm38-dual-backend-report.json   --output /tmp/ogm38-ogm31-differential-report.json
+python benchmarks/dual-backend/run.py --output /tmp/ogm38-dual-backend-report.json --artifact-dir /tmp/ogm38-dual-backend-artifacts --iterations 1000
+python benchmarks/value-representations/validate_ogm38_ogm31.py --native-report /tmp/ogm38-native-value-ssa-report.json --ogm31-report /tmp/ogm38-dual-backend-report.json --output /tmp/ogm38-ogm31-differential-report.json
+python benchmarks/value-representations/export_ogm38_raw_samples.py --native-report /tmp/ogm38-native-value-ssa-report.json --differential-report /tmp/ogm38-ogm31-differential-report.json --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --artifact-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --output-dir /tmp/ogm38-results
 ~~~
 
-The focused GitHub Actions workflow runs these checks in the repository's CI Fast / engineering-delivery lane. Browser/runtime acceptance remains a separate promotion-candidate activity under the repository workflow and is not claimed by this PR.
+The full report, OGM-31 differential and generated portable/native artifacts remain available in the CI run artifact. Committed projections retain every raw compile/throughput sample and every GC/allocator sample, plus source/tested revision, toolchain, worker peak-memory metrics and reproducible validation.
 
 ## Acceptance-criteria status
 
 | Criterion | Status | Evidence and remaining gap |
 |---|---|---|
-| Four candidates on the same accepted Core IR corpus | **Partial** | All four process 77 Value representations from the same five canonical fixtures and match the OGM-31 observations. Candidate-specific native lowering does not yet execute each complete fixture CFG end-to-end. |
-| Actual codegen, throughput, register pressure/spills, helper and conversion costs | **Partial** | Native compile/object/loop throughput, helper callbacks, conversion counts, generated pressure-function disassembly and stack-relative traffic are measured. regalloc2 remains a separate controlled spill model; complete Cranelift spill metadata is not exposed. |
-| Equivalent heap/allocator/GC and peak-memory metrics | **Partial** | OGM-26 collectors and OGM-24 backing allocator run equivalent candidate-shaped workloads with root and fragmentation metrics. Allocator is a sidecar, not integrated into GcHeap; process RSS is not measured. |
-| Native differential semantics for requested values and effects | **Partial** | 31 cases pass for each candidate, including native strict equality, distinct String/BigInt handles, object/Symbol identity and ABI/host adapter observations. Some operator completions remain M0 oracle work rather than generated native operator implementations. |
-| Rooting, handle lifetime, safepoints and ABI transitions | **Partial** | Real OGM-26 generation-checked handles survive forced collections; OGM-27 shadow roots and call-boundary models balance; OGM-31 host adapters match. No production machine stack maps or integrated Runtime ABI are claimed. |
-| Raw measurements, toolchain/revision metadata and reproduction | **Met for the M0 measurement corpus** | The repository commits 101 raw compile/loop samples per candidate and 101 GC plus allocator samples for every candidate × collector × allocator strategy, with pinned target/toolchain/revision metadata. Regression tests validate both datasets. The full native report and generated object/disassembly evidence are retained in the linked CI artifact; exact reproduction commands are documented above. |
-| Documented Value ABI / internal SSA direction | **Partial** | Keep the public Value ABI explicitly tagged and architecture-neutral; preserve representation-aware SSA behind verified Core IR representations, boxing at dynamic/external boundaries. Do not select NaN-box from nominal width. A production ABI decision remains open. |
+| All four candidates on the same accepted Core IR corpus | **Partial** | All four execute five generated native batch loops covering 77 Values from the same five fixtures and match OGM-31 observations. Full candidate-specific lowering/execution of every complete fixture CFG is not implemented. |
+| Actual native codegen, compile time, throughput, pressure/spills, helper/conversion costs | **Partial** | Native code/object/compile/loop/helper metrics and objdump pressure-function accesses are measured. The regalloc2 spill profile is still a separate liveness model, not Cranelift's private spill report. |
+| Equivalent heap/allocator/GC and peak memory | **Met for this M0 proof heap** | OGM-24 allocator blocks back the actual OGM-26 object payloads; both collectors × all three allocator strategies run equivalent workloads. Isolated worker VmHWM baseline/peak/delta is recorded. This is still not a production Runtime heap or total application footprint. |
+| Differential correctness for requested values and effects | **Partial** | 31 semantic cases per candidate, generated native strict equality, distinct String/BigInt handle value comparisons, object/Symbol identity and OGM-31 differential pass. Some operator implementations remain oracle/adapter work rather than candidate-native lowering. |
+| Rooting, handle lifetime, safepoints and ABI transitions | **Partial** | OGM-26 generation-checked handles survive forced GC; OGM-27 shadow roots and M0 host/ABI adapters balance. Production machine stack maps and full Runtime ABI integration are not implemented. |
+| Raw measurements, revisions, reproduction and machine-readable reports committed | **Met for the M0 corpus** | The repository commits all 101 compile/loop raw samples, all 101 GC samples for 24 candidate × collector × allocator combinations, all allocator raw samples, full native JSON projection and OGM-31 differential. Revisions/toolchain and reproduction/exporter scripts are pinned. |
+| Separate public Runtime ABI vs internal SSA decision | **Partial** | Retain explicit tagged, architecture-neutral public Value ABI as the conservative baseline; prefer representation-aware internal SSA under Core IR v1 contracts and box at dynamic/external boundaries. No production ABI selection follows from width alone. |
 
-This is a verified and reproducible M0 evidence slice, **not completion of every OGM-38 acceptance criterion**. The Linear task remains In Progress. Remaining engineering gaps are still M0 proof gaps: they must not be mislabeled as browser QA, silently deferred to M1, or used as justification to start an unauthorized production Runtime implementation.
-
-## Decision supported by current evidence
-
-Keep two design decisions separate:
-
-1. **Public Runtime Value ABI:** retain the explicit, architecture-neutral tagged representation as the baseline until broader object, GC, ABI, memory and integration evidence justifies a change.
-2. **Internal compiler SSA:** prefer representation-aware SSA under the canonical Core IR v1 representation/phi contracts, and box only at dynamic semantic and external ABI boundaries.
-
-The Number-loop measurements favour representation-aware SSA in this prototype. They do not prove that NaN-box is the better public ABI; the 8-byte representation did not produce the fastest representation-aware loop in this run. No final production Value layout is selected.
+This is a verified M0 evidence slice, **not completion of every OGM-38 acceptance criterion**. Full Core IR CFG lowering, complete native operator implementation, true Cranelift spill metadata, production machine stack maps and production Runtime ABI integration remain M0 engineering gaps. They must not be mislabeled as browser QA or silently deferred to M1. OGM-38 therefore remains In Progress.
