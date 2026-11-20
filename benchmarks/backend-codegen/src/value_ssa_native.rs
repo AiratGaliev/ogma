@@ -2219,14 +2219,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             0,
         );
         let incremented = b.ins().iadd_imm_u(index_param, 1);
-        b.ins()
-            .brif(
-                accepted,
-                loop_block,
-                &[BlockArg::Value(incremented)],
-                invalid_block,
-                &[],
-            );
+        b.ins().brif(
+            accepted,
+            loop_block,
+            &[BlockArg::Value(incremented)],
+            invalid_block,
+            &[],
+        );
         b.switch_to_block(invalid_block);
         b.ins().return_(&[dispatch_status]);
         b.switch_to_block(done_block);
