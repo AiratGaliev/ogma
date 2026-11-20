@@ -668,6 +668,14 @@ struct NativeValueSemanticCaseEvidence {
     matches: bool,
 }
 
+type NativeSemanticDispatchResult = (
+    Vec<SemanticValue>,
+    usize,
+    usize,
+    Option<NativeAotHostCallEvidence>,
+    Vec<Option<u64>>,
+);
+
 #[derive(Clone, Debug, Serialize)]
 struct NativeValueSemanticsEvidence {
     cases: Vec<NativeValueSemanticCaseEvidence>,
@@ -2791,13 +2799,7 @@ fn dispatch_native_semantic_inputs(
     invoke_aot_host: bool,
     perform_native_transition: bool,
     value_move: NativeValueMove,
-) -> Result<(
-    Vec<SemanticValue>,
-    usize,
-    usize,
-    Option<NativeAotHostCallEvidence>,
-    Vec<Option<u64>>,
-)> {
+) -> Result<NativeSemanticDispatchResult> {
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut references = BTreeMap::new();
     let mut retained_handles = Vec::new();
