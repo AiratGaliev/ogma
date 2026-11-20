@@ -4530,7 +4530,10 @@ fn run_native_core_ir_corpus_validation(
             fixture_values.extend(values);
         }
         if fixture_values.is_empty() {
-            bail!("{} Core IR fixture {relative_path} has no native Value inputs", candidate.name());
+            bail!(
+                "{} Core IR fixture {relative_path} has no native Value inputs",
+                candidate.name()
+            );
         }
         total_reference_resolutions += dispatch_candidate_corpus_values(
             candidate,
