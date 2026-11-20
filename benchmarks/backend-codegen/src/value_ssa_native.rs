@@ -3321,8 +3321,7 @@ fn run_native_value_semantics(
         };
         if matches!(
             case.name,
-            "call-boundary"
-                | "object-identity-same"
+            "object-identity-same"
                 | "symbol-identity-same"
                 | "object-identity-distinct"
                 | "symbol-identity-distinct"
