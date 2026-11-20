@@ -396,7 +396,7 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
     def test_committed_full_native_and_differential_reports_match_the_projections(self):
-        results = Path(__file__).parent / "results"
+        results = Path(os.environ["OGM38_RESULTS_DIR"])
         primary = json.loads(
             (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
         )
