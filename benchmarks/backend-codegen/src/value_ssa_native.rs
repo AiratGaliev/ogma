@@ -3381,13 +3381,15 @@ fn run_native_value_semantics(
             && native_store_load_transition;
         if !matches {
             bail!(
-                "{} native Value semantic case {} differed: expected {:?} / {:?}, got {:?} / {:?}",
+                "{} native Value semantic case {} differed: expected {:?} / {:?}, got {:?} / {:?}; identity tokens={:?}; decoded inputs={:?}",
                 candidate.name(),
                 case.name,
                 case.expected,
                 case.expected_host_trace,
                 actual,
-                actual_host_trace
+                actual_host_trace,
+                reference_tokens,
+                observed
             );
         }
         total_callbacks += callbacks;
