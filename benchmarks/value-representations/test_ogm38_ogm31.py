@@ -34,6 +34,20 @@ def make_reports():
                     "throw": "TypeError: Cannot convert a Symbol value to a number",
                     "host_trace": [],
                 },
+                "call_boundary": {
+                    "return": 8,
+                    "host_trace": [{
+                        "symbol": "benchmark.host.call_target",
+                        "args": [2, "item=5"],
+                    }],
+                },
+                "host_call": {
+                    "return": 42,
+                    "host_trace": [{
+                        "symbol": "benchmark.host.echo",
+                        "args": [31],
+                    }],
+                },
             },
         },
     }
@@ -53,7 +67,34 @@ def make_reports():
                 "symbol_handle_survived_forced_collection": True,
                 "all_native_fixture_cases_match_expected": True,
             },
-            "native_value_semantics": {"every_case_matches": True},
+            "native_value_semantics": {
+                "every_case_matches": True,
+                "cases": [
+                    {
+                        "name": "call-boundary",
+                        "matches": True,
+                        "actual_host_trace": ["benchmark.host.call_target([2,\\"item=5\\"])"],
+                        "native_host_callback": {
+                            "callee_resolved": True,
+                            "receiver": 2.0,
+                            "argument": "item=5",
+                            "result_bits": proof.number_to_bits(8.0),
+                            "host_callback_calls": 1,
+                        },
+                    },
+                    {
+                        "name": "host-call-echo",
+                        "matches": True,
+                        "actual_host_trace": ["benchmark.host.echo([31])"],
+                        "native_host_callback": {
+                            "symbol": "benchmark.host.echo",
+                            "arguments": ["31"],
+                            "result_bits": proof.number_to_bits(42.0),
+                            "host_callback_calls": 1,
+                        },
+                    },
+                ],
+            },
             "native_shadow_roots": {
                 "all_roots_survived": True,
                 "all_roots_reclaimed": True,
