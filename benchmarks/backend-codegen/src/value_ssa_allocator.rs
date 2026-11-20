@@ -115,7 +115,6 @@ fn sample(
     strategy: AllocatorStrategy,
     object_count: usize,
     payload_bytes_per_object: usize,
-    value_storage_bytes: usize,
     quota_bytes: usize,
 ) -> Result<AllocatorSample> {
     let payload_layout = layout(payload_bytes_per_object)?;
@@ -207,11 +206,13 @@ pub fn run_allocator_evidence(
     let one_round_bytes = object_count
         .checked_mul(payload_bytes_per_object)
         .context("OGM-24 total allocation size overflow")?;
-    // Allow two simultaneously live rounds only transiently; quota tracks the
-    // first round after it has been returned to the cache.
+    if one_round_bytes != value_storage_bytes {
+        bail!("OGM-24 allocator payload does not match the candidate Value heap size");
+    }
+    // At most one round is live; the second round either reuses cached blocks
+    // or performs a fresh System allocation after the first round was released.
     let quota_bytes = one_round_bytes
-        .checked_mul(2)
-        .and_then(|bytes| bytes.checked_add(1024 * 1024))
+        .checked_add(1024 * 1024)
         .context("OGM-24 allocator quota overflow")?;
 
     let mut evidence = Vec::with_capacity(AllocatorStrategy::ALL.len());
@@ -221,7 +222,6 @@ pub fn run_allocator_evidence(
                 strategy,
                 object_count,
                 payload_bytes_per_object,
-                value_storage_bytes,
                 quota_bytes,
             )?);
         }
@@ -231,7 +231,6 @@ pub fn run_allocator_evidence(
                 strategy,
                 object_count,
                 payload_bytes_per_object,
-                value_storage_bytes,
                 quota_bytes,
             )?);
         }
@@ -292,7 +291,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn same_candidate_heap_shape_is_measured_with_all_ogm29_strategies() {
+    fn same_candidate_heap_shape_is_measured_with_all_ogm24_strategies() {
         let evidence = run_allocator_evidence(64, 16, 16, 1, 3).expect("allocator evidence");
         assert_eq!(evidence.len(), AllocatorStrategy::ALL.len());
         for item in &evidence {
