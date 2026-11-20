@@ -3325,10 +3325,8 @@ fn run_native_value_semantics(
             actual = SemanticCompletion::Normal(SemanticValue::Number(host_callback.result_bits));
             actual_host_trace = vec![host_callback.trace.clone()];
         }
-        let (
-            native_reference_identity_preserved,
-            native_reference_equality_result,
-        ) = native_reference_identity_evidence(case.name, &reference_tokens);
+        let (native_reference_identity_preserved, native_reference_equality_result) =
+            native_reference_identity_evidence(case.name, &reference_tokens);
         if let Some(equality_result) = native_reference_equality_result {
             actual = SemanticCompletion::Normal(SemanticValue::Boolean(equality_result));
         }
