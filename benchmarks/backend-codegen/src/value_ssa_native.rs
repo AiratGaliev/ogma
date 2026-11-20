@@ -5,6 +5,7 @@
 //! production ECMAScript Runtime or a general Core IR compiler.
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
+    isa::TargetIsa,
     ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
     settings::{self, Configurable},
 };
@@ -552,7 +553,10 @@ fn byte_distribution(samples: Vec<f64>) -> ByteDistribution {
 struct RegisterPressure {
     allocator: &'static str,
     workload: &'static str,
-    machine_env: &'static str,
+    machine_env: String,
+    allocatable_integer_registers: usize,
+    allocatable_float_registers: usize,
+    allocatable_vector_registers: usize,
     integer_registers_used: usize,
     float_registers_used: usize,
     register_allocations: usize,
@@ -5197,21 +5201,40 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
         bail!("allocator pressure probe only supports canonical call-boundary return");
     }
 
-    let make_register_set = |class: RegClass| {
-        let mut set = PRegSet::empty();
-        for index in 0..6 {
-            set.add(PReg::new(index, class));
+    let mut isa_flags = settings::builder();
+    isa_flags.set("opt_level", "speed")?;
+    let isa = cranelift_native::builder()
+        .map_err(|error| anyhow!(error))?
+        .finish(settings::Flags::new(isa_flags))?;
+    let target_function = cranelift_codegen::ir::Function::new();
+    let allocatable = isa.allocatable_registers(&target_function);
+    let register_info = isa.register_info();
+
+    let mut preferred = [PRegSet::empty(), PRegSet::empty(), PRegSet::empty()];
+    for class in register_info.classes.iter().copied() {
+        if class.toprc != class.index {
+            continue;
         }
-        set
-    };
-    let empty = PRegSet::empty();
+        let regalloc_class = match class.index {
+            0 => RegClass::Int,
+            1 => RegClass::Float,
+            2 => RegClass::Vector,
+            other => bail!("unsupported Cranelift top-level register class index {other}"),
+        };
+        for register_unit in allocatable.iter(class) {
+            let register_index = usize::from(class.index_of(register_unit));
+            preferred[regalloc_class as usize].add(PReg::new(register_index, regalloc_class));
+        }
+    }
+    let allocatable_integer_registers = preferred[RegClass::Int as usize].len() as usize;
+    let allocatable_float_registers = preferred[RegClass::Float as usize].len() as usize;
+    let allocatable_vector_registers = preferred[RegClass::Vector as usize].len() as usize;
+    if allocatable_integer_registers == 0 || allocatable_float_registers == 0 {
+        bail!("native target ISA did not expose allocatable integer and floating-point registers");
+    }
     let machine_env = MachineEnv {
-        preferred_regs_by_class: [
-            make_register_set(RegClass::Int),
-            make_register_set(RegClass::Float),
-            make_register_set(RegClass::Vector),
-        ],
-        non_preferred_regs_by_class: [empty; 3],
+        preferred_regs_by_class: preferred,
+        non_preferred_regs_by_class: [PRegSet::empty(); 3],
         scratch_by_class: [None, None, None],
         fixed_stack_slots: Vec::new(),
     };
@@ -5253,7 +5276,14 @@ fn register_pressure(candidate: Candidate) -> Result<RegisterPressure> {
     Ok(RegisterPressure {
         allocator: "regalloc2 0.15.3 (same crate version resolved by Cranelift 0.137.2)",
         workload: "positive-call-boundary.json parameter/operand/result dataflow profile",
-        machine_env: "controlled 6 GPR + 6 FPR + 6 vector-register budget; not the host ISA allocation map",
+        machine_env: format!(
+            "{} ({}) allocatable target registers; Core IR value liveness model",
+            isa.name(),
+            isa.triple()
+        ),
+        allocatable_integer_registers,
+        allocatable_float_registers,
+        allocatable_vector_registers,
         integer_registers_used: integer_registers.len() as usize,
         float_registers_used: float_registers.len() as usize,
         register_allocations,
@@ -6360,11 +6390,18 @@ mod tests {
         let nanbox_boxed = reports
             .get("nanbox-8-boxed")
             .expect("NaN-box boxed candidate");
-        assert!(tagged_boxed.spill_slots > nanbox_boxed.spill_slots);
-        assert!(tagged_boxed.spill_store_edits > 0);
-        assert!(tagged_boxed.spill_reload_edits > 0);
-        assert_eq!(nanbox_boxed.spill_store_edits, 0);
-        assert_eq!(nanbox_boxed.spill_reload_edits, 0);
+        for evidence in reports.values() {
+            assert!(evidence.allocatable_integer_registers > 0);
+            assert!(evidence.allocatable_float_registers > 0);
+            assert!(
+                !evidence.machine_env.contains("controlled 6 GPR")
+                    && evidence.machine_env.contains("allocatable target registers")
+            );
+            if evidence.spill_slots > 0 {
+                assert!(evidence.spill_store_edits > 0);
+                assert!(evidence.spill_reload_edits > 0);
+            }
+        }
     }
 
     #[test]
