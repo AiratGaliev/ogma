@@ -1227,8 +1227,7 @@ fn define_candidate_strict_equal(
                     left_tag,
                     right_tag,
                 );
-                b.ins()
-                    .brif(tags_match, matching_class, &[], mismatch, &[]);
+                b.ins().brif(tags_match, matching_class, &[], mismatch, &[]);
 
                 b.switch_to_block(matching_class);
                 let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
