@@ -5319,12 +5319,7 @@ fn encode_candidate_number_heap(
     let object = *objects
         .get(object_index)
         .context("candidate Value slot exceeds the allocated GC object graph")?;
-    encode_candidate_number_value(
-        runtime,
-        heap.payload_words_mut(object)?,
-        local_slot,
-        value,
-    )
+    encode_candidate_number_value(runtime, heap.payload_words_mut(object)?, local_slot, value)
 }
 
 fn encode_candidate_object_heap(
@@ -5339,12 +5334,7 @@ fn encode_candidate_object_heap(
     let object = *objects
         .get(object_index)
         .context("candidate object Value slot exceeds the allocated GC graph")?;
-    encode_candidate_object_value(
-        runtime,
-        heap.payload_words_mut(object)?,
-        local_slot,
-        token,
-    )
+    encode_candidate_object_value(runtime, heap.payload_words_mut(object)?, local_slot, token)
 }
 
 fn decode_candidate_object_heap(
@@ -5452,12 +5442,8 @@ fn run_gc_sample(
             root_value_slot,
             token,
         )?;
-        let root = resolve_candidate_object_heap(
-            &heap,
-            &objects,
-            candidate.runtime,
-            root_value_slot,
-        )?;
+        let root =
+            resolve_candidate_object_heap(&heap, &objects, candidate.runtime, root_value_slot)?;
         if root != objects[root_object_index] {
             bail!("candidate Value decoded to a different OGM-26 GcRef");
         }
@@ -5560,18 +5546,10 @@ fn run_gc_sample(
     // alive across collection; decode the Value again after the safepoint.
     for (handle, expected_object, value_slot) in persistent_handles.iter() {
         let token = heap.encode_host_handle_token(*handle)?;
-        if decode_candidate_object_heap(
-            &heap,
-            &objects,
-            candidate.runtime,
-            *value_slot,
-        )? != Some(token)
-            || resolve_candidate_object_heap(
-                &heap,
-                &objects,
-                candidate.runtime,
-                *value_slot,
-            )? != *expected_object
+        if decode_candidate_object_heap(&heap, &objects, candidate.runtime, *value_slot)?
+            != Some(token)
+            || resolve_candidate_object_heap(&heap, &objects, candidate.runtime, *value_slot)?
+                != *expected_object
         {
             bail!(
                 "{} persistent candidate Value did not resolve to its original GcRef",
@@ -5637,7 +5615,8 @@ fn run_gc_sample(
         allocator_reserved_bytes_before_collection: allocator_before.reserved_bytes,
         allocator_peak_reserved_bytes: allocator_before.peak_reserved_bytes,
         allocator_peak_internal_fragmentation_bytes: allocator_before
-            .peak_internal_fragmentation_bytes as u64,
+            .peak_internal_fragmentation_bytes
+            as u64,
         allocator_reused_allocations: allocator_before.reused_allocations,
         allocator_allocation_failures: allocator_before.allocation_failures,
         allocator_reserved_bytes_after_release: allocator_after_release.reserved_bytes,
@@ -5733,9 +5712,8 @@ fn gc_evidence(
     object_count: usize,
 ) -> Result<GcEvidence> {
     let collectors = CollectorKind::ALL;
-    let mut collector_comparisons = Vec::with_capacity(
-        AllocatorStrategy::ALL.len() * CollectorKind::ALL.len(),
-    );
+    let mut collector_comparisons =
+        Vec::with_capacity(AllocatorStrategy::ALL.len() * CollectorKind::ALL.len());
 
     for allocator_strategy in AllocatorStrategy::ALL {
         let mut raw_samples: [Vec<GcSample>; 2] =
@@ -6595,9 +6573,11 @@ mod tests {
             for collector in evidence.collector_comparisons {
                 assert_eq!(collector.object_count, 64);
                 assert_eq!(collector.encoded_object_values_resolved, 17);
-                assert!(AllocatorStrategy::ALL
-                    .iter()
-                    .any(|strategy| strategy.name() == collector.allocator_strategy));
+                assert!(
+                    AllocatorStrategy::ALL
+                        .iter()
+                        .any(|strategy| strategy.name() == collector.allocator_strategy)
+                );
                 assert_eq!(
                     collector.actual_value_storage_capacity_bytes,
                     evidence.value_storage_bytes
@@ -6610,10 +6590,7 @@ mod tests {
                     collector.raw_samples[0].allocator_live_backing_bytes,
                     evidence.value_storage_bytes
                 );
-                assert_eq!(
-                    collector.raw_samples[0].allocator_allocation_failures,
-                    0
-                );
+                assert_eq!(collector.raw_samples[0].allocator_allocation_failures, 0);
                 assert!(collector.process_rss_delta_bytes.p50_bytes >= 0.0);
                 assert!(collector.collection_ns.p50_ns > 0.0);
                 assert!(collector.root_scan_ns.p50_ns > 0.0);
