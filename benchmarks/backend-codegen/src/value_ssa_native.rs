@@ -72,7 +72,7 @@ fn canonical_number_bits(value: f64) -> u64 {
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 type NativeValueBinary = unsafe extern "C" fn(u64, u64, u64) -> i32;
-type NativeStrictEqual = unsafe extern "C" fn(u64, u64) -> i32;
+type NativeStrictEqual = unsafe extern "C" fn(u64, u64, u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
@@ -669,6 +669,7 @@ struct NativeValueSemanticCaseEvidence {
     native_reference_identity_preserved: bool,
     native_reference_equality_result: Option<bool>,
     native_strict_equal_executed: bool,
+    native_reference_value_comparison_executed: bool,
     native_store_load_transition: bool,
     matches: bool,
 }
@@ -689,6 +690,7 @@ struct NativeSemanticDispatchResult {
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_strict_equal_result: Option<bool>,
+    native_reference_value_comparison_executed: bool,
     reference_tokens: Vec<Option<u64>>,
 }
 
@@ -1181,6 +1183,16 @@ fn define_candidate_strict_equal(
     signature: &Signature,
     function: cranelift_module::FuncId,
 ) -> Result<()> {
+    let mut reference_equal_signature = module.make_signature();
+    reference_equal_signature.params.extend(
+        [types::I64, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    reference_equal_signature
+        .returns
+        .push(AbiParam::new(types::I32));
+
     let mut context = module.make_context();
     context.func.signature = signature.clone();
     {
@@ -1189,11 +1201,11 @@ fn define_candidate_strict_equal(
         let matching_class = b.create_block();
         let numeric = b.create_block();
         let non_numeric = b.create_block();
+        let primitive_value = b.create_block();
         let mismatch = b.create_block();
-        let merge = b.create_block();
         b.append_block_params_for_function_params(entry);
-        b.append_block_param(merge, types::I8);
         let parameters = b.block_params(entry).to_vec();
+        let callback_signature = b.import_signature(reference_equal_signature);
         b.switch_to_block(entry);
 
         match candidate.runtime {
@@ -1204,12 +1216,19 @@ fn define_candidate_strict_equal(
                 let right_tag = b
                     .ins()
                     .load(types::I64, MemFlagsData::new(), parameters[1], 0);
+                let left_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
+                let right_payload = b
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
                 let tags_match = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
                     left_tag,
                     right_tag,
                 );
-                b.ins().brif(tags_match, matching_class, &[], mismatch, &[]);
+                b.ins()
+                    .brif(tags_match, matching_class, &[], mismatch, &[]);
 
                 b.switch_to_block(matching_class);
                 let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
@@ -1221,35 +1240,57 @@ fn define_candidate_strict_equal(
                 b.ins()
                     .brif(both_are_numbers, numeric, &[], non_numeric, &[]);
 
-                b.switch_to_block(numeric);
-                let left_bits = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
-                let right_bits = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
-                let left_number = b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits);
-                let right_number = b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits);
-                let equal = b.ins().fcmp(
-                    cranelift_codegen::ir::condcodes::FloatCC::Equal,
-                    left_number,
-                    right_number,
-                );
-                b.ins().jump(merge, &[BlockArg::Value(equal)]);
-
                 b.switch_to_block(non_numeric);
-                let left_payload = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[0], 8);
-                let right_payload = b
-                    .ins()
-                    .load(types::I64, MemFlagsData::new(), parameters[1], 8);
+                let string_tag = b.ins().iconst(types::I64, STRING_TAG as i64);
+                let bigint_tag = b.ins().iconst(types::I64, BIGINT_TAG as i64);
+                let is_string = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    string_tag,
+                );
+                let is_bigint = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    bigint_tag,
+                );
+                let is_primitive_value = b.ins().bor(is_string, is_bigint);
+                let compare_payloads = b.create_block();
+                b.ins().brif(
+                    is_primitive_value,
+                    primitive_value,
+                    &[],
+                    compare_payloads,
+                    &[],
+                );
+
+                b.switch_to_block(compare_payloads);
                 let equal = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
                     left_payload,
                     right_payload,
                 );
-                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+                let result = b.ins().uextend(types::I32, equal);
+                b.ins().return_(&[result]);
+
+                b.switch_to_block(primitive_value);
+                let call = b.ins().call_indirect(
+                    callback_signature,
+                    parameters[2],
+                    &[parameters[3], left_tag, left_payload, right_payload],
+                );
+                let result = b.inst_results(call)[0];
+                b.ins().return_(&[result]);
+
+                b.switch_to_block(numeric);
+                let left_number = b.ins().bitcast(types::F64, MemFlagsData::new(), left_payload);
+                let right_number = b.ins().bitcast(types::F64, MemFlagsData::new(), right_payload);
+                let equal = b.ins().fcmp(
+                    cranelift_codegen::ir::condcodes::FloatCC::Equal,
+                    left_number,
+                    right_number,
+                );
+                let result = b.ins().uextend(types::I32, equal);
+                b.ins().return_(&[result]);
             }
             RuntimeLayout::NanBox8 => {
                 let left_is_non_number = nanbox_word_is_non_number(&mut b, parameters[0]);
@@ -1278,32 +1319,80 @@ fn define_candidate_strict_equal(
                     left_number,
                     right_number,
                 );
-                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+                let result = b.ins().uextend(types::I32, equal);
+                b.ins().return_(&[result]);
 
                 b.switch_to_block(non_numeric);
+                let left_tag = b
+                    .ins()
+                    .ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64);
+                let right_tag = b
+                    .ins()
+                    .ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64);
+                let tags_match = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    right_tag,
+                );
+                let tagged_value = b.create_block();
+                b.ins()
+                    .brif(tags_match, tagged_value, &[], mismatch, &[]);
+
+                b.switch_to_block(tagged_value);
+                let string_tag = b.ins().iconst(types::I64, NANBOX_STRING_TAG as i64);
+                let bigint_tag = b.ins().iconst(types::I64, NANBOX_BIGINT_TAG as i64);
+                let is_string = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    string_tag,
+                );
+                let is_bigint = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    bigint_tag,
+                );
+                let is_primitive_value = b.ins().bor(is_string, is_bigint);
+                let compare_words = b.create_block();
+                b.ins().brif(
+                    is_primitive_value,
+                    primitive_value,
+                    &[],
+                    compare_words,
+                    &[],
+                );
+
+                b.switch_to_block(compare_words);
                 let equal = b.ins().icmp(
                     cranelift_codegen::ir::condcodes::IntCC::Equal,
                     parameters[0],
                     parameters[1],
                 );
-                b.ins().jump(merge, &[BlockArg::Value(equal)]);
+                let result = b.ins().uextend(types::I32, equal);
+                b.ins().return_(&[result]);
+
+                b.switch_to_block(primitive_value);
+                let left_payload = b.ins().band_imm_u(parameters[0], MAX_PAYLOAD as i64);
+                let right_payload = b.ins().band_imm_u(parameters[1], MAX_PAYLOAD as i64);
+                let call = b.ins().call_indirect(
+                    callback_signature,
+                    parameters[2],
+                    &[parameters[3], left_tag, left_payload, right_payload],
+                );
+                let result = b.inst_results(call)[0];
+                b.ins().return_(&[result]);
             }
         }
 
         b.switch_to_block(mismatch);
-        let false_value = b.ins().iconst(types::I8, 0);
-        b.ins().jump(merge, &[BlockArg::Value(false_value)]);
-
-        b.switch_to_block(merge);
-        let equal = b.block_params(merge)[0];
-        let result = b.ins().uextend(types::I32, equal);
-        b.ins().return_(&[result]);
+        let false_value = b.ins().iconst(types::I32, 0);
+        b.ins().return_(&[false_value]);
         b.seal_all_blocks();
         b.finalize(module.target_config());
     }
     module.define_function(function, &mut context)?;
     Ok(())
 }
+
 
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
@@ -1344,9 +1433,11 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         &numeric_binary_signature,
     )?;
     let mut strict_equal_signature = module.make_signature();
-    strict_equal_signature
-        .params
-        .extend([types::I64, types::I64].into_iter().map(AbiParam::new));
+    strict_equal_signature.params.extend(
+        [types::I64, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
     strict_equal_signature
         .returns
         .push(AbiParam::new(types::I32));
@@ -2600,6 +2691,80 @@ struct NativeSemanticCallbackContext {
     aot_host_call: Option<NativeAotHostCallEvidence>,
 }
 
+struct NativeReferenceEqualityCallbackContext {
+    runtime: RuntimeLayout,
+    heap: *mut GcHeap,
+    references: BTreeMap<u64, SemanticReference>,
+    calls: usize,
+    forced_collections: usize,
+}
+
+// Generated native strict equality calls this M0 helper only for String and
+// BigInt payloads. These are primitive values, so equality is by contents,
+// not by the generation-checked host-handle token used to keep them alive.
+unsafe extern "C" fn compare_native_primitive_references(
+    context_pointer: u64,
+    tag: u64,
+    left_token: u64,
+    right_token: u64,
+) -> i32 {
+    if context_pointer == 0 || left_token == 0 || right_token == 0 {
+        return 2;
+    }
+    // SAFETY: generated native strict equality invokes the callback
+    // synchronously with a live, uniquely borrowed context.
+    let context = unsafe {
+        &mut *(context_pointer as *mut NativeReferenceEqualityCallbackContext)
+    };
+    context.calls += 1;
+    let (string_tag, bigint_tag) = match context.runtime {
+        RuntimeLayout::Tagged16 => (STRING_TAG, BIGINT_TAG),
+        RuntimeLayout::NanBox8 => (NANBOX_STRING_TAG, NANBOX_BIGINT_TAG),
+    };
+    if tag != string_tag && tag != bigint_tag || context.heap.is_null() {
+        return 3;
+    }
+    let Some(left) = context.references.get(&left_token) else {
+        return 4;
+    };
+    let Some(right) = context.references.get(&right_token) else {
+        return 4;
+    };
+    // SAFETY: the caller owns this live heap for the entire native call.
+    let heap = unsafe { &mut *context.heap };
+    if heap.resolve_host_handle_token(left_token) != Ok(left.reference)
+        || heap.resolve_host_handle_token(right_token) != Ok(right.reference)
+    {
+        return 5;
+    }
+    // Prove both independently allocated primitive handles remain rooted
+    // across a collection before the host performs their value comparison.
+    if heap.collect().is_err()
+        || !heap.is_alive(left.reference)
+        || !heap.is_alive(right.reference)
+        || heap.resolve_host_handle_token(left_token) != Ok(left.reference)
+        || heap.resolve_host_handle_token(right_token) != Ok(right.reference)
+    {
+        return 6;
+    }
+    context.forced_collections += 1;
+
+    let equal = match (tag, &left.value, &right.value) {
+        (tag, SemanticValue::String(left), SemanticValue::String(right))
+            if tag == string_tag =>
+        {
+            left == right
+        }
+        (tag, SemanticValue::BigInt(left), SemanticValue::BigInt(right))
+            if tag == bigint_tag =>
+        {
+            left == right
+        }
+        _ => return 7,
+    };
+    i32::from(equal)
+}
+
 fn decode_semantic_reference(
     context: &mut NativeSemanticCallbackContext,
     token: u64,
@@ -3312,17 +3477,23 @@ fn candidate_value_for_semantic(
         | SemanticValue::BigInt(_)
         | SemanticValue::Object { .. }
         | SemanticValue::Symbol(_) => {
-            if let Some((token, _)) = references
-                .iter()
-                .find(|(_, reference)| reference.value == *value)
-            {
-                return Ok(match value {
-                    SemanticValue::String(_) => CandidateValue::StringRef(*token),
-                    SemanticValue::BigInt(_) => CandidateValue::BigIntRef(*token),
-                    SemanticValue::Object { .. } => CandidateValue::ObjectRef(*token),
-                    SemanticValue::Symbol(_) => CandidateValue::SymbolRef(*token),
-                    _ => unreachable!(),
-                });
+            // Strings and BigInts are JavaScript primitives: equal values may
+            // occupy different heap handles and must be compared by value.
+            // Only objects and symbols use handle identity for strict equality.
+            if matches!(
+                value,
+                SemanticValue::Object { .. } | SemanticValue::Symbol(_)
+            ) {
+                if let Some((token, _)) = references
+                    .iter()
+                    .find(|(_, reference)| reference.value == *value)
+                {
+                    return Ok(match value {
+                        SemanticValue::Object { .. } => CandidateValue::ObjectRef(*token),
+                        SemanticValue::Symbol(_) => CandidateValue::SymbolRef(*token),
+                        _ => unreachable!(),
+                    });
+                }
             }
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
@@ -3446,23 +3617,45 @@ fn dispatch_native_semantic_inputs(
     }
 
     let reference_count = references.len();
+    let mut reference_equality_context = NativeReferenceEqualityCallbackContext {
+        runtime: candidate.runtime,
+        heap: &mut heap as *mut GcHeap,
+        references: references.clone(),
+        calls: 0,
+        forced_collections: 0,
+    };
+    let reference_equality_callback =
+        compare_native_primitive_references as *const () as usize as u64;
+    let reference_equality_context_argument =
+        &mut reference_equality_context as *mut NativeReferenceEqualityCallbackContext as u64;
     let native_strict_equal_result =
         if let Some((left_slot, right_slot)) = options.strict_equal_slots {
             let left = native_value_argument_for_slot(candidate, &storage, left_slot)?;
             let right = native_value_argument_for_slot(candidate, &storage, right_slot)?;
-            // SAFETY: both arguments use the candidate layout emitted together
-            // with the native strict-equality function pointer.
-            match unsafe { strict_equal(left, right) } {
+            // SAFETY: both Values, callback and context use the exact native
+            // ABI emitted with this candidate and remain live for the call.
+            match unsafe {
+                strict_equal(
+                    left,
+                    right,
+                    reference_equality_callback,
+                    reference_equality_context_argument,
+                )
+            } {
                 0 => Some(false),
                 1 => Some(true),
                 status => bail!(
-                    "{} generated native strict equality returned invalid boolean status {status}",
+                    "{} generated native strict equality returned invalid status {status}",
                     candidate.name()
                 ),
             }
         } else {
             None
         };
+    let native_reference_value_comparison_executed =
+        reference_equality_context.calls != 0;
+    let reference_equality_collections = reference_equality_context.forced_collections;
+    drop(reference_equality_context);
 
     if options.perform_native_transition {
         if inputs.len() != 2
@@ -3567,10 +3760,11 @@ fn dispatch_native_semantic_inputs(
     Ok(NativeSemanticDispatchResult {
         observed,
         callbacks,
-        forced_collections,
+        forced_collections: forced_collections + reference_equality_collections,
         aot_host_call,
         native_host_callback: context_native_host_callback,
         native_strict_equal_result,
+        native_reference_value_comparison_executed,
         reference_tokens,
     })
 }
@@ -3646,6 +3840,7 @@ fn run_native_value_semantics(
             aot_host_call,
             native_host_callback,
             native_strict_equal_result,
+            native_reference_value_comparison_executed,
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
@@ -3660,6 +3855,20 @@ fn run_native_value_semantics(
         {
             bail!(
                 "{} generated native strict equality disagreed with encoded HostHandle identity for {}",
+                candidate.name(),
+                case.name
+            );
+        }
+        let primitive_reference_equality_case = matches!(
+            case.name,
+            "string-strict-equality-same"
+                | "string-strict-equality-distinct"
+                | "bigint-strict-equality-same"
+                | "bigint-strict-equality-distinct"
+        );
+        if native_reference_value_comparison_executed != primitive_reference_equality_case {
+            bail!(
+                "{} {} did not execute exactly the required primitive String/BigInt value-comparison path",
                 candidate.name(),
                 case.name
             );
@@ -3794,6 +4003,7 @@ fn run_native_value_semantics(
             native_reference_identity_preserved,
             native_reference_equality_result: native_strict_equal_result,
             native_strict_equal_executed: native_strict_equal_result.is_some(),
+            native_reference_value_comparison_executed,
             native_store_load_transition,
             matches,
         });
@@ -5996,6 +6206,57 @@ mod tests {
             native_reference_identity_evidence("object-identity-distinct", &[Some(7), None]),
             (false, None)
         );
+    }
+
+    #[test]
+    fn equal_string_and_bigint_primitives_use_distinct_generation_checked_handles() {
+        let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+        let mut references = BTreeMap::new();
+        let mut retained_handles = Vec::new();
+
+        let string_left = candidate_value_for_semantic(
+            &SemanticValue::String("same".to_owned()),
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+        )
+        .expect("allocate first String primitive");
+        let string_right = candidate_value_for_semantic(
+            &SemanticValue::String("same".to_owned()),
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+        )
+        .expect("allocate second String primitive");
+        let bigint_left = candidate_value_for_semantic(
+            &SemanticValue::BigInt(42),
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+        )
+        .expect("allocate first BigInt primitive");
+        let bigint_right = candidate_value_for_semantic(
+            &SemanticValue::BigInt(42),
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+        )
+        .expect("allocate second BigInt primitive");
+
+        assert!(matches!(string_left, CandidateValue::StringRef(_)));
+        assert!(matches!(string_right, CandidateValue::StringRef(_)));
+        assert!(matches!(bigint_left, CandidateValue::BigIntRef(_)));
+        assert!(matches!(bigint_right, CandidateValue::BigIntRef(_)));
+        assert_ne!(candidate_reference_token(string_left), candidate_reference_token(string_right));
+        assert_ne!(candidate_reference_token(bigint_left), candidate_reference_token(bigint_right));
+        assert_eq!(retained_handles.len(), 4);
+
+        for handle in retained_handles {
+            heap.release_host_handle(handle).expect("release primitive handle");
+        }
+        let cleanup = heap.collect().expect("collect primitive handle cleanup");
+        assert_eq!(cleanup.live_objects_after, 0);
+        assert_eq!(cleanup.reclaimed_objects, 4);
     }
 
     #[test]

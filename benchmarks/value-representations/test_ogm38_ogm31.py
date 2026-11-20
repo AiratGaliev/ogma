@@ -196,6 +196,7 @@ def make_reports():
                         "name": "string-strict-equality-same",
                         "matches": True,
                         "native_strict_equal_executed": True,
+                        "native_reference_value_comparison_executed": True,
                         "native_reference_identity_preserved": True,
                         "native_reference_equality_result": True,
                     },
@@ -203,6 +204,7 @@ def make_reports():
                         "name": "string-strict-equality-distinct",
                         "matches": True,
                         "native_strict_equal_executed": True,
+                        "native_reference_value_comparison_executed": True,
                         "native_reference_identity_preserved": True,
                         "native_reference_equality_result": False,
                     },
@@ -210,6 +212,7 @@ def make_reports():
                         "name": "bigint-strict-equality-same",
                         "matches": True,
                         "native_strict_equal_executed": True,
+                        "native_reference_value_comparison_executed": True,
                         "native_reference_identity_preserved": True,
                         "native_reference_equality_result": True,
                     },
@@ -217,6 +220,7 @@ def make_reports():
                         "name": "bigint-strict-equality-distinct",
                         "matches": True,
                         "native_strict_equal_executed": True,
+                        "native_reference_value_comparison_executed": True,
                         "native_reference_identity_preserved": True,
                         "native_reference_equality_result": False,
                     },
@@ -311,6 +315,19 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         cases.append(dict(cases[0]))
         with self.assertRaisesRegex(RuntimeError, "semantic case names are duplicated"):
             proof.validate_reports(native, dual)
+
+    def test_rejects_identity_only_string_and_bigint_equality(self):
+        for case_name in (
+            "string-strict-equality-same",
+            "bigint-strict-equality-same",
+        ):
+            with self.subTest(case_name=case_name):
+                native, dual = make_reports()
+                semantic_cases = native["candidates"][0]["native_value_semantics"]["cases"]
+                case = next(item for item in semantic_cases if item["name"] == case_name)
+                case["native_reference_value_comparison_executed"] = False
+                with self.assertRaisesRegex(RuntimeError, "did not compare primitive"):
+                    proof.validate_reports(native, dual)
 
     def test_rejects_unbalanced_native_roots(self):
         native, dual = make_reports()

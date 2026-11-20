@@ -204,6 +204,15 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
                 raise RuntimeError(
                     f"{name}: {case_name} did not preserve distinct/same HostHandle identity"
                 )
+            if case_name in {
+                "string-strict-equality-same",
+                "string-strict-equality-distinct",
+                "bigint-strict-equality-same",
+                "bigint-strict-equality-distinct",
+            } and equality_case.get("native_reference_value_comparison_executed") is not True:
+                raise RuntimeError(
+                    f"{name}: {case_name} did not compare primitive String/BigInt contents across distinct handles"
+                )
         call_boundary = semantic_cases.get("call-boundary")
         call_observation = oracle.get("call_boundary", {})
         call_trace = call_observation.get("host_trace", [])
