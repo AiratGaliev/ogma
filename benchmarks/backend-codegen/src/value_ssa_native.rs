@@ -71,6 +71,7 @@ fn canonical_number_bits(value: f64) -> u64 {
 }
 
 type NativeLoop = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
+type NativeValueBinary = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
@@ -701,6 +702,18 @@ struct NativeShadowRootEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeCoreIrExecutionEvidence {
+    branch_equal_result_bits: u64,
+    branch_unequal_result_bits: u64,
+    loop_integer_result_bits: u64,
+    loop_fractional_result_bits: u64,
+    dynamic_add_result_bits: u64,
+    dynamic_add_throw_status: i32,
+    symbol_handle_survived_forced_collection: bool,
+    all_native_fixture_cases_match_expected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeCoreIrFixtureEvidence {
     fixture: String,
     path: String,
@@ -766,6 +779,7 @@ struct CandidateEvidence {
     native_code: NativeCodeMetrics,
     native_handle_dispatch: NativeHandleDispatchEvidence,
     native_core_ir_corpus: NativeCoreIrCorpusEvidence,
+    native_core_ir_execution: NativeCoreIrExecutionEvidence,
     native_value_semantics: NativeValueSemanticsEvidence,
     native_shadow_roots: NativeShadowRootEvidence,
     /// Real x86-64 disassembly of the Cranelift-generated live-value stress
@@ -1014,6 +1028,144 @@ fn nanbox_word_is_non_number(builder: &mut FunctionBuilder<'_>, word: Value) -> 
     builder.ins().bor(reserved_tag, noncanonical_nan)
 }
 
+fn define_candidate_numeric_binary(
+    module: &mut ObjectModule,
+    builder_context: &mut FunctionBuilderContext,
+    candidate: Candidate,
+    signature: &Signature,
+    function: cranelift_module::FuncId,
+    operation: &'static str,
+) -> Result<()> {
+    let mut context = module.make_context();
+    context.func.signature = signature.clone();
+    {
+        let mut b = FunctionBuilder::new(&mut context.func, builder_context);
+        let entry = b.create_block();
+        let invalid = b.create_block();
+        let body = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        let parameters = b.block_params(entry).to_vec();
+        b.switch_to_block(entry);
+
+        let (left_bits, right_bits, invalid_left, invalid_right) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let left_tag = b.ins().load(
+                    types::I64,
+                    MemFlagsData::new(),
+                    parameters[0],
+                    0,
+                );
+                let right_tag = b.ins().load(
+                    types::I64,
+                    MemFlagsData::new(),
+                    parameters[1],
+                    0,
+                );
+                let number_tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
+                let left_valid = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    left_tag,
+                    number_tag,
+                );
+                let right_valid = b.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    right_tag,
+                    number_tag,
+                );
+                let invalid_left =
+                    b.ins().bnot(left_valid);
+                let invalid_right =
+                    b.ins().bnot(right_valid);
+                let left_bits = b.ins().load(
+                    types::I64,
+                    MemFlagsData::new(),
+                    parameters[0],
+                    8,
+                );
+                let right_bits = b.ins().load(
+                    types::I64,
+                    MemFlagsData::new(),
+                    parameters[1],
+                    8,
+                );
+                (left_bits, right_bits, invalid_left, invalid_right)
+            }
+            RuntimeLayout::NanBox8 => {
+                let invalid_left = nanbox_word_is_non_number(&mut b, parameters[0]);
+                let invalid_right = nanbox_word_is_non_number(&mut b, parameters[1]);
+                (
+                    parameters[0],
+                    parameters[1],
+                    invalid_left,
+                    invalid_right,
+                )
+            }
+        };
+        let invalid = b.ins().bor(invalid_left, invalid_right);
+        b.ins().brif(invalid, invalid_block, &[], body, &[]);
+
+        b.switch_to_block(body);
+        let (left, right) = match candidate.ssa {
+            SsaPolicy::Boxed => (
+                b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits),
+                b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits),
+            ),
+            SsaPolicy::RepresentationAware => {
+                let left = b.ins().bitcast(types::F64, MemFlagsData::new(), left_bits);
+                let right = b.ins().bitcast(types::F64, MemFlagsData::new(), right_bits);
+                (left, right)
+            }
+        };
+        let result_bits = match operation {
+            "branch" => {
+                let equal = b.ins().fcmp(
+                    cranelift_codegen::ir::condcodes::FloatCC::Equal,
+                    left,
+                    right,
+                );
+                match candidate.ssa {
+                    SsaPolicy::Boxed => b.ins().select(equal, left_bits, right_bits),
+                    SsaPolicy::RepresentationAware => {
+                        let selected = b.ins().select(equal, left, right);
+                        b.ins().bitcast(types::I64, MemFlagsData::new(), selected)
+                    }
+                }
+            }
+            "dynamic_add" => {
+                let sum = b.ins().fadd(left, right);
+                b.ins().bitcast(types::I64, MemFlagsData::new(), sum)
+            }
+            _ => bail!("unknown generated Core IR numeric operation {operation}"),
+        };
+
+        match candidate.runtime {
+            RuntimeLayout::Tagged16 => {
+                let tag = b.ins().iconst(types::I64, NUMBER_TAG as i64);
+                b.ins().store(MemFlagsData::new(), tag, parameters[2], 0);
+                b.ins()
+                    .store(MemFlagsData::new(), result_bits, parameters[2], 8);
+            }
+            RuntimeLayout::NanBox8 => {
+                b.ins()
+                    .store(MemFlagsData::new(), result_bits, parameters[2], 0);
+            }
+        }
+        let ok = b.ins().iconst(types::I32, 0);
+        b.ins().return_(&[ok]);
+
+        b.switch_to_block(invalid_block);
+        let status = b.ins().iconst(
+            types::I32,
+            if operation == "dynamic_add" { 2 } else { 1 },
+        );
+        b.ins().return_(&[status]);
+        b.seal_all_blocks();
+        b.finalize(module.target_config());
+    }
+    module.define_function(function, &mut context)?;
+    Ok(())
+}
+
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -1032,6 +1184,24 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
     );
     signature.returns.push(AbiParam::new(types::I32));
     let function = module.declare_function("ogma_value_loop", Linkage::Export, &signature)?;
+
+    let mut numeric_binary_signature = module.make_signature();
+    numeric_binary_signature.params.extend(
+        [types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    numeric_binary_signature.returns.push(AbiParam::new(types::I32));
+    let branch_function = module.declare_function(
+        "ogma_value_branch",
+        Linkage::Export,
+        &numeric_binary_signature,
+    )?;
+    let dynamic_add_function = module.declare_function(
+        "ogma_value_dynamic_add",
+        Linkage::Export,
+        &numeric_binary_signature,
+    )?;
 
     let mut dispatch_signature = module.make_signature();
     dispatch_signature.params.extend(
@@ -1410,6 +1580,23 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
 
     module.define_function(function, &mut context)?;
     module.clear_context(&mut context);
+
+    define_candidate_numeric_binary(
+        &mut module,
+        &mut builder_context,
+        candidate,
+        &numeric_binary_signature,
+        branch_function,
+        "branch",
+    )?;
+    define_candidate_numeric_binary(
+        &mut module,
+        &mut builder_context,
+        candidate,
+        &numeric_binary_signature,
+        dynamic_add_function,
+        "dynamic_add",
+    )?;
 
     // The second export is a real native helper boundary for candidate Values.
     // It extracts a tagged pointer or NaN-box word, then makes an indirect C ABI
