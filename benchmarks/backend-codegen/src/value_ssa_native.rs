@@ -702,7 +702,7 @@ struct NativeCoreIrFixtureEvidence {
 #[derive(Clone, Debug, Serialize)]
 struct NativeCoreIrCorpusEvidence {
     manifest: &'static str,
-    accepted_fixture_count: usize,
+    canonical_fixture_count: usize,
     fixtures: Vec<NativeCoreIrFixtureEvidence>,
     native_value_dispatches: usize,
     reference_values_resolved_after_forced_gc: usize,
@@ -3237,17 +3237,34 @@ fn run_native_core_ir_corpus_validation(
             .context("generated native Value dispatch entry point missing for Core IR corpus")?
     };
     let manifest_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/core-ir/manifest.json");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/dual-backend/manifest.json");
     let manifest: JsonValue =
         serde_json::from_str(&fs::read_to_string(&manifest_path).with_context(|| {
-            format!("read accepted Core IR manifest {}", manifest_path.display())
+            format!("read canonical OGM-31 fixture manifest {}", manifest_path.display())
         })?)?;
-    if manifest["contract"] != "ogma.core-ir" || manifest["version"] != "1.0.0" {
-        bail!("OGM-38 native corpus requires canonical ogma.core-ir/1.0.0 manifest");
+    if manifest["schema"] != "ogma.dual-backend-proof"
+        || manifest["version"] != "1.0.0"
+        || manifest["core_ir_contract"] != "ogma.core-ir/1.0.0"
+    {
+        bail!("OGM-38 native candidates require the canonical OGM-31 dual-backend manifest");
     }
-    let fixtures = manifest["fixtures"]
+    let fixtures = manifest["source_fixtures"]
         .as_array()
-        .context("canonical Core IR manifest fixtures array missing")?;
+        .context("OGM-31 canonical source_fixtures array missing")?;
+    let expected_fixture_ids = [
+        "branch",
+        "loop",
+        "dynamic_exception",
+        "call_boundary",
+        "host_call",
+    ];
+    let actual_fixture_ids: Vec<_> = fixtures
+        .iter()
+        .map(|fixture| fixture["id"].as_str().unwrap_or(""))
+        .collect();
+    if actual_fixture_ids != expected_fixture_ids {
+        bail!("OGM-38 requires the five canonical OGM-31 Core IR fixtures in manifest order");
+    }
     let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut retained_handles = Vec::new();
@@ -3255,26 +3272,23 @@ fn run_native_core_ir_corpus_validation(
     let mut total_dispatches = 0_usize;
     let mut total_reference_resolutions = 0_usize;
 
-    for fixture in fixtures
-        .iter()
-        .filter(|fixture| fixture["expect"].as_str() == Some("accepted"))
-    {
-        let relative_path = fixture["path"]
+    for fixture in fixtures {
+        let relative_path = fixture["core_ir"]
             .as_str()
-            .context("accepted Core IR fixture path missing")?;
+            .context("OGM-31 Core IR fixture path missing")?;
         if !relative_path.starts_with("tests/core-ir/fixtures/")
             || relative_path.split('/').any(|component| component == "..")
         {
-            bail!("accepted Core IR fixture path is outside the canonical fixture directory");
+            bail!("OGM-31 Core IR fixture path is outside the canonical fixture directory");
         }
         let fixture_path = repository_root.join(relative_path);
         let document: JsonValue =
             serde_json::from_str(&fs::read_to_string(&fixture_path).with_context(|| {
-                format!("read accepted Core IR fixture {}", fixture_path.display())
+                format!("read OGM-31 Core IR fixture {}", fixture_path.display())
             })?)?;
         let representations = core_ir_representations(&document);
         if representations.is_empty() {
-            bail!("accepted Core IR fixture {relative_path} has no Value representations");
+            bail!("OGM-31 Core IR fixture {relative_path} has no Value representations");
         }
 
         let before_dispatches = total_dispatches;
@@ -3347,9 +3361,9 @@ fn run_native_core_ir_corpus_validation(
         });
     }
 
-    if fixture_evidence.len() != 7 {
+    if fixture_evidence.len() != expected_fixture_ids.len() {
         bail!(
-            "OGM-38 expected all seven accepted Core IR fixtures, executed {}",
+            "OGM-38 expected all five canonical OGM-31 Core IR fixtures, executed {}",
             fixture_evidence.len()
         );
     }
@@ -3368,8 +3382,8 @@ fn run_native_core_ir_corpus_validation(
     }
 
     Ok(NativeCoreIrCorpusEvidence {
-        manifest: "tests/core-ir/manifest.json (ogma.core-ir/1.0.0; all accepted entries)",
-        accepted_fixture_count: fixture_evidence.len(),
+        manifest: "benchmarks/dual-backend/manifest.json (OGM-31 canonical five-fixture set)",
+        canonical_fixture_count: fixture_evidence.len(),
         fixtures: fixture_evidence,
         native_value_dispatches: total_dispatches,
         reference_values_resolved_after_forced_gc: total_reference_resolutions,
