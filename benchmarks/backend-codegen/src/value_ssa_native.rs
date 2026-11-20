@@ -657,6 +657,22 @@ struct NativeValueSemanticsEvidence {
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct NativeShadowRootEvidence {
+    candidate: String,
+    managed_roots: usize,
+    entry_safepoint: u32,
+    call_boundary_safepoint: u32,
+    entry_roots_scanned: usize,
+    call_boundary_roots_scanned: usize,
+    persistent_handles: usize,
+    live_objects_after_entry: usize,
+    live_objects_after_call_boundary: usize,
+    reclaimed_after_release: usize,
+    all_roots_survived: bool,
+    all_roots_reclaimed: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct NativeCoreIrFixtureEvidence {
     fixture: String,
     path: String,
@@ -723,6 +739,7 @@ struct CandidateEvidence {
     native_handle_dispatch: NativeHandleDispatchEvidence,
     native_core_ir_corpus: NativeCoreIrCorpusEvidence,
     native_value_semantics: NativeValueSemanticsEvidence,
+    native_shadow_roots: NativeShadowRootEvidence,
     /// Real x86-64 disassembly of the Cranelift-generated live-value stress
     /// function. Stack-relative loads/stores are native spill traffic, unlike
     /// the separate regalloc2 pressure model below.
@@ -2708,6 +2725,113 @@ fn run_native_value_semantics(
     })
 }
 
+fn run_native_shadow_root_validation(
+    candidate: Candidate,
+    managed_roots: usize,
+) -> Result<NativeShadowRootEvidence> {
+    use ogma_native_runtime_boundary_proof::{
+        FrameDescriptor, InterpreterFrame, JsValue, NativeFrame, RootMap, RootProviders,
+        SafepointId,
+    };
+
+    if managed_roots == 0 {
+        bail!("{} shadow-root workload must contain managed values", candidate.name());
+    }
+
+    let mut heap = ogma_native_runtime_boundary_proof::GcHeap::default();
+    let references: Vec<_> = (0..managed_roots).map(|_| heap.allocate()).collect();
+    let slots: Vec<usize> = (0..managed_roots).collect();
+    let descriptor = FrameDescriptor::new(
+        format!("ogm38-{}", candidate.name()),
+        managed_roots,
+        SafepointId(0),
+        vec![
+            RootMap {
+                safepoint: SafepointId(0),
+                slots: slots.clone(),
+            },
+            RootMap {
+                safepoint: SafepointId(1),
+                slots: slots.clone(),
+            },
+        ],
+    )?;
+    let frame_values = references
+        .iter()
+        .copied()
+        .map(JsValue::Managed)
+        .collect();
+    let frame = NativeFrame::new(descriptor, frame_values)?;
+    let mut providers = RootProviders::default();
+    let native_frame = providers.native.enter(frame)?;
+    let mut persistent_handles = Vec::with_capacity(managed_roots);
+    for reference in references.iter().copied() {
+        persistent_handles.push(providers.persistent.retain(&heap, reference)?);
+    }
+
+    let entry = providers.collect(&mut heap)?;
+    if entry.objects_live != managed_roots
+        || entry.objects_marked != managed_roots
+        || entry.roots_scanned != managed_roots * 2
+    {
+        bail!(
+            "{} OGM-27 entry safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
+            candidate.name(),
+            entry.objects_live,
+            entry.objects_marked,
+            entry.roots_scanned
+        );
+    }
+
+    providers
+        .native
+        .current_mut(native_frame)?
+        .set_safepoint(SafepointId(1), &slots)?;
+    let call_boundary = providers.collect(&mut heap)?;
+    if call_boundary.objects_live != managed_roots
+        || call_boundary.objects_marked != managed_roots
+        || call_boundary.roots_scanned != managed_roots * 2
+    {
+        bail!(
+            "{} OGM-27 call-boundary safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
+            candidate.name(),
+            call_boundary.objects_live,
+            call_boundary.objects_marked,
+            call_boundary.roots_scanned
+        );
+    }
+
+    providers.native.leave(native_frame)?;
+    for handle in persistent_handles.iter().copied() {
+        providers.persistent.release(handle)?;
+    }
+    let cleanup = providers.collect(&mut heap)?;
+    if cleanup.objects_live != 0 || cleanup.objects_reclaimed != managed_roots {
+        bail!(
+            "{} OGM-27 roots were not reclaimed after native-frame and persistent-handle release (live={}, reclaimed={}/{})",
+            candidate.name(),
+            cleanup.objects_live,
+            cleanup.objects_reclaimed,
+            managed_roots
+        );
+    }
+
+    Ok(NativeShadowRootEvidence {
+        candidate: candidate.name().to_owned(),
+        managed_roots,
+        entry_safepoint: 0,
+        call_boundary_safepoint: 1,
+        entry_roots_scanned: entry.roots_scanned,
+        call_boundary_roots_scanned: call_boundary.roots_scanned,
+        persistent_handles: persistent_handles.len(),
+        live_objects_after_entry: entry.objects_live,
+        live_objects_after_call_boundary: call_boundary.objects_live,
+        reclaimed_after_release: cleanup.objects_reclaimed,
+        all_roots_survived: true,
+        all_roots_reclaimed: true,
+    })
+}
+
 fn core_ir_representations(document: &JsonValue) -> BTreeSet<String> {
     fn visit(value: &JsonValue, representations: &mut BTreeSet<String>) {
         match value {
@@ -4178,6 +4302,21 @@ fn run(
         let native_core_ir_corpus =
             run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_value_semantics = run_native_value_semantics(candidate, &library)?;
+        let semantic_reference_count = semantic_cases()
+            .iter()
+            .flat_map(|case| case.inputs.iter())
+            .filter(|value| {
+                matches!(
+                    value,
+                    SemanticValue::String(_)
+                        | SemanticValue::BigInt(_)
+                        | SemanticValue::Object { .. }
+                        | SemanticValue::Symbol(_)
+                )
+            })
+            .count();
+        let native_shadow_roots =
+            run_native_shadow_root_validation(candidate, semantic_reference_count)?;
         let native_pressure =
             run_native_pressure_validation(candidate, &library, &object_path)?;
         let register_pressure = register_pressure(candidate)?;
@@ -4212,6 +4351,7 @@ fn run(
             native_handle_dispatch,
             native_core_ir_corpus,
             native_value_semantics,
+            native_shadow_roots,
             native_pressure,
             register_pressure,
             gc,
