@@ -17,14 +17,14 @@ All four candidates use the same accepted Core IR v1 contract and the five-fixtu
 
 ## Reproducible CI run
 
-- CI run: [OGM-38 run #44726681350](https://github.com/AiratGaliev/ogma/actions/runs/44726681350) — success.
+- CI run: [OGM-38 run #44730458468](https://github.com/AiratGaliev/ogma/actions/runs/44730458468) — success.
 - OGM-38 native job: success (format, Clippy with warnings denied, OGM-26/27/backend tests, all four native candidates and OGM-31 differential proof).
 - Repository fast-checks: success.
-- Raw CI artifact: [ogm38-native-value-ssa-evidence, artifact 14623748867](https://github.com/AiratGaliev/ogma/actions/runs/44726681350/artifacts/14623748867).
+- Raw CI artifact: [ogm38-native-value-ssa-evidence, artifact 14625194465](https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465).
 - Source revision and tested revision: e145f6b4cd8a175d43cb8fb96bc8667f315a3c7d.
 - Environment: GitHub-hosted Linux x86_64; Rust 1.100.0; Cranelift 0.137.2; target x86_64-unknown-linux-gnu; Intel Xeon Platinum 8573C.
 - Sampling: 3 warmups and 101 measurements per candidate; 1,000 native calls per throughput sample.
-- Full CI JSON: 1,657,812 bytes; SHA-256 05de9c347b24ea27f3a91bae604c5a768519cfd2d92d6e28544b4b44ec2c49a1 (preserved in artifact 14623748867).
+- Full CI JSON: 1,657,526 bytes; SHA-256 05de9c347b24ea27f3a91bae604c5a768519cfd2d92d6e28544b4b44ec2c49a1 (preserved in artifact 14625194465).
 - The repository's previously tracked `results/ogm38-native-value-ssa-report.json.gz` is an older evidence run, not the report for revision e145f6b4cd8a175d43cb8fb96bc8667f315a3c7d. It is not used for any table or conclusion in this document.
 - A lossless compact projection of the current run was generated and locally checksum-verified (expanded JSON 274,526 bytes; gzip 43,422 bytes). It retains all 101 raw sample values for compile time, native throughput, handle helper, both collectors (build/collection/root-scan/cleanup and per-sample topology) and all three allocator strategies. GC and allocator sample records use an ordered field-name array plus positional sample rows; semantic cases, fixture dispatches, generated-code metrics, root evidence and aggregate percentiles are retained. This compact projection was not committed to the PR; the full authoritative report remains in the linked CI artifact, whose retention currently expires on 2027-02-18. Consequently, the raw-measurements-committed criterion is still open.
 
