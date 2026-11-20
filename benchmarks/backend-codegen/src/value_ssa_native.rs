@@ -5,8 +5,8 @@
 //! production ECMAScript Runtime or a general Core IR compiler.
 use anyhow::{Context, Result, anyhow, bail};
 use cranelift_codegen::{
-    isa::TargetIsa,
     ir::{AbiParam, BlockArg, InstBuilder, MemFlagsData, Signature, Value, types},
+    isa::TargetIsa,
     settings::{self, Configurable},
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
@@ -6373,7 +6373,9 @@ mod tests {
             assert!(evidence.allocatable_float_registers > 0);
             assert!(
                 !evidence.machine_env.contains("controlled 6 GPR")
-                    && evidence.machine_env.contains("allocatable target registers")
+                    && evidence
+                        .machine_env
+                        .contains("allocatable target registers")
             );
             if evidence.spill_slots > 0 {
                 assert!(evidence.spill_store_edits > 0);
