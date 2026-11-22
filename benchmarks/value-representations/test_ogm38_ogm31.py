@@ -490,7 +490,7 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         encoded = (results / "ogm38-raw-measurements.json.gz.b64").read_text(
             encoding="ascii"
         )
-        compressed = base64.b64decode(encoded, validate=True)
+        compressed = base64.b64decode(encoded.strip(), validate=True)
         raw = gzip.decompress(compressed)
         report = json.loads(raw.decode("utf-8"))
         self.assertEqual("ogma.ogm38.raw-measurements", report["schema"])
