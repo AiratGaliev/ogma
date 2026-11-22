@@ -38,7 +38,7 @@ Reopen the internal representation choice after the production heap/object model
 
 ## Raw evidence
 
-The full report and lossless raw arrays are retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). The committed latest-evidence manifest records exact checksums and source/toolchain revisions. The raw binary itself is not yet stored in Git; the raw-data-in-repository criterion remains Partial.
+The full report and original lossless raw arrays are retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). The compact lossless 156-series/101-sample XZ dataset is committed in Git as 14 Base64 fragments under `results/ogm38-raw-native-samples.delta.json.xz.b64.parts/`. The decoder and regression test reconstruct it and verify exact XZ/JSON checksums and the pinned source revision. The PR's later [verification run #45050612364](https://github.com/AiratGaliev/ogma/actions/runs/45050612364) passed this Git-tracked archive test along with the full focused OGM-38 evidence job.
 
 ## Scope boundary
 

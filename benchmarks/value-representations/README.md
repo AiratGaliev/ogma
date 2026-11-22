@@ -38,7 +38,7 @@ Derived from canonical Core IR:
 - peak live SSA values and abstract payload bytes;
 - logical SSA/environment payload estimates and an instruction-count proxy.
 
-Not measured because this repository has no Rust workspace, runtime, interpreter, AOT code generator or register allocator:
+Not measured by the original OGM-17 structural model (the subsequent OGM-38 native follow-up adds a separate bounded native proof):
 - native object-code size;
 - native execution throughput;
 - physical register pressure and spill counts;
@@ -49,7 +49,7 @@ The instruction-count proxy is not code size. SSA liveness is not physical regis
 
 ## NaN-box model boundary
 
-The executable codec uses a deterministic synthetic heap-handle table to test round-trip encoding of strings, arbitrarily large BigInts, objects and symbols. It checks 48-bit handle exhaustion rather than truncating IDs or using non-reversible hashes. This table is a proof fixture, not a production pointer representation. It does not prove pointer canonicalization, GC roots, write barriers, moving-GC compatibility or host ABI safety.
+The executable codec uses a deterministic synthetic heap-handle table to test round-trip encoding of strings, arbitrarily large BigInts, objects and symbols. It checks 48-bit handle exhaustion rather than truncating IDs or using non-reversible hashes. This table is a proof fixture, not a production pointer representation. It does not prove pointer canonicalization, GC roots, write barriers, moving-GC compatibility or host ABI safety. OGM-38's separate M0 native integration proof exercises real generation-checked host handles and OGM-26/27 root/GC paths; it still does not claim a production Runtime heap or production stack-map encoder.
 
 ## Semantic subset
 
@@ -63,37 +63,24 @@ From the repository root with Python 3.12+:
     python -m unittest discover -s benchmarks/value-representations -p "test_*.py" -v
     python benchmarks/value-representations/run.py
 
-The report is written to benchmarks/value-representations/results/value-ssa-report.json.
+The report is written to benchmarks/value-representations/results/value-ssa-report.json. For the focused native follow-up reproduction commands and toolchain, see [native-evidence-ogm38.md](native-evidence-ogm38.md).
 
 ## Recommendation
 
-Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Preserve representation-aware SSA as the compiler direction and box only at dynamic semantic and external ABI boundaries. Keep NaN-boxing unselected until the Rust heap, GC, ABI and native benchmark prototypes exist.
-
+Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Adopt representation-aware SSA and box at dynamic semantic and external ABI boundaries. OGM-38 supplies bounded native, heap/GC and ABI evidence; NaN-box remains experimental because the M0 measurements do not justify selecting it as the production internal layout across targets and representative workloads.
 
 ## Native follow-up (OGM-38)
 
-The latest measured source revision is `74991baa54b346389b6193c1f7075954055be181`, from [successful CI run #45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950). Both Fast CI and the focused OGM-38 native-evidence job passed. [Artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441) contains the full native/differential JSON, Core IR report, generated native objects, portable .ogmb fixtures, Cargo.lock and raw measurements.
+OGM-38 adds a bounded native execution and runtime-evidence follow-up to the original OGM-17 structural model. Its canonical Git-tracked measurement snapshot is pinned to tested revision `74991baa54b346389b6193c1f7075954055be181`, produced by [successful CI run #45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950). [Artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441) retains the full native/differential reports, Core IR report, generated native objects, portable .ogmb fixtures, Cargo.lock and original raw samples.
+
+The lossless compact raw dataset is committed in `results/ogm38-raw-native-samples.delta.json.xz.b64.parts/` as 14 Base64 fragments. It reconstructs to 39,096 bytes of XZ containing 156 measurement series × 101 samples and 36 worker records (24 collector and 12 allocator configurations). `decode_ogm38_raw_archive.py` verifies the exact XZ/JSON checksums, tested revision, candidate inventory and sample counts; the regression suite exercises this reconstruction.
+
+The latest verification run for this PR is [CI run #45050612364](https://github.com/AiratGaliev/ogma/actions/runs/45050612364), which checked out PR head `d4a9d25d987795d46622c7e25b76ac6b9b4d34f4`. Both `fast-checks` and the focused OGM-38 native-evidence job passed. The latter ran the Core IR/OGM-17 checks, Rust formatting, Clippy, OGM-26/27/backend contract tests, all four native candidates, OGM-31 differential validation and the raw-export regression suite (42 Python tests passed). [Verification artifact #14765960816](https://github.com/AiratGaliev/ogma/actions/runs/45050612364/artifacts/14765960816) contains the freshly generated report for that tested revision. The committed snapshot intentionally remains pinned to its own source revision rather than being relabelled as measurements from a different commit.
 
 All four candidates use the same five canonical OGM-31 fixtures. Each dispatches 77 Value inputs through generated native batch loops, passes 31 semantic cases with one generated native CFG entry per case, and matches the independent OGM-31 portable oracle. Each candidate records 70 callbacks, 39 forced collections and 28 candidate roots that survive entry/call-boundary collections and are reclaimed after release.
 
-The Number-only native loop p50 is 278.135 ns (Tagged16 boxed), 92.447 ns (Tagged16 representation-aware), 278.053 ns (NaN-box boxed) and 86.048 ns (NaN-box representation-aware). Representation-aware SSA accounts for most of the speedup; the measured 6.9% p50 difference between the representation-aware Value layouts is not sufficient to select a production layout. A generated 32-live-Value Cranelift pressure function records 64 spill slots / 512 B for Tagged16 and 32 / 256 B for NaN-box.
+For the committed snapshot, the Number-only native loop p50 is 278.135 ns (Tagged16 boxed), 92.447 ns (Tagged16 representation-aware), 278.053 ns (NaN-box boxed) and 86.048 ns (NaN-box representation-aware). Representation-aware SSA accounts for most of the speedup; the measured 6.9% p50 difference between the representation-aware Value layouts is not sufficient to select a production layout. A generated 32-live-Value Cranelift pressure function records 64 spill slots / 512 B for Tagged16 and 32 / 256 B for NaN-box.
 
 The OGM-24 IsolateAllocator backs actual OGM-26 candidate Value payload storage. Both collectors and all three allocator strategies use the same 2,048-object graph. There are 24 isolated collector workers and 12 direct allocator workers; each records 101 raw samples. Linux VmHWM is measured separately from logical heap and allocator accounting.
 
-The full lossless raw archive is retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441); the manifest pins its exact checksums and tested revision. The raw arrays are not yet stored in Git itself, so OGM-38 criterion 6 remains Partial specifically for source-repository storage.
-
-The M0 decision is recorded in [decision-record-ogm38.md](decision-record-ogm38.md): keep the public embedding ABI opaque and versioned, use explicit tagged Value as the conservative internal M1 baseline, adopt representation-aware SSA and retain NaN-box as experimental. Exact measurements and acceptance boundaries are in [native-evidence-ogm38.md](native-evidence-ogm38.md).
-
-
-
-OGM-38 is the M0 native-evidence and Value/SSA decision follow-up. The latest measured source revision is `770bf5bdaa598473a49733d1053b4fff589091c1`, from [successful CI run #45042417728](https://github.com/AiratGaliev/ogma/actions/runs/45042417728). Both Fast CI and the focused OGM-38 native job passed. [Artifact #14762262101](https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101) contains the full native/differential JSON, Core IR report, generated native objects, portable .ogmb fixtures, Cargo.lock and raw measurements.
-
-All four candidates use the same five canonical OGM-31 fixtures. Each dispatches 77 Value inputs through generated native batch loops, passes 31 semantic cases with one generated native CFG entry per case, and matches the independent OGM-31 portable oracle. Each candidate records 70 callbacks, 39 forced collections and 28 candidate roots that survive entry/call-boundary collections and are reclaimed after release.
-
-The Number-only native loop p50 is 334.334 ns (Tagged16 boxed), 102.113 ns (Tagged16 representation-aware), 336.747 ns (NaN-box boxed) and 84.818 ns (NaN-box representation-aware). A generated 32-live-Value Cranelift pressure function records 64 spill slots / 512 B for Tagged16 and 32 / 256 B for NaN-box. These results are bounded native probes, not whole-runtime performance claims.
-
-The OGM-24 IsolateAllocator backs actual OGM-26 candidate Value payload storage. Both collectors and all three allocator strategies use the same 2,048-object graph. There are 24 isolated GC workers and 12 direct allocator workers; each records 101 raw samples. Linux VmHWM is measured separately from logical heap and allocator accounting.
-
-The complete raw measurement arrays and compact XZ delta snapshot are retained in [CI artifact #14762262101](https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101). The manifest pins the full report, differential, projections, XZ snapshot and decoded JSON checksums. Exporter, validator and regression tests are committed, but the raw arrays/XZ snapshot are not yet stored in Git itself; criterion 6 therefore remains Partial.
-
-The M0 decision is recorded in [decision-record-ogm38.md](decision-record-ogm38.md): keep the public embedding ABI opaque and versioned, use explicit tagged Value as the conservative internal M1 baseline, adopt representation-aware SSA and retain NaN-box as experimental. Exact measurements and acceptance boundaries are in [native-evidence-ogm38.md](native-evidence-ogm38.md).
+The M0 decision is recorded in [decision-record-ogm38.md](decision-record-ogm38.md): keep the public embedding ABI opaque and versioned, use explicit tagged Value as the conservative internal baseline, adopt representation-aware SSA and retain NaN-box as experimental. Exact measurement boundaries and acceptance status are in [native-evidence-ogm38.md](native-evidence-ogm38.md).

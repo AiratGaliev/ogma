@@ -2,7 +2,7 @@
   "schema": "ogma.ogm38.latest-evidence",
   "version": 3,
   "task": "OGM-38",
-  "evidence_status": "m0-evidence-complete-except-raw-archive-git-storage",
+  "evidence_status": "m0-evidence-complete-raw-archive-committed",
   "source_revision": "74991baa54b346389b6193c1f7075954055be181",
   "tested_revision": "74991baa54b346389b6193c1f7075954055be181",
   "workflow_run": {
@@ -227,7 +227,7 @@
     "spills": "GNU objdump disassembly of generated Cranelift 32-live-Value function; regalloc2 is supplemental."
   },
   "raw_dataset": {
-    "storage": "GitHub Actions artifact #14762343441; raw archive not yet stored as a Git-tracked binary",
+    "storage": "Git-tracked Base64 fragments in benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/; decode_ogm38_raw_archive.py reconstructs the XZ archive and verifies exact checksums.",
     "artifact_path": "ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64",
     "encoding": "XZ-compressed delta JSON; 156 101-sample series and 36 worker records; numeric scale 1000 (0.001-unit precision)",
     "base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
@@ -239,7 +239,25 @@
     "decoded_json_bytes": 163821,
     "raw_columnar_gzip_base64_sha256": "5ab29b1558c43c750e0572710a771302b8e4bbc20889e9e28bc04f524afc11f1",
     "raw_columnar_gzip_sha256": "1d39a921ba274d29d40889098f821ce027b0c1bd5a93a784bb7517ea035aa050",
-    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6"
+    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6",
+    "git_tracked_parts": "benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/",
+    "fragment_count": 14,
+    "fragment_lengths_bytes": [
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      128
+    ]
   },
   "checked_in_evidence": {
     "native_evidence": "benchmarks/value-representations/native-evidence-ogm38.md",
@@ -247,6 +265,30 @@
     "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
     "exporter": "benchmarks/value-representations/export_ogm38_raw_samples.py",
     "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py",
-    "ci_artifact": "14762343441"
+    "ci_artifact": "14762343441",
+    "decoder": "benchmarks/value-representations/decode_ogm38_raw_archive.py",
+    "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
+    "ci_artifact_note": "Archive-producing measurement snapshot: 14762343441; latest verification run/artifact: 45050612364 / 14765960816."
+  },
+  "latest_verification_run": {
+    "id": 45050612364,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45050612364",
+    "tested_revision": "d4a9d25d987795d46622c7e25b76ac6b9b4d34f4",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "focused_python_tests": {
+      "ran": 42,
+      "result": "passed"
+    },
+    "artifact": {
+      "id": 14765960816,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45050612364/artifacts/14765960816",
+      "zip_sha256": "278f41b42bd7eba9e0a415b537ab0e089a4175491b8b9c2b07ce8b6631d3d86b",
+      "size_bytes": 624101,
+      "note": "Fresh report for the verification revision; the Git-tracked raw snapshot remains pinned to its separately recorded source revision."
+    }
   }
 }
