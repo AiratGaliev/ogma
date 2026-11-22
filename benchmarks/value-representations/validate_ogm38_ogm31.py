@@ -371,8 +371,30 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
             raise RuntimeError(f"{name}: generated native host.echo callback evidence is incomplete")
 
         roots = candidate.get("native_shadow_roots")
-        if not isinstance(roots, dict) or roots.get("all_roots_survived") is not True or roots.get("all_roots_reclaimed") is not True:
-            raise RuntimeError(f"{name}: OGM-27 native/interpreter/persistent roots were not balanced")
+        if (
+            not isinstance(roots, dict)
+            or roots.get("all_roots_survived") is not True
+            or roots.get("all_roots_reclaimed") is not True
+            or roots.get("candidate_values_survived_both_collections") is not True
+            or roots.get("candidate_value_layout") not in {"tagged-16", "nanbox-8"}
+        ):
+            raise RuntimeError(f"{name}: OGM-27 candidate Value roots were not balanced")
+        candidate_slots = roots.get("candidate_value_slots")
+        candidate_handles = roots.get("candidate_reference_handles_resolved")
+        candidate_tags = roots.get("candidate_reference_tags")
+        if (
+            not isinstance(candidate_slots, int)
+            or isinstance(candidate_slots, bool)
+            or candidate_slots <= 0
+            or candidate_handles != candidate_slots
+            or not isinstance(candidate_tags, list)
+            or len(candidate_tags) != candidate_slots
+            or set(candidate_tags) != {"String", "BigInt", "Object", "Symbol"}
+            or roots.get("entry_safepoint") != 0
+            or roots.get("call_boundary_safepoint") != 1
+            or roots.get("reclaimed_after_release") != candidate_slots
+        ):
+            raise RuntimeError(f"{name}: candidate Value root-map scan/handle-lifetime evidence is incomplete")
 
         corpus = candidate.get("native_core_ir_corpus")
         if (
