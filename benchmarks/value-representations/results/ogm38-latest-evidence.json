@@ -268,27 +268,41 @@
     "ci_artifact": "14762343441",
     "decoder": "benchmarks/value-representations/decode_ogm38_raw_archive.py",
     "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
-    "ci_artifact_note": "Archive-producing measurement snapshot: 14762343441; latest verification run/artifact: 45050612364 / 14765960816."
+    "ci_artifact_note": "Canonical measurement snapshot artifact: 14762343441 (run 45044214950); later PR-head verification: run 45055209774 / artifact 14767710910. The verification artifact contains a fresh report but does not replace the immutable Git-tracked raw snapshot."
   },
   "latest_verification_run": {
-    "id": 45050612364,
-    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45050612364",
-    "tested_revision": "d4a9d25d987795d46622c7e25b76ac6b9b4d34f4",
+    "id": 45055209774,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45055209774",
+    "tested_revision": "7f84ccba117047218fcbf2954f5463e0764c6692",
     "jobs": {
       "fast_checks": "success",
       "native_value_ssa_evidence": "success"
     },
+    "fast_checks": {
+      "python_tests": 203,
+      "result": "passed"
+    },
     "focused_python_tests": {
-      "ran": 42,
+      "value_representation": {
+        "ran": 42,
+        "result": "passed"
+      },
+      "dual_backend": {
+        "ran": 8,
+        "result": "passed"
+      }
+    },
+    "rust_unit_tests": {
+      "ran": 65,
       "result": "passed"
     },
     "artifact": {
-      "id": 14765960816,
+      "id": 14767710910,
       "name": "ogm38-native-value-ssa-evidence",
-      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45050612364/artifacts/14765960816",
-      "zip_sha256": "278f41b42bd7eba9e0a415b537ab0e089a4175491b8b9c2b07ce8b6631d3d86b",
-      "size_bytes": 624101,
-      "note": "Fresh report for the verification revision; the Git-tracked raw snapshot remains pinned to its separately recorded source revision."
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45055209774/artifacts/14767710910",
+      "zip_sha256": "1b32c2d1ffdce6d3e962c934f8b4d4766ce7d28237cd21858ec3408d534a4926",
+      "size_bytes": 631852,
+      "note": "Fresh native/differential report for PR head 7f84ccba117047218fcbf2954f5463e0764c6692. The canonical Git-tracked raw sample snapshot remains pinned to source revision 74991baa54b346389b6193c1f7075954055be181."
     }
   }
 }

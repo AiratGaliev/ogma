@@ -1,0 +1,199 @@
+"""Integrity checks tying the OGM-38 raw archive to its complete benchmark matrix."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import unittest
+from pathlib import Path
+
+import decode_ogm38_raw_archive as raw_archive
+
+
+HERE = Path(__file__).resolve().parent
+RESULTS = HERE / "results"
+EXPECTED_CANDIDATES = {
+    "tagged-16-boxed",
+    "tagged-16-representation-aware",
+    "nanbox-8-boxed",
+    "nanbox-8-representation-aware",
+}
+EXPECTED_COLLECTORS = {"rc-cycle-removal", "non-moving-mark-sweep"}
+EXPECTED_ALLOCATORS = {
+    "system-allocator",
+    "per-isolate-exact-reuse",
+    "per-isolate-size-class-pool",
+}
+COLLECTOR_METRICS = {
+    "build_ns",
+    "collection_ns",
+    "root_scan_ns",
+    "cleanup_collection_ns",
+}
+ALLOCATOR_METRICS = {"allocation_ns", "deallocation_ns"}
+SEMANTIC_ADD_CASES = {
+    "number-add",
+    "string-concat",
+    "bigint-add",
+    "object-to-primitive-add",
+    "symbol-add-throws",
+    "bigint-number-add-throws",
+}
+
+
+class Ogm38ArchiveIntegrityTests(unittest.TestCase):
+    def test_archive_covers_the_complete_candidate_gc_allocator_matrix(self):
+        compressed, report = raw_archive.load_committed_archive()
+        candidate_names = {item["name"] for item in report["candidates"]}
+        self.assertEqual(EXPECTED_CANDIDATES, candidate_names)
+        self.assertEqual(4, len(report["candidates"]))
+
+        collector_workers = [item for item in report["workers"] if item["type"] == "collector"]
+        allocator_workers = [item for item in report["workers"] if item["type"] == "allocator"]
+        expected_gc = {
+            (candidate, collector, allocator)
+            for candidate in EXPECTED_CANDIDATES
+            for collector in EXPECTED_COLLECTORS
+            for allocator in EXPECTED_ALLOCATORS
+        }
+        actual_gc = {
+            (item["candidate"], item["collector"], item["allocator"])
+            for item in collector_workers
+        }
+        self.assertEqual(expected_gc, actual_gc)
+        self.assertEqual(len(expected_gc), len(collector_workers))
+
+        expected_alloc = {
+            (candidate, allocator)
+            for candidate in EXPECTED_CANDIDATES
+            for allocator in EXPECTED_ALLOCATORS
+        }
+        actual_alloc = {
+            (item["candidate"], item["allocator"])
+            for item in allocator_workers
+        }
+        self.assertEqual(expected_alloc, actual_alloc)
+        self.assertEqual(len(expected_alloc), len(allocator_workers))
+
+        expected_metric_names = set()
+        for candidate in report["candidates"]:
+            name = candidate["name"]
+            self.assertEqual(31, candidate["native_semantic_case_count"])
+            self.assertEqual(31, candidate["native_semantic_batch_dispatch_invocations"])
+            self.assertEqual(77, candidate["native_value_dispatches"])
+            self.assertEqual(SEMANTIC_ADD_CASES, set(candidate["semantic_add_cases"]))
+            expected_metric_names.update({
+                f"{name}|compile_ns",
+                f"{name}|loop_ns_per_call",
+                f"{name}|handle_dispatch_ns_per_call",
+            })
+            expected_metric_names.update(
+                f"{name}|semantic_add|{case}" for case in SEMANTIC_ADD_CASES
+            )
+
+        for item in collector_workers:
+            name = item["candidate"]
+            self.assertEqual(COLLECTOR_METRICS, set(item["variable_fields"]))
+            self.assertEqual(item["allocator"], item["constant_fields"]["allocator_strategy"])
+            self.assertEqual(
+                item["rss_baseline_bytes"] + item["rss_delta_bytes"],
+                item["rss_peak_bytes"],
+            )
+            for metric in COLLECTOR_METRICS:
+                expected_metric_names.add(
+                    f"{name}|collector|{item['collector']}|{item['allocator']}|{metric}"
+                )
+
+        for item in allocator_workers:
+            self.assertEqual(ALLOCATOR_METRICS, set(item["variable_fields"]))
+            for metric in ALLOCATOR_METRICS:
+                expected_metric_names.add(
+                    f"{item['candidate']}|allocator|{item['allocator']}|{metric}"
+                )
+
+        actual_metric_names = {item[0] for item in report["metric_arrays"]}
+        self.assertEqual(expected_metric_names, actual_metric_names)
+        self.assertEqual(156, len(expected_metric_names))
+
+        for metric_name, first, deltas in report["metric_arrays"]:
+            samples = [first]
+            for delta in deltas:
+                samples.append(samples[-1] + delta)
+            self.assertEqual(101, len(samples), metric_name)
+            self.assertTrue(all(value >= 0 for value in samples), metric_name)
+
+    def test_manifest_and_primary_projection_match_the_committed_snapshot(self):
+        compressed, report = raw_archive.load_committed_archive()
+        raw_json = __import__("lzma").decompress(compressed)
+        manifest_path = RESULTS / "ogm38-latest-evidence.json"
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+        raw = manifest["raw_dataset"]
+
+        self.assertEqual(report["source_revision"], manifest["source_revision"])
+        self.assertEqual(report["tested_revision"], manifest["tested_revision"])
+        self.assertEqual(report["source_revision"], raw_archive.EXPECTED_SOURCE_REVISION)
+        self.assertEqual(hashlib.sha256(compressed).hexdigest(), raw["xz_sha256"])
+        self.assertEqual(hashlib.sha256(raw_json).hexdigest(), raw["decoded_json_sha256"])
+        self.assertEqual(len(compressed), raw["xz_bytes"])
+        self.assertEqual(len(raw_json), raw["decoded_json_bytes"])
+        self.assertEqual(len(report["metric_arrays"]), raw["series_count"])
+        self.assertEqual(len(report["workers"]), raw["worker_count"])
+        self.assertEqual(raw_archive.EXPECTED_PART_COUNT, raw["fragment_count"])
+        self.assertEqual(raw_archive.EXPECTED_PART_LENGTHS, raw["fragment_lengths_bytes"])
+
+        parts_dir = HERE / "results" / "ogm38-raw-native-samples.delta.json.xz.b64.parts"
+        encoded = b"".join(
+            (parts_dir / f"part-{index:02d}.b64").read_bytes()
+            for index in range(raw_archive.EXPECTED_PART_COUNT)
+        )
+        encoded_sha = hashlib.sha256(encoded).hexdigest()
+        self.assertEqual(encoded_sha, raw["base64_file_sha256"])
+        self.assertEqual(encoded_sha, manifest["checksums"]["raw_delta_base64_file_sha256"])
+        self.assertEqual(raw["xz_sha256"], manifest["checksums"]["raw_delta_xz_sha256"])
+        self.assertEqual(
+            raw["decoded_json_sha256"],
+            manifest["checksums"]["raw_delta_json_sha256"],
+        )
+
+        primary_path = RESULTS / "ogm38-primary-benchmark-samples.json"
+        primary_bytes = primary_path.read_bytes()
+        primary = json.loads(primary_bytes)
+        self.assertEqual(
+            hashlib.sha256(primary_bytes).hexdigest(),
+            manifest["checksums"]["primary_projection_sha256"],
+        )
+        self.assertEqual(report["source_revision"], primary["source_revision"])
+        self.assertEqual(report["tested_revision"], primary["tested_revision"])
+
+        arrays = {item[0]: item for item in report["metric_arrays"]}
+        candidates = {item["name"]: item for item in report["candidates"]}
+        self.assertEqual(EXPECTED_CANDIDATES, {item["name"] for item in primary["candidates"]})
+        for projection in primary["candidates"]:
+            candidate = candidates[projection["name"]]
+            for field, metric_key in (
+                ("compile_ns", candidate["compile_metric"]),
+                ("native_loop_ns_per_call", candidate["loop_metric"]),
+            ):
+                metric = arrays[metric_key]
+                values = [metric[1]]
+                for delta in metric[2]:
+                    values.append(values[-1] + delta)
+                self.assertEqual(projection[field], [value / 1000 for value in values])
+
+    def test_verification_pointer_is_for_the_last_completed_pr_head_run(self):
+        manifest = json.loads((RESULTS / "ogm38-latest-evidence.json").read_text())
+        verification = manifest["latest_verification_run"]
+        self.assertEqual(45055209774, verification["id"])
+        self.assertEqual("7f84ccba117047218fcbf2954f5463e0764c6692", verification["tested_revision"])
+        self.assertEqual("success", verification["jobs"]["fast_checks"])
+        self.assertEqual("success", verification["jobs"]["native_value_ssa_evidence"])
+        self.assertEqual("passed", verification["fast_checks"]["result"])
+        self.assertEqual(203, verification["fast_checks"]["python_tests"])
+        self.assertEqual(42, verification["focused_python_tests"]["value_representation"]["ran"])
+        self.assertEqual(8, verification["focused_python_tests"]["dual_backend"]["ran"])
+        self.assertEqual(65, verification["rust_unit_tests"]["ran"])
+
+
+if __name__ == "__main__":
+    unittest.main()
