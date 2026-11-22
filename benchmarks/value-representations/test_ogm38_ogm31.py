@@ -102,6 +102,10 @@ def make_reports():
             },
             "native_value_semantics": {
                 "every_case_matches": True,
+                "native_semantic_add_code": {
+                    "symbol": "ogma_value_semantic_add",
+                    "call_instructions": 1,
+                },
                 "cases": [
                     {
                         "name": "nan-strict-equality",
@@ -279,6 +283,9 @@ def make_reports():
             item.setdefault("forced_collections", 0)
             item.setdefault("native_reference_identity_preserved", True)
             item.setdefault("native_store_load_transition", True)
+            is_native_add = item["name"] in proof.NATIVE_RUNTIME_ADD_CASES
+            item.setdefault("native_runtime_add_executed", is_native_add)
+            item.setdefault("native_runtime_add_calls", 1 if is_native_add else 0)
         semantic["cases"] = list(cases.values())
 
     return native, dual
@@ -479,6 +486,21 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "symbol"
         ] = "not-generated"
         with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_native_runtime_operation_fallback_to_the_oracle(self):
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        case = next(item for item in semantic["cases"] if item["name"] == "string-concat")
+        case["native_runtime_add_executed"] = False
+        case["native_runtime_add_calls"] = 0
+        with self.assertRaisesRegex(RuntimeError, "native Runtime js.add evidence"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        semantic["native_semantic_add_code"]["call_instructions"] = 0
+        with self.assertRaisesRegex(RuntimeError, "no measured call instruction"):
             proof.validate_reports(native, dual)
 
     def test_rejects_semantic_completion_mismatch_even_when_summary_flag_is_true(self):
