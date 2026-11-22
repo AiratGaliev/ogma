@@ -131,10 +131,8 @@ def validate_semantic_case_evidence(
         raise RuntimeError(f"{candidate}: native Value semantic matrix did not pass")
 
     cases = semantic.get("cases")
-    if not isinstance(cases, list) or len(cases) != len(EXPECTED_SEMANTIC_CASES):
-        raise RuntimeError(
-            f"{candidate}: expected exactly {len(EXPECTED_SEMANTIC_CASES)} semantic cases"
-        )
+    if not isinstance(cases, list):
+        raise RuntimeError(f"{candidate}: native Value semantic case list is malformed")
     if any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in cases):
         raise RuntimeError(f"{candidate}: native Value semantic case list is malformed")
 
@@ -142,6 +140,10 @@ def validate_semantic_case_evidence(
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
         raise RuntimeError(f"{candidate}: semantic case names are duplicated: {duplicates}")
+    if len(cases) != len(EXPECTED_SEMANTIC_CASES):
+        raise RuntimeError(
+            f"{candidate}: expected exactly {len(EXPECTED_SEMANTIC_CASES)} semantic cases"
+        )
     if set(names) != EXPECTED_SEMANTIC_CASES:
         missing = sorted(EXPECTED_SEMANTIC_CASES - set(names))
         unexpected = sorted(set(names) - EXPECTED_SEMANTIC_CASES)
