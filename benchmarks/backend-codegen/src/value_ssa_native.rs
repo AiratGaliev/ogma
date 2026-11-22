@@ -3510,9 +3510,7 @@ fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompleti
 /// calling the same implementation twice.
 fn runtime_to_primitive(value: &SemanticValue) -> std::result::Result<SemanticValue, &'static str> {
     match value {
-        SemanticValue::Object { primitive, .. } => {
-            Ok(SemanticValue::String(primitive.clone()))
-        }
+        SemanticValue::Object { primitive, .. } => Ok(SemanticValue::String(primitive.clone())),
         SemanticValue::Undefined
         | SemanticValue::Null
         | SemanticValue::Boolean(_)
@@ -3603,13 +3601,10 @@ fn runtime_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletio
         }
         (SemanticValue::String(_), _) | (_, SemanticValue::String(_)) => {
             match (runtime_to_string(&left), runtime_to_string(&right)) {
-                (Ok(left), Ok(right)) => SemanticCompletion::Normal(SemanticValue::String(
-                    format!("{left}{right}"),
-                )),
-                (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw {
-                    name,
-                    value: None,
-                },
+                (Ok(left), Ok(right)) => {
+                    SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")))
+                }
+                (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw { name, value: None },
             }
         }
         _ => match (runtime_to_number(&left), runtime_to_number(&right)) {
@@ -4678,8 +4673,7 @@ fn run_native_value_semantics(
             matches,
         });
     }
-    let native_semantic_add_code =
-        native_code_metrics(object_path, "ogma_value_semantic_add")?;
+    let native_semantic_add_code = native_code_metrics(object_path, "ogma_value_semantic_add")?;
     if native_semantic_add_code.call_instructions == 0 {
         bail!(
             "{} generated js.add helper entry point contains no native call instruction",
@@ -4776,7 +4770,10 @@ fn run_native_shadow_root_validation(
         // Keep the resolved OGM-26 object live until the corresponding native
         // shadow frame has been released.
         if tag == 0 {
-            bail!("{} candidate Value scanner observed an invalid zero tag", candidate.name());
+            bail!(
+                "{} candidate Value scanner observed an invalid zero tag",
+                candidate.name()
+            );
         }
     }
 
@@ -4815,9 +4812,13 @@ fn run_native_shadow_root_validation(
         .collect(&mut heap)
         .map_err(|error| anyhow!("OGM-27 entry safepoint collection failed: {error:?}"))?;
     let candidate_entry_collection = candidate_heap.collect()?;
-    let candidate_entry_handles_survived = candidate_tokens.iter().zip(&candidate_handles).all(
-        |(token, (_, expected))| candidate_heap.resolve_host_handle_token(*token) == Ok(*expected),
-    );
+    let candidate_entry_handles_survived =
+        candidate_tokens
+            .iter()
+            .zip(&candidate_handles)
+            .all(|(token, (_, expected))| {
+                candidate_heap.resolve_host_handle_token(*token) == Ok(*expected)
+            });
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
         || entry.roots_scanned != managed_roots * 3
@@ -4842,9 +4843,13 @@ fn run_native_shadow_root_validation(
         .collect(&mut heap)
         .map_err(|error| anyhow!("OGM-27 call-boundary collection failed: {error:?}"))?;
     let candidate_call_collection = candidate_heap.collect()?;
-    let candidate_call_handles_survived = candidate_tokens.iter().zip(&candidate_handles).all(
-        |(token, (_, expected))| candidate_heap.resolve_host_handle_token(*token) == Ok(*expected),
-    );
+    let candidate_call_handles_survived =
+        candidate_tokens
+            .iter()
+            .zip(&candidate_handles)
+            .all(|(token, (_, expected))| {
+                candidate_heap.resolve_host_handle_token(*token) == Ok(*expected)
+            });
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
         || call_boundary.roots_scanned != managed_roots * 3
@@ -7081,8 +7086,7 @@ fn run(
         let native_core_ir_corpus = run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_core_ir_execution =
             run_native_core_ir_execution(candidate, &library, &object_path)?;
-        let native_value_semantics =
-            run_native_value_semantics(candidate, &library, &object_path)?;
+        let native_value_semantics = run_native_value_semantics(candidate, &library, &object_path)?;
         let semantic_reference_count = semantic_cases()
             .iter()
             .flat_map(|case| case.inputs.iter())
