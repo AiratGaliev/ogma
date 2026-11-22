@@ -84,6 +84,14 @@ EXPECTED_SEMANTIC_CASES = {
     "host-call-throw",
 }
 
+NATIVE_RUNTIME_ADD_CASES = {
+    "number-add",
+    "string-concat",
+    "bigint-add",
+    "object-to-primitive-add",
+    "symbol-add-throws",
+}
+
 NATIVE_TO_ORACLE_FIELDS = {
     "branch_equal_result_bits": ("branch_equal", 7.0),
     "branch_unequal_result_bits": ("branch_unequal", 8.0),
@@ -151,8 +159,31 @@ def validate_semantic_case_evidence(
             f"{candidate}: semantic case set differs (missing={missing}, unexpected={unexpected})"
         )
 
+    native_add_code = semantic.get("native_semantic_add_code")
+    if (
+        not isinstance(native_add_code, dict)
+        or native_add_code.get("symbol") != "ogma_value_semantic_add"
+        or not isinstance(native_add_code.get("call_instructions"), int)
+        or isinstance(native_add_code.get("call_instructions"), bool)
+        or native_add_code["call_instructions"] < 1
+    ):
+        raise RuntimeError(f"{candidate}: generated native js.add entry point has no measured call instruction")
+
     for item in cases:
         case_name = item["name"]
+        expected_native_add = case_name in NATIVE_RUNTIME_ADD_CASES
+        actual_native_add = item.get("native_runtime_add_executed")
+        native_add_calls = item.get("native_runtime_add_calls")
+        if (
+            actual_native_add is not expected_native_add
+            or not isinstance(native_add_calls, int)
+            or isinstance(native_add_calls, bool)
+            or native_add_calls != (1 if expected_native_add else 0)
+        ):
+            raise RuntimeError(
+                f"{candidate}: {case_name} native Runtime js.add evidence is missing or unexpected"
+            )
+
         expected_completion = item.get("expected_completion")
         actual_completion = item.get("actual_completion")
         if not isinstance(expected_completion, str) or not expected_completion:
