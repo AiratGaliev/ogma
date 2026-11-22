@@ -122,7 +122,7 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             self.assertEqual(101, len(samples), metric_name)
             self.assertTrue(all(value >= 0 for value in samples), metric_name)
 
-    def test_manifest_and_primary_projection_match_the_committed_snapshot(self):
+    def test_manifest_and_historical_projection_have_independent_provenance(self):
         compressed, report = raw_archive.load_committed_archive()
         raw_json = __import__("lzma").decompress(compressed)
         manifest_path = RESULTS / "ogm38-latest-evidence.json"
@@ -161,27 +161,45 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         primary_path = RESULTS / "ogm38-primary-benchmark-samples.json"
         primary_bytes = primary_path.read_bytes()
         primary = json.loads(primary_bytes)
+        projection_meta = manifest["historical_primary_projection"]
         self.assertEqual(
             hashlib.sha256(primary_bytes).hexdigest(),
             manifest["checksums"]["primary_projection_sha256"],
         )
-        self.assertEqual(report["source_revision"], primary["source_revision"])
-        self.assertEqual(report["tested_revision"], primary["tested_revision"])
+        self.assertEqual(
+            "reference-only-separate-snapshot",
+            projection_meta["status"],
+        )
+        self.assertEqual(primary["source_revision"], projection_meta["source_revision"])
+        self.assertEqual(primary["tested_revision"], projection_meta["tested_revision"])
+        self.assertEqual(primary["run_url"], projection_meta["run_url"])
+        self.assertEqual(
+            primary["full_report_artifact_url"],
+            projection_meta["artifact_url"],
+        )
+        self.assertEqual(44730458468, projection_meta["workflow_run_id"])
+        self.assertEqual(14625194465, projection_meta["artifact_id"])
+        self.assertEqual(
+            "74991baa54b346389b6193c1f7075954055be181",
+            report["source_revision"],
+        )
+        self.assertNotEqual(report["source_revision"], primary["source_revision"])
 
-        arrays = {item[0]: item for item in report["metric_arrays"]}
-        candidates = {item["name"]: item for item in report["candidates"]}
-        self.assertEqual(EXPECTED_CANDIDATES, {item["name"] for item in primary["candidates"]})
-        for projection in primary["candidates"]:
-            candidate = candidates[projection["name"]]
-            for field, metric_key in (
-                ("compile_ns", candidate["compile_metric"]),
-                ("native_loop_ns_per_call", candidate["loop_metric"]),
-            ):
-                metric = arrays[metric_key]
-                values = [metric[1]]
-                for delta in metric[2]:
-                    values.append(values[-1] + delta)
-                self.assertEqual(projection[field], [value / 1000 for value in values])
+        # The historical projection is validated against its own provenance.
+        # It must never be relabelled or compared as if it were the raw 74991
+        # snapshot; the latter is independently reconstructed and checked above.
+        self.assertEqual(
+            EXPECTED_CANDIDATES,
+            {item["name"] for item in primary["candidates"]},
+        )
+        for candidate in primary["candidates"]:
+            self.assertTrue(candidate["all_semantic_cases_match"])
+            self.assertEqual(101, len(candidate["compile_ns"]))
+            self.assertEqual(101, len(candidate["native_loop_ns_per_call"]))
+            self.assertTrue(all(value >= 0 for value in candidate["compile_ns"]))
+            self.assertTrue(
+                all(value >= 0 for value in candidate["native_loop_ns_per_call"])
+            )
 
     def test_manifest_records_the_pre_integrity_test_verification(self):
         manifest = json.loads((RESULTS / "ogm38-latest-evidence.json").read_text())

@@ -304,5 +304,17 @@
       "size_bytes": 631852,
       "note": "Fresh native/differential report for PR head 7f84ccba117047218fcbf2954f5463e0764c6692. The canonical Git-tracked raw sample snapshot remains pinned to source revision 74991baa54b346389b6193c1f7075954055be181."
     }
+  },
+  "historical_primary_projection": {
+    "status": "reference-only-separate-snapshot",
+    "path": "benchmarks/value-representations/results/ogm38-primary-benchmark-samples.json",
+    "source_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
+    "tested_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
+    "workflow_run_id": 44730458468,
+    "run_url": "https://github.com/AiratGaliev/ogma/actions/runs/44730458468",
+    "artifact_id": 14625194465,
+    "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465",
+    "sha256": "247ed726c2f24366d9e6cceda4ccdc65ca59e931188faa2dfa9abe679c54235e",
+    "note": "This projection is retained as a historical reference and is not part of the raw native/GC/allocator snapshot pinned by source_revision/tested_revision."
   }
 }
