@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from validate_ogm38_ogm31 import validate_semantic_case_evidence
+
 EXPECTED_CANDIDATES = {
     "tagged-16-boxed",
     "tagged-16-representation-aware",
@@ -83,12 +85,13 @@ def validate_reports(native: dict[str, Any], differential: dict[str, Any]) -> No
                 f"{name}.{metric} contains non-positive samples",
             )
 
-        semantic = candidate.get("native_value_semantics", {})
-        require(
-            semantic.get("every_case_matches") is True
-            and len(semantic.get("cases", [])) == 31,
-            f"{name} does not pass the full 31-case semantic matrix",
-        )
+        try:
+            validate_semantic_case_evidence(
+                candidate.get("native_value_semantics"),
+                candidate=name,
+            )
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
         corpus = candidate.get("native_core_ir_corpus", {})
         require(
             corpus.get("canonical_fixture_count") == EXPECTED_FIXTURES

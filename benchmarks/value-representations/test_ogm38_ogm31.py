@@ -265,6 +265,22 @@ def make_reports():
                 "all_roots_reclaimed": True,
             },
         })
+    for candidate in native["candidates"]:
+        semantic = candidate["native_value_semantics"]
+        cases = {item["name"]: item for item in semantic["cases"]}
+        for case_name in sorted(proof.EXPECTED_SEMANTIC_CASES - cases.keys()):
+            cases[case_name] = {"name": case_name, "matches": True}
+        for item in cases.values():
+            item.setdefault("expected_completion", "Normal(Number(1))")
+            item.setdefault("actual_completion", item["expected_completion"])
+            item.setdefault("expected_host_trace", item.get("actual_host_trace", []))
+            item.setdefault("actual_host_trace", item["expected_host_trace"])
+            item.setdefault("native_callbacks", 1)
+            item.setdefault("forced_collections", 0)
+            item.setdefault("native_reference_identity_preserved", True)
+            item.setdefault("native_store_load_transition", True)
+        semantic["cases"] = list(cases.values())
+
     return native, dual
 
 
@@ -463,6 +479,32 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "symbol"
         ] = "not-generated"
         with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_semantic_completion_mismatch_even_when_summary_flag_is_true(self):
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        case = next(item for item in semantic["cases"] if item["name"] == "number-add")
+        case["actual_completion"] = "Normal(Number(999))"
+        self.assertTrue(semantic["every_case_matches"])
+        with self.assertRaisesRegex(RuntimeError, "actual completion differs"):
+            proof.validate_reports(native, dual)
+        with self.assertRaisesRegex(ValueError, "actual completion differs"):
+            exporter.validate_reports(native, dual)
+
+    def test_rejects_semantic_host_trace_mismatch_even_when_summary_flag_is_true(self):
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        case = next(item for item in semantic["cases"] if item["name"] == "string-concat")
+        case["actual_host_trace"] = ["unexpected.side_effect([])"]
+        with self.assertRaisesRegex(RuntimeError, "actual host trace differs"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_missing_semantic_case(self):
+        native, dual = make_reports()
+        cases = native["candidates"][0]["native_value_semantics"]["cases"]
+        cases[:] = [item for item in cases if item["name"] != "bigint-add"]
+        with self.assertRaisesRegex(RuntimeError, "expected exactly 31 semantic cases"):
             proof.validate_reports(native, dual)
 
     def test_rejects_duplicate_semantic_case_names(self):

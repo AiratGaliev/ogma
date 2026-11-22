@@ -50,6 +50,40 @@ STRICT_EQUALITY_CASES = {
     "bigint-strict-equality-same": True,
     "bigint-strict-equality-distinct": False,
 }
+EXPECTED_SEMANTIC_CASES = {
+    "number-add",
+    "string-concat",
+    "bigint-add",
+    "object-to-primitive-add",
+    "symbol-add-throws",
+    "bigint-to-number-throws",
+    "nan-strict-equality",
+    "signed-zero-strict-equality",
+    "object-identity-same",
+    "object-identity-distinct",
+    "symbol-identity-same",
+    "symbol-identity-distinct",
+    "undefined-strict-equality",
+    "null-strict-equality",
+    "undefined-null-strict-equality",
+    "boolean-strict-equality-same",
+    "boolean-strict-equality-distinct",
+    "positive-infinity-strict-equality",
+    "negative-infinity-strict-equality",
+    "opposite-infinity-strict-equality",
+    "string-strict-equality-same",
+    "string-strict-equality-distinct",
+    "bigint-strict-equality-same",
+    "bigint-strict-equality-distinct",
+    "type-transition-number-to-string",
+    "exception-passthrough",
+    "call-boundary",
+    "host-call-generic-add",
+    "host-call-echo",
+    "host-call-reentrant",
+    "host-call-throw",
+}
+
 NATIVE_TO_ORACLE_FIELDS = {
     "branch_equal_result_bits": ("branch_equal", 7.0),
     "branch_unequal_result_bits": ("branch_unequal", 8.0),
@@ -84,6 +118,69 @@ def expect_number(observation: Any, *, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RuntimeError(f"OGM-31 {name} return is not numeric: {value!r}")
     return float(value)
+
+
+
+def validate_semantic_case_evidence(
+    semantic: Any,
+    *,
+    candidate: str,
+) -> list[dict[str, Any]]:
+    """Validate every serialized semantic result, not only the aggregate flag."""
+    if not isinstance(semantic, dict) or semantic.get("every_case_matches") is not True:
+        raise RuntimeError(f"{candidate}: native Value semantic matrix did not pass")
+
+    cases = semantic.get("cases")
+    if not isinstance(cases, list) or len(cases) != len(EXPECTED_SEMANTIC_CASES):
+        raise RuntimeError(
+            f"{candidate}: expected exactly {len(EXPECTED_SEMANTIC_CASES)} semantic cases"
+        )
+    if any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in cases):
+        raise RuntimeError(f"{candidate}: native Value semantic case list is malformed")
+
+    names = [item["name"] for item in cases]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise RuntimeError(f"{candidate}: semantic case names are duplicated: {duplicates}")
+    if set(names) != EXPECTED_SEMANTIC_CASES:
+        missing = sorted(EXPECTED_SEMANTIC_CASES - set(names))
+        unexpected = sorted(set(names) - EXPECTED_SEMANTIC_CASES)
+        raise RuntimeError(
+            f"{candidate}: semantic case set differs (missing={missing}, unexpected={unexpected})"
+        )
+
+    for item in cases:
+        case_name = item["name"]
+        expected_completion = item.get("expected_completion")
+        actual_completion = item.get("actual_completion")
+        if not isinstance(expected_completion, str) or not expected_completion:
+            raise RuntimeError(f"{candidate}: {case_name} expected completion is missing")
+        if actual_completion != expected_completion:
+            raise RuntimeError(
+                f"{candidate}: {case_name} actual completion differs from expected completion"
+            )
+
+        expected_trace = item.get("expected_host_trace")
+        actual_trace = item.get("actual_host_trace")
+        if not isinstance(expected_trace, list) or actual_trace != expected_trace:
+            raise RuntimeError(
+                f"{candidate}: {case_name} actual host trace differs from expected host trace"
+            )
+
+        callbacks = item.get("native_callbacks")
+        collections = item.get("forced_collections")
+        if not isinstance(callbacks, int) or isinstance(callbacks, bool) or callbacks <= 0:
+            raise RuntimeError(f"{candidate}: {case_name} native callback count is invalid")
+        if not isinstance(collections, int) or isinstance(collections, bool) or collections < 0:
+            raise RuntimeError(f"{candidate}: {case_name} forced collection count is invalid")
+        if item.get("matches") is not True:
+            raise RuntimeError(f"{candidate}: {case_name} semantic case did not match")
+        if item.get("native_reference_identity_preserved") is not True:
+            raise RuntimeError(f"{candidate}: {case_name} did not preserve reference identity")
+        if item.get("native_store_load_transition") is not True:
+            raise RuntimeError(f"{candidate}: {case_name} native Value transition did not pass")
+
+    return cases
 
 
 def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, Any]:
@@ -157,31 +254,10 @@ def validate_reports(native: dict[str, Any], dual: dict[str, Any]) -> dict[str, 
         if execution.get("symbol_handle_survived_forced_collection") is not True:
             raise RuntimeError(f"{name}: Symbol HostHandle did not survive forced collection")
 
-        value_semantics = candidate.get("native_value_semantics")
-        if not isinstance(value_semantics, dict) or value_semantics.get("every_case_matches") is not True:
-            raise RuntimeError(f"{name}: native Value semantic matrix did not pass")
-        semantic_case_items = value_semantics.get("cases")
-        if (
-            not isinstance(semantic_case_items, list)
-            or any(
-                not isinstance(item, dict) or not isinstance(item.get("name"), str)
-                for item in semantic_case_items
-            )
-        ):
-            raise RuntimeError(f"{name}: native Value semantic case list is malformed")
-        semantic_case_names = [item["name"] for item in semantic_case_items]
-        duplicate_case_names = sorted(
-            {
-                case_name
-                for case_name in semantic_case_names
-                if semantic_case_names.count(case_name) > 1
-            }
+        semantic_case_items = validate_semantic_case_evidence(
+            candidate.get("native_value_semantics"),
+            candidate=name,
         )
-        if duplicate_case_names:
-            raise RuntimeError(
-                f"{name}: native Value semantic case names are duplicated: "
-                f"{duplicate_case_names}"
-            )
         semantic_cases = {item["name"]: item for item in semantic_case_items}
         for case_name, expected_equal in STRICT_EQUALITY_CASES.items():
             equality_case = semantic_cases.get(case_name)
