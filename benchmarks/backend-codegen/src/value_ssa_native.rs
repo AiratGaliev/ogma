@@ -6659,27 +6659,26 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
         // local arrays or stack-address materialization. Ignore push/pop
         // callee-save bookkeeping and count actual stack-memory moves.
         if !matches!(mnemonic, "push" | "pop" | "lea") {
-            if let Some((address, width)) = first_stack {
-                if mnemonic.starts_with("mov") || mnemonic.starts_with("vmov") {
-                    allocator_spill_stores += 1;
-                    allocator_spill_slots
-                        .entry(address)
-                        .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
-                        .or_insert(width);
-                }
+            if let Some((address, width)) = first_stack
+                && (mnemonic.starts_with("mov") || mnemonic.starts_with("vmov"))
+            {
+                allocator_spill_stores += 1;
+                allocator_spill_slots
+                    .entry(address)
+                    .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
+                    .or_insert(width);
             }
-            if let Some((address, width)) = second_stack {
-                if mnemonic.starts_with("mov")
+            if let Some((address, width)) = second_stack
+                && (mnemonic.starts_with("mov")
                     || mnemonic.starts_with("vmov")
                     || mnemonic.starts_with("cmp")
-                    || mnemonic.starts_with("test")
-                {
-                    allocator_spill_loads += 1;
-                    allocator_spill_slots
-                        .entry(address)
-                        .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
-                        .or_insert(width);
-                }
+                    || mnemonic.starts_with("test"))
+            {
+                allocator_spill_loads += 1;
+                allocator_spill_slots
+                    .entry(address)
+                    .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
+                    .or_insert(width);
             }
         }
 
