@@ -2905,7 +2905,7 @@ fn run_native_handle_dispatch_validation(
 
     drop(value_storage);
     for handle in handles {
-        heap.release_host_handle(handle)?;
+        batch.heap.release_host_handle(handle)?;
     }
     let released = heap.collect()?;
     if released.live_objects_after != 0 || released.reclaimed_objects != objects.len() {
@@ -4020,7 +4020,7 @@ fn candidate_value_for_semantic(
             }
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
-            let token = heap.encode_host_handle_token(handle)?;
+            let token = batch.heap.encode_host_handle_token(handle)?;
             let candidate_value = match value {
                 SemanticValue::String(_) => CandidateValue::StringRef(token),
                 SemanticValue::BigInt(_) => CandidateValue::BigIntRef(token),
@@ -4402,22 +4402,28 @@ fn dispatch_native_semantic_inputs(
         reference_tokens,
     })
 }
-fn finish_native_runtime_add_batch(
+struct NativeRuntimeAddBatch<'a> {
     candidate: Candidate,
-    case: &SemanticCase,
-    output_storage: &[u64],
-    heap: &mut GcHeap,
-    references: &mut BTreeMap<u64, SemanticReference>,
-    retained_handles: &mut Vec<ogma_gc_comparison_proof::HostHandle>,
+    case: &'a SemanticCase,
+    output_storage: &'a [u64],
+    heap: &'a mut GcHeap,
+    references: &'a mut BTreeMap<u64, SemanticReference>,
+    retained_handles: &'a mut Vec<ogma_gc_comparison_proof::HostHandle>,
     input_handle_count: usize,
     iterations: u64,
     result_handles_per_call: usize,
+}
+
+fn finish_native_runtime_add_batch(
+    mut batch: NativeRuntimeAddBatch<'_>,
     batch_name: &str,
 ) -> Result<(usize, bool)> {
-    let encoded = decode_candidate_value(candidate.runtime, output_storage, 0)?;
+    let candidate = batch.candidate;
+    let case = batch.case;
+    let encoded = decode_candidate_value(candidate.runtime, batch.output_storage, 0)?;
     match &case.expected {
         SemanticCompletion::Normal(expected) => {
-            if !candidate_value_matches_semantic(encoded, expected, references, heap)? {
+            if !candidate_value_matches_semantic(encoded, expected, batch.references, batch.heap)? {
                 bail!(
                     "{} {} native Runtime js.add {} stored an incorrect candidate Value",
                     candidate.name(),
@@ -4438,11 +4444,11 @@ fn finish_native_runtime_add_batch(
         }
     }
 
-    let output_handle_count = retained_handles
+    let output_handle_count = batch.retained_handles
         .len()
-        .checked_sub(input_handle_count)
+        .checked_sub(batch.input_handle_count)
         .context("native Runtime js.add result handle vector shrank below its input prefix")?;
-    let expected_output_handle_count = result_handles_per_call * iterations as usize;
+    let expected_output_handle_count = batch.result_handles_per_call * batch.iterations as usize;
     if output_handle_count != expected_output_handle_count {
         bail!(
             "{} {} native Runtime js.add {} allocated {} result handles, expected {}",
@@ -4454,10 +4460,10 @@ fn finish_native_runtime_add_batch(
         );
     }
 
-    let output_handles = retained_handles.split_off(input_handle_count);
+    let output_handles = batch.retained_handles.split_off(batch.input_handle_count);
     for handle in output_handles {
         let token = heap.encode_host_handle_token(handle)?;
-        if references.remove(&token).is_none() {
+        if batch.references.remove(&token).is_none() {
             bail!(
                 "{} {} native Runtime js.add could not find a newly allocated result handle",
                 candidate.name(),
@@ -4470,8 +4476,8 @@ fn finish_native_runtime_add_batch(
         return Ok((output_handle_count, false));
     }
 
-    let cleanup = heap.collect()?;
-    if cleanup.live_objects_after != input_handle_count as u64
+    let cleanup = batch.heap.collect()?;
+    if cleanup.live_objects_after != batch.input_handle_count as u64
         || cleanup.reclaimed_objects != expected_output_handle_count
     {
         bail!(
@@ -4565,15 +4571,17 @@ fn measure_native_runtime_add_case(
             );
         }
         let (allocated, collected) = finish_native_runtime_add_batch(
-            candidate,
-            case,
-            &output_storage,
-            &mut heap,
-            &mut references,
-            &mut retained_handles,
-            input_handle_count,
-            iterations,
-            result_handles_per_call,
+            NativeRuntimeAddBatch {
+                candidate,
+                case,
+                output_storage: &output_storage,
+                heap: &mut heap,
+                references: &mut references,
+                retained_handles: &mut retained_handles,
+                input_handle_count,
+                iterations,
+                result_handles_per_call,
+            },
             "warmup",
         )?;
         result_handles_allocated_total += allocated;
@@ -4598,15 +4606,17 @@ fn measure_native_runtime_add_case(
             );
         }
         let (allocated, collected) = finish_native_runtime_add_batch(
-            candidate,
-            case,
-            &output_storage,
-            &mut heap,
-            &mut references,
-            &mut retained_handles,
-            input_handle_count,
-            iterations,
-            result_handles_per_call,
+            NativeRuntimeAddBatch {
+                candidate,
+                case,
+                output_storage: &output_storage,
+                heap: &mut heap,
+                references: &mut references,
+                retained_handles: &mut retained_handles,
+                input_handle_count,
+                iterations,
+                result_handles_per_call,
+            },
             "measurement",
         )?;
         result_handles_allocated_total += allocated;
