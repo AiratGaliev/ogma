@@ -90,6 +90,7 @@ NATIVE_RUNTIME_ADD_CASES = {
     "bigint-add",
     "object-to-primitive-add",
     "symbol-add-throws",
+    "bigint-to-number-throws",
 }
 
 NATIVE_TO_ORACLE_FIELDS = {
