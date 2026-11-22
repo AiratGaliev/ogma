@@ -110,6 +110,7 @@ def make_reports():
                     "operation": "Number(19) + Number(23)",
                     "iterations_per_sample": 1000,
                     "warmup_rounds": 3,
+                    "native_calls_total": 104000,
                     "throughput": {
                         "p50_ns": 80.0,
                         "p95_ns": 90.0,
@@ -505,6 +506,19 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "symbol"
         ] = "not-generated"
         with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_native_runtime_add_measurement_summary_and_call_count_drift(self):
+        native, dual = make_reports()
+        measurement = native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
+        measurement["native_calls_total"] -= 1
+        with self.assertRaisesRegex(RuntimeError, "executed call count"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        measurement = native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
+        measurement["throughput"]["p50_ns"] = 81.0
+        with self.assertRaisesRegex(RuntimeError, "p50_ns does not match its raw samples"):
             proof.validate_reports(native, dual)
 
     def test_rejects_missing_or_incomplete_native_runtime_add_measurement(self):
