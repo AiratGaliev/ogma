@@ -748,6 +748,8 @@ struct NativeValueSemanticCaseEvidence {
     native_strict_equal_executed: bool,
     native_reference_value_comparison_executed: bool,
     native_store_load_transition: bool,
+    native_runtime_add_executed: bool,
+    native_runtime_add_calls: usize,
     matches: bool,
 }
 
@@ -756,6 +758,7 @@ struct NativeSemanticDispatchOptions {
     invoke_aot_host: bool,
     invoke_call_boundary: bool,
     invoke_host_echo: bool,
+    invoke_semantic_add: bool,
     perform_native_transition: bool,
     strict_equal_slots: Option<(usize, usize)>,
 }
@@ -768,6 +771,8 @@ struct NativeSemanticDispatchResult {
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_strict_equal_result: Option<bool>,
     native_reference_value_comparison_executed: bool,
+    runtime_add_completion: Option<SemanticCompletion>,
+    native_runtime_add_calls: usize,
     reference_tokens: Vec<Option<u64>>,
 }
 
@@ -3906,6 +3911,37 @@ fn candidate_value_for_semantic(
     })
 }
 
+fn candidate_value_matches_semantic(
+    encoded: CandidateValue,
+    expected: &SemanticValue,
+    references: &BTreeMap<u64, SemanticReference>,
+    heap: &GcHeap,
+) -> Result<bool> {
+    let matches = match (encoded, expected) {
+        (CandidateValue::Undefined, SemanticValue::Undefined)
+        | (CandidateValue::Null, SemanticValue::Null) => true,
+        (CandidateValue::Boolean(left), SemanticValue::Boolean(right)) => left == *right,
+        (CandidateValue::Number(left), SemanticValue::Number(right)) => {
+            canonical_number_bits(f64::from_bits(left))
+                == canonical_number_bits(f64::from_bits(*right))
+        }
+        (CandidateValue::StringRef(token), SemanticValue::String(_))
+        | (CandidateValue::BigIntRef(token), SemanticValue::BigInt(_))
+        | (CandidateValue::ObjectRef(token), SemanticValue::Object { .. })
+        | (CandidateValue::SymbolRef(token), SemanticValue::Symbol(_)) => {
+            let reference = references
+                .get(&token)
+                .context("native Runtime helper output handle is absent from the handle map")?;
+            let resolved = heap
+                .resolve_host_handle_token(token)
+                .context("native Runtime helper output handle is stale after allocation")?;
+            resolved == reference.reference && reference.value == *expected
+        }
+        _ => false,
+    };
+    Ok(matches)
+}
+
 fn candidate_reference_token(value: CandidateValue) -> Option<u64> {
     match value {
         CandidateValue::StringRef(token)
@@ -3982,6 +4018,7 @@ fn dispatch_native_semantic_inputs(
     inputs: &[SemanticValue],
     options: NativeSemanticDispatchOptions,
     value_move: NativeValueMove,
+    semantic_add: NativeSemanticAdd,
 ) -> Result<NativeSemanticDispatchResult> {
     let mut heap = GcHeap::new(CollectorKind::MarkSweep);
     let mut references = BTreeMap::new();
@@ -4004,7 +4041,84 @@ fn dispatch_native_semantic_inputs(
         )?);
     }
 
-    let reference_count = references.len();
+    let (runtime_add_completion, native_runtime_add_calls, runtime_add_forced_collections) =
+        if options.invoke_semantic_add {
+            if inputs.len() < 2 {
+                bail!("{} semantic add requires two input Values", candidate.name());
+            }
+            let left = native_value_argument_for_slot(candidate, &storage, 0)?;
+            let right = native_value_argument_for_slot(candidate, &storage, 1)?;
+            let mut output_storage = match candidate.runtime {
+                RuntimeLayout::Tagged16 => vec![0_u64; 2],
+                RuntimeLayout::NanBox8 => vec![0_u64; 1],
+            };
+            let mut runtime_context = NativeRuntimeAddContext {
+                runtime: candidate.runtime,
+                heap: &mut heap as *mut GcHeap,
+                references: &mut references as *mut BTreeMap<u64, SemanticReference>,
+                retained_handles: &mut retained_handles
+                    as *mut Vec<ogma_gc_comparison_proof::HostHandle>,
+                completion: None,
+                forced_collections: 0,
+                helper_calls: 0,
+            };
+            let callback = native_semantic_add_callback as *const () as usize as u64;
+            let context_pointer =
+                &mut runtime_context as *mut NativeRuntimeAddContext as usize as u64;
+            let output_pointer = output_storage.as_mut_ptr() as usize as u64;
+            // SAFETY: candidate Values, helper context, callback and output slot
+            // all remain live for the synchronous generated native invocation.
+            let status = unsafe {
+                semantic_add(left, right, callback, context_pointer, output_pointer)
+            };
+            let completion = runtime_context
+                .completion
+                .take()
+                .context("generated native js.add did not enter the M0 Runtime helper")?;
+            let expected_status = match completion {
+                SemanticCompletion::Normal(_) => 0,
+                SemanticCompletion::Throw { .. } => 1,
+            };
+            if status != expected_status || runtime_context.helper_calls != 1 {
+                bail!(
+                    "{} generated native js.add completion/helper mismatch (status={}, expected={}, calls={})",
+                    candidate.name(),
+                    status,
+                    expected_status,
+                    runtime_context.helper_calls
+                );
+            }
+            if let SemanticCompletion::Normal(ref value) = completion {
+                let encoded = decode_candidate_value(candidate.runtime, &output_storage, 0)?;
+                if !candidate_value_matches_semantic(
+                    encoded,
+                    value,
+                    &references,
+                    &heap,
+                )? {
+                    bail!(
+                        "{} generated native js.add did not store its semantic result in the candidate Value layout",
+                        candidate.name()
+                    );
+                }
+            } else {
+                let encoded = decode_candidate_value(candidate.runtime, &output_storage, 0)?;
+                if encoded != CandidateValue::Undefined {
+                    bail!(
+                        "{} generated native js.add did not clear its output slot on Throw",
+                        candidate.name()
+                    );
+                }
+            }
+            (
+                Some(completion),
+                runtime_context.helper_calls,
+                runtime_context.forced_collections,
+            )
+        } else {
+            (None, 0, 0)
+        };
+
     let mut reference_equality_context = NativeReferenceEqualityCallbackContext {
         runtime: candidate.runtime,
         heap: &mut heap as *mut GcHeap,
@@ -4133,6 +4247,7 @@ fn dispatch_native_semantic_inputs(
     drop(context);
     drop(aot_table);
 
+    let reference_count = retained_handles.len();
     for handle in retained_handles {
         heap.release_host_handle(handle)?;
     }
@@ -4147,12 +4262,16 @@ fn dispatch_native_semantic_inputs(
     }
     Ok(NativeSemanticDispatchResult {
         observed,
-        callbacks,
-        forced_collections: forced_collections + reference_equality_collections,
+        callbacks: callbacks + native_runtime_add_calls,
+        forced_collections: forced_collections
+            + reference_equality_collections
+            + runtime_add_forced_collections,
         aot_host_call,
         native_host_callback: context_native_host_callback,
         native_strict_equal_result,
         native_reference_value_comparison_executed,
+        runtime_add_completion,
+        native_runtime_add_calls,
         reference_tokens,
     })
 }
@@ -4174,6 +4293,11 @@ fn run_native_value_semantics(
         *library
             .get::<NativeStrictEqual>(b"ogma_value_strict_equal\0")
             .context("generated native strict-equality entry point missing")?
+    };
+    let semantic_add = unsafe {
+        *library
+            .get::<NativeSemanticAdd>(b"ogma_value_semantic_add\0")
+            .context("generated native Runtime js.add entry point missing")?
     };
     let mut evidence = Vec::new();
     let mut total_callbacks = 0;
@@ -4216,10 +4340,19 @@ fn run_native_value_semantics(
                 invoke_aot_host,
                 invoke_call_boundary,
                 invoke_host_echo,
+                invoke_semantic_add: matches!(
+                    case.name,
+                    "number-add"
+                        | "string-concat"
+                        | "bigint-add"
+                        | "object-to-primitive-add"
+                        | "symbol-add-throws"
+                ),
                 perform_native_transition: case.name == "type-transition-number-to-string",
                 strict_equal_slots,
             },
             value_move,
+            semantic_add,
         )?;
         let NativeSemanticDispatchResult {
             observed,
@@ -4229,9 +4362,15 @@ fn run_native_value_semantics(
             native_host_callback,
             native_strict_equal_result,
             native_reference_value_comparison_executed,
+            runtime_add_completion,
+            native_runtime_add_calls,
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
+        if let Some(runtime_add) = runtime_add_completion {
+            actual = runtime_add;
+            actual_host_trace.clear();
+        }
         if let Some(host_callback) = &native_host_callback {
             actual = SemanticCompletion::Normal(SemanticValue::Number(host_callback.result_bits));
             actual_host_trace = vec![host_callback.trace.clone()];
@@ -4358,6 +4497,24 @@ fn run_native_value_semantics(
                     (&observed[0], &observed[1]),
                     (SemanticValue::String(left), SemanticValue::String(right)) if left == right
                 ));
+        let expects_native_runtime_add = matches!(
+            case.name,
+            "number-add"
+                | "string-concat"
+                | "bigint-add"
+                | "object-to-primitive-add"
+                | "symbol-add-throws"
+        );
+        if (runtime_add_completion.is_some() != expects_native_runtime_add)
+            || (expects_native_runtime_add && native_runtime_add_calls != 1)
+            || (!expects_native_runtime_add && native_runtime_add_calls != 0)
+        {
+            bail!(
+                "{} {} native Runtime js.add execution evidence is inconsistent",
+                candidate.name(),
+                case.name
+            );
+        }
         let matches = actual == case.expected
             && actual_host_trace == case.expected_host_trace
             && native_reference_identity_preserved
@@ -4393,6 +4550,8 @@ fn run_native_value_semantics(
             native_strict_equal_executed: native_strict_equal_result.is_some(),
             native_reference_value_comparison_executed,
             native_store_load_transition,
+            native_runtime_add_executed: runtime_add_completion.is_some(),
+            native_runtime_add_calls,
             matches,
         });
     }
