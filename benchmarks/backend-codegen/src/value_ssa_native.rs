@@ -4444,7 +4444,8 @@ fn finish_native_runtime_add_batch(
         }
     }
 
-    let output_handle_count = batch.retained_handles
+    let output_handle_count = batch
+        .retained_handles
         .len()
         .checked_sub(batch.input_handle_count)
         .context("native Runtime js.add result handle vector shrank below its input prefix")?;
