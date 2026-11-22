@@ -3061,7 +3061,7 @@ unsafe extern "C" fn native_semantic_add_callback(
         Ok(value) => value,
         Err(status) => return 20 + status,
     };
-    let completion = semantic_add(&left, &right);
+    let completion = runtime_add(&left, &right);
 
     let words = match context.runtime {
         RuntimeLayout::Tagged16 => 2,
@@ -3494,6 +3494,121 @@ fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompleti
         _ => SemanticCompletion::Throw {
             name: "TypeError",
             value: None,
+        },
+    }
+}
+
+/// M0 Runtime operation implementation reached by generated Cranelift
+/// code through the candidate Value ABI. Kept independent from the semantic
+/// oracle below so differential checks cannot validate an operation by
+/// calling the same implementation twice.
+fn runtime_to_primitive(value: &SemanticValue) -> std::result::Result<SemanticValue, &'static str> {
+    match value {
+        SemanticValue::Object { primitive, .. } => {
+            Ok(SemanticValue::String(primitive.clone()))
+        }
+        SemanticValue::Undefined
+        | SemanticValue::Null
+        | SemanticValue::Boolean(_)
+        | SemanticValue::Number(_)
+        | SemanticValue::String(_)
+        | SemanticValue::BigInt(_)
+        | SemanticValue::Symbol(_) => Ok(value.clone()),
+    }
+}
+
+fn runtime_to_string(value: &SemanticValue) -> std::result::Result<String, &'static str> {
+    match value {
+        SemanticValue::Undefined => Ok(String::from("undefined")),
+        SemanticValue::Null => Ok(String::from("null")),
+        SemanticValue::Boolean(boolean) => Ok(if *boolean { "true" } else { "false" }.to_owned()),
+        SemanticValue::Number(bits) => {
+            let number = f64::from_bits(*bits);
+            if number.is_nan() {
+                Ok(String::from("NaN"))
+            } else if number == f64::INFINITY {
+                Ok(String::from("Infinity"))
+            } else if number == f64::NEG_INFINITY {
+                Ok(String::from("-Infinity"))
+            } else if number == 0.0 {
+                Ok(String::from("0"))
+            } else {
+                Ok(number.to_string())
+            }
+        }
+        SemanticValue::String(string) => Ok(string.clone()),
+        SemanticValue::BigInt(integer) => Ok(integer.to_string()),
+        SemanticValue::Object { .. } => Err("TypeError: Object ToPrimitive was not applied"),
+        SemanticValue::Symbol(_) => Err("TypeError"),
+    }
+}
+
+fn runtime_to_number(value: &SemanticValue) -> std::result::Result<f64, &'static str> {
+    match value {
+        SemanticValue::Undefined => Ok(f64::NAN),
+        SemanticValue::Null => Ok(0.0),
+        SemanticValue::Boolean(boolean) => Ok(if *boolean { 1.0 } else { 0.0 }),
+        SemanticValue::Number(bits) => Ok(f64::from_bits(*bits)),
+        SemanticValue::String(string) => {
+            let trimmed = string.trim();
+            if trimmed.is_empty() {
+                Ok(0.0)
+            } else {
+                Ok(trimmed.parse::<f64>().unwrap_or(f64::NAN))
+            }
+        }
+        SemanticValue::BigInt(_) => Err("TypeError"),
+        SemanticValue::Object { .. } => Err("TypeError: Object ToPrimitive was not applied"),
+        SemanticValue::Symbol(_) => Err("TypeError"),
+    }
+}
+
+fn runtime_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletion {
+    let left = match runtime_to_primitive(left) {
+        Ok(value) => value,
+        Err(name) => return SemanticCompletion::Throw { name, value: None },
+    };
+    let right = match runtime_to_primitive(right) {
+        Ok(value) => value,
+        Err(name) => return SemanticCompletion::Throw { name, value: None },
+    };
+
+    match (&left, &right) {
+        (SemanticValue::Symbol(_), _) | (_, SemanticValue::Symbol(_)) => {
+            SemanticCompletion::Throw {
+                name: "TypeError",
+                value: None,
+            }
+        }
+        (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) => {
+            match left.checked_add(*right) {
+                Some(sum) => SemanticCompletion::Normal(SemanticValue::BigInt(sum)),
+                None => SemanticCompletion::Throw {
+                    name: "RangeError: M0 BigInt exceeds signed 128-bit payload",
+                    value: None,
+                },
+            }
+        }
+        (SemanticValue::BigInt(_), _) | (_, SemanticValue::BigInt(_)) => {
+            SemanticCompletion::Throw {
+                name: "TypeError",
+                value: None,
+            }
+        }
+        (SemanticValue::String(_), _) | (_, SemanticValue::String(_)) => {
+            match (runtime_to_string(&left), runtime_to_string(&right)) {
+                (Ok(left), Ok(right)) => SemanticCompletion::Normal(SemanticValue::String(
+                    format!("{left}{right}"),
+                )),
+                (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw {
+                    name,
+                    value: None,
+                },
+            }
+        }
+        _ => match (runtime_to_number(&left), runtime_to_number(&right)) {
+            (Ok(left), Ok(right)) => SemanticCompletion::Normal(semantic_number(left + right)),
+            (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw { name, value: None },
         },
     }
 }
