@@ -4075,7 +4075,7 @@ fn dispatch_native_semantic_inputs(
                 .completion
                 .take()
                 .context("generated native js.add did not enter the M0 Runtime helper")?;
-            let expected_status = match completion {
+            let expected_status = match &completion {
                 SemanticCompletion::Normal(_) => 0,
                 SemanticCompletion::Throw { .. } => 1,
             };
