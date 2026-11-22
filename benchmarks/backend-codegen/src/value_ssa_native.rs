@@ -4450,15 +4450,7 @@ fn measure_native_number_add(
     let output_pointer = output_storage.as_mut_ptr() as usize as u64;
     let expected = SemanticCompletion::Normal(semantic_number(42.0));
 
-    let invoke = || unsafe {
-        semantic_add(
-            left,
-            right,
-            callback,
-            context_pointer,
-            output_pointer,
-        )
-    };
+    let invoke = || unsafe { semantic_add(left, right, callback, context_pointer, output_pointer) };
     for _ in 0..warmups {
         let mut last_status = invoke();
         for _ in 1..iterations {
