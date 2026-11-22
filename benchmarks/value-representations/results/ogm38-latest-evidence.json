@@ -33,7 +33,7 @@
     "full_native_report_uncompressed_sha256": "938a8b2c1d81bbe81d7dd2aa212849442a5e4a749a16ed453e5ea9c6943e0c06",
     "full_native_report_gzip_sha256": "746386cadf30fcb412ccc77a7fd7a33d631432854463580eb378e66ee63f45f0",
     "differential_report_sha256": "5c17d9e29d24dbe1faf5544c48aca958c7103e110a60ac5de2b8b770d1be6da7",
-    "primary_projection_sha256": "18de679735ae6e80b60ab70bfe68a490ba3e5668517b9306818ea87db7404802",
+    "primary_projection_sha256": "247ed726c2f24366d9e6cceda4ccdc65ca59e931188faa2dfa9abe679c54235e",
     "runtime_projection_gzip_sha256": "3730d8ae29f28265f7d1601a46ce049769a802de1ee6ee8718e7c34c617cdbde",
     "raw_delta_base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
     "raw_delta_xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
