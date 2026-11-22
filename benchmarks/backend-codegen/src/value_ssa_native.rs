@@ -6397,12 +6397,18 @@ fn run_native_pressure_validation(
     }
 
     let metrics = native_code_metrics(object_path, "ogma_value_pressure")?;
-    if metrics.stack_relative_stores == 0 || metrics.stack_relative_loads == 0 {
+    if metrics.allocator_spill_stores == 0
+        || metrics.allocator_spill_loads == 0
+        || metrics.allocator_spill_slots == 0
+        || metrics.allocator_spill_slot_bytes == 0
+    {
         bail!(
-            "{} generated pressure function did not produce measurable spill stores and reloads (stores={}, loads={})",
+            "{} generated pressure function did not produce measurable Cranelift allocator spill/reload traffic (spill_stores={}, spill_loads={}, slots={}, slot_bytes={})",
             candidate.name(),
-            metrics.stack_relative_stores,
-            metrics.stack_relative_loads
+            metrics.allocator_spill_stores,
+            metrics.allocator_spill_loads,
+            metrics.allocator_spill_slots,
+            metrics.allocator_spill_slot_bytes
         );
     }
     Ok(metrics)
