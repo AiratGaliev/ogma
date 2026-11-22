@@ -2952,6 +2952,149 @@ struct NativeReferenceEqualityCallbackContext {
     forced_collections: usize,
 }
 
+/// Opaque host state for the M0 Runtime operation helper called directly by
+/// Cranelift-generated candidate code. The pointers remain valid for the
+/// synchronous native call and are never retained beyond it.
+struct NativeRuntimeAddContext {
+    runtime: RuntimeLayout,
+    heap: *mut GcHeap,
+    references: *mut BTreeMap<u64, SemanticReference>,
+    retained_handles: *mut Vec<ogma_gc_comparison_proof::HostHandle>,
+    completion: Option<SemanticCompletion>,
+    forced_collections: usize,
+    helper_calls: usize,
+}
+
+fn decode_runtime_add_operand(
+    context: &mut NativeRuntimeAddContext,
+    tag: u64,
+    payload: u64,
+) -> std::result::Result<SemanticValue, i32> {
+    if context.heap.is_null() || context.references.is_null() {
+        return Err(1);
+    }
+    let normalized_tag = match context.runtime {
+        RuntimeLayout::Tagged16 => tag,
+        RuntimeLayout::NanBox8 => match tag {
+            NANBOX_UNDEFINED_TAG => UNDEFINED_TAG,
+            NANBOX_NULL_TAG => NULL_TAG,
+            NANBOX_BOOLEAN_TAG => BOOLEAN_TAG,
+            NANBOX_STRING_TAG => STRING_TAG,
+            NANBOX_BIGINT_TAG => BIGINT_TAG,
+            NANBOX_OBJECT_TAG => OBJECT_TAG,
+            NANBOX_SYMBOL_TAG => SYMBOL_TAG,
+            _ => NUMBER_TAG,
+        },
+    };
+    match normalized_tag {
+        UNDEFINED_TAG if payload == 0 => Ok(SemanticValue::Undefined),
+        NULL_TAG if payload == 0 => Ok(SemanticValue::Null),
+        BOOLEAN_TAG if payload <= 1 => Ok(SemanticValue::Boolean(payload != 0)),
+        NUMBER_TAG => {
+            let bits = match context.runtime {
+                RuntimeLayout::Tagged16 => payload,
+                RuntimeLayout::NanBox8 => (tag << NAN_TAG_SHIFT) | payload,
+            };
+            let number = f64::from_bits(bits);
+            if number.is_nan() && bits != CANONICAL_NAN_BITS {
+                return Err(2);
+            }
+            Ok(SemanticValue::Number(canonical_number_bits(number)))
+        }
+        STRING_TAG | BIGINT_TAG | OBJECT_TAG | SYMBOL_TAG if payload != 0 => {
+            let heap = unsafe { &mut *context.heap };
+            let references = unsafe { &*context.references };
+            let reference = references.get(&payload).ok_or(3)?;
+            heap.collect().map_err(|_| 4)?;
+            context.forced_collections += 1;
+            match heap.resolve_host_handle_token(payload) {
+                Ok(actual) if actual == reference.reference && heap.is_alive(actual) => {
+                    Ok(reference.value.clone())
+                }
+                _ => Err(5),
+            }
+        }
+        _ => Err(6),
+    }
+}
+
+unsafe extern "C" fn native_semantic_add_callback(
+    context_pointer: u64,
+    left_tag: u64,
+    left_payload: u64,
+    right_tag: u64,
+    right_payload: u64,
+    output_pointer: u64,
+) -> i32 {
+    if context_pointer == 0 || output_pointer == 0 {
+        return 1;
+    }
+    // SAFETY: the generated candidate function calls this callback
+    // synchronously with a unique pointer to NativeRuntimeAddContext.
+    let context = unsafe { &mut *(context_pointer as *mut NativeRuntimeAddContext) };
+    context.helper_calls += 1;
+
+    let left = match decode_runtime_add_operand(context, left_tag, left_payload) {
+        Ok(value) => value,
+        Err(status) => return 10 + status,
+    };
+    let right = match decode_runtime_add_operand(context, right_tag, right_payload) {
+        Ok(value) => value,
+        Err(status) => return 20 + status,
+    };
+    let completion = semantic_add(&left, &right);
+
+    let words = match context.runtime {
+        RuntimeLayout::Tagged16 => 2,
+        RuntimeLayout::NanBox8 => 1,
+    };
+    // SAFETY: the caller allocates an output slot with the exact candidate
+    // layout and keeps it alive until the generated native function returns.
+    let output = unsafe { std::slice::from_raw_parts_mut(output_pointer as *mut u64, words) };
+    output.fill(0);
+
+    match completion {
+        SemanticCompletion::Normal(value) => {
+            if context.retained_handles.is_null() {
+                return 2;
+            }
+            // SAFETY: the runtime context points to the live per-case handle
+            // vector and reference map owned by dispatch_native_semantic_inputs.
+            let heap = unsafe { &mut *context.heap };
+            let references = unsafe { &mut *context.references };
+            let retained = unsafe { &mut *context.retained_handles };
+            let encoded = match candidate_value_for_semantic(
+                &value,
+                heap,
+                references,
+                retained,
+            ) {
+                Ok(value) => value,
+                Err(_) => return 3,
+            };
+            if encode_candidate_value(context.runtime, output, 0, encoded).is_err() {
+                return 4;
+            }
+            context.completion = Some(SemanticCompletion::Normal(value));
+            0
+        }
+        thrown @ SemanticCompletion::Throw { .. } => {
+            if encode_candidate_value(
+                context.runtime,
+                output,
+                0,
+                CandidateValue::Undefined,
+            )
+            .is_err()
+            {
+                return 5;
+            }
+            context.completion = Some(thrown);
+            1
+        }
+    }
+}
+
 // Generated native strict equality calls this M0 helper only for String and
 // BigInt payloads. These are primitive values, so equality is by contents,
 // not by the generation-checked host-handle token used to keep them alive.
