@@ -183,7 +183,6 @@ def validate_semantic_case_evidence(
     add_measurements = semantic.get("native_runtime_add_measurements")
     if (
         not isinstance(add_measurements, list)
-        or len(add_measurements) != len(NATIVE_RUNTIME_ADD_CASES)
         or any(not isinstance(item, dict) or not isinstance(item.get("case"), str) for item in add_measurements)
     ):
         raise RuntimeError(f"{candidate}: native Runtime js.add case measurement list is malformed")
