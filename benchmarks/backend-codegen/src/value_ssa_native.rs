@@ -4829,7 +4829,7 @@ fn run_native_shadow_root_validation(
             "{} OGM-27 entry safepoint failed to retain candidate roots (runtime_live={}, candidate_live={}, roots_scanned={}, candidate_handles_survived={})",
             candidate.name(),
             entry.objects_live,
-            candidate_entry_collection.live_objects,
+            candidate_entry_collection.live_objects_after,
             entry.roots_scanned,
             candidate_entry_handles_survived
         );
@@ -4860,7 +4860,7 @@ fn run_native_shadow_root_validation(
             "{} OGM-27 call-boundary safepoint failed to retain candidate roots (runtime_live={}, candidate_live={}, roots_scanned={}, candidate_handles_survived={})",
             candidate.name(),
             call_boundary.objects_live,
-            candidate_call_collection.live_objects,
+            candidate_call_collection.live_objects_after,
             call_boundary.roots_scanned,
             candidate_call_handles_survived
         );
@@ -4892,7 +4892,7 @@ fn run_native_shadow_root_validation(
     }
     let candidate_cleanup = candidate_heap.collect()?;
     if candidate_cleanup.live_objects_after != 0
-        || candidate_cleanup.reclaimed_objects != managed_roots as u64
+        || candidate_cleanup.reclaimed_objects != managed_roots
     {
         bail!(
             "{} candidate Value handles were not reclaimed after native-frame release (live={}, reclaimed={}/{})",
