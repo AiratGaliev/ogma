@@ -781,6 +781,7 @@ struct NativeValueSemanticsEvidence {
     cases: Vec<NativeValueSemanticCaseEvidence>,
     native_callbacks: usize,
     forced_collections: usize,
+    native_semantic_add_code: NativeCodeMetrics,
     every_case_matches: bool,
 }
 
@@ -4394,6 +4395,7 @@ fn dispatch_native_semantic_inputs(
 fn run_native_value_semantics(
     candidate: Candidate,
     library: &Library,
+    object_path: &Path,
 ) -> Result<NativeValueSemanticsEvidence> {
     let dispatch = unsafe {
         *library
@@ -4671,10 +4673,19 @@ fn run_native_value_semantics(
             matches,
         });
     }
+    let native_semantic_add_code =
+        native_code_metrics(object_path, "ogma_value_semantic_add")?;
+    if native_semantic_add_code.call_instructions == 0 {
+        bail!(
+            "{} generated js.add helper entry point contains no native call instruction",
+            candidate.name()
+        );
+    }
     Ok(NativeValueSemanticsEvidence {
         cases: evidence,
         native_callbacks: total_callbacks,
         forced_collections: total_forced_collections,
+        native_semantic_add_code,
         every_case_matches: true,
     })
 }
@@ -6963,7 +6974,8 @@ fn run(
         let native_core_ir_corpus = run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_core_ir_execution =
             run_native_core_ir_execution(candidate, &library, &object_path)?;
-        let native_value_semantics = run_native_value_semantics(candidate, &library)?;
+        let native_value_semantics =
+            run_native_value_semantics(candidate, &library, &object_path)?;
         let semantic_reference_count = semantic_cases()
             .iter()
             .flat_map(|case| case.inputs.iter())
