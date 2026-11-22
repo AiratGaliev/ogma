@@ -489,8 +489,11 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         self.assertTrue(semantic["every_case_matches"])
         with self.assertRaisesRegex(RuntimeError, "actual completion differs"):
             proof.validate_reports(native, dual)
-        with self.assertRaisesRegex(ValueError, "actual completion differs"):
-            exporter.validate_reports(native, dual)
+        with self.assertRaisesRegex(RuntimeError, "actual completion differs"):
+            exporter.validate_semantic_case_evidence(
+                semantic,
+                candidate=native["candidates"][0]["name"],
+            )
 
     def test_rejects_semantic_host_trace_mismatch_even_when_summary_flag_is_true(self):
         native, dual = make_reports()
