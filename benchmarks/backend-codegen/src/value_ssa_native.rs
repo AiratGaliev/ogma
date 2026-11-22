@@ -4456,7 +4456,7 @@ fn measure_native_runtime_add_case(
     let output_pointer = output_storage.as_mut_ptr() as usize as u64;
     let invoke = || unsafe { semantic_add(left, right, callback, context_pointer, output_pointer) };
 
-    let expected_status = match case.expected {
+    let expected_status = match &case.expected {
         SemanticCompletion::Normal(_) => 0,
         SemanticCompletion::Throw { .. } => 1,
     };
@@ -4583,6 +4583,7 @@ fn measure_native_runtime_add_case(
         }
         finish_batch("measurement")?;
     }
+    drop(finish_batch);
 
     let expected_calls = (warmups + samples) as u64 * iterations;
     let managed_operand_count = input_handle_count;
