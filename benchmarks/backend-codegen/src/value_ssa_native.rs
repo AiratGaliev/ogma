@@ -788,6 +788,10 @@ struct NativeValueSemanticsEvidence {
 #[derive(Clone, Debug, Serialize)]
 struct NativeShadowRootEvidence {
     candidate: String,
+    candidate_value_layout: String,
+    candidate_value_slots: usize,
+    candidate_reference_tags: Vec<String>,
+    candidate_reference_handles_resolved: usize,
     managed_roots: usize,
     entry_safepoint: u32,
     call_boundary_safepoint: u32,
@@ -797,6 +801,7 @@ struct NativeShadowRootEvidence {
     live_objects_after_entry: usize,
     live_objects_after_call_boundary: usize,
     reclaimed_after_release: usize,
+    candidate_values_survived_both_collections: bool,
     all_roots_survived: bool,
     all_roots_reclaimed: bool,
 }
@@ -4706,8 +4711,75 @@ fn run_native_shadow_root_validation(
         );
     }
 
+    // Build the actual candidate Value array first. Its reference payloads are
+    // generation-checked OGM-26 HostHandle tokens, not synthetic object IDs.
+    let mut candidate_heap = GcHeap::new(CollectorKind::MarkSweep);
+    let mut candidate_storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; managed_roots * 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; managed_roots],
+    };
+    let reference_tags = [STRING_TAG, BIGINT_TAG, OBJECT_TAG, SYMBOL_TAG];
+    let mut candidate_handles = Vec::with_capacity(managed_roots);
+    let mut candidate_tokens = Vec::with_capacity(managed_roots);
+    for index in 0..managed_roots {
+        let reference = candidate_heap.allocate(32);
+        let handle = candidate_heap.retain_host_handle(reference)?;
+        let token = candidate_heap.encode_host_handle_token(handle)?;
+        let tag = reference_tags[index % reference_tags.len()];
+        encode_candidate_reference_value(
+            candidate.runtime,
+            &mut candidate_storage,
+            index,
+            tag,
+            token,
+        )?;
+        let decoded = decode_candidate_value(candidate.runtime, &candidate_storage, index)?;
+        if candidate_reference_token(decoded) != Some(token)
+            || candidate_heap.resolve_host_handle_token(token)? != reference
+        {
+            bail!(
+                "{} candidate Value slot {index} did not resolve its OGM-26 HostHandle",
+                candidate.name()
+            );
+        }
+        candidate_handles.push((handle, reference));
+        candidate_tokens.push(token);
+    }
+
+    // The OGM-27 proof heap mirrors the objects resolved from each encoded
+    // candidate slot. The precise NativeFrame root map is populated only from
+    // this candidate-Value scan, never from a separately fabricated Value list.
     let mut heap = ogma_native_runtime_boundary_proof::GcHeap::default();
-    let references: Vec<_> = (0..managed_roots).map(|_| heap.allocate()).collect();
+    let mut references = Vec::with_capacity(managed_roots);
+    let mut observed_tags = Vec::with_capacity(managed_roots);
+    for index in 0..managed_roots {
+        let encoded = decode_candidate_value(candidate.runtime, &candidate_storage, index)?;
+        let token = candidate_reference_token(encoded)
+            .context("candidate Value scanner found an immediate in a managed root slot")?;
+        let resolved = candidate_heap.resolve_host_handle_token(token)?;
+        if resolved != candidate_handles[index].1 || token != candidate_tokens[index] {
+            bail!(
+                "{} candidate Value scanner resolved the wrong generation-checked handle at slot {index}",
+                candidate.name()
+            );
+        }
+        let (tag, _) = candidate_value_tag_payload(candidate.runtime, &candidate_storage, index)?;
+        let label = match encoded {
+            CandidateValue::StringRef(_) => "String",
+            CandidateValue::BigIntRef(_) => "BigInt",
+            CandidateValue::ObjectRef(_) => "Object",
+            CandidateValue::SymbolRef(_) => "Symbol",
+            _ => unreachable!(),
+        };
+        observed_tags.push(label.to_owned());
+        references.push(heap.allocate());
+        // Keep the resolved OGM-26 object live until the corresponding native
+        // shadow frame has been released.
+        if tag == 0 {
+            bail!("{} candidate Value scanner observed an invalid zero tag", candidate.name());
+        }
+    }
+
     let slots: Vec<usize> = (0..managed_roots).collect();
     let descriptor = FrameDescriptor::new(
         format!("ogm38-{}", candidate.name()),
@@ -4742,16 +4814,23 @@ fn run_native_shadow_root_validation(
     let entry = providers
         .collect(&mut heap)
         .map_err(|error| anyhow!("OGM-27 entry safepoint collection failed: {error:?}"))?;
+    let candidate_entry_collection = candidate_heap.collect()?;
+    let candidate_entry_handles_survived = candidate_tokens.iter().zip(&candidate_handles).all(
+        |(token, (_, expected))| candidate_heap.resolve_host_handle_token(*token) == Ok(*expected),
+    );
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
         || entry.roots_scanned != managed_roots * 3
+        || candidate_entry_collection.live_objects != managed_roots as u64
+        || !candidate_entry_handles_survived
     {
         bail!(
-            "{} OGM-27 entry safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
+            "{} OGM-27 entry safepoint failed to retain candidate roots (runtime_live={}, candidate_live={}, roots_scanned={}, candidate_handles_survived={})",
             candidate.name(),
             entry.objects_live,
-            entry.objects_marked,
-            entry.roots_scanned
+            candidate_entry_collection.live_objects,
+            entry.roots_scanned,
+            candidate_entry_handles_survived
         );
     }
 
@@ -4762,16 +4841,23 @@ fn run_native_shadow_root_validation(
     let call_boundary = providers
         .collect(&mut heap)
         .map_err(|error| anyhow!("OGM-27 call-boundary collection failed: {error:?}"))?;
+    let candidate_call_collection = candidate_heap.collect()?;
+    let candidate_call_handles_survived = candidate_tokens.iter().zip(&candidate_handles).all(
+        |(token, (_, expected))| candidate_heap.resolve_host_handle_token(*token) == Ok(*expected),
+    );
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
         || call_boundary.roots_scanned != managed_roots * 3
+        || candidate_call_collection.live_objects != managed_roots as u64
+        || !candidate_call_handles_survived
     {
         bail!(
-            "{} OGM-27 call-boundary safepoint failed to retain candidate roots (live={}, marked={}, roots_scanned={})",
+            "{} OGM-27 call-boundary safepoint failed to retain candidate roots (runtime_live={}, candidate_live={}, roots_scanned={}, candidate_handles_survived={})",
             candidate.name(),
             call_boundary.objects_live,
-            call_boundary.objects_marked,
-            call_boundary.roots_scanned
+            candidate_call_collection.live_objects,
+            call_boundary.roots_scanned,
+            candidate_call_handles_survived
         );
     }
 
@@ -4796,8 +4882,28 @@ fn run_native_shadow_root_validation(
         );
     }
 
+    for (handle, _) in candidate_handles.iter().copied() {
+        candidate_heap.release_host_handle(handle)?;
+    }
+    let candidate_cleanup = candidate_heap.collect()?;
+    if candidate_cleanup.live_objects_after != 0
+        || candidate_cleanup.reclaimed_objects != managed_roots as u64
+    {
+        bail!(
+            "{} candidate Value handles were not reclaimed after native-frame release (live={}, reclaimed={}/{})",
+            candidate.name(),
+            candidate_cleanup.live_objects_after,
+            candidate_cleanup.reclaimed_objects,
+            managed_roots
+        );
+    }
+
     Ok(NativeShadowRootEvidence {
         candidate: candidate.name().to_owned(),
+        candidate_value_layout: candidate.runtime.name().to_owned(),
+        candidate_value_slots: managed_roots,
+        candidate_reference_tags: observed_tags,
+        candidate_reference_handles_resolved: candidate_handles.len(),
         managed_roots,
         entry_safepoint: 0,
         call_boundary_safepoint: 1,
@@ -4807,6 +4913,7 @@ fn run_native_shadow_root_validation(
         live_objects_after_entry: entry.objects_live,
         live_objects_after_call_boundary: call_boundary.objects_live,
         reclaimed_after_release: cleanup.objects_reclaimed,
+        candidate_values_survived_both_collections: true,
         all_roots_survived: true,
         all_roots_reclaimed: true,
     })
