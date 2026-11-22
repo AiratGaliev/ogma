@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,38 @@ def validate_semantic_case_evidence(
         or native_add_code["call_instructions"] < 1
     ):
         raise RuntimeError(f"{candidate}: generated native js.add entry point has no measured call instruction")
+
+    add_measurement = semantic.get("native_runtime_add_number")
+    throughput = add_measurement.get("throughput") if isinstance(add_measurement, dict) else None
+    raw_samples = throughput.get("raw_samples_ns") if isinstance(throughput, dict) else None
+    if (
+        not isinstance(add_measurement, dict)
+        or add_measurement.get("operation") != "Number(19) + Number(23)"
+        or not isinstance(add_measurement.get("iterations_per_sample"), int)
+        or isinstance(add_measurement.get("iterations_per_sample"), bool)
+        or add_measurement["iterations_per_sample"] <= 0
+        or not isinstance(add_measurement.get("warmup_rounds"), int)
+        or isinstance(add_measurement.get("warmup_rounds"), bool)
+        or add_measurement["warmup_rounds"] < 0
+        or not isinstance(throughput, dict)
+        or not isinstance(raw_samples, list)
+        or len(raw_samples) != 101
+        or any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+            for value in raw_samples
+        )
+        or any(
+            not isinstance(throughput.get(metric), (int, float))
+            or isinstance(throughput.get(metric), bool)
+            or not math.isfinite(throughput[metric])
+            or throughput[metric] <= 0
+            for metric in ("p50_ns", "p95_ns", "p99_ns")
+        )
+    ):
+        raise RuntimeError(f"{candidate}: generated native Runtime js.add throughput samples are incomplete or invalid")
 
     for item in cases:
         case_name = item["name"]
