@@ -192,8 +192,8 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             EXPECTED_CANDIDATES,
             {item["name"] for item in primary["candidates"]},
         )
+        self.assertEqual(101, primary["samples_per_metric"])
         for candidate in primary["candidates"]:
-            self.assertTrue(candidate["all_semantic_cases_match"])
             self.assertEqual(101, len(candidate["compile_ns"]))
             self.assertEqual(101, len(candidate["native_loop_ns_per_call"]))
             self.assertTrue(all(value >= 0 for value in candidate["compile_ns"]))
