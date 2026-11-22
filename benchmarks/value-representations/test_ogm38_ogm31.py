@@ -265,6 +265,14 @@ def make_reports():
                 ],
             },
             "native_shadow_roots": {
+                "candidate_value_layout": "nanbox-8" if name.startswith("nanbox") else "tagged-16",
+                "candidate_value_slots": 4,
+                "candidate_reference_tags": ["String", "BigInt", "Object", "Symbol"],
+                "candidate_reference_handles_resolved": 4,
+                "entry_safepoint": 0,
+                "call_boundary_safepoint": 1,
+                "reclaimed_after_release": 4,
+                "candidate_values_survived_both_collections": True,
                 "all_roots_survived": True,
                 "all_roots_reclaimed": True,
             },
@@ -556,6 +564,11 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         native, dual = make_reports()
         native["candidates"][0]["native_shadow_roots"]["all_roots_reclaimed"] = False
         with self.assertRaisesRegex(RuntimeError, "roots were not balanced"):
+            proof.validate_reports(native, dual)
+    def test_rejects_candidate_root_proofs_that_bypass_value_layout_scanning(self):
+        native, dual = make_reports()
+        native["candidates"][0]["native_shadow_roots"]["candidate_reference_handles_resolved"] = 3
+        with self.assertRaisesRegex(RuntimeError, "candidate Value root-map scan/handle-lifetime evidence"):
             proof.validate_reports(native, dual)
 
 
