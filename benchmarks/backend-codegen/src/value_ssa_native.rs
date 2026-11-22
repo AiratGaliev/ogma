@@ -4524,8 +4524,7 @@ fn measure_native_runtime_add_case(
         runtime: candidate.runtime,
         heap: &mut heap as *mut GcHeap,
         references: &mut references as *mut BTreeMap<u64, SemanticReference>,
-        retained_handles: &mut retained_handles
-            as *mut Vec<ogma_gc_comparison_proof::HostHandle>,
+        retained_handles: &mut retained_handles as *mut Vec<ogma_gc_comparison_proof::HostHandle>,
         completion: None,
         forced_collections: 0,
         helper_calls: 0,
@@ -4705,7 +4704,6 @@ fn measure_native_runtime_add_cases(
     }
     Ok(measurements)
 }
-
 
 fn run_native_value_semantics(
     candidate: Candidate,
