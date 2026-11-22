@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -291,6 +292,114 @@ def build_runtime_projection(
     }
 
 
+
+def _columnar_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    require(bool(samples), "raw sample array must not be empty")
+    fields = list(samples[0])
+    require(
+        all(isinstance(sample, dict) and list(sample) == fields for sample in samples),
+        "raw sample rows must have the same ordered fields",
+    )
+    return {
+        "raw_sample_fields": fields,
+        "raw_samples_columnar": {
+            field: [sample[field] for sample in samples]
+            for field in fields
+        },
+    }
+
+
+def build_compact_raw_measurements(
+    native: dict[str, Any],
+    differential: dict[str, Any],
+) -> dict[str, Any]:
+    candidates = []
+    for candidate in native["candidates"]:
+        gc = candidate["gc"]
+        collector_comparisons = [
+            {
+                **{key: value for key, value in comparison.items() if key != "raw_samples"},
+                **_columnar_samples(comparison["raw_samples"]),
+            }
+            for comparison in gc["collector_comparisons"]
+        ]
+        allocator_comparisons = [
+            {
+                **{key: value for key, value in comparison.items() if key != "raw_samples"},
+                **_columnar_samples(comparison["raw_samples"]),
+            }
+            for comparison in gc["allocator_comparisons"]
+        ]
+        semantic = candidate["native_value_semantics"]
+        candidates.append(
+            {
+                "name": candidate["name"],
+                "runtime_value_bytes": candidate["runtime_value_bytes"],
+                "compile_first_ns": candidate["compile_first_ns"],
+                "compile_ns": candidate["compile_ns"],
+                "object_bytes": candidate["object_bytes"],
+                "shared_library_bytes": candidate["shared_library_bytes"],
+                "iterations_per_sample": candidate["iterations_per_sample"],
+                "warmup_rounds": candidate["warmup_rounds"],
+                "throughput_ns_per_call": candidate["throughput_ns_per_call"],
+                "calls_per_second_p50": candidate["calls_per_second_p50"],
+                "native_code": candidate["native_code"],
+                "native_handle_dispatch": candidate["native_handle_dispatch"],
+                "native_core_ir_corpus": candidate["native_core_ir_corpus"],
+                "native_core_ir_execution": candidate["native_core_ir_execution"],
+                "native_value_semantics": {
+                    "cases": semantic["cases"],
+                    "native_callbacks": semantic["native_callbacks"],
+                    "forced_collections": semantic["forced_collections"],
+                    "native_batch_dispatch_invocations": semantic["native_batch_dispatch_invocations"],
+                    "native_semantic_add_code": semantic["native_semantic_add_code"],
+                    "native_runtime_add_measurements": semantic["native_runtime_add_measurements"],
+                    "every_case_matches": semantic["every_case_matches"],
+                },
+                "native_shadow_roots": candidate["native_shadow_roots"],
+                "native_pressure": candidate["native_pressure"],
+                "register_pressure": candidate["register_pressure"],
+                "gc": {
+                    "collector_implementation": gc["collector_implementation"],
+                    "object_count": gc["object_count"],
+                    "graph_edges": gc["graph_edges"],
+                    "value_slots_per_object": gc["value_slots_per_object"],
+                    "value_storage_bytes": gc["value_storage_bytes"],
+                    "value_layout_bytes": gc["value_layout_bytes"],
+                    "handle_payload_bits": gc["handle_payload_bits"],
+                    "encoded_object_values_resolved": gc["encoded_object_values_resolved"],
+                    "collector_comparisons": collector_comparisons,
+                    "allocator_comparisons": allocator_comparisons,
+                },
+            }
+        )
+    return {
+        "schema": "ogma.ogm38.raw-measurements",
+        "version": 1,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "toolchain": {
+            key: native[key]
+            for key in (
+                "rustc", "operating_system", "architecture", "target_triple", "cpu_model"
+            )
+        },
+        "core_ir_contract": native["core_ir_contract"],
+        "core_ir_fixture": native["core_ir_fixture"],
+        "core_ir_fixture_parameters": native["core_ir_fixture_parameters"],
+        "semantic_workload": native["semantic_workload"],
+        "iterations_per_sample": native["iterations_per_sample"],
+        "warmup_rounds": native["warmup_rounds"],
+        "measurement_samples": native["measurement_samples"],
+        "max_loop_iterations": native["max_loop_iterations"],
+        "candidates": candidates,
+        "measurement_boundaries": native["measurement_boundaries"],
+        "unsupported_native_semantics": native["unsupported_native_semantics"],
+        "differential_validation": differential,
+    }
+
+
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -346,6 +455,16 @@ def main() -> int:
         differential_bytes
     )
 
+    compact_raw = build_compact_raw_measurements(native, differential)
+    compact_raw_bytes = json.dumps(
+        compact_raw, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    compact_raw_gzip = gzip.compress(compact_raw_bytes, compresslevel=9, mtime=0)
+    compact_raw_base64 = base64.b64encode(compact_raw_gzip).decode("ascii") + "\n"
+    (output_dir / "ogm38-raw-measurements.json.gz.b64").write_text(
+        compact_raw_base64, encoding="ascii"
+    )
+
     print(
         json.dumps(
             {
@@ -363,6 +482,7 @@ def main() -> int:
                     "ogm38-primary-benchmark-samples.json",
                     "ogm38-runtime-raw-samples.json.gz",
                     "ogm38-ogm31-differential-report.json",
+                    "ogm38-raw-measurements.json.gz.b64",
                 ],
             },
             indent=2,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import hashlib
 import json
@@ -367,6 +368,7 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                     )
                 self.assertTrue(candidate["all_semantic_cases_match"])
                 self.assertEqual(31, candidate["semantic_cases_passed"])
+                self.assertEqual(31, candidate["native_semantic_batch_dispatch_invocations"])
                 self.assertEqual(5, candidate["native_batch_invocations"])
                 self.assertEqual(77, candidate["native_value_dispatches"])
                 self.assertEqual(20, candidate["reference_values_resolved_after_forced_gc"])
@@ -481,6 +483,56 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "does not match OGM-31"):
             proof.validate_reports(native, dual)
+
+    @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
+    def test_committed_columnar_raw_measurements_are_lossless_and_complete(self):
+        results = Path(os.environ["OGM38_RESULTS_DIR"])
+        encoded = (results / "ogm38-raw-measurements.json.gz.b64").read_text(
+            encoding="ascii"
+        )
+        compressed = base64.b64decode(encoded, validate=True)
+        raw = gzip.decompress(compressed)
+        report = json.loads(raw.decode("utf-8"))
+        self.assertEqual("ogma.ogm38.raw-measurements", report["schema"])
+        self.assertEqual(1, report["version"])
+        self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(101, report["measurement_samples"])
+        self.assertEqual(3, report["warmup_rounds"])
+        self.assertEqual("x86_64-unknown-linux-gnu", report["toolchain"]["target_triple"])
+        self.assertEqual(
+            {"tagged-16-boxed", "tagged-16-representation-aware",
+             "nanbox-8-boxed", "nanbox-8-representation-aware"},
+            {item["name"] for item in report["candidates"]},
+        )
+        primary = json.loads(
+            (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
+        )
+        for candidate in report["candidates"]:
+            name = candidate["name"]
+            projection = next(item for item in primary["candidates"] if item["name"] == name)
+            self.assertEqual(101, len(candidate["compile_ns"]["raw_samples_ns"]))
+            self.assertEqual(101, len(candidate["throughput_ns_per_call"]["raw_samples_ns"]))
+            self.assertEqual(projection["compile_ns"], candidate["compile_ns"]["raw_samples_ns"])
+            self.assertEqual(
+                projection["native_loop_ns_per_call"],
+                candidate["throughput_ns_per_call"]["raw_samples_ns"],
+            )
+            semantic = candidate["native_value_semantics"]
+            self.assertEqual(31, len(semantic["cases"]))
+            self.assertEqual(31, semantic["native_batch_dispatch_invocations"])
+            self.assertTrue(semantic["every_case_matches"])
+            self.assertEqual(6, len(semantic["native_runtime_add_measurements"]))
+            for measurement in semantic["native_runtime_add_measurements"]:
+                self.assertEqual(101, len(measurement["throughput"]["raw_samples_ns"]))
+            gc = candidate["gc"]
+            self.assertEqual(6, len(gc["collector_comparisons"]))
+            self.assertEqual(3, len(gc["allocator_comparisons"]))
+            for worker in gc["collector_comparisons"] + gc["allocator_comparisons"]:
+                columns = worker["raw_samples_columnar"]
+                self.assertEqual(set(worker["raw_sample_fields"]), set(columns))
+                self.assertTrue(columns)
+                self.assertTrue(all(len(values) == 101 for values in columns.values()))
+        self.assertTrue(report["differential_validation"]["all_candidates_match_portable_ogm31_oracle"])
 
     def test_rejects_a_missing_candidate_or_fixture(self):
         native, dual = make_reports()
