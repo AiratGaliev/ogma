@@ -4465,7 +4465,7 @@ fn run_native_value_semantics(
                         | "bigint-add"
                         | "object-to-primitive-add"
                         | "symbol-add-throws"
-                        | "bigint-to-number-throws"
+                | "bigint-to-number-throws"
                 ),
                 perform_native_transition: case.name == "type-transition-number-to-string",
                 strict_equal_slots,
