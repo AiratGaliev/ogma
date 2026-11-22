@@ -4415,7 +4415,7 @@ struct NativeRuntimeAddBatch<'a> {
 }
 
 fn finish_native_runtime_add_batch(
-    mut batch: NativeRuntimeAddBatch<'_>,
+    batch: NativeRuntimeAddBatch<'_>,
     batch_name: &str,
 ) -> Result<(usize, bool)> {
     let candidate = batch.candidate;
