@@ -4344,7 +4344,12 @@ fn dispatch_native_semantic_inputs(
     // SAFETY: the contiguous candidate Value array and callback context remain
     // live and exclusively borrowed until the generated native call returns.
     let status = unsafe {
-        batch_dispatch(value_buffer, value_count, callback_address, context_argument)
+        batch_dispatch(
+            value_buffer,
+            value_count,
+            callback_address,
+            context_argument,
+        )
     };
     if status != 0 {
         bail!(
