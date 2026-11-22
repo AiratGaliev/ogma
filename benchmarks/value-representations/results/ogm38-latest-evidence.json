@@ -1,0 +1,189 @@
+{
+  "schema": "ogma.ogm38.latest-evidence",
+  "version": 1,
+  "task": "OGM-38",
+  "source_revision": "439f74c945a1acd93b816b33982fa103bb72d7bc",
+  "tested_revision": "439f74c945a1acd93b816b33982fa103bb72d7bc",
+  "workflow_run": {
+    "id": 45023749338,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45023749338",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "artifact": {
+      "id": 14755470848,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45023749338/artifacts/14755470848"
+    }
+  },
+  "toolchain": {
+    "target": "x86_64-unknown-linux-gnu",
+    "operating_system": "Linux 7.0.0-1017-azure",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "cranelift": "0.137.2"
+  },
+  "checksums": {
+    "full_native_report_uncompressed_sha256": "321b652fdebf28d5641b4bbd8ec5d7d91f02cbb2e94dd1cde731789000589f51",
+    "full_native_report_gzip_sha256": "01fdee2346b881262d6c0d10895b3d39114d080a2ca7a01375f00356221b9930",
+    "differential_report_sha256": "c7c5103e9fd3e3daf42484eb7a90cb57cb358fc69d09af61bb25f3adba20acd1",
+    "primary_projection_sha256": "ea17d0fba153f35b4d9729e144335c5ebd5fc77beccbdd6ae34bfb7916bc9bfe",
+    "runtime_projection_gzip_sha256": "594143c1106652ef593c0635714e501e76e8d7afc9344fac565985cb3770d0a7"
+  },
+  "sampling": {
+    "warmup_rounds": 3,
+    "samples_per_metric": 101,
+    "native_calls_per_throughput_sample": 1000
+  },
+  "corpus": {
+    "candidate_count": 4,
+    "canonical_fixture_count": 5,
+    "native_value_dispatches_per_candidate": 77,
+    "semantic_cases_passed_per_candidate": 31,
+    "native_callbacks_per_candidate": 70,
+    "forced_collections_per_candidate": 39,
+    "gc_allocator_worker_combinations": 24
+  },
+  "native_loop": {
+    "workload": "Number-only strict-equality-controlled specialization of canonical loop fixture (js.add + js.to_number); not representative application throughput",
+    "candidates": [
+      {
+        "name": "tagged-16-boxed",
+        "compile_ms_p50_p95_p99": [
+          1.62189,
+          1.849094,
+          17.139065
+        ],
+        "loop_ns_p50_p95_p99": [
+          342.735,
+          355.074,
+          356.505
+        ],
+        "object_bytes": 4128,
+        "loop_code_bytes": 336,
+        "pressure_code_bytes": 1460,
+        "stack_loads": 65,
+        "stack_stores": 65,
+        "spill_loads": 64,
+        "spill_stores": 64,
+        "spill_slots": 64,
+        "spill_slot_bytes": 512
+      },
+      {
+        "name": "tagged-16-representation-aware",
+        "compile_ms_p50_p95_p99": [
+          1.821994,
+          1.85957,
+          2.020347
+        ],
+        "loop_ns_p50_p95_p99": [
+          109.371,
+          123.642,
+          127.227
+        ],
+        "object_bytes": 4456,
+        "loop_code_bytes": 336,
+        "pressure_code_bytes": 1789,
+        "stack_loads": 66,
+        "stack_stores": 65,
+        "spill_loads": 65,
+        "spill_stores": 64,
+        "spill_slots": 64,
+        "spill_slot_bytes": 512
+      },
+      {
+        "name": "nanbox-8-boxed",
+        "compile_ms_p50_p95_p99": [
+          1.521983,
+          1.572267,
+          82.611293
+        ],
+        "loop_ns_p50_p95_p99": [
+          342.434,
+          354.593,
+          357.657
+        ],
+        "object_bytes": 3720,
+        "loop_code_bytes": 392,
+        "pressure_code_bytes": 727,
+        "stack_loads": 33,
+        "stack_stores": 33,
+        "spill_loads": 32,
+        "spill_stores": 32,
+        "spill_slots": 32,
+        "spill_slot_bytes": 256
+      },
+      {
+        "name": "nanbox-8-representation-aware",
+        "compile_ms_p50_p95_p99": [
+          1.625445,
+          1.698122,
+          20.710068
+        ],
+        "loop_ns_p50_p95_p99": [
+          108.831,
+          117.453,
+          124.624
+        ],
+        "object_bytes": 4024,
+        "loop_code_bytes": 384,
+        "pressure_code_bytes": 1039,
+        "stack_loads": 33,
+        "stack_stores": 33,
+        "spill_loads": 32,
+        "spill_stores": 32,
+        "spill_slots": 32,
+        "spill_slot_bytes": 256
+      }
+    ],
+    "shared_library_bytes": 15304
+  },
+  "heap_gc": {
+    "object_count": 2048,
+    "edge_count": 2121,
+    "value_storage_bytes": {
+      "tagged16": 524288,
+      "nanbox8": 262144
+    },
+    "peak_logical_heap_bytes": {
+      "tagged16": 787600,
+      "nanbox8": 525456
+    },
+    "vmhwm_peak_range_mib": {
+      "tagged-16-boxed": [
+        4.68,
+        4.797
+      ],
+      "tagged-16-representation-aware": [
+        4.684,
+        4.867
+      ],
+      "nanbox-8-boxed": [
+        4.465,
+        4.676
+      ],
+      "nanbox-8-representation-aware": [
+        4.434,
+        4.578
+      ]
+    }
+  },
+  "evidence_boundary": {
+    "core_ir": "Generated native batch dispatch loops over fixture Values, not complete per-candidate lowering and execution of every fixture CFG.",
+    "semantics": "Some String concatenation, BigInt arithmetic and Object ToPrimitive paths remain M0 oracle/adapter work, not general candidate-native operator lowering.",
+    "rooting": "OGM-26 generation-checked handles and OGM-27 root-map/frame proof; not production compiler-generated machine stack maps or full production Runtime ABI.",
+    "memory": "VmHWM is isolated worker process peak memory, not heap-only RSS or full app footprint.",
+    "spill": "Native spill counters are derived from objdump of generated 32-live-Value Cranelift pressure functions; separate regalloc2 liveness model is supplemental."
+  },
+  "checked_in_projection_state": {
+    "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
+    "raw_measurements": "Latest full raw datasets are in the linked CI artifact.",
+    "historical_projection_files": [
+      "benchmarks/value-representations/results/ogm38-primary-benchmark-samples.json",
+      "benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz",
+      "benchmarks/value-representations/results/ogm38-runtime-raw-samples.json.gz",
+      "benchmarks/value-representations/results/ogm38-ogm31-differential-report.json"
+    ]
+  }
+}
