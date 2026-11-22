@@ -57,7 +57,7 @@ EXPECTED_SEMANTIC_CASES = {
     "bigint-add",
     "object-to-primitive-add",
     "symbol-add-throws",
-    "bigint-to-number-throws",
+    "bigint-number-add-throws",
     "nan-strict-equality",
     "signed-zero-strict-equality",
     "object-identity-same",
@@ -91,7 +91,7 @@ NATIVE_RUNTIME_ADD_CASES = {
     "bigint-add",
     "object-to-primitive-add",
     "symbol-add-throws",
-    "bigint-to-number-throws",
+    "bigint-number-add-throws",
 }
 
 NATIVE_RUNTIME_ADD_EXPECTATIONS = {
@@ -100,7 +100,7 @@ NATIVE_RUNTIME_ADD_EXPECTATIONS = {
     "bigint-add": (2, 1),
     "object-to-primitive-add": (1, 1),
     "symbol-add-throws": (1, 0),
-    "bigint-to-number-throws": (1, 0),
+    "bigint-number-add-throws": (1, 0),
 }
 
 NATIVE_TO_ORACLE_FIELDS = {
