@@ -4048,7 +4048,10 @@ fn dispatch_native_semantic_inputs(
     let (runtime_add_completion, native_runtime_add_calls, runtime_add_forced_collections) =
         if options.invoke_semantic_add {
             if inputs.len() < 2 {
-                bail!("{} semantic add requires two input Values", candidate.name());
+                bail!(
+                    "{} semantic add requires two input Values",
+                    candidate.name()
+                );
             }
             let left = native_value_argument_for_slot(candidate, &storage, 0)?;
             let right = native_value_argument_for_slot(candidate, &storage, 1)?;
@@ -4072,9 +4075,8 @@ fn dispatch_native_semantic_inputs(
             let output_pointer = output_storage.as_mut_ptr() as usize as u64;
             // SAFETY: candidate Values, helper context, callback and output slot
             // all remain live for the synchronous generated native invocation.
-            let status = unsafe {
-                semantic_add(left, right, callback, context_pointer, output_pointer)
-            };
+            let status =
+                unsafe { semantic_add(left, right, callback, context_pointer, output_pointer) };
             let completion = runtime_context
                 .completion
                 .take()
@@ -4094,12 +4096,7 @@ fn dispatch_native_semantic_inputs(
             }
             if let SemanticCompletion::Normal(ref value) = completion {
                 let encoded = decode_candidate_value(candidate.runtime, &output_storage, 0)?;
-                if !candidate_value_matches_semantic(
-                    encoded,
-                    value,
-                    &references,
-                    &heap,
-                )? {
+                if !candidate_value_matches_semantic(encoded, value, &references, &heap)? {
                     bail!(
                         "{} generated native js.add did not store its semantic result in the candidate Value layout",
                         candidate.name()
