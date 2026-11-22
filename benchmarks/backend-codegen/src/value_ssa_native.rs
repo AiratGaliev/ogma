@@ -854,6 +854,13 @@ struct NativeCodeMetrics {
     stack_relative_memory_instructions: usize,
     stack_relative_loads: usize,
     stack_relative_stores: usize,
+    /// Actual Cranelift allocator spill/reload instructions in the 32-live-Value
+    /// pressure function. That function declares no explicit CLIF stack slots;
+    /// these counters are derived from emitted x86-64 stack memory operands.
+    allocator_spill_loads: usize,
+    allocator_spill_stores: usize,
+    allocator_spill_slots: usize,
+    allocator_spill_slot_bytes: usize,
     call_instructions: usize,
 }
 
@@ -6149,6 +6156,37 @@ fn is_vector_register(token: &str) -> bool {
     })
 }
 
+fn stack_spill_operand(operand: &str) -> Option<(String, usize)> {
+    let lower = operand.to_ascii_lowercase();
+    let open = lower.find('[')?;
+    let close = lower[open + 1..].find(']')? + open + 1;
+    let address = lower[open + 1..close]
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>();
+    if !address.contains("rsp") && !address.contains("rbp") {
+        return None;
+    }
+    let width = if lower[..open].contains("zmmword ptr") {
+        64
+    } else if lower[..open].contains("ymmword ptr") {
+        32
+    } else if lower[..open].contains("xmmword ptr") {
+        16
+    } else if lower[..open].contains("qword ptr") {
+        8
+    } else if lower[..open].contains("dword ptr") {
+        4
+    } else if lower[..open].contains("word ptr") {
+        2
+    } else if lower[..open].contains("byte ptr") {
+        1
+    } else {
+        return None;
+    };
+    Some((address, width))
+}
+
 fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<NativeCodeMetrics> {
     let mut in_function = false;
     let mut found_symbol = false;
@@ -6159,6 +6197,9 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
     let mut stack_relative_memory_instructions = 0_usize;
     let mut stack_relative_loads = 0_usize;
     let mut stack_relative_stores = 0_usize;
+    let mut allocator_spill_loads = 0_usize;
+    let mut allocator_spill_stores = 0_usize;
+    let mut allocator_spill_slots = BTreeMap::<String, usize>::new();
     let mut call_instructions = 0_usize;
     let mut numeric_conversion_instructions = 0_usize;
 
@@ -6200,17 +6241,49 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
         if mnemonic.starts_with("cvt") || mnemonic.starts_with("vcvt") {
             numeric_conversion_instructions += 1;
         }
-        let stack_access = operands.contains("[rsp")
-            || operands.contains("[rbp")
+        let operand_parts = operands.split(',').map(str::trim).collect::<Vec<_>>();
+        let first_operand = operand_parts.first().copied().unwrap_or_default();
+        let second_operand = operand_parts.get(1).copied().unwrap_or_default();
+        let first_stack = stack_spill_operand(first_operand);
+        let second_stack = stack_spill_operand(second_operand);
+        let stack_access = first_stack.is_some()
+            || second_stack.is_some()
             || mnemonic == "push"
             || mnemonic == "pop";
         if stack_access {
             stack_relative_memory_instructions += 1;
-            let first_operand = operands.split(',').next().unwrap_or_default().trim();
-            if first_operand.contains('[') || mnemonic == "push" {
+            if first_stack.is_some() || mnemonic == "push" {
                 stack_relative_stores += 1;
             } else {
                 stack_relative_loads += 1;
+            }
+        }
+
+        // The pressure function contains no explicit Cranelift stack slots,
+        // local arrays or stack-address materialization. Ignore push/pop
+        // callee-save bookkeeping and count actual stack-memory moves.
+        if !matches!(mnemonic, "push" | "pop" | "lea") {
+            if let Some((address, width)) = first_stack {
+                if mnemonic.starts_with("mov") || mnemonic.starts_with("vmov") {
+                    allocator_spill_stores += 1;
+                    allocator_spill_slots
+                        .entry(address)
+                        .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
+                        .or_insert(width);
+                }
+            }
+            if let Some((address, width)) = second_stack {
+                if mnemonic.starts_with("mov")
+                    || mnemonic.starts_with("vmov")
+                    || mnemonic.starts_with("cmp")
+                    || mnemonic.starts_with("test")
+                {
+                    allocator_spill_loads += 1;
+                    allocator_spill_slots
+                        .entry(address)
+                        .and_modify(|slot_width| *slot_width = (*slot_width).max(width))
+                        .or_insert(width);
+                }
             }
         }
 
@@ -6238,6 +6311,10 @@ fn parse_native_disassembly(disassembly: &str, symbol: &'static str) -> Result<N
         stack_relative_memory_instructions,
         stack_relative_loads,
         stack_relative_stores,
+        allocator_spill_loads,
+        allocator_spill_stores,
+        allocator_spill_slots: allocator_spill_slots.len(),
+        allocator_spill_slot_bytes: allocator_spill_slots.values().sum(),
         call_instructions,
     })
 }
@@ -6558,6 +6635,28 @@ mod tests {
         let metrics = parse_native_disassembly(disassembly, "ogma_value_conversion_probe")
             .expect("parse native conversion instructions");
         assert_eq!(metrics.numeric_conversion_instructions, 2);
+    }
+
+    #[test]
+    fn pressure_disassembly_counts_allocator_spill_slots_and_reload_traffic() {
+        let disassembly = r#"
+0000000000000000 <ogma_value_pressure>:
+   0: 48 83 ec 20             sub rsp,0x20
+   4: 48 89 44 24 08          mov QWORD PTR [rsp+0x8],rax
+   9: 48 8b 5c 24 08          mov rbx,QWORD PTR [rsp+0x8]
+   e: f2 0f 11 44 24 10       movsd QWORD PTR [rsp+0x10],xmm0
+  14: f2 0f 10 4c 24 10       movsd xmm1,QWORD PTR [rsp+0x10]
+  1a: 53                      push rbx
+  1b: 5b                      pop rbx
+  1c: 48 83 c4 20             add rsp,0x20
+  20: c3                      ret
+"#;
+        let metrics =
+            parse_native_disassembly(disassembly, "ogma_value_pressure").expect("parse spills");
+        assert_eq!(metrics.allocator_spill_stores, 2);
+        assert_eq!(metrics.allocator_spill_loads, 2);
+        assert_eq!(metrics.allocator_spill_slots, 2);
+        assert_eq!(metrics.allocator_spill_slot_bytes, 16);
     }
 
     #[test]
