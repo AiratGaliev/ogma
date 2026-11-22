@@ -791,6 +791,7 @@ struct NativeRuntimeAddMeasurement {
     operation: &'static str,
     iterations_per_sample: u64,
     warmup_rounds: usize,
+    native_calls_total: u64,
     throughput: Distribution,
 }
 
@@ -4506,6 +4507,7 @@ fn measure_native_number_add(
         operation: "Number(19) + Number(23)",
         iterations_per_sample: iterations,
         warmup_rounds: warmups,
+        native_calls_total: context.helper_calls as u64,
         throughput: distribution(timings),
     })
 }
