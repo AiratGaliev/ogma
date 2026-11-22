@@ -2905,7 +2905,7 @@ fn run_native_handle_dispatch_validation(
 
     drop(value_storage);
     for handle in handles {
-        batch.heap.release_host_handle(handle)?;
+        heap.release_host_handle(handle)?;
     }
     let released = heap.collect()?;
     if released.live_objects_after != 0 || released.reclaimed_objects != objects.len() {
@@ -4020,7 +4020,7 @@ fn candidate_value_for_semantic(
             }
             let object = heap.allocate(64);
             let handle = heap.retain_host_handle(object)?;
-            let token = batch.heap.encode_host_handle_token(handle)?;
+            let token = heap.encode_host_handle_token(handle)?;
             let candidate_value = match value {
                 SemanticValue::String(_) => CandidateValue::StringRef(token),
                 SemanticValue::BigInt(_) => CandidateValue::BigIntRef(token),
@@ -4462,7 +4462,7 @@ fn finish_native_runtime_add_batch(
 
     let output_handles = batch.retained_handles.split_off(batch.input_handle_count);
     for handle in output_handles {
-        let token = heap.encode_host_handle_token(handle)?;
+        let token = batch.heap.encode_host_handle_token(handle)?;
         if batch.references.remove(&token).is_none() {
             bail!(
                 "{} {} native Runtime js.add could not find a newly allocated result handle",
@@ -4470,7 +4470,7 @@ fn finish_native_runtime_add_batch(
                 case.name
             );
         }
-        heap.release_host_handle(handle)?;
+        batch.heap.release_host_handle(handle)?;
     }
     if expected_output_handle_count == 0 {
         return Ok((output_handle_count, false));
