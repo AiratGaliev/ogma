@@ -106,6 +106,17 @@ def make_reports():
                     "symbol": "ogma_value_semantic_add",
                     "call_instructions": 1,
                 },
+                "native_runtime_add_number": {
+                    "operation": "Number(19) + Number(23)",
+                    "iterations_per_sample": 1000,
+                    "warmup_rounds": 3,
+                    "throughput": {
+                        "p50_ns": 80.0,
+                        "p95_ns": 90.0,
+                        "p99_ns": 95.0,
+                        "raw_samples_ns": [80.0] * 101,
+                    },
+                },
                 "cases": [
                     {
                         "name": "nan-strict-equality",
@@ -494,6 +505,18 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
             "symbol"
         ] = "not-generated"
         with self.assertRaisesRegex(RuntimeError, "strict_equal"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_missing_or_incomplete_native_runtime_add_measurement(self):
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        semantic["native_runtime_add_number"]["throughput"]["raw_samples_ns"].pop()
+        with self.assertRaisesRegex(RuntimeError, "throughput samples are incomplete or invalid"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        del native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
+        with self.assertRaisesRegex(RuntimeError, "throughput samples are incomplete or invalid"):
             proof.validate_reports(native, dual)
 
     def test_rejects_native_runtime_operation_fallback_to_the_oracle(self):
