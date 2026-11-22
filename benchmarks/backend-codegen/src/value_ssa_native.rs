@@ -4405,6 +4405,88 @@ fn dispatch_native_semantic_inputs(
         reference_tokens,
     })
 }
+fn finish_native_runtime_add_batch(
+    candidate: Candidate,
+    case: &SemanticCase,
+    output_storage: &[u64],
+    heap: &mut GcHeap,
+    references: &mut BTreeMap<u64, SemanticReference>,
+    retained_handles: &mut Vec<ogma_gc_comparison_proof::HostHandle>,
+    input_handle_count: usize,
+    iterations: u64,
+    result_handles_per_call: usize,
+    batch_name: &str,
+) -> Result<(usize, bool)> {
+    let encoded = decode_candidate_value(candidate.runtime, output_storage, 0)?;
+    match &case.expected {
+        SemanticCompletion::Normal(expected) => {
+            if !candidate_value_matches_semantic(encoded, expected, references, heap)? {
+                bail!(
+                    "{} {} native Runtime js.add {} stored an incorrect candidate Value",
+                    candidate.name(),
+                    case.name,
+                    batch_name
+                );
+            }
+        }
+        SemanticCompletion::Throw { .. } => {
+            if encoded != CandidateValue::Undefined {
+                bail!(
+                    "{} {} native Runtime js.add {} did not clear the output slot on Throw",
+                    candidate.name(),
+                    case.name,
+                    batch_name
+                );
+            }
+        }
+    }
+
+    let output_handle_count = retained_handles
+        .len()
+        .checked_sub(input_handle_count)
+        .context("native Runtime js.add result handle vector shrank below its input prefix")?;
+    let expected_output_handle_count = result_handles_per_call * iterations as usize;
+    if output_handle_count != expected_output_handle_count {
+        bail!(
+            "{} {} native Runtime js.add {} allocated {} result handles, expected {}",
+            candidate.name(),
+            case.name,
+            batch_name,
+            output_handle_count,
+            expected_output_handle_count
+        );
+    }
+
+    let output_handles = retained_handles.split_off(input_handle_count);
+    for handle in output_handles {
+        let token = heap.encode_host_handle_token(handle)?;
+        if references.remove(&token).is_none() {
+            bail!(
+                "{} {} native Runtime js.add could not find a newly allocated result handle",
+                candidate.name(),
+                case.name
+            );
+        }
+        heap.release_host_handle(handle)?;
+    }
+    if expected_output_handle_count == 0 {
+        return Ok((output_handle_count, false));
+    }
+
+    let cleanup = heap.collect()?;
+    if cleanup.live_objects_after != input_handle_count as u64
+        || cleanup.reclaimed_objects != expected_output_handle_count
+    {
+        bail!(
+            "{} {} native Runtime js.add {} did not reclaim its temporary result handles",
+            candidate.name(),
+            case.name,
+            batch_name
+        );
+    }
+    Ok((output_handle_count, true))
+}
+
 fn measure_native_runtime_add_case(
     candidate: Candidate,
     semantic_add: NativeSemanticAdd,
@@ -4472,96 +4554,34 @@ fn measure_native_runtime_add_case(
     let mut result_handles_allocated_total = 0_usize;
     let mut cleanup_collections_total = 0_usize;
 
-    let mut finish_batch = |batch_name: &str| -> Result<usize> {
-        if context.completion.as_ref() != Some(&case.expected) {
-            bail!(
-                "{} {} native Runtime js.add {} completion differs from its expected semantic result",
-                candidate.name(),
-                case.name,
-                batch_name
-            );
-        }
-        let encoded = decode_candidate_value(candidate.runtime, &output_storage, 0)?;
-        match &case.expected {
-            SemanticCompletion::Normal(expected) => {
-                if !candidate_value_matches_semantic(encoded, expected, &references, &heap)? {
-                    bail!(
-                        "{} {} native Runtime js.add {} stored an incorrect candidate Value",
-                        candidate.name(),
-                        case.name,
-                        batch_name
-                    );
-                }
-            }
-            SemanticCompletion::Throw { .. } => {
-                if encoded != CandidateValue::Undefined {
-                    bail!(
-                        "{} {} native Runtime js.add {} did not clear the output slot on Throw",
-                        candidate.name(),
-                        case.name,
-                        batch_name
-                    );
-                }
-            }
-        }
-
-        let output_handle_count = retained_handles.len().saturating_sub(input_handle_count);
-        let expected_output_handle_count = result_handles_per_call * iterations as usize;
-        if output_handle_count != expected_output_handle_count {
-            bail!(
-                "{} {} native Runtime js.add {} allocated {} result handles, expected {}",
-                candidate.name(),
-                case.name,
-                batch_name,
-                output_handle_count,
-                expected_output_handle_count
-            );
-        }
-        let output_handles = retained_handles.split_off(input_handle_count);
-        for handle in output_handles {
-            let token = heap.encode_host_handle_token(handle)?;
-            if references.remove(&token).is_none() {
-                bail!(
-                    "{} {} native Runtime js.add could not find a newly allocated result handle",
-                    candidate.name(),
-                    case.name
-                );
-            }
-            heap.release_host_handle(handle)?;
-        }
-        if expected_output_handle_count != 0 {
-            let cleanup = heap.collect()?;
-            if cleanup.live_objects_after != input_handle_count as u64
-                || cleanup.reclaimed_objects != expected_output_handle_count
-            {
-                bail!(
-                    "{} {} native Runtime js.add {} did not reclaim its temporary result handles",
-                    candidate.name(),
-                    case.name,
-                    batch_name
-                );
-            }
-            cleanup_collections_total += 1;
-        }
-        result_handles_allocated_total += expected_output_handle_count;
-        Ok(output_handle_count)
-    };
-
     for _ in 0..warmups {
         let mut last_status = invoke();
         for _ in 1..iterations {
             last_status = invoke();
         }
-        if last_status != expected_status {
+        if last_status != expected_status || context.completion.as_ref() != Some(&case.expected) {
             bail!(
-                "{} {} native Runtime js.add warmup returned status {}, expected {}",
+                "{} {} native Runtime js.add warmup returned an unexpected status/completion (status={}, expected={})",
                 candidate.name(),
                 case.name,
                 last_status,
                 expected_status
             );
         }
-        finish_batch("warmup")?;
+        let (allocated, collected) = finish_native_runtime_add_batch(
+            candidate,
+            case,
+            &output_storage,
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+            input_handle_count,
+            iterations,
+            result_handles_per_call,
+            "warmup",
+        )?;
+        result_handles_allocated_total += allocated;
+        cleanup_collections_total += usize::from(collected);
     }
 
     let mut timings = Vec::with_capacity(samples);
@@ -4572,18 +4592,30 @@ fn measure_native_runtime_add_case(
             last_status = invoke();
         }
         timings.push(begin.elapsed().as_nanos() as f64 / iterations as f64);
-        if last_status != expected_status {
+        if last_status != expected_status || context.completion.as_ref() != Some(&case.expected) {
             bail!(
-                "{} {} native Runtime js.add measurement returned status {}, expected {}",
+                "{} {} native Runtime js.add measurement returned an unexpected status/completion (status={}, expected={})",
                 candidate.name(),
                 case.name,
                 last_status,
                 expected_status
             );
         }
-        finish_batch("measurement")?;
+        let (allocated, collected) = finish_native_runtime_add_batch(
+            candidate,
+            case,
+            &output_storage,
+            &mut heap,
+            &mut references,
+            &mut retained_handles,
+            input_handle_count,
+            iterations,
+            result_handles_per_call,
+            "measurement",
+        )?;
+        result_handles_allocated_total += allocated;
+        cleanup_collections_total += usize::from(collected);
     }
-    drop(finish_batch);
 
     let expected_calls = (warmups + samples) as u64 * iterations;
     let managed_operand_count = input_handle_count;
