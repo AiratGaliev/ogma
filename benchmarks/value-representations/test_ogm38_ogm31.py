@@ -12,6 +12,7 @@ import math
 import unittest
 from pathlib import Path
 
+import decode_ogm38_raw_archive as raw_archive
 import export_ogm38_raw_samples as exporter
 import validate_ogm38_ogm31 as proof
 
@@ -600,6 +601,27 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                 candidate["native_loop_ns_per_call"],
                 [value / 1000 for value in loop_values],
             )
+
+    def test_git_tracked_raw_archive_reconstructs_with_exact_checksums(self):
+        compressed, report = raw_archive.load_committed_archive()
+        self.assertEqual(39_096, len(compressed))
+        self.assertEqual(
+            "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+            hashlib.sha256(compressed).hexdigest(),
+        )
+        self.assertEqual("74991baa54b346389b6193c1f7075954055be181", report["source_revision"])
+        self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(101, report["samples"])
+        self.assertEqual(156, len(report["metric_arrays"]))
+        self.assertEqual(36, len(report["workers"]))
+        self.assertEqual(24, sum(worker["type"] == "collector" for worker in report["workers"]))
+        self.assertEqual(12, sum(worker["type"] == "allocator" for worker in report["workers"]))
+        self.assertTrue(all(len(series[2]) == 100 for series in report["metric_arrays"]))
+        self.assertEqual(
+            {"tagged-16-boxed", "tagged-16-representation-aware",
+             "nanbox-8-boxed", "nanbox-8-representation-aware"},
+            {candidate["name"] for candidate in report["candidates"]},
+        )
 
     def test_rejects_a_missing_candidate_or_fixture(self):
         native, dual = make_reports()
