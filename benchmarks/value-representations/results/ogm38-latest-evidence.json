@@ -264,11 +264,12 @@
     "decision_record": "benchmarks/value-representations/decision-record-ogm38.md",
     "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
     "exporter": "benchmarks/value-representations/export_ogm38_raw_samples.py",
-    "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py",
+    "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py; benchmarks/value-representations/test_ogm38_archive_integrity.py",
     "ci_artifact": "14762343441",
     "decoder": "benchmarks/value-representations/decode_ogm38_raw_archive.py",
     "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
-    "ci_artifact_note": "Canonical measurement snapshot artifact: 14762343441 (run 45044214950); later PR-head verification: run 45055209774 / artifact 14767710910. The verification artifact contains a fresh report but does not replace the immutable Git-tracked raw snapshot."
+    "ci_artifact_note": "Canonical measurement snapshot artifact: 14762343441 (run 45044214950); later PR-head verification: run 45055209774 / artifact 14767710910. The verification artifact contains a fresh report but does not replace the immutable Git-tracked raw snapshot.",
+    "archive_integrity_tests": "benchmarks/value-representations/test_ogm38_archive_integrity.py"
   },
   "pre_integrity_test_verification": {
     "id": 45055209774,
@@ -316,5 +317,45 @@
     "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465",
     "sha256": "247ed726c2f24366d9e6cceda4ccdc65ca59e931188faa2dfa9abe679c54235e",
     "note": "This projection is retained as a historical reference and is not part of the raw native/GC/allocator snapshot pinned by source_revision/tested_revision."
+  },
+  "implementation_and_integrity_verification": {
+    "id": 45058642369,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45058642369",
+    "tested_revision": "0bac5df6da65d3655cc0114d32883865b02cd9f2",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "fast_checks": {
+      "python_tests": 203,
+      "result": "passed"
+    },
+    "focused_tests": {
+      "value_representation": {
+        "ran": 45,
+        "result": "passed"
+      },
+      "dual_backend": {
+        "ran": 8,
+        "result": "passed"
+      },
+      "rust_unit_tests": {
+        "ran": 65,
+        "result": "passed"
+      },
+      "formatting": "passed",
+      "clippy": "passed",
+      "four_native_candidates": "passed",
+      "ogm31_differential": "passed",
+      "committed_raw_archive_reconstruction": "passed"
+    },
+    "artifact": {
+      "id": 14768059877,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45058642369/artifacts/14768059877",
+      "size_bytes": 626960,
+      "sha256": "1ed5c226edd88efdcf8218cb39fcaac7dc7fd69864bc2063a353cb208c801fbe"
+    },
+    "note": "The artifact was produced by a successful run on tested_revision. Documentation and manifest-only changes after that revision do not relabel the immutable raw measurement snapshot."
   }
 }
