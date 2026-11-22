@@ -147,7 +147,9 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             (parts_dir / f"part-{index:02d}.b64").read_bytes()
             for index in range(raw_archive.EXPECTED_PART_COUNT)
         )
-        encoded_sha = hashlib.sha256(encoded).hexdigest()
+        self.assertEqual(raw_archive.EXPECTED_BASE64_BYTES, len(encoded))
+        # The exporter stores a trailing newline after the Base64 payload.
+        encoded_sha = hashlib.sha256(encoded + b"\\n").hexdigest()
         self.assertEqual(encoded_sha, raw["base64_file_sha256"])
         self.assertEqual(encoded_sha, manifest["checksums"]["raw_delta_base64_file_sha256"])
         self.assertEqual(raw["xz_sha256"], manifest["checksums"]["raw_delta_xz_sha256"])
@@ -181,9 +183,9 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
                     values.append(values[-1] + delta)
                 self.assertEqual(projection[field], [value / 1000 for value in values])
 
-    def test_verification_pointer_is_for_the_last_completed_pr_head_run(self):
+    def test_manifest_records_the_pre_integrity_test_verification(self):
         manifest = json.loads((RESULTS / "ogm38-latest-evidence.json").read_text())
-        verification = manifest["latest_verification_run"]
+        verification = manifest["pre_integrity_test_verification"]
         self.assertEqual(45055209774, verification["id"])
         self.assertEqual("7f84ccba117047218fcbf2954f5463e0764c6692", verification["tested_revision"])
         self.assertEqual("success", verification["jobs"]["fast_checks"])

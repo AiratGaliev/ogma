@@ -270,7 +270,7 @@
     "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
     "ci_artifact_note": "Canonical measurement snapshot artifact: 14762343441 (run 45044214950); later PR-head verification: run 45055209774 / artifact 14767710910. The verification artifact contains a fresh report but does not replace the immutable Git-tracked raw snapshot."
   },
-  "latest_verification_run": {
+  "pre_integrity_test_verification": {
     "id": 45055209774,
     "url": "https://github.com/AiratGaliev/ogma/actions/runs/45055209774",
     "tested_revision": "7f84ccba117047218fcbf2954f5463e0764c6692",
