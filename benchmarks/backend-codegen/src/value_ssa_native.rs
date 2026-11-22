@@ -78,6 +78,7 @@ type NativeHandleDispatch = unsafe extern "C" fn(u64, u64, u64) -> i32;
 type NativeBatchHandleDispatch = unsafe extern "C" fn(u64, u64, u64, u64) -> i32;
 type NativePressure = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type NativeValueMove = unsafe extern "C" fn(u64, u64) -> i32;
+type NativeSemanticAdd = unsafe extern "C" fn(u64, u64, u64, u64, u64) -> i32;
 
 struct NativeHandleCallbackContext {
     heap: *mut GcHeap,
@@ -1471,6 +1472,78 @@ fn define_candidate_strict_equal(
     Ok(())
 }
 
+fn define_candidate_semantic_add(
+    module: &mut ObjectModule,
+    builder_context: &mut FunctionBuilderContext,
+    candidate: Candidate,
+    signature: &Signature,
+    function: cranelift_module::FuncId,
+) -> Result<()> {
+    let mut callback_signature = module.make_signature();
+    callback_signature.params.extend(
+        [
+            types::I64,
+            types::I64,
+            types::I64,
+            types::I64,
+            types::I64,
+            types::I64,
+        ]
+        .into_iter()
+        .map(AbiParam::new),
+    );
+    callback_signature.returns.push(AbiParam::new(types::I32));
+
+    let mut context = module.make_context();
+    context.func.signature = signature.clone();
+    {
+        let mut builder = FunctionBuilder::new(&mut context.func, builder_context);
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        let parameters = builder.block_params(entry).to_vec();
+        builder.switch_to_block(entry);
+
+        let (left_tag, left_payload, right_tag, right_payload) = match candidate.runtime {
+            RuntimeLayout::Tagged16 => (
+                builder.ins().load(types::I64, MemFlagsData::new(), parameters[0], 0),
+                builder.ins().load(types::I64, MemFlagsData::new(), parameters[0], 8),
+                builder.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0),
+                builder.ins().load(types::I64, MemFlagsData::new(), parameters[1], 8),
+            ),
+            RuntimeLayout::NanBox8 => (
+                builder.ins().ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64),
+                builder.ins().band_imm_u(parameters[0], MAX_PAYLOAD as i64),
+                builder.ins().ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64),
+                builder.ins().band_imm_u(parameters[1], MAX_PAYLOAD as i64),
+            ),
+        };
+
+        // js.add is a native call in the generated candidate function. The
+        // M0 Runtime helper owns coercion, managed result allocation and the
+        // Normal/Throw completion; the compiler-generated caller passes only
+        // candidate-layout tag/payload words and an opaque context pointer.
+        let callback = builder.import_signature(callback_signature);
+        let call = builder.ins().call_indirect(
+            callback,
+            parameters[2],
+            &[
+                parameters[3],
+                left_tag,
+                left_payload,
+                right_tag,
+                right_payload,
+                parameters[4],
+            ],
+        );
+        let status = builder.inst_results(call)[0];
+        builder.ins().return_(&[status]);
+        builder.seal_all_blocks();
+        builder.finalize(module.target_config());
+    }
+    module.define_function(function, &mut context)?;
+    Ok(())
+}
+
 fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u64> {
     let start = Instant::now();
     let mut flags = settings::builder();
@@ -1509,6 +1582,19 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         Linkage::Export,
         &numeric_binary_signature,
     )?;
+    let mut semantic_add_signature = module.make_signature();
+    semantic_add_signature.params.extend(
+        [types::I64, types::I64, types::I64, types::I64, types::I64]
+            .into_iter()
+            .map(AbiParam::new),
+    );
+    semantic_add_signature.returns.push(AbiParam::new(types::I32));
+    let semantic_add_function = module.declare_function(
+        "ogma_value_semantic_add",
+        Linkage::Export,
+        &semantic_add_signature,
+    )?;
+
     let mut strict_equal_signature = module.make_signature();
     strict_equal_signature.params.extend(
         [types::I64, types::I64, types::I64, types::I64]
@@ -1938,6 +2024,13 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
         candidate,
         &strict_equal_signature,
         strict_equal_function,
+    )?;
+    define_candidate_semantic_add(
+        &mut module,
+        &mut builder_context,
+        candidate,
+        &semantic_add_signature,
+        semantic_add_function,
     )?;
 
     // The second export is a real native helper boundary for candidate Values.
