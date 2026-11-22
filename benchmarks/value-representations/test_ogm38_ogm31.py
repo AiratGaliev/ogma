@@ -6,6 +6,7 @@ import base64
 import gzip
 import hashlib
 import json
+import lzma
 import os
 import math
 import unittest
@@ -533,6 +534,72 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
                 self.assertTrue(columns)
                 self.assertTrue(all(len(values) == 101 for values in columns.values()))
         self.assertTrue(report["differential_validation"]["all_candidates_match_portable_ogm31_oracle"])
+
+
+    @unittest.skipUnless(os.environ.get("OGM38_RESULTS_DIR"), "requires freshly exported CI evidence")
+    def test_committed_xz_raw_samples_cover_all_native_and_runtime_measurements(self):
+        results = Path(os.environ["OGM38_RESULTS_DIR"])
+        encoded = (
+            results / "ogm38-raw-native-samples.delta.json.xz.b64"
+        ).read_text(encoding="ascii")
+        compressed = base64.b64decode(encoded.strip(), validate=True)
+        decoded = lzma.decompress(compressed)
+        report = json.loads(decoded.decode("utf-8"))
+        self.assertEqual("ogma.ogm38.raw-measurements-delta", report["schema"])
+        self.assertEqual(1, report["version"])
+        self.assertEqual(report["source_revision"], report["tested_revision"])
+        self.assertEqual(101, report["samples"])
+        self.assertEqual(3, report["warmups"])
+        self.assertEqual(1000, report["numeric_scale"])
+        self.assertEqual(4, len(report["candidates"]))
+        expected_names = {
+            "tagged-16-boxed", "tagged-16-representation-aware",
+            "nanbox-8-boxed", "nanbox-8-representation-aware",
+        }
+        self.assertEqual(expected_names, {item["name"] for item in report["candidates"]})
+        self.assertEqual(36, len(report["workers"]))
+        self.assertEqual(24, sum(item["type"] == "collector" for item in report["workers"]))
+        self.assertEqual(12, sum(item["type"] == "allocator" for item in report["workers"]))
+        arrays = {item[0]: item for item in report["metric_arrays"]}
+        self.assertEqual(len(arrays), len(report["metric_arrays"]))
+        self.assertGreater(len(arrays), 100)
+        for key, first, deltas in report["metric_arrays"]:
+            self.assertEqual(100, len(deltas), key)
+            self.assertTrue(all(isinstance(value, int) for value in [first, *deltas]))
+        for candidate in report["candidates"]:
+            name = candidate["name"]
+            self.assertEqual(31, candidate["native_semantic_case_count"])
+            self.assertEqual(31, candidate["native_semantic_batch_dispatch_invocations"])
+            self.assertEqual(77, candidate["native_value_dispatches"])
+            for key in (
+                candidate["compile_metric"],
+                candidate["loop_metric"],
+                candidate["handle_dispatch_metric"],
+            ):
+                self.assertIn(key, arrays)
+            self.assertEqual(6, len(candidate["semantic_add_cases"]))
+            for case_name in candidate["semantic_add_cases"]:
+                self.assertIn(f"{name}|semantic_add|{case_name}", arrays)
+        primary = json.loads(
+            (results / "ogm38-primary-benchmark-samples.json").read_text(encoding="utf-8")
+        )
+        for candidate in primary["candidates"]:
+            delta_candidate = next(
+                item for item in report["candidates"] if item["name"] == candidate["name"]
+            )
+            compile_item = arrays[delta_candidate["compile_metric"]]
+            loop_item = arrays[delta_candidate["loop_metric"]]
+            compile_values = [compile_item[1]]
+            loop_values = [loop_item[1]]
+            for delta in compile_item[2]:
+                compile_values.append(compile_values[-1] + delta)
+            for delta in loop_item[2]:
+                loop_values.append(loop_values[-1] + delta)
+            self.assertEqual(candidate["compile_ns"], [value / 1000 for value in compile_values])
+            self.assertEqual(
+                candidate["native_loop_ns_per_call"],
+                [value / 1000 for value in loop_values],
+            )
 
     def test_rejects_a_missing_candidate_or_fixture(self):
         native, dual = make_reports()

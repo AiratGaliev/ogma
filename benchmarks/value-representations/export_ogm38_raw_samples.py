@@ -8,6 +8,7 @@ import base64
 import gzip
 import hashlib
 import json
+import lzma
 from pathlib import Path
 from typing import Any
 
@@ -400,6 +401,140 @@ def build_compact_raw_measurements(
     }
 
 
+
+def build_delta_raw_measurements(native: dict[str, Any]) -> dict[str, Any]:
+    """Losslessly encode each 101-sample metric as a scaled first value + deltas."""
+    metric_arrays: list[list[Any]] = []
+    workers: list[dict[str, Any]] = []
+
+    def add_array(key: str, values: list[Any]) -> None:
+        require(
+            isinstance(values, list) and len(values) == EXPECTED_SAMPLES,
+            f"{key} must contain {EXPECTED_SAMPLES} raw samples",
+        )
+        scaled = []
+        for value in values:
+            require(
+                isinstance(value, (int, float)) and not isinstance(value, bool),
+                f"{key} contains a non-numeric sample",
+            )
+            scaled_value = int(round(float(value) * 1000))
+            require(
+                abs(scaled_value / 1000 - float(value)) <= 0.0000001,
+                f"{key} has precision finer than the declared 0.001 unit scale",
+            )
+            scaled.append(scaled_value)
+        metric_arrays.append(
+            [key, scaled[0], [scaled[index] - scaled[index - 1] for index in range(1, len(scaled))]]
+        )
+
+    candidates = []
+    for candidate in native["candidates"]:
+        name = candidate["name"]
+        add_array(f"{name}|compile_ns", candidate["compile_ns"]["raw_samples_ns"])
+        add_array(
+            f"{name}|loop_ns_per_call",
+            candidate["throughput_ns_per_call"]["raw_samples_ns"],
+        )
+        add_array(
+            f"{name}|handle_dispatch_ns_per_call",
+            candidate["native_handle_dispatch"]["throughput_ns_per_call"]["raw_samples_ns"],
+        )
+        semantic_add_cases = []
+        for measurement in candidate["native_value_semantics"]["native_runtime_add_measurements"]:
+            case_name = measurement["case"]
+            add_array(
+                f"{name}|semantic_add|{case_name}",
+                measurement["throughput"]["raw_samples_ns"],
+            )
+            semantic_add_cases.append(case_name)
+
+        gc = candidate["gc"]
+        for comparison in gc["collector_comparisons"]:
+            rows = comparison["raw_samples"]
+            require(len(rows) == EXPECTED_SAMPLES, f"{name} collector raw sample count differs")
+            constants: dict[str, Any] = {}
+            variable_fields = []
+            for field in rows[0]:
+                values = [row[field] for row in rows]
+                if all(value == values[0] for value in values):
+                    constants[field] = values[0]
+                else:
+                    add_array(
+                        f"{name}|collector|{comparison['collector']}|{comparison['allocator_strategy']}|{field}",
+                        values,
+                    )
+                    variable_fields.append(field)
+            workers.append(
+                {
+                    "candidate": name,
+                    "type": "collector",
+                    "collector": comparison["collector"],
+                    "allocator": comparison["allocator_strategy"],
+                    "rss_baseline_bytes": comparison["process_peak_rss_baseline_bytes"],
+                    "rss_peak_bytes": comparison["process_peak_rss_bytes"],
+                    "rss_delta_bytes": comparison["process_peak_rss_delta_bytes"],
+                    "constant_fields": constants,
+                    "variable_fields": variable_fields,
+                }
+            )
+
+        for comparison in gc["allocator_comparisons"]:
+            rows = comparison["raw_samples"]
+            require(len(rows) == EXPECTED_SAMPLES, f"{name} allocator raw sample count differs")
+            constants = {}
+            variable_fields = []
+            for field in rows[0]:
+                values = [row[field] for row in rows]
+                if all(value == values[0] for value in values):
+                    constants[field] = values[0]
+                else:
+                    add_array(
+                        f"{name}|allocator|{comparison['strategy']}|{field}",
+                        values,
+                    )
+                    variable_fields.append(field)
+            workers.append(
+                {
+                    "candidate": name,
+                    "type": "allocator",
+                    "allocator": comparison["strategy"],
+                    "constant_fields": constants,
+                    "variable_fields": variable_fields,
+                }
+            )
+        candidates.append(
+            {
+                "name": name,
+                "compile_metric": f"{name}|compile_ns",
+                "loop_metric": f"{name}|loop_ns_per_call",
+                "handle_dispatch_metric": f"{name}|handle_dispatch_ns_per_call",
+                "semantic_add_cases": semantic_add_cases,
+                "native_semantic_batch_dispatch_invocations": candidate["native_value_semantics"]["native_batch_dispatch_invocations"],
+                "native_semantic_case_count": len(candidate["native_value_semantics"]["cases"]),
+                "native_value_dispatches": candidate["native_core_ir_corpus"]["native_value_dispatches"],
+            }
+        )
+
+    return {
+        "schema": "ogma.ogm38.raw-measurements-delta",
+        "version": 1,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "target": native["target_triple"],
+        "cpu": native["cpu_model"],
+        "rustc": native["rustc"],
+        "samples": native["measurement_samples"],
+        "warmups": native["warmup_rounds"],
+        "numeric_scale": 1000,
+        "encoding": "each metric array is [first value in milli-units, followed by 100 signed deltas]; worker fields constant across all 101 samples are stored once in constant_fields",
+        "candidates": candidates,
+        "workers": workers,
+        "metric_arrays": metric_arrays,
+    }
+
+
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -465,6 +600,16 @@ def main() -> int:
         compact_raw_base64, encoding="ascii"
     )
 
+    delta_raw = build_delta_raw_measurements(native)
+    delta_raw_bytes = json.dumps(
+        delta_raw, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    delta_raw_xz = lzma.compress(delta_raw_bytes, preset=9)
+    delta_raw_base64 = base64.b64encode(delta_raw_xz).decode("ascii") + "\n"
+    (output_dir / "ogm38-raw-native-samples.delta.json.xz.b64").write_text(
+        delta_raw_base64, encoding="ascii"
+    )
+
     print(
         json.dumps(
             {
@@ -483,6 +628,7 @@ def main() -> int:
                     "ogm38-runtime-raw-samples.json.gz",
                     "ogm38-ogm31-differential-report.json",
                     "ogm38-raw-measurements.json.gz.b64",
+                    "ogm38-raw-native-samples.delta.json.xz.b64",
                 ],
             },
             indent=2,
