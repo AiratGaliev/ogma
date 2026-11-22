@@ -4460,8 +4460,8 @@ fn measure_native_number_add(
         )
     };
     for _ in 0..warmups {
-        let mut last_status = 0;
-        for _ in 0..iterations {
+        let mut last_status = invoke();
+        for _ in 1..iterations {
             last_status = invoke();
         }
         if last_status != 0 || context.completion.as_ref() != Some(&expected) {
@@ -4475,8 +4475,8 @@ fn measure_native_number_add(
     let mut timings = Vec::with_capacity(samples);
     for _ in 0..samples {
         let begin = Instant::now();
-        let mut last_status = 0;
-        for _ in 0..iterations {
+        let mut last_status = invoke();
+        for _ in 1..iterations {
             last_status = invoke();
         }
         timings.push(begin.elapsed().as_nanos() as f64 / iterations as f64);
