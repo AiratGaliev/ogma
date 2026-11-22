@@ -94,6 +94,15 @@ NATIVE_RUNTIME_ADD_CASES = {
     "bigint-to-number-throws",
 }
 
+NATIVE_RUNTIME_ADD_EXPECTATIONS = {
+    "number-add": (0, 0),
+    "string-concat": (1, 1),
+    "bigint-add": (2, 1),
+    "object-to-primitive-add": (1, 1),
+    "symbol-add-throws": (1, 0),
+    "bigint-to-number-throws": (1, 0),
+}
+
 NATIVE_TO_ORACLE_FIELDS = {
     "branch_equal_result_bits": ("branch_equal", 7.0),
     "branch_unequal_result_bits": ("branch_unequal", 8.0),
@@ -171,52 +180,70 @@ def validate_semantic_case_evidence(
     ):
         raise RuntimeError(f"{candidate}: generated native js.add entry point has no measured call instruction")
 
-    add_measurement = semantic.get("native_runtime_add_number")
-    throughput = add_measurement.get("throughput") if isinstance(add_measurement, dict) else None
-    raw_samples = throughput.get("raw_samples_ns") if isinstance(throughput, dict) else None
+    add_measurements = semantic.get("native_runtime_add_measurements")
     if (
-        not isinstance(add_measurement, dict)
-        or add_measurement.get("operation") != "Number(19) + Number(23)"
-        or add_measurement.get("iterations_per_sample") != 1000
-        or not isinstance(add_measurement.get("iterations_per_sample"), int)
-        or isinstance(add_measurement.get("iterations_per_sample"), bool)
-        or add_measurement.get("warmup_rounds") != 3
-        or not isinstance(add_measurement.get("warmup_rounds"), int)
-        or isinstance(add_measurement.get("warmup_rounds"), bool)
-        or not isinstance(add_measurement.get("native_calls_total"), int)
-        or isinstance(add_measurement.get("native_calls_total"), bool)
-        or not isinstance(throughput, dict)
-        or not isinstance(raw_samples, list)
-        or len(raw_samples) != 101
-        or any(
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
-            or not math.isfinite(value)
-            or value <= 0
-            for value in raw_samples
-        )
-        or any(
-            not isinstance(throughput.get(metric), (int, float))
-            or isinstance(throughput.get(metric), bool)
-            or not math.isfinite(throughput[metric])
-            or throughput[metric] <= 0
-            for metric in ("p50_ns", "p95_ns", "p99_ns")
-        )
+        not isinstance(add_measurements, list)
+        or len(add_measurements) != len(NATIVE_RUNTIME_ADD_CASES)
+        or any(not isinstance(item, dict) or not isinstance(item.get("case"), str) for item in add_measurements)
     ):
-        raise RuntimeError(f"{candidate}: generated native Runtime js.add throughput samples are incomplete or invalid")
+        raise RuntimeError(f"{candidate}: native Runtime js.add case measurement list is malformed")
+    measured_cases = [item["case"] for item in add_measurements]
+    if len(set(measured_cases)) != len(measured_cases) or set(measured_cases) != NATIVE_RUNTIME_ADD_CASES:
+        raise RuntimeError(f"{candidate}: native Runtime js.add measurements do not cover the exact semantic case set")
 
-    if add_measurement["native_calls_total"] != (
-        add_measurement["warmup_rounds"] + len(raw_samples)
-    ) * add_measurement["iterations_per_sample"]:
-        raise RuntimeError(f"{candidate}: native Runtime js.add executed call count does not match its raw sample plan")
-
-    ordered_samples = sorted(raw_samples)
-    for metric, percentile in (("p50_ns", 0.50), ("p95_ns", 0.95), ("p99_ns", 0.99)):
-        expected = ordered_samples[math.ceil((len(ordered_samples) - 1) * percentile)]
-        if throughput[metric] != expected:
-            raise RuntimeError(
-                f"{candidate}: native Runtime js.add {metric} does not match its raw samples"
+    for measurement in add_measurements:
+        case_name = measurement["case"]
+        throughput = measurement.get("throughput")
+        raw_samples = throughput.get("raw_samples_ns") if isinstance(throughput, dict) else None
+        expected_forced_per_call, expected_handles_per_call = NATIVE_RUNTIME_ADD_EXPECTATIONS[case_name]
+        if (
+            measurement.get("iterations_per_sample") != 1000
+            or not isinstance(measurement.get("iterations_per_sample"), int)
+            or isinstance(measurement.get("iterations_per_sample"), bool)
+            or measurement.get("warmup_rounds") != 3
+            or not isinstance(measurement.get("warmup_rounds"), int)
+            or isinstance(measurement.get("warmup_rounds"), bool)
+            or not isinstance(measurement.get("native_calls_total"), int)
+            or isinstance(measurement.get("native_calls_total"), bool)
+            or measurement.get("native_calls_total") != 104000
+            or not isinstance(measurement.get("forced_collections_total"), int)
+            or isinstance(measurement.get("forced_collections_total"), bool)
+            or measurement.get("forced_collections_total") != expected_forced_per_call * 104000
+            or not isinstance(measurement.get("result_handles_allocated_total"), int)
+            or isinstance(measurement.get("result_handles_allocated_total"), bool)
+            or measurement.get("result_handles_allocated_total") != expected_handles_per_call * 104000
+            or not isinstance(measurement.get("cleanup_collections_total"), int)
+            or isinstance(measurement.get("cleanup_collections_total"), bool)
+            or measurement.get("cleanup_collections_total") != (105 if expected_handles_per_call else 1)
+            or not isinstance(throughput, dict)
+            or not isinstance(raw_samples, list)
+            or len(raw_samples) != 101
+            or any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value <= 0
+                for value in raw_samples
             )
+            or any(
+                not isinstance(throughput.get(metric), (int, float))
+                or isinstance(throughput.get(metric), bool)
+                or not math.isfinite(throughput[metric])
+                or throughput[metric] <= 0
+                for metric in ("p50_ns", "p95_ns", "p99_ns")
+            )
+        ):
+            raise RuntimeError(
+                f"{candidate}: native Runtime js.add {case_name} throughput/allocation samples are incomplete or invalid"
+            )
+
+        ordered_samples = sorted(raw_samples)
+        for metric, percentile in (("p50_ns", 0.50), ("p95_ns", 0.95), ("p99_ns", 0.99)):
+            expected = ordered_samples[math.ceil((len(ordered_samples) - 1) * percentile)]
+            if throughput[metric] != expected:
+                raise RuntimeError(
+                    f"{candidate}: native Runtime js.add {case_name} {metric} does not match its raw samples"
+                )
 
     for item in cases:
         case_name = item["name"]
