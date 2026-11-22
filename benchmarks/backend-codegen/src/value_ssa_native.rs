@@ -1510,15 +1510,27 @@ fn define_candidate_semantic_add(
 
         let (left_tag, left_payload, right_tag, right_payload) = match candidate.runtime {
             RuntimeLayout::Tagged16 => (
-                builder.ins().load(types::I64, MemFlagsData::new(), parameters[0], 0),
-                builder.ins().load(types::I64, MemFlagsData::new(), parameters[0], 8),
-                builder.ins().load(types::I64, MemFlagsData::new(), parameters[1], 0),
-                builder.ins().load(types::I64, MemFlagsData::new(), parameters[1], 8),
+                builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 0),
+                builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[0], 8),
+                builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 0),
+                builder
+                    .ins()
+                    .load(types::I64, MemFlagsData::new(), parameters[1], 8),
             ),
             RuntimeLayout::NanBox8 => (
-                builder.ins().ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64),
+                builder
+                    .ins()
+                    .ushr_imm_u(parameters[0], NAN_TAG_SHIFT as i64),
                 builder.ins().band_imm_u(parameters[0], MAX_PAYLOAD as i64),
-                builder.ins().ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64),
+                builder
+                    .ins()
+                    .ushr_imm_u(parameters[1], NAN_TAG_SHIFT as i64),
                 builder.ins().band_imm_u(parameters[1], MAX_PAYLOAD as i64),
             ),
         };
@@ -1593,7 +1605,9 @@ fn make_candidate_function(candidate: Candidate, object_path: &Path) -> Result<u
             .into_iter()
             .map(AbiParam::new),
     );
-    semantic_add_signature.returns.push(AbiParam::new(types::I32));
+    semantic_add_signature
+        .returns
+        .push(AbiParam::new(types::I32));
     let semantic_add_function = module.declare_function(
         "ogma_value_semantic_add",
         Linkage::Export,
@@ -3068,12 +3082,7 @@ unsafe extern "C" fn native_semantic_add_callback(
             let heap = unsafe { &mut *context.heap };
             let references = unsafe { &mut *context.references };
             let retained = unsafe { &mut *context.retained_handles };
-            let encoded = match candidate_value_for_semantic(
-                &value,
-                heap,
-                references,
-                retained,
-            ) {
+            let encoded = match candidate_value_for_semantic(&value, heap, references, retained) {
                 Ok(value) => value,
                 Err(_) => return 3,
             };
@@ -3084,13 +3093,8 @@ unsafe extern "C" fn native_semantic_add_callback(
             0
         }
         thrown @ SemanticCompletion::Throw { .. } => {
-            if encode_candidate_value(
-                context.runtime,
-                output,
-                0,
-                CandidateValue::Undefined,
-            )
-            .is_err()
+            if encode_candidate_value(context.runtime, output, 0, CandidateValue::Undefined)
+                .is_err()
             {
                 return 5;
             }
