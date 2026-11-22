@@ -4367,8 +4367,8 @@ fn run_native_value_semantics(
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
-        if let Some(runtime_add) = runtime_add_completion {
-            actual = runtime_add;
+        if let Some(runtime_add) = runtime_add_completion.as_ref() {
+            actual = runtime_add.clone();
             actual_host_trace.clear();
         }
         if let Some(host_callback) = &native_host_callback {
