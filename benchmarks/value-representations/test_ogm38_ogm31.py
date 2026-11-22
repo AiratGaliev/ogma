@@ -106,18 +106,24 @@ def make_reports():
                     "symbol": "ogma_value_semantic_add",
                     "call_instructions": 1,
                 },
-                "native_runtime_add_number": {
-                    "operation": "Number(19) + Number(23)",
-                    "iterations_per_sample": 1000,
-                    "warmup_rounds": 3,
-                    "native_calls_total": 104000,
-                    "throughput": {
-                        "p50_ns": 80.0,
-                        "p95_ns": 90.0,
-                        "p99_ns": 95.0,
-                        "raw_samples_ns": [80.0] * 101,
-                    },
-                },
+                "native_runtime_add_measurements": [
+                    {
+                        "case": case_name,
+                        "iterations_per_sample": 1000,
+                        "warmup_rounds": 3,
+                        "native_calls_total": 104000,
+                        "forced_collections_total": proof.NATIVE_RUNTIME_ADD_EXPECTATIONS[case_name][0] * 104000,
+                        "result_handles_allocated_total": proof.NATIVE_RUNTIME_ADD_EXPECTATIONS[case_name][1] * 104000,
+                        "cleanup_collections_total": 105 if proof.NATIVE_RUNTIME_ADD_EXPECTATIONS[case_name][1] else 1,
+                        "throughput": {
+                            "p50_ns": 80.0,
+                            "p95_ns": 80.0,
+                            "p99_ns": 80.0,
+                            "raw_samples_ns": [80.0] * 101,
+                        },
+                    }
+                    for case_name in sorted(proof.NATIVE_RUNTIME_ADD_CASES)
+                ],
                 "cases": [
                     {
                         "name": "nan-strict-equality",
@@ -510,27 +516,34 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
 
     def test_rejects_native_runtime_add_measurement_summary_and_call_count_drift(self):
         native, dual = make_reports()
-        measurement = native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
+        measurements = native["candidates"][0]["native_value_semantics"]["native_runtime_add_measurements"]
+        measurement = next(item for item in measurements if item["case"] == "number-add")
         measurement["native_calls_total"] -= 1
-        with self.assertRaisesRegex(RuntimeError, "executed call count"):
+        with self.assertRaisesRegex(RuntimeError, "number-add throughput/allocation samples are incomplete or invalid"):
             proof.validate_reports(native, dual)
 
         native, dual = make_reports()
-        measurement = native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
+        measurements = native["candidates"][0]["native_value_semantics"]["native_runtime_add_measurements"]
+        measurement = next(item for item in measurements if item["case"] == "number-add")
         measurement["throughput"]["p50_ns"] = 81.0
-        with self.assertRaisesRegex(RuntimeError, "p50_ns does not match its raw samples"):
+        with self.assertRaisesRegex(RuntimeError, "number-add p50_ns does not match its raw samples"):
             proof.validate_reports(native, dual)
 
     def test_rejects_missing_or_incomplete_native_runtime_add_measurement(self):
         native, dual = make_reports()
         semantic = native["candidates"][0]["native_value_semantics"]
-        semantic["native_runtime_add_number"]["throughput"]["raw_samples_ns"].pop()
-        with self.assertRaisesRegex(RuntimeError, "throughput samples are incomplete or invalid"):
+        measurement = next(
+            item for item in semantic["native_runtime_add_measurements"]
+            if item["case"] == "string-concat"
+        )
+        measurement["throughput"]["raw_samples_ns"].pop()
+        with self.assertRaisesRegex(RuntimeError, "string-concat throughput/allocation samples are incomplete or invalid"):
             proof.validate_reports(native, dual)
 
         native, dual = make_reports()
-        del native["candidates"][0]["native_value_semantics"]["native_runtime_add_number"]
-        with self.assertRaisesRegex(RuntimeError, "throughput samples are incomplete or invalid"):
+        semantic = native["candidates"][0]["native_value_semantics"]
+        semantic["native_runtime_add_measurements"].pop()
+        with self.assertRaisesRegex(RuntimeError, "do not cover the exact semantic case set"):
             proof.validate_reports(native, dual)
 
     def test_rejects_native_runtime_operation_fallback_to_the_oracle(self):
