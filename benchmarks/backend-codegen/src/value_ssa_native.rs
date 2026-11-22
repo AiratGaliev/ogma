@@ -4821,7 +4821,7 @@ fn run_native_shadow_root_validation(
     if entry.objects_live != managed_roots
         || entry.objects_marked != managed_roots
         || entry.roots_scanned != managed_roots * 3
-        || candidate_entry_collection.live_objects != managed_roots as u64
+        || candidate_entry_collection.live_objects_after != managed_roots as u64
         || !candidate_entry_handles_survived
     {
         bail!(
@@ -4848,7 +4848,7 @@ fn run_native_shadow_root_validation(
     if call_boundary.objects_live != managed_roots
         || call_boundary.objects_marked != managed_roots
         || call_boundary.roots_scanned != managed_roots * 3
-        || candidate_call_collection.live_objects != managed_roots as u64
+        || candidate_call_collection.live_objects_after != managed_roots as u64
         || !candidate_call_handles_survived
     {
         bail!(
