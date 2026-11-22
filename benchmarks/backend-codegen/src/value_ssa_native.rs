@@ -782,7 +782,16 @@ struct NativeValueSemanticsEvidence {
     native_callbacks: usize,
     forced_collections: usize,
     native_semantic_add_code: NativeCodeMetrics,
+    native_runtime_add_number: NativeRuntimeAddMeasurement,
     every_case_matches: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NativeRuntimeAddMeasurement {
+    operation: &'static str,
+    iterations_per_sample: u64,
+    warmup_rounds: usize,
+    throughput: Distribution,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4392,10 +4401,130 @@ fn dispatch_native_semantic_inputs(
         reference_tokens,
     })
 }
+fn measure_native_number_add(
+    candidate: Candidate,
+    semantic_add: NativeSemanticAdd,
+    iterations: u64,
+    warmups: usize,
+    samples: usize,
+) -> Result<NativeRuntimeAddMeasurement> {
+    if iterations == 0 || samples == 0 {
+        bail!("native Runtime js.add measurement requires positive iterations and samples");
+    }
+    let mut input_storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; 4],
+        RuntimeLayout::NanBox8 => vec![0_u64; 2],
+    };
+    encode_candidate_value(
+        candidate.runtime,
+        &mut input_storage,
+        0,
+        CandidateValue::Number(canonical_number_bits(19.0)),
+    )?;
+    encode_candidate_value(
+        candidate.runtime,
+        &mut input_storage,
+        1,
+        CandidateValue::Number(canonical_number_bits(23.0)),
+    )?;
+    let left = native_value_argument_for_slot(candidate, &input_storage, 0)?;
+    let right = native_value_argument_for_slot(candidate, &input_storage, 1)?;
+    let mut output_storage = match candidate.runtime {
+        RuntimeLayout::Tagged16 => vec![0_u64; 2],
+        RuntimeLayout::NanBox8 => vec![0_u64; 1],
+    };
+    let mut heap = GcHeap::new(CollectorKind::MarkSweep);
+    let mut references = BTreeMap::new();
+    let mut retained_handles = Vec::new();
+    let mut context = NativeRuntimeAddContext {
+        runtime: candidate.runtime,
+        heap: &mut heap,
+        references: &mut references,
+        retained_handles: &mut retained_handles,
+        completion: None,
+        forced_collections: 0,
+        helper_calls: 0,
+    };
+    let callback = native_semantic_add_callback as *const () as usize as u64;
+    let context_pointer = &mut context as *mut NativeRuntimeAddContext as usize as u64;
+    let output_pointer = output_storage.as_mut_ptr() as usize as u64;
+    let expected = SemanticCompletion::Normal(semantic_number(42.0));
+
+    let invoke = || unsafe {
+        semantic_add(
+            left,
+            right,
+            callback,
+            context_pointer,
+            output_pointer,
+        )
+    };
+    for _ in 0..warmups {
+        let mut last_status = 0;
+        for _ in 0..iterations {
+            last_status = invoke();
+        }
+        if last_status != 0 || context.completion.as_ref() != Some(&expected) {
+            bail!(
+                "{} native Runtime Number js.add warmup returned an unexpected completion/status",
+                candidate.name()
+            );
+        }
+    }
+
+    let mut timings = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let begin = Instant::now();
+        let mut last_status = 0;
+        for _ in 0..iterations {
+            last_status = invoke();
+        }
+        timings.push(begin.elapsed().as_nanos() as f64 / iterations as f64);
+        if last_status != 0 || context.completion.as_ref() != Some(&expected) {
+            bail!(
+                "{} native Runtime Number js.add measurement returned an unexpected completion/status",
+                candidate.name()
+            );
+        }
+    }
+
+    let output = decode_candidate_value(candidate.runtime, &output_storage, 0)?;
+    if output != CandidateValue::Number(canonical_number_bits(42.0)) {
+        bail!(
+            "{} native Runtime Number js.add measurement stored an incorrect candidate Value",
+            candidate.name()
+        );
+    }
+    let expected_calls = (warmups + samples) as u64 * iterations;
+    if context.helper_calls as u64 != expected_calls
+        || context.forced_collections != 0
+        || !retained_handles.is_empty()
+    {
+        bail!(
+            "{} native Runtime Number js.add measurement accounting mismatch (calls={}, expected={}, collections={}, handles={})",
+            candidate.name(),
+            context.helper_calls,
+            expected_calls,
+            context.forced_collections,
+            retained_handles.len()
+        );
+    }
+
+    Ok(NativeRuntimeAddMeasurement {
+        operation: "Number(19) + Number(23)",
+        iterations_per_sample: iterations,
+        warmup_rounds: warmups,
+        throughput: distribution(timings),
+    })
+}
+
 fn run_native_value_semantics(
     candidate: Candidate,
     library: &Library,
     object_path: &Path,
+    iterations: u64,
+    warmups: usize,
+    samples: usize,
 ) -> Result<NativeValueSemanticsEvidence> {
     let dispatch = unsafe {
         *library
@@ -4682,11 +4811,14 @@ fn run_native_value_semantics(
             candidate.name()
         );
     }
+    let native_runtime_add_number =
+        measure_native_number_add(candidate, semantic_add, iterations, warmups, samples)?;
     Ok(NativeValueSemanticsEvidence {
         cases: evidence,
         native_callbacks: total_callbacks,
         forced_collections: total_forced_collections,
         native_semantic_add_code,
+        native_runtime_add_number,
         every_case_matches: true,
     })
 }
@@ -7088,7 +7220,14 @@ fn run(
         let native_core_ir_corpus = run_native_core_ir_corpus_validation(candidate, &library)?;
         let native_core_ir_execution =
             run_native_core_ir_execution(candidate, &library, &object_path)?;
-        let native_value_semantics = run_native_value_semantics(candidate, &library, &object_path)?;
+        let native_value_semantics = run_native_value_semantics(
+            candidate,
+            &library,
+            &object_path,
+            iterations,
+            warmups,
+            samples,
+        )?;
         let semantic_reference_count = semantic_cases()
             .iter()
             .flat_map(|case| case.inputs.iter())
