@@ -192,6 +192,7 @@ def build_primary_projection(
                 "shared_library_bytes": candidate["shared_library_bytes"],
                 "loop_code_bytes": candidate["native_code"]["function_code_bytes"],
                 "semantic_cases_passed": len(candidate["native_value_semantics"]["cases"]),
+                "native_semantic_batch_dispatch_invocations": candidate["native_value_semantics"]["native_batch_dispatch_invocations"],
                 "native_batch_invocations": candidate["native_core_ir_corpus"]["native_batch_invocations"],
                 "native_value_dispatches": candidate["native_core_ir_corpus"]["native_value_dispatches"],
                 "reference_values_resolved_after_forced_gc": candidate["native_core_ir_corpus"]["reference_values_resolved_after_forced_gc"],

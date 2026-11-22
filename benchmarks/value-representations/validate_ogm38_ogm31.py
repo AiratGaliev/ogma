@@ -170,6 +170,16 @@ def validate_semantic_case_evidence(
             f"{candidate}: semantic case set differs (missing={missing}, unexpected={unexpected})"
         )
 
+    batch_dispatches = semantic.get("native_batch_dispatch_invocations")
+    if (
+        not isinstance(batch_dispatches, int)
+        or isinstance(batch_dispatches, bool)
+        or batch_dispatches != len(EXPECTED_SEMANTIC_CASES)
+    ):
+        raise RuntimeError(
+            f"{candidate}: native semantic batch dispatcher must execute exactly once per case"
+        )
+
     native_add_code = semantic.get("native_semantic_add_code")
     if (
         not isinstance(native_add_code, dict)
@@ -246,6 +256,15 @@ def validate_semantic_case_evidence(
 
     for item in cases:
         case_name = item["name"]
+        case_batch_dispatches = item.get("native_batch_dispatch_invocations")
+        if (
+            not isinstance(case_batch_dispatches, int)
+            or isinstance(case_batch_dispatches, bool)
+            or case_batch_dispatches != 1
+        ):
+            raise RuntimeError(
+                f"{candidate}: {case_name} did not execute exactly one generated native batch-dispatch CFG"
+            )
         expected_native_add = case_name in NATIVE_RUNTIME_ADD_CASES
         actual_native_add = item.get("native_runtime_add_executed")
         native_add_calls = item.get("native_runtime_add_calls")

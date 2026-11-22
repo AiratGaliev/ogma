@@ -741,6 +741,7 @@ struct NativeValueSemanticCaseEvidence {
     actual_host_trace: Vec<String>,
     native_callbacks: usize,
     forced_collections: usize,
+    native_batch_dispatch_invocations: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_reference_identity_preserved: bool,
@@ -767,6 +768,7 @@ struct NativeSemanticDispatchResult {
     observed: Vec<SemanticValue>,
     callbacks: usize,
     forced_collections: usize,
+    native_batch_dispatch_invocations: usize,
     aot_host_call: Option<NativeAotHostCallEvidence>,
     native_host_callback: Option<NativeHostCallbackEvidence>,
     native_strict_equal_result: Option<bool>,
@@ -781,6 +783,7 @@ struct NativeValueSemanticsEvidence {
     cases: Vec<NativeValueSemanticCaseEvidence>,
     native_callbacks: usize,
     forced_collections: usize,
+    native_batch_dispatch_invocations: usize,
     native_semantic_add_code: NativeCodeMetrics,
     native_runtime_add_measurements: Vec<NativeRuntimeAddMeasurement>,
     every_case_matches: bool,
@@ -4143,7 +4146,7 @@ fn native_value_argument_for_slot(
 
 fn dispatch_native_semantic_inputs(
     candidate: Candidate,
-    dispatch: NativeHandleDispatch,
+    batch_dispatch: NativeBatchHandleDispatch,
     strict_equal: NativeStrictEqual,
     inputs: &[SemanticValue],
     options: NativeSemanticDispatchOptions,
@@ -4157,18 +4160,12 @@ fn dispatch_native_semantic_inputs(
         RuntimeLayout::Tagged16 => vec![0_u64; inputs.len() * 2],
         RuntimeLayout::NanBox8 => vec![0_u64; inputs.len()],
     };
-    let mut expected_tags_payloads = Vec::with_capacity(inputs.len());
     let mut reference_tokens = Vec::with_capacity(inputs.len());
     for (index, value) in inputs.iter().enumerate() {
         let encoded =
             candidate_value_for_semantic(value, &mut heap, &mut references, &mut retained_handles)?;
         reference_tokens.push(candidate_reference_token(encoded));
         encode_candidate_value(candidate.runtime, &mut storage, index, encoded)?;
-        expected_tags_payloads.push(candidate_value_tag_payload(
-            candidate.runtime,
-            &storage,
-            index,
-        )?);
     }
 
     let (runtime_add_completion, native_runtime_add_calls, runtime_add_forced_collections) =
@@ -4337,23 +4334,23 @@ fn dispatch_native_semantic_inputs(
     };
     let callback_address = decode_native_semantic_value_callback as *const () as usize as u64;
     let context_argument = &mut context as *mut NativeSemanticCallbackContext as usize as u64;
-    for (index, (expected_tag, expected_payload)) in expected_tags_payloads.into_iter().enumerate()
-    {
-        let value_argument = match candidate.runtime {
-            RuntimeLayout::Tagged16 => unsafe {
-                storage.as_mut_ptr().add(index * 2) as usize as u64
-            },
-            RuntimeLayout::NanBox8 => storage[index],
-        };
-        // SAFETY: candidate storage, callback context and callback function
-        // remain valid for this synchronous native entrypoint call.
-        let status = unsafe { dispatch(value_argument, callback_address, context_argument) };
-        if status != 0 {
-            bail!(
-                "{} native semantic Value callback rejected input {index} with status {status} (tag={expected_tag:#x}, payload={expected_payload:#x})",
-                candidate.name()
-            );
-        }
+    let value_buffer = storage.as_mut_ptr() as usize as u64;
+    let value_count = u64::try_from(inputs.len())
+        .context("native semantic Value batch length does not fit the C ABI")?;
+    // The generated Cranelift batch dispatcher owns the loop, candidate-layout
+    // slot addressing, Value validation and C-ABI callback sequence. Keep the
+    // Rust side to one native entrypoint per semantic case; it must not emulate
+    // the native CFG by dispatching individual Values in a host-side loop.
+    // SAFETY: the contiguous candidate Value array and callback context remain
+    // live and exclusively borrowed until the generated native call returns.
+    let status = unsafe {
+        batch_dispatch(value_buffer, value_count, callback_address, context_argument)
+    };
+    if status != 0 {
+        bail!(
+            "{} generated native semantic batch dispatcher rejected the Value matrix (status={status}, count={value_count})",
+            candidate.name()
+        );
     }
     let expected_native_values = if options.perform_native_transition {
         vec![inputs[1].clone(), inputs[1].clone()]
@@ -4393,6 +4390,7 @@ fn dispatch_native_semantic_inputs(
         forced_collections: forced_collections
             + reference_equality_collections
             + runtime_add_forced_collections,
+        native_batch_dispatch_invocations: 1,
         aot_host_call,
         native_host_callback: context_native_host_callback,
         native_strict_equal_result,
@@ -4724,10 +4722,10 @@ fn run_native_value_semantics(
     warmups: usize,
     samples: usize,
 ) -> Result<NativeValueSemanticsEvidence> {
-    let dispatch = unsafe {
+    let batch_dispatch = unsafe {
         *library
-            .get::<NativeHandleDispatch>(b"ogma_value_handle_dispatch\0")
-            .context("generated native Value dispatch entry point missing for semantic suite")?
+            .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\0")
+            .context("generated native Value batch dispatcher missing for semantic suite")?
     };
     let value_move = unsafe {
         *library
@@ -4747,6 +4745,7 @@ fn run_native_value_semantics(
     let mut evidence = Vec::new();
     let mut total_callbacks = 0;
     let mut total_forced_collections = 0;
+    let mut total_native_batch_dispatch_invocations = 0;
     for case in semantic_cases() {
         let invoke_aot_host = matches!(
             case.name,
@@ -4778,7 +4777,7 @@ fn run_native_value_semantics(
         };
         let dispatched = dispatch_native_semantic_inputs(
             candidate,
-            dispatch,
+            batch_dispatch,
             strict_equal,
             &case.inputs,
             NativeSemanticDispatchOptions {
@@ -4810,6 +4809,7 @@ fn run_native_value_semantics(
             native_reference_value_comparison_executed,
             runtime_add_completion,
             native_runtime_add_calls,
+            native_batch_dispatch_invocations,
             reference_tokens,
         } = dispatched;
         let (mut actual, mut actual_host_trace) = evaluate_semantic_case(case.name, &observed);
@@ -4981,6 +4981,7 @@ fn run_native_value_semantics(
         }
         total_callbacks += callbacks;
         total_forced_collections += forced_collections;
+        total_native_batch_dispatch_invocations += native_batch_dispatch_invocations;
         evidence.push(NativeValueSemanticCaseEvidence {
             name: case.name.to_owned(),
             inputs,
@@ -4990,6 +4991,7 @@ fn run_native_value_semantics(
             actual_host_trace,
             native_callbacks: callbacks,
             forced_collections,
+            native_batch_dispatch_invocations,
             aot_host_call,
             native_host_callback,
             native_reference_identity_preserved,
@@ -5015,6 +5017,7 @@ fn run_native_value_semantics(
         cases: evidence,
         native_callbacks: total_callbacks,
         forced_collections: total_forced_collections,
+        native_batch_dispatch_invocations: total_native_batch_dispatch_invocations,
         native_semantic_add_code,
         native_runtime_add_measurements,
         every_case_matches: true,

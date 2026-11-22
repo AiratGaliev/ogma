@@ -102,6 +102,7 @@ def make_reports():
             },
             "native_value_semantics": {
                 "every_case_matches": True,
+                "native_batch_dispatch_invocations": len(proof.EXPECTED_SEMANTIC_CASES),
                 "native_semantic_add_code": {
                     "symbol": "ogma_value_semantic_add",
                     "call_instructions": 1,
@@ -307,6 +308,7 @@ def make_reports():
             item.setdefault("actual_host_trace", item["expected_host_trace"])
             item.setdefault("native_callbacks", 1)
             item.setdefault("forced_collections", 0)
+            item.setdefault("native_batch_dispatch_invocations", 1)
             item.setdefault("native_reference_identity_preserved", True)
             item.setdefault("native_store_load_transition", True)
             is_native_add = item["name"] in proof.NATIVE_RUNTIME_ADD_CASES
@@ -544,6 +546,19 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
         semantic = native["candidates"][0]["native_value_semantics"]
         semantic["native_runtime_add_measurements"].pop()
         with self.assertRaisesRegex(RuntimeError, "do not cover the exact semantic case set"):
+            proof.validate_reports(native, dual)
+
+    def test_rejects_missing_or_incomplete_native_semantic_batch_dispatch(self):
+        native, dual = make_reports()
+        semantic = native["candidates"][0]["native_value_semantics"]
+        semantic["native_batch_dispatch_invocations"] -= 1
+        with self.assertRaisesRegex(RuntimeError, "native semantic batch dispatcher"):
+            proof.validate_reports(native, dual)
+
+        native, dual = make_reports()
+        case = native["candidates"][0]["native_value_semantics"]["cases"][0]
+        case["native_batch_dispatch_invocations"] = 0
+        with self.assertRaisesRegex(RuntimeError, "generated native batch-dispatch CFG"):
             proof.validate_reports(native, dual)
 
     def test_rejects_native_runtime_operation_fallback_to_the_oracle(self):
