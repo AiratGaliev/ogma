@@ -149,7 +149,7 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(raw_archive.EXPECTED_BASE64_BYTES, len(encoded))
         # The exporter stores a trailing newline after the Base64 payload.
-        encoded_sha = hashlib.sha256(encoded + b"\\n").hexdigest()
+        encoded_sha = hashlib.sha256(encoded + bytes([10])).hexdigest()
         self.assertEqual(encoded_sha, raw["base64_file_sha256"])
         self.assertEqual(encoded_sha, manifest["checksums"]["raw_delta_base64_file_sha256"])
         self.assertEqual(raw["xz_sha256"], manifest["checksums"]["raw_delta_xz_sha256"])
