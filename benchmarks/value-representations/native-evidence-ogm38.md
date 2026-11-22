@@ -1,6 +1,6 @@
 # OGM-38 — Native Value and SSA evidence
 
-**M0 native evidence: complete except raw-data Git storage; PR #32 remains open.** All four candidates are measured with generated native code, an OGM-24-backed OGM-26 heap, isolated peak-memory workers, a 31-case native semantic batch CFG and independent OGM-31 differential. The full raw measurement archive is retained in the successful CI artifact; its manifest, exporter and tests are committed. The raw sample arrays themselves are not yet stored in Git.
+**M0 native evidence: complete except raw-data Git storage; PR #32 remains open.** All four candidates are measured with generated native code, an OGM-24-backed OGM-26 heap, isolated peak-memory workers, a 31-case native semantic batch CFG and independent OGM-31 differential. The full raw measurement archive for tested HEAD `74991baa…` is retained in its successful CI artifact; the manifest, exporter and tests are committed. The raw sample arrays themselves are not yet stored in Git.
 
 ## Question and candidates
 
@@ -17,31 +17,34 @@ All four use the same Core IR v1 contract, the same five canonical OGM-31 fixtur
 
 ## Reproducible CI run and evidence provenance
 
-- Latest successful native-evidence run: [#45042417728](https://github.com/AiratGaliev/ogma/actions/runs/45042417728).
-- Measured source/tested revision: `770bf5bdaa598473a49733d1053b4fff589091c1`.
-- Both `fast-checks` and `OGM-38 native Value and SSA representation evidence` passed. The focused job completed Core IR/OGM-17 verification, Rust formatting, Clippy with `-D warnings`, OGM-26/27/backend contract tests, all four native candidates, OGM-31 differential validation, evidence export and the raw-data regression suite.
-- Full evidence artifact: [`ogm38-native-value-ssa-evidence`, artifact 14762262101](https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101). It contains the full native JSON report, OGM-31 differential, Core IR report, generated Cranelift/LLVM objects, portable .ogmb fixtures, resolved lockfile and all raw samples.
-- Target: `x86_64-unknown-linux-gnu`; CPU AMD EPYC 9V45 96-Core Processor; Linux 7.0.0-1017-azure; Rust 1.100.0; Cranelift 0.137.2; Python 3.12.16.
+- Latest successful native-evidence run: [#45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950).
+- Measured source/tested revision: `74991baa54b346389b6193c1f7075954055be181`; the native report records identical source and tested revisions.
+- Both `fast-checks` and `OGM-38 native Value and SSA representation evidence` passed. The focused job completed Core IR/OGM-17 verification, formatting, Clippy with `-D warnings`, OGM-26/27/backend contract tests, all four native candidates, OGM-31 differential, compact raw export and validation/regression tests.
+- Full evidence artifact: [`ogm38-native-value-ssa-evidence`, artifact 14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). ZIP SHA-256: `156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d`; size 629,779 bytes. It contains the full native JSON, OGM-31 differential, Core IR report, generated Cranelift/LLVM objects, portable .ogmb fixtures, lockfile and raw samples.
+- Target: `x86_64-unknown-linux-gnu`; CPU Intel Xeon 6975P-C; Linux 7.0.0-1014-aws; Rust 1.100.0; Cranelift 0.137.2; regalloc2 0.15.3; Python 3.12.16.
 - Sampling: three warmups, 101 measured samples per metric and 1,000 native calls per throughput sample.
-- The committed `results/ogm38-latest-evidence.json` pins the run, artifact, measured source revision, toolchain, principal metrics and SHA-256 checksums. The exporter and regression tests are committed and run before artifact upload.
-- **Raw-data storage boundary:** all 156 raw metric series and 36 worker records are in artifact #14762262101, including the lossless XZ delta snapshot `ogm38-raw-native-samples.delta.json.xz.b64`. The artifact's base64 source SHA-256 is `2d4fba0fb455952d6d971699518556d8fc4e7d74e17e353c72e6431c149204c5`; decoded XZ SHA-256 is `5b3c2dd2d982c2ddfe492819b0870f7e6b48529e35ef21b711d10186bf62ada5`; decoded JSON SHA-256 is `675865adc754b06712a777e8a46cb949338256c53acb597bb49bb3abd3b831b8`. The compact raw snapshot is in the CI artifact, not yet committed to the repository.
-- The older tracked `ogm38-native-value-ssa-report.json.gz` and `ogm38-runtime-raw-samples.json.gz` remain historical snapshots from previous runs. Do not use them as current raw data for revision `770bf5b`.
-- `export_ogm38_raw_samples.py` validates the full native and differential reports and generates deterministic primary/runtime and compact raw projections. CI uploads the full report and projections only after validation.
+- Report checksums: native JSON `938a8b2c1d81bbe81d7dd2aa212849442a5e4a749a16ed453e5ea9c6943e0c06`; compressed native report `746386cadf30fcb412ccc77a7fd7a33d631432854463580eb378e66ee63f45f0`; differential `5c17d9e29d24dbe1faf5544c48aca958c7103e110a60ac5de2b8b770d1be6da7`; primary projection `18de679735ae6e80b60ab70bfe68a490ba3e5668517b9306818ea87db7404802`; runtime projection gzip `3730d8ae29f28265f7d1601a46ce049769a802de1ee6ee8718e7c34c617cdbde`.
+- Compact raw XZ dataset: `ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64` in artifact #14762343441. Base64 file (including trailing newline) SHA-256 `f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb`, size 52,129 bytes; decoded XZ SHA-256 `ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d`, size 39,096 bytes; decompressed JSON SHA-256 `08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057`, size 163,821 bytes.
+- The compact XZ dataset contains 156 raw series × 101 samples and 36 worker records (24 collector configurations and 12 direct allocator configurations). The complete columnar sample export is also retained in artifact #14762343441.
+- Exporter, validator, tests, decision record and checksum-pinned manifest are in Git. The raw archive itself remains artifact-backed rather than Git-tracked, so the repository-storage part of acceptance criterion 6 is still Partial.
+- Older raw files from runs before revision `74991baa` are historical snapshots and must not be used as current measurements.
+
+
 
 ## Native code generation and throughput
 
 The generated Cranelift ObjectModule functions are loaded and invoked as native code. The principal throughput workload is a strict-equality-controlled, Number-only loop specialization from the canonical loop fixture (`js.add` + `js.to_number`). It is a deliberately narrow compiler/runtime probe, not representative JavaScript application throughput.
 
 | Candidate | Value bytes | Compile p50 / p95 / p99 (ms) | Loop p50 / p95 / p99 (ns) | Handle dispatch p50 (ns) | Object bytes | Loop code bytes |
-|---|---:|---:|---:|---:|---:|
-| tagged-16-boxed | 16 | 1.248 / 1.293 / 1.350 | 334.334 / 347.263 / 352.641 | 5.108 | 4,128 | 336 |
-| tagged-16-representation-aware | 16 | 1.385 / 1.432 / 3.434 | 102.113 / 112.990 / 114.492 | 5.098 | 4,456 | 336 |
-| nanbox-8-boxed | 8 | 1.164 / 1.910 / 3.259 | 336.747 / 347.013 / 350.928 | 4.577 | 3,720 | 392 |
-| nanbox-8-representation-aware | 8 | 1.211 / 1.280 / 3.397 | 84.818 / 160.141 / 215.004 | 4.577 | 4,024 | 384 |
+|---|---:|---:|---:|---:|---:|---:|
+| tagged-16-boxed | 16 | 1.444 / 1.606 / 1.662 | 278.135 / 289.190 / 295.624 | 5.413 | 4,128 | 336 |
+| tagged-16-representation-aware | 16 | 1.619 / 1.826 / 1.948 | 92.447 / 103.353 / 106.646 | 5.413 | 4,456 | 336 |
+| nanbox-8-boxed | 8 | 1.360 / 1.558 / 1.654 | 278.053 / 289.244 / 292.306 | 5.163 | 3,720 | 392 |
+| nanbox-8-representation-aware | 8 | 1.464 / 1.650 / 1.786 | 86.048 / 96.714 / 102.456 | 5.411 | 4,024 | 384 |
 
 All four shared libraries are 15,304 bytes in this run. Complete object size includes helper functions in addition to the Number loop. Compile p50 is candidate Cranelift function compilation, not whole-program compile/startup time. The large p99 compile outliers are retained in the raw sample set and should not be treated as steady-state compile latency.
 
-On this Number-only workload, representation-aware SSA reduces p50 latency by about 3.27× for Tagged16 and 3.97× for NaN-box compared with boxed SSA. NaN-box representation-aware has the lowest p50, but its p95/p99 are more variable in this run. This supports representation-aware internal SSA as the compiler policy; it is not a universal application performance claim and does not establish NaN-box as a public or production ABI.
+On this Number-only workload, representation-aware SSA reduces p50 latency by about 3.01× for Tagged16 and 3.23× for NaN-box compared with boxed SSA. The NaN-box representation-aware p50 is 6.9% lower than Tagged16 representation-aware, a small difference compared with the representation-policy gain. This supports representation-aware internal SSA as the compiler policy; it is not a universal application performance claim and does not establish NaN-box as a public or production ABI.
 
 ## Canonical Core IR corpus and differential
 
@@ -68,6 +71,19 @@ The strict-equality regression is important: equal Strings and equal BigInts are
 
 **Boundary:** String concatenation, BigInt arithmetic, object ToPrimitive and some completion observations are still M0 oracle/adapter work rather than general generated native operator implementations. The 31-case pass is not a claim that the full ECMAScript operator set has been lowered.
 
+## Native semantic helper measurements
+
+The generated native candidate-layout callers enter shared M0 Rust semantic helpers for dynamic operations. These timings measure the real helper/ABI boundary and should not be interpreted as four separate Cranelift implementations of the full ECMAScript operators.
+
+| Candidate | Number add | String concat | BigInt add | Object ToPrimitive add | Symbol error | BigInt/Number error |
+|---|---:|---:|---:|---:|---:|---:|
+| tagged-16-boxed | 39.307 | 4,739.631 | 8,823.970 | 4,737.143 | 182.096 | 177.975 |
+| tagged-16-representation-aware | 39.315 | 4,762.928 | 8,770.836 | 4,805.377 | 182.079 | 177.593 |
+| nanbox-8-boxed | 39.021 | 4,853.913 | 8,869.891 | 4,830.519 | 181.796 | 178.166 |
+| nanbox-8-representation-aware | 39.241 | 4,824.774 | 8,973.212 | 4,820.699 | 182.169 | 178.034 |
+
+<em>Values are p50 nanoseconds per call; every helper case has 101 raw samples.</em>
+
 ## Heap, allocator, GC, roots and peak process memory
 
 The OGM-26 heap uses the OGM-24 `IsolateAllocator` for actual object payload backing blocks. Each object cell owns its allocation; its candidate Value slots are stored in that block and are exposed through checked word-slice accessors. When RC-cycle-removal or MarkSweep reclaims an object, its backing allocation is returned to the selected allocator strategy. Unit tests exercise System, exact-reuse and size-class strategies under both collectors, including payload contents surviving roots/collection and storage reclamation after roots are released.
@@ -83,10 +99,10 @@ Each of the 24 candidate × collector × allocator combinations runs in its own 
 
 | Candidate | Peak worker VmHWM across its six GC/allocator combinations |
 |---|---:|
-| tagged-16-boxed | 4.727–4.824 MiB |
-| tagged-16-representation-aware | 4.785–4.930 MiB |
-| nanbox-8-boxed | 4.465–4.648 MiB |
-| nanbox-8-representation-aware | 4.484–4.645 MiB |
+| tagged-16-boxed | 4.730–5.035 MiB |
+| tagged-16-representation-aware | 4.727–4.988 MiB |
+| nanbox-8-boxed | 4.473–4.715 MiB |
+| nanbox-8-representation-aware | 4.465–4.664 MiB |
 
 The worker report stores baseline/peak/delta for every combination, not only the range shown here. The exporter and regression tests verify that all 24 combinations exist, each has 101 raw samples, and `peak >= baseline` with `delta = peak - baseline`.
 
@@ -145,4 +161,4 @@ The full report, OGM-31 differential, generated portable/native artifacts and ev
 | Raw measurements, revisions, reproduction and machine-readable reports committed | **Partial** | Exporter/tests and checksum-pinned manifest are committed. Full raw native/GC/allocator arrays and compressed delta snapshot are retained in artifact #14762262101; the raw arrays/XZ snapshot itself is not yet stored in Git. |
 | Public Runtime ABI separated from internal SSA/layout decision | **Met as an M0 recommendation** | Keep the public embedding ABI opaque/versioned; use explicit tagged Value as the conservative internal M1 baseline; adopt representation-aware SSA; retain NaN-box as experimental, not selected from nominal width alone. |
 
-OGM-38's bounded M0 native evidence and Value/SSA recommendation are complete on this branch. The remaining repository-storage gap is explicit: full raw measurement arrays are present in the successful CI artifact and their checksums/source revision are pinned in the committed manifest, but the raw snapshot itself is not yet stored in Git. A production Runtime, complete ECMAScript operator lowering and production machine stack-map emission are outside this bounded M0 proof. PR #32 remains open; Linear OGM-38 stays In Progress.
+OGM-38's bounded M0 native evidence and Value/SSA recommendation are complete on tested revision `74991baa…`. The remaining repository-storage gap is explicit: full raw measurement arrays are present in the successful CI artifact and their checksums/source revision are pinned in the committed manifest, but the raw snapshot itself is not yet stored in Git. A production Runtime, general full-ECMAScript operator lowering and production machine stack-map emission are outside this bounded M0 proof. PR #32 remains open; Linear OGM-38 stays In Progress.

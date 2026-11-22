@@ -1,45 +1,46 @@
 {
   "schema": "ogma.ogm38.latest-evidence",
-  "version": 2,
+  "version": 3,
   "task": "OGM-38",
-  "source_revision": "770bf5bdaa598473a49733d1053b4fff589091c1",
-  "tested_revision": "770bf5bdaa598473a49733d1053b4fff589091c1",
+  "evidence_status": "m0-evidence-complete-except-raw-archive-git-storage",
+  "source_revision": "74991baa54b346389b6193c1f7075954055be181",
+  "tested_revision": "74991baa54b346389b6193c1f7075954055be181",
   "workflow_run": {
-    "id": 45042417728,
-    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45042417728",
+    "id": 45044214950,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950",
     "jobs": {
       "fast_checks": "success",
       "native_value_ssa_evidence": "success"
     },
     "artifact": {
-      "id": 14762262101,
+      "id": 14762343441,
       "name": "ogm38-native-value-ssa-evidence",
-      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101",
-      "zip_sha256": "cb02584ab35ce2752f6f1c6706cc3272203a73db1427e235576676161d572206",
-      "size_bytes": 589292
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441",
+      "zip_sha256": "156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d",
+      "size_bytes": 629779
     }
   },
   "toolchain": {
     "target": "x86_64-unknown-linux-gnu",
-    "operating_system": "Linux 7.0.0-1017-azure",
-    "cpu": "AMD EPYC 9V45 96-Core Processor",
+    "operating_system": "Linux 7.0.0-1014-aws",
+    "cpu": "Intel(R) Xeon(R) 6975P-C",
     "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
     "cranelift": "0.137.2",
+    "regalloc2": "0.15.3",
     "python": "3.12.16"
   },
   "checksums": {
-    "full_native_report_uncompressed_sha256": "054a4c863abc725e299c0e406ae15b475d2e6b2673b3caaa171933aa49a78dd0",
-    "full_native_report_gzip_sha256": "be09f27c3b96826f203766561ccdddd070e26241ecb1b6a76b4609b32c748ca7",
-    "differential_report_sha256": "41fa203f44fb896f22dbed2f5c37b38ed02b33bca70275daeaca0125b687e5a1",
-    "primary_projection_sha256": "72b54cd0c8a1182cb3bfc1cdc9840a8529035bb66d53ebf3cdec5ec3fa29b114",
-    "runtime_projection_gzip_sha256": "7e26da7f00569724ac6ca7c7d1390dfd55350cd6dcab2970ac8228ac9e8cc82e",
-    "raw_delta_base64_artifact_sha256": "2d4fba0fb455952d6d971699518556d8fc4e7d74e17e353c72e6431c149204c5",
-    "raw_delta_xz_artifact_sha256": "5b3c2dd2d982c2ddfe492819b0870f7e6b48529e35ef21b711d10186bf62ada5",
-    "raw_delta_json_artifact_sha256": "675865adc754b06712a777e8a46cb949338256c53acb597bb49bb3abd3b831b8",
-    "raw_delta_series_count": 156,
-    "raw_delta_worker_count": 36,
-    "raw_delta_xz_bytes": 34896,
-    "raw_delta_json_bytes": 160467
+    "full_native_report_uncompressed_sha256": "938a8b2c1d81bbe81d7dd2aa212849442a5e4a749a16ed453e5ea9c6943e0c06",
+    "full_native_report_gzip_sha256": "746386cadf30fcb412ccc77a7fd7a33d631432854463580eb378e66ee63f45f0",
+    "differential_report_sha256": "5c17d9e29d24dbe1faf5544c48aca958c7103e110a60ac5de2b8b770d1be6da7",
+    "primary_projection_sha256": "18de679735ae6e80b60ab70bfe68a490ba3e5668517b9306818ea87db7404802",
+    "runtime_projection_gzip_sha256": "3730d8ae29f28265f7d1601a46ce049769a802de1ee6ee8718e7c34c617cdbde",
+    "raw_delta_base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
+    "raw_delta_xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+    "raw_delta_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
+    "raw_columnar_gzip_base64_file_sha256": "5ab29b1558c43c750e0572710a771302b8e4bbc20889e9e28bc04f524afc11f1",
+    "raw_columnar_gzip_sha256": "1d39a921ba274d29d40889098f821ce027b0c1bd5a93a784bb7517ea035aa050",
+    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6"
   },
   "sampling": {
     "warmup_rounds": 3,
@@ -59,7 +60,7 @@
     "collector_worker_combinations": 24,
     "allocator_worker_combinations": 12,
     "all_candidates_match_portable_ogm31_oracle": true,
-    "oracle_revision": "f6e673ec3a7accb271e96cdd23dec61ae9d89c94"
+    "oracle_revision": "c6952c237a5a58088d1aff4e49949e4d3421a66f"
   },
   "native_loop": {
     "workload": "Number-only specialization of canonical strict-equality-controlled loop (js.add + js.to_number); not representative application throughput",
@@ -67,20 +68,16 @@
       {
         "name": "tagged-16-boxed",
         "compile_ms_p50_p95_p99": [
-          1.247781,
-          1.292958,
-          1.349694
+          1.444288,
+          1.605649,
+          1.662298
         ],
         "loop_ns_p50_p95_p99": [
-          334.334,
-          347.263,
-          352.641
+          278.135,
+          289.19,
+          295.624
         ],
-        "handle_dispatch_ns_p50_p95_p99": [
-          5.108,
-          5.118,
-          7.692
-        ],
+        "handle_dispatch_ns_p50": 5.413,
         "object_bytes": 4128,
         "loop_code_bytes": 336,
         "pressure_code_bytes": 1460,
@@ -92,20 +89,16 @@
       {
         "name": "tagged-16-representation-aware",
         "compile_ms_p50_p95_p99": [
-          1.38454,
-          1.431941,
-          3.433859
+          1.619497,
+          1.826193,
+          1.947972
         ],
         "loop_ns_p50_p95_p99": [
-          102.113,
-          112.99,
-          114.492
+          92.447,
+          103.353,
+          106.646
         ],
-        "handle_dispatch_ns_p50_p95_p99": [
-          5.098,
-          5.108,
-          5.118
-        ],
+        "handle_dispatch_ns_p50": 5.413,
         "object_bytes": 4456,
         "loop_code_bytes": 336,
         "pressure_code_bytes": 1789,
@@ -117,20 +110,16 @@
       {
         "name": "nanbox-8-boxed",
         "compile_ms_p50_p95_p99": [
-          1.163883,
-          1.910108,
-          3.258849
+          1.360383,
+          1.55807,
+          1.653655
         ],
         "loop_ns_p50_p95_p99": [
-          336.747,
-          347.013,
-          350.928
+          278.053,
+          289.244,
+          292.306
         ],
-        "handle_dispatch_ns_p50_p95_p99": [
-          4.577,
-          4.587,
-          4.817
-        ],
+        "handle_dispatch_ns_p50": 5.163,
         "object_bytes": 3720,
         "loop_code_bytes": 392,
         "pressure_code_bytes": 727,
@@ -142,20 +131,16 @@
       {
         "name": "nanbox-8-representation-aware",
         "compile_ms_p50_p95_p99": [
-          1.210954,
-          1.279848,
-          3.396647
+          1.464211,
+          1.650423,
+          1.786
         ],
         "loop_ns_p50_p95_p99": [
-          84.818,
-          160.141,
-          215.004
+          86.048,
+          96.714,
+          102.456
         ],
-        "handle_dispatch_ns_p50_p95_p99": [
-          4.577,
-          4.597,
-          4.607
-        ],
+        "handle_dispatch_ns_p50": 5.411,
         "object_bytes": 4024,
         "loop_code_bytes": 384,
         "pressure_code_bytes": 1039,
@@ -166,6 +151,40 @@
       }
     ],
     "shared_library_bytes": 15304
+  },
+  "native_add_p50_ns": {
+    "tagged_16_boxed": {
+      "number_add": 39.307,
+      "string_concat": 4739.631,
+      "bigint_add": 8823.97,
+      "object_to_primitive_add": 4737.143,
+      "symbol_add_throws": 182.096,
+      "bigint_number_add_throws": 177.975
+    },
+    "tagged_16_representation_aware": {
+      "number_add": 39.315,
+      "string_concat": 4762.928,
+      "bigint_add": 8770.836,
+      "object_to_primitive_add": 4805.377,
+      "symbol_add_throws": 182.079,
+      "bigint_number_add_throws": 177.593
+    },
+    "nanbox_8_boxed": {
+      "number_add": 39.021,
+      "string_concat": 4853.913,
+      "bigint_add": 8869.891,
+      "object_to_primitive_add": 4830.519,
+      "symbol_add_throws": 181.796,
+      "bigint_number_add_throws": 178.166
+    },
+    "nanbox_8_representation_aware": {
+      "number_add": 39.241,
+      "string_concat": 4824.774,
+      "bigint_add": 8973.212,
+      "object_to_primitive_add": 4820.699,
+      "symbol_add_throws": 182.169,
+      "bigint_number_add_throws": 178.034
+    }
   },
   "heap_gc": {
     "object_count": 2048,
@@ -181,28 +200,23 @@
     },
     "vmhwm_peak_range_mib": {
       "tagged-16-boxed": [
-        4.727,
-        4.824
+        4.73046875,
+        5.03515625
       ],
       "tagged-16-representation-aware": [
-        4.785,
-        4.93
+        4.7265625,
+        4.98828125
       ],
       "nanbox-8-boxed": [
-        4.465,
-        4.648
+        4.47265625,
+        4.71484375
       ],
       "nanbox-8-representation-aware": [
-        4.484,
-        4.645
+        4.46484375,
+        4.6640625
       ]
     },
-    "reuse_allocations_per_candidate_per_reusing_allocator": 12928,
-    "allocation_failures": 0,
-    "maximum_internal_fragmentation_bytes": {
-      "tagged16": 32768,
-      "nanbox8": 16384
-    }
+    "allocation_failures": 0
   },
   "evidence_boundary": {
     "core_ir": "Five canonical fixtures and 77 candidate Value dispatches per candidate; generated native batch loops and bounded native semantic CFG, not general full-CFG compiler.",
@@ -210,65 +224,22 @@
     "rooting": "28 candidate roots survive entry/call-boundary collections and are reclaimed; OGM-26/27 M0 handle/root-frame model, not production stack-map encoder.",
     "public_abi": "Versioned OGM-19/32 embedding API uses opaque handles and explicit completions; no candidate Value word is exposed publicly.",
     "memory": "Isolated worker Linux VmHWM; includes executable/runtime/mappings and allocator, not heap-only RSS.",
-    "spills": "GNU objdump disassembly of generated Cranelift 32-live-Value function; regalloc2 supplemental."
-  },
-  "checked_in_projection_state": {
-    "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
-    "raw_measurements": "Latest full raw datasets are in the linked CI artifact.",
-    "historical_projection_files": [
-      "benchmarks/value-representations/results/ogm38-primary-benchmark-samples.json",
-      "benchmarks/value-representations/results/ogm38-native-value-ssa-report.json.gz",
-      "benchmarks/value-representations/results/ogm38-runtime-raw-samples.json.gz",
-      "benchmarks/value-representations/results/ogm38-ogm31-differential-report.json"
-    ]
-  },
-  "evidence_status": "m0-evidence-complete-except-raw-sample-git-storage",
-  "native_add_p50_ns": {
-    "tagged_16_boxed": {
-      "number_add": 35.213,
-      "string_concat": 3680.006,
-      "bigint_add": 6733.255,
-      "object_to_primitive_add": 3694.13,
-      "symbol_add_throws": 156.094,
-      "bigint_number_add_throws": 157.267
-    },
-    "tagged_16_representation_aware": {
-      "number_add": 35.374,
-      "string_concat": 3661.12,
-      "bigint_add": 6711.983,
-      "object_to_primitive_add": 3694.41,
-      "symbol_add_throws": 157.096,
-      "bigint_number_add_throws": 156.756
-    },
-    "nanbox_8_boxed": {
-      "number_add": 35.343,
-      "string_concat": 3680.955,
-      "bigint_add": 6745.632,
-      "object_to_primitive_add": 3707.846,
-      "symbol_add_throws": 158.459,
-      "bigint_number_add_throws": 156.686
-    },
-    "nanbox_8_representation_aware": {
-      "number_add": 35.484,
-      "string_concat": 3660.354,
-      "bigint_add": 6715.026,
-      "object_to_primitive_add": 3721.116,
-      "symbol_add_throws": 156.456,
-      "bigint_number_add_throws": 156.546
-    }
+    "spills": "GNU objdump disassembly of generated Cranelift 32-live-Value function; regalloc2 is supplemental."
   },
   "raw_dataset": {
-    "storage": "GitHub Actions artifact #14762262101; not yet stored as a repository blob",
+    "storage": "GitHub Actions artifact #14762343441; raw archive not yet stored as a Git-tracked binary",
     "artifact_path": "ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64",
-    "decode_command": "base64 --decode ogm38-raw-native-samples.delta.json.xz.b64 | xz --decompress --stdout",
     "encoding": "XZ-compressed delta JSON; 156 101-sample series and 36 worker records; numeric scale 1000 (0.001-unit precision)",
-    "base64_sha256": "2d4fba0fb455952d6d971699518556d8fc4e7d74e17e353c72e6431c149204c5",
-    "xz_sha256": "5b3c2dd2d982c2ddfe492819b0870f7e6b48529e35ef21b711d10186bf62ada5",
-    "decoded_json_sha256": "675865adc754b06712a777e8a46cb949338256c53acb597bb49bb3abd3b831b8",
+    "base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
+    "xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+    "decoded_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
     "series_count": 156,
     "worker_count": 36,
-    "xz_bytes": 34896,
-    "decoded_json_bytes": 160467
+    "xz_bytes": 39096,
+    "decoded_json_bytes": 163821,
+    "raw_columnar_gzip_base64_sha256": "5ab29b1558c43c750e0572710a771302b8e4bbc20889e9e28bc04f524afc11f1",
+    "raw_columnar_gzip_sha256": "1d39a921ba274d29d40889098f821ce027b0c1bd5a93a784bb7517ea035aa050",
+    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6"
   },
   "checked_in_evidence": {
     "native_evidence": "benchmarks/value-representations/native-evidence-ogm38.md",
@@ -276,8 +247,6 @@
     "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
     "exporter": "benchmarks/value-representations/export_ogm38_raw_samples.py",
     "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py",
-    "primary_projection": "artifact:14762262101/ogm38-committed-results/ogm38-primary-benchmark-samples.json",
-    "differential_report": "artifact:14762262101/ogm38-committed-results/ogm38-ogm31-differential-report.json",
-    "raw_delta_samples": "artifact:14762262101/ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64"
+    "ci_artifact": "14762343441"
   }
 }

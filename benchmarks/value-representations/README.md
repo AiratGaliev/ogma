@@ -72,6 +72,20 @@ Keep the public Runtime Value ABI explicitly tagged and architecture-neutral. Pr
 
 ## Native follow-up (OGM-38)
 
+The latest measured source revision is `74991baa54b346389b6193c1f7075954055be181`, from [successful CI run #45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950). Both Fast CI and the focused OGM-38 native-evidence job passed. [Artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441) contains the full native/differential JSON, Core IR report, generated native objects, portable .ogmb fixtures, Cargo.lock and raw measurements.
+
+All four candidates use the same five canonical OGM-31 fixtures. Each dispatches 77 Value inputs through generated native batch loops, passes 31 semantic cases with one generated native CFG entry per case, and matches the independent OGM-31 portable oracle. Each candidate records 70 callbacks, 39 forced collections and 28 candidate roots that survive entry/call-boundary collections and are reclaimed after release.
+
+The Number-only native loop p50 is 278.135 ns (Tagged16 boxed), 92.447 ns (Tagged16 representation-aware), 278.053 ns (NaN-box boxed) and 86.048 ns (NaN-box representation-aware). Representation-aware SSA accounts for most of the speedup; the measured 6.9% p50 difference between the representation-aware Value layouts is not sufficient to select a production layout. A generated 32-live-Value Cranelift pressure function records 64 spill slots / 512 B for Tagged16 and 32 / 256 B for NaN-box.
+
+The OGM-24 IsolateAllocator backs actual OGM-26 candidate Value payload storage. Both collectors and all three allocator strategies use the same 2,048-object graph. There are 24 isolated collector workers and 12 direct allocator workers; each records 101 raw samples. Linux VmHWM is measured separately from logical heap and allocator accounting.
+
+The full lossless raw archive is retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441); the manifest pins its exact checksums and tested revision. The raw arrays are not yet stored in Git itself, so OGM-38 criterion 6 remains Partial specifically for source-repository storage.
+
+The M0 decision is recorded in [decision-record-ogm38.md](decision-record-ogm38.md): keep the public embedding ABI opaque and versioned, use explicit tagged Value as the conservative internal M1 baseline, adopt representation-aware SSA and retain NaN-box as experimental. Exact measurements and acceptance boundaries are in [native-evidence-ogm38.md](native-evidence-ogm38.md).
+
+
+
 OGM-38 is the M0 native-evidence and Value/SSA decision follow-up. The latest measured source revision is `770bf5bdaa598473a49733d1053b4fff589091c1`, from [successful CI run #45042417728](https://github.com/AiratGaliev/ogma/actions/runs/45042417728). Both Fast CI and the focused OGM-38 native job passed. [Artifact #14762262101](https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101) contains the full native/differential JSON, Core IR report, generated native objects, portable .ogmb fixtures, Cargo.lock and raw measurements.
 
 All four candidates use the same five canonical OGM-31 fixtures. Each dispatches 77 Value inputs through generated native batch loops, passes 31 semantic cases with one generated native CFG entry per case, and matches the independent OGM-31 portable oracle. Each candidate records 70 callbacks, 39 forced collections and 28 candidate roots that survive entry/call-boundary collections and are reclaimed after release.

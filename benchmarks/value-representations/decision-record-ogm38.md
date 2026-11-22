@@ -2,7 +2,7 @@
 
 ## Status
 
-M0 implementation recommendation based on successful CI run [#45042417728](https://github.com/AiratGaliev/ogma/actions/runs/45042417728), measured source revision `770bf5bdaa598473a49733d1053b4fff589091c1`, Rust 1.100.0 and Cranelift 0.137.2.
+M0 implementation recommendation based on successful CI run [#45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950), measured source revision `74991baa54b346389b6193c1f7075954055be181`, Rust 1.100.0 and Cranelift 0.137.2.
 
 This decision establishes the conservative direction for the next Runtime/compiler implementation. It does not freeze a production binary layout and does not expose internal Value words through the embedding ABI.
 
@@ -17,12 +17,12 @@ This decision establishes the conservative direction for the next Runtime/compil
 
 | Candidate | Compile p50 | Loop p50 | Object bytes | Native pressure spills |
 |---|---:|---:|---:|---:|
-| Tagged16 + boxed SSA | 1.248 ms | 334.334 ns | 4,128 | 64 slots / 512 B |
-| Tagged16 + representation-aware SSA | 1.385 ms | 102.113 ns | 4,456 | 64 slots / 512 B |
-| NaN-box + boxed SSA | 1.164 ms | 336.747 ns | 3,720 | 32 slots / 256 B |
-| NaN-box + representation-aware SSA | 1.211 ms | 84.818 ns | 4,024 | 32 slots / 256 B |
+| Tagged16 + boxed SSA | 1.444 ms | 278.135 ns | 4,128 | 64 slots / 512 B |
+| Tagged16 + representation-aware SSA | 1.619 ms | 92.447 ns | 4,456 | 64 slots / 512 B |
+| NaN-box + boxed SSA | 1.360 ms | 278.053 ns | 3,720 | 32 slots / 256 B |
+| NaN-box + representation-aware SSA | 1.464 ms | 86.048 ns | 4,024 | 32 slots / 256 B |
 
-Representation-aware SSA improves p50 by about 3.27× for Tagged16 and 3.97× for NaN-box in this synthetic numeric loop. NaN-box reduces Value payload backing storage from 524,288 B to 262,144 B in the measured graph and halves the observed spills of the generated 32-live-Value pressure function. These are bounded M0 measurements, not whole-runtime performance claims. The NaN-box representation-aware candidate has more variable p95/p99 latency in this run.
+Representation-aware SSA improves p50 by about 3.01× for Tagged16 and 3.23× for NaN-box in this synthetic numeric loop. NaN-box reduces Value payload backing storage from 524,288 B to 262,144 B in the measured graph and halves the observed spills of the generated 32-live-Value pressure function. These are bounded M0 measurements, not whole-runtime performance claims. The p50 difference between the representation-aware layouts is only 6.9%; it does not justify choosing NaN-box before production multi-target and workload evidence exists.
 
 ## Why NaN-box is not selected
 
@@ -38,7 +38,7 @@ Reopen the internal representation choice after the production heap/object model
 
 ## Raw evidence
 
-The full report and lossless raw arrays are retained in [CI artifact #14762262101](https://github.com/AiratGaliev/ogma/actions/runs/45042417728/artifacts/14762262101). The committed latest-evidence manifest records exact checksums and source/toolchain revisions. The raw binary itself is not yet stored in Git; the raw-data-in-repository criterion remains Partial.
+The full report and lossless raw arrays are retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). The committed latest-evidence manifest records exact checksums and source/toolchain revisions. The raw binary itself is not yet stored in Git; the raw-data-in-repository criterion remains Partial.
 
 ## Scope boundary
 
