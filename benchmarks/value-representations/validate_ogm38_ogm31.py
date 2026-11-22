@@ -177,12 +177,14 @@ def validate_semantic_case_evidence(
     if (
         not isinstance(add_measurement, dict)
         or add_measurement.get("operation") != "Number(19) + Number(23)"
+        or add_measurement.get("iterations_per_sample") != 1000
         or not isinstance(add_measurement.get("iterations_per_sample"), int)
         or isinstance(add_measurement.get("iterations_per_sample"), bool)
-        or add_measurement["iterations_per_sample"] <= 0
+        or add_measurement.get("warmup_rounds") != 3
         or not isinstance(add_measurement.get("warmup_rounds"), int)
         or isinstance(add_measurement.get("warmup_rounds"), bool)
-        or add_measurement["warmup_rounds"] < 0
+        or not isinstance(add_measurement.get("native_calls_total"), int)
+        or isinstance(add_measurement.get("native_calls_total"), bool)
         or not isinstance(throughput, dict)
         or not isinstance(raw_samples, list)
         or len(raw_samples) != 101
@@ -202,6 +204,19 @@ def validate_semantic_case_evidence(
         )
     ):
         raise RuntimeError(f"{candidate}: generated native Runtime js.add throughput samples are incomplete or invalid")
+
+    if add_measurement["native_calls_total"] != (
+        add_measurement["warmup_rounds"] + len(raw_samples)
+    ) * add_measurement["iterations_per_sample"]:
+        raise RuntimeError(f"{candidate}: native Runtime js.add executed call count does not match its raw sample plan")
+
+    ordered_samples = sorted(raw_samples)
+    for metric, percentile in (("p50_ns", 0.50), ("p95_ns", 0.95), ("p99_ns", 0.99)):
+        expected = ordered_samples[math.ceil((len(ordered_samples) - 1) * percentile)]
+        if throughput[metric] != expected:
+            raise RuntimeError(
+                f"{candidate}: native Runtime js.add {metric} does not match its raw samples"
+            )
 
     for item in cases:
         case_name = item["name"]
