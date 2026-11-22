@@ -3705,8 +3705,8 @@ fn semantic_cases() -> Vec<SemanticCase> {
             expected_host_trace: vec![],
         },
         SemanticCase {
-            name: "bigint-to-number-throws",
-            inputs: vec![SemanticValue::BigInt(7)],
+            name: "bigint-number-add-throws",
+            inputs: vec![SemanticValue::BigInt(7), semantic_number(5.0)],
             expected: SemanticCompletion::Throw {
                 name: "TypeError",
                 value: None,
@@ -3919,11 +3919,8 @@ fn evaluate_semantic_case(
         | "string-concat"
         | "bigint-add"
         | "object-to-primitive-add"
-        | "symbol-add-throws" => semantic_add(&values[0], &values[1]),
-        "bigint-to-number-throws" => match semantic_to_number(&values[0]) {
-            Ok(value) => SemanticCompletion::Normal(semantic_number(value)),
-            Err(name) => SemanticCompletion::Throw { name, value: None },
-        },
+        | "symbol-add-throws"
+        | "bigint-number-add-throws" => semantic_add(&values[0], &values[1]),
         "nan-strict-equality"
         | "signed-zero-strict-equality"
         | "object-identity-same"
@@ -4688,7 +4685,7 @@ fn measure_native_runtime_add_cases(
         "bigint-add",
         "object-to-primitive-add",
         "symbol-add-throws",
-        "bigint-to-number-throws",
+        "bigint-number-add-throws",
     ];
     let cases = semantic_cases();
     let mut measurements = Vec::with_capacity(names.len());
@@ -4786,7 +4783,7 @@ fn run_native_value_semantics(
                         | "bigint-add"
                         | "object-to-primitive-add"
                         | "symbol-add-throws"
-                        | "bigint-to-number-throws"
+                        | "bigint-number-add-throws"
                 ),
                 perform_native_transition: case.name == "type-transition-number-to-string",
                 strict_equal_slots,
@@ -4944,7 +4941,7 @@ fn run_native_value_semantics(
                 | "bigint-add"
                 | "object-to-primitive-add"
                 | "symbol-add-throws"
-                | "bigint-to-number-throws"
+                | "bigint-number-add-throws"
         );
         if (runtime_add_completion.is_some() != expects_native_runtime_add)
             || (expects_native_runtime_add && native_runtime_add_calls != 1)
