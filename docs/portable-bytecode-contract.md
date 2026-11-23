@@ -268,3 +268,4 @@ The checked-in corpus covers valid stack/register candidates, exception and susp
 - OGM-36 does not implement a production encoder, decoder, interpreter, Core IR lowering, native AOT backend or sandbox.
 - OGM-36 does not decide stack versus register encoding. OGM-16 owns that comparison.
 - Core IR v1 remains the sole source of Core IR semantics; this bytecode contract does not duplicate or redefine those semantics.
+- The planned M2 Rust embedding generator is a thin build-time adapter over canonical `.ogmb`: it emits a Rust source module that includes the same artifact bytes at Rust compile time. It does not change this container, add a new execution backend or Rust ABI, generate Rust implementations of JavaScript semantics, or bypass Runtime verification. The embedded bytes remain untrusted input and must pass the ordinary verifier. See [Rust Embedding Code Generation Contract](rust-embedding-codegen-contract.md); this generator is not implemented by OGM-36.
