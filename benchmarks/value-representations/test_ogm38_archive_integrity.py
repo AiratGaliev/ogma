@@ -166,32 +166,48 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         self.assertEqual(14798285147, snapshot_run["artifact"]["id"])
         self.assertEqual(report["source_revision"], snapshot_run["tested_revision"])
 
-        active_results = Path(os.environ.get("OGM38_RESULTS_DIR", RESULTS))
-        primary_path = active_results / "ogm38-primary-benchmark-samples.json"
-        primary_bytes = primary_path.read_bytes()
-        primary = json.loads(primary_bytes)
-        self.assertEqual(
-            hashlib.sha256(primary_bytes).hexdigest(),
-            manifest["checksums"]["primary_projection_sha256"],
-        )
-        self.assertEqual(report["source_revision"], primary["source_revision"])
-        self.assertEqual(report["tested_revision"], primary["tested_revision"])
-        self.assertEqual(snapshot_run["url"], primary["run_url"])
-        self.assertEqual(
-            snapshot_run["url"] + "/artifacts",
-            primary["full_report_artifact_url"],
-        )
-        self.assertEqual(
-            EXPECTED_CANDIDATES,
-            {item["name"] for item in primary["candidates"]},
-        )
-        self.assertEqual(101, primary["samples_per_metric"])
-        for candidate in primary["candidates"]:
-            self.assertEqual(101, len(candidate["compile_ns"]))
-            self.assertEqual(101, len(candidate["native_loop_ns_per_call"]))
-            self.assertTrue(all(value >= 0 for value in candidate["compile_ns"]))
-            self.assertTrue(
-                all(value >= 0 for value in candidate["native_loop_ns_per_call"])
+        active_results_env = os.environ.get("OGM38_RESULTS_DIR")
+        if active_results_env:
+            active_results = Path(active_results_env)
+        elif os.environ.get("RUNNER_TEMP"):
+            active_results = Path(os.environ["RUNNER_TEMP"]) / "ogm38-committed-results"
+        else:
+            active_results = None
+
+        if active_results is not None:
+            primary_path = active_results / "ogm38-primary-benchmark-samples.json"
+            self.assertTrue(primary_path.is_file(), f"missing CI-generated projection: {primary_path}")
+            primary_bytes = primary_path.read_bytes()
+            primary = json.loads(primary_bytes)
+            self.assertEqual(
+                hashlib.sha256(primary_bytes).hexdigest(),
+                manifest["checksums"]["primary_projection_sha256"],
+            )
+            self.assertEqual(report["source_revision"], primary["source_revision"])
+            self.assertEqual(report["tested_revision"], primary["tested_revision"])
+            self.assertEqual(snapshot_run["url"], primary["run_url"])
+            self.assertEqual(
+                snapshot_run["url"] + "/artifacts",
+                primary["full_report_artifact_url"],
+            )
+            self.assertEqual(
+                EXPECTED_CANDIDATES,
+                {item["name"] for item in primary["candidates"]},
+            )
+            self.assertEqual(101, primary["samples_per_metric"])
+            for candidate in primary["candidates"]:
+                self.assertEqual(101, len(candidate["compile_ns"]))
+                self.assertEqual(101, len(candidate["native_loop_ns_per_call"]))
+                self.assertTrue(all(value >= 0 for value in candidate["compile_ns"]))
+                self.assertTrue(
+                    all(value >= 0 for value in candidate["native_loop_ns_per_call"])
+                )
+        else:
+            # Developer runs without CI output can still validate the immutable
+            # archive + historical projection; the active report is CI-artifact-backed.
+            self.assertRegex(
+                manifest["checksums"]["primary_projection_sha256"],
+                r"^[0-9a-f]{64}$",
             )
 
         # The older primary projection is a separate historical snapshot and no
