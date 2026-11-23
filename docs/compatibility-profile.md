@@ -465,8 +465,8 @@ This planned micro-corpus is owned by [OGM-101](https://linear.app/ogma-engine/i
 | Lockfile | pnpm-lock.yaml, lockfileVersion 9.0; fixture must commit the exact lockfile and integrity values |
 | Install layout | .npmrc: node-linker=isolated; local node_modules/.pnpm virtual store plus symlinked package/dependency entries |
 | Staging command | pnpm install --frozen-lockfile --ignore-scripts |
-| CJS / Node Base package | debug@4.4.3; runtime dependency ms is resolved and pinned by the fixture lockfile; optional supports-color is intentionally absent in the first test |
-| ESM / exports control | escape-string-regexp@5.0.0; type=module, string-form exports entry, default export, no runtime dependencies |
+| CJS / Node Base package | debug@4.4.3; runtime dependency ms@2.1.3 is resolved and pinned by the fixture lockfile; optional supports-color is intentionally absent in the first test |
+| ESM / exports + dependency control | strip-ansi@7.1.0 → ansi-regex@6.2.2; both type=module with ESM default exports, strip-ansi has a string-form exports entry and imports ansi-regex at runtime |
 | Node reference | Node.js 26.13.0 and selected reference cases from sections 4.1–4.3 |
 
 Do not substitute p-limit@7.3.3/yocto-queue for this initial ESM control: yocto-queue uses private class fields and generator methods, which are not a reason to silently widen the M2 language contract. Add such a package only after those ECMAScript features are explicitly accepted and tested.
@@ -476,7 +476,7 @@ The primary debug@4.4.3 scenario must exercise:
 - node:util.formatWithOptions(), inspect() and deprecate() only, with the exact formatting/inspection options and default warn-once behaviour exercised by the package and selected Node reference fixtures; other util exports remain deferred.
 - node:tty.isatty(fd) only, returning the Node-compatible result from host-provided terminal metadata; no TTY streams, raw mode or terminal control.
 - process.env as a Runtime/Realm-scoped string map seeded from the explicit DEBUG and DEBUG_* allowlist; support key enumeration, reads, string-coercing writes and deletes, without mutating the parent OS environment or exposing ambient secrets.
-- process.stderr.fd === 2 as a logical stream id and write(string) to a host-provided sink gated by process.stderr.write; it is not an OS file descriptor or filesystem capability.
+- process.stderr.fd === 2 as a logical stream id and write(string) to a host-provided sink gated by process.stderr.write; return the Node-style boolean acceptance/backpressure result. It is not an OS file descriptor or filesystem capability.
 - Bare util/tty and node:util/node:tty aliases resolving to the same registered builtin identities/cache entries; missing optional supports-color must produce a normal missing-package error that the package catches.
 
 Node process.nextTick(), timers/immediates, broader Base APIs and Node Host I/O are not part of this M2 proof; they remain with OGM-95/96/98 in M4. PromiseJobs are not being claimed by this package set.
