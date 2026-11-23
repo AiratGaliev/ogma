@@ -8080,15 +8080,11 @@ mod tests {
                     *library
                         .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\0")?
                 };
-                let strict_equal = unsafe {
-                    *library.get::<NativeStrictEqual>(b"ogma_value_strict_equal\0")?
-                };
-                let value_move = unsafe {
-                    *library.get::<NativeValueMove>(b"ogma_value_move\0")?
-                };
-                let semantic_add_entry = unsafe {
-                    *library.get::<NativeSemanticAdd>(b"ogma_value_semantic_add\0")?
-                };
+                let strict_equal =
+                    unsafe { *library.get::<NativeStrictEqual>(b"ogma_value_strict_equal\0")? };
+                let value_move = unsafe { *library.get::<NativeValueMove>(b"ogma_value_move\0")? };
+                let semantic_add_entry =
+                    unsafe { *library.get::<NativeSemanticAdd>(b"ogma_value_semantic_add\0")? };
 
                 for (case_name, inputs, expected) in &cases {
                     let result = dispatch_native_semantic_inputs(
@@ -8126,11 +8122,13 @@ mod tests {
             let cleanup = fs::remove_dir_all(&root);
             verification?;
             cleanup.with_context(|| {
-                format!("remove OGM-38 regression build directory {}", root.display())
+                format!(
+                    "remove OGM-38 regression build directory {}",
+                    root.display()
+                )
             })?;
         }
 
         Ok(())
     }
-
 }
