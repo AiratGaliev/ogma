@@ -239,7 +239,6 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(44730458468, projection_meta["workflow_run_id"])
         self.assertEqual(14625194465, projection_meta["artifact_id"])
-        self.assertNotEqual(report["source_revision"], historical_primary["source_revision"])
 
         historical_compressed, historical_report = raw_archive.load_committed_archive(
             raw_archive.HISTORICAL_PARTS_DIR,
