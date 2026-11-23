@@ -4,7 +4,7 @@
 
 Ogma is an independent engine project. It is not a wrapper around QuickJS-NG, a replacement for the host application/game engine, or a requirement to ship the Node.js runtime with a packaged native application.
 
-> **Current phase: M1 — Minimal Executable Runtime.** The root Rust workspace and minimal M1 crate boundaries are being bootstrapped. The production parser, compiler, Runtime, verifier, interpreter and embedding behavior are not implemented yet. Planned capabilities must not be described as available functionality.
+> **Current phase: M1 — Minimal Executable Runtime.** The root Rust workspace and minimal M1 crate boundaries are in place. OGM-41 has implemented the JavaScript parser/source-diagnostics frontend and a parse-only conformance adapter. The production compiler/Core IR lowering, ECMAScript Runtime execution, interpreter and embedding behavior are still under implementation; parser availability must not be described as runtime or full language conformance.
 
 ## Project direction
 
@@ -56,7 +56,7 @@ The permanent branch flow is:
 ### CI and conformance policy
 
 - **Fast CI** is the routine gate for topic PRs into dev and ordinary dev pushes. It validates repository documentation and routing, runs the Python repository/verifier/runner self-tests, verifies Core IR and .ogmb fixture corpora, compiles helpers, and runs the pinned Node.js package-resolution and scheduling reference fixtures.
-- **A live Test262/parser or QuickJS-NG differential smoke requires an executable Ogma adapter.** The current M0 profile is not_implemented, so Fast CI proves runner/shard/aggregate mechanics but does not claim that Ogma executes JavaScript conformance cases. The fake adapter is used only by protocol self-tests.
+- **Parser and runtime conformance are separate.** Fast CI builds the real OGM-41 parser adapter and runs a bounded six-case parser smoke. Runtime Test262 and QuickJS-NG differential execution still require their own executable adapters; fake adapters remain limited to protocol self-tests.
 - **Full conformance and integration suites do not run on topic PRs.** The complete pinned Test262 corpus, extended differential suite and promotion-level integration checks belong to dev → test and later release-promotion gates. The bounded same-Core-IR portable/native proof is a separate M0 task-specific check, not a general conformance claim.
 - Test coverage is developed with each implementation. Add or update focused regression, parser, ABI and integration fixtures in the same topic PR when the changed contract needs them; delaying the full-suite run must not delay creating tests.
 - Long-running fuzzing, stress, GC/lifecycle, resource-limit and broad platform matrices belong in scheduled/manual lanes unless a specific change requires a focused check.
@@ -65,16 +65,16 @@ The permanent branch flow is:
 
 ### Current repository bootstrap status
 
-The root Cargo workspace and minimal M1 crate boundaries are present, but there is no executable Ogma parser, production ECMAScript Runtime or engine adapter yet. OGM-33, OGM-34, OGM-35 and OGM-37 delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. The tooling is real; engine conformance is not yet available.
+The root Cargo workspace and minimal M1 crate boundaries are present. OGM-41 delivered a real JavaScript parser/frontend and parse-only adapter; a production ECMAScript Runtime and runtime Test262 adapter are not yet available. OGM-33, OGM-34, OGM-35 and OGM-37 delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. Parser availability is real, but runtime conformance is not yet available.
 
 - **CI Fast** runs for PRs to dev/test/main and pushes to those permanent branches. The current dev head has a successful fast-checks run with 203 Python tests; the exact evidence and other child-task runs are indexed in [OGM-10 Developer Tooling & Verification evidence](docs/developer-tooling-verification-evidence.md).
-- **Conformance Promotion** runs for PRs targeting test or main. OGM-35 delivered exact route validation, eight deterministic Test262 shards, four parser-corpus shards, JSON/JUnit artifacts and a required aggregate. Since the active profile still declares parser and execution as not_implemented, real corpus results remain unsupported and aggregation fails closed; no successful Ogma conformance promotion is claimed.
-- The pinned Test262, test262-parser-tests and QuickJS-NG revisions are recorded in conformance/baseline.json. The active readiness and feature declarations are in conformance/profile.json. Do not change readiness to ready until corresponding executable adapters and focused tests exist.
+- **Conformance Promotion** runs for PRs targeting test or main. OGM-35 delivered exact route validation, eight deterministic Test262 shards, four parser-corpus shards, JSON/JUnit artifacts and a required aggregate. OGM-41 marks parser readiness as `ready`; full parser-corpus promotion requires `OGMA_PARSER_ADAPTER` to be configured. Runtime execution remains `not_implemented`, so runtime Test262 promotion remains fail-closed. No full parser or runtime conformance result is claimed.
+- The pinned Test262, test262-parser-tests and QuickJS-NG revisions are recorded in conformance/baseline.json. The active readiness and feature declarations are in conformance/profile.json. Parser readiness is `ready` after OGM-41; runtime execution must remain `not_implemented` until an executable Runtime adapter and focused tests exist.
 - The OGM-31 same-Core-IR proof demonstrates bounded portable/interpreter and native-AOT fixture equivalence. It does not implement source parsing or establish general runtime/differential conformance.
 - Active GitHub rulesets protect dev, test and main. All three require PRs, block deletion and non-fast-forward updates, and have no bypass actors. dev requires fast-checks; test and main require fast-checks plus conformance-promotion.
 - The rulesets are [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038).
 
-The promotion infrastructure is implemented, but a configured gate is not a passed conformance suite. Keep the gate fail-closed until a real Ogma parser/runtime adapter produces supported results for the pinned inputs. Root Cargo checks validate the workspace scaffold only and do not change parser/runtime readiness.
+The promotion infrastructure is implemented, but a configured gate is not a passed conformance suite. The parser-only path now has a real adapter, but full parser-corpus promotion still requires the verified command to be configured and the full pinned corpus to pass. Keep runtime Test262 fail-closed until a real Ogma Runtime adapter produces supported results. Root Cargo checks and the bounded parser smoke do not establish runtime or full parser conformance.
 
 ## Source of truth and project links
 
