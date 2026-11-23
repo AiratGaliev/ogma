@@ -14,14 +14,17 @@ The architecture specification is authoritative for test categories, engine sema
 
 The repository contains an adapter-driven Python runner, a pinned source baseline, a machine-readable active profile, deterministic shard manifests, a result aggregator and protocol self-tests. The runner is development/test tooling only. It is not part of the Ogma Runtime or production dependency graph.
 
-The current M0 repository still has no root Cargo workspace, executable Ogma parser, ECMAScript Runtime or engine adapter. Consequently:
+The Rust workspace and OGM-41 JavaScript parser frontend now exist. `ogma-frontend` exposes a real parse-only adapter for the supplementary parser corpus. The ECMAScript Runtime and runtime Test262 adapter remain unimplemented. The Python runner and its reports are development/test tooling; they are not part of the Ogma Runtime or production dependency graph.
 
-- `conformance/profile.json` declares execution and parser states as `not_implemented`;
-- a real Test262 or parser-corpus invocation under that profile classifies tests as `UNSUPPORTED`, never as `PASS`;
-- self-tests use a deterministic fake adapter to prove the runner/adapter contract; they do not execute JavaScript and do not constitute engine conformance;
-- CI promotion remains blocked until OGM-35 connects the actual adapter and promotion suites.
+Consequently:
 
-Do not change the active execution state to `ready` merely to make a workflow green. It may be changed only when an executable adapter exists, its focused tests pass and the feature profile truthfully describes the semantics it can run.
+- `conformance/profile.json` declares runtime execution as `not_implemented` and parser-adapter readiness as `ready`;
+- parser-corpus cases can be sent to the real parser adapter and classified as parser `PASS` / `FAIL`;
+- runtime Test262 requests remain `UNSUPPORTED` until an execution adapter exists; parser acceptance must never be counted as runtime execution;
+- runner self-tests still use a deterministic fake adapter to test generic protocol and reporting logic; they do not execute JavaScript and do not constitute engine conformance;
+- the parser-only promotion suite can run independently, while runtime Test262 promotion remains fail-closed.
+
+Do not change runtime execution state to `ready` merely to make a workflow green. It may be changed only when an executable Runtime adapter exists, its focused tests pass and the feature profile truthfully describes the semantics it can execute. Parser readiness is separate: `ready` means a real parser adapter exists and its focused checks pass, not that the full parser corpus or ECMAScript runtime is conformant.
 
 ## 2. Pinned conformance baseline
 
@@ -58,6 +61,8 @@ The current repository keeps independent contract corpora separate. The runner a
 | `conformance/baseline.json` | Immutable upstream Test262, parser-corpus and QuickJS-NG revisions |
 | `conformance/profile.json` | Active runner profile, execution readiness, feature status and exact reviewed exclusions |
 | `tools/test_runner.py` | Suite discovery, metadata preparation, adapter invocation, JSON/JUnit reporting, deterministic sharding and aggregation |
+| `crates/ogma-frontend/src/bin/parser_adapter.rs` | Real OGM-41 JSON-lines parser adapter for the pinned supplementary parser corpus |
+| `tools/parser_corpus_smoke.py` | Six-case bounded Fast-CI smoke through the real parser adapter |
 | `tests/test-runner/fixtures/` | Small fake corpora and harness files used only to test the runner protocol |
 | `.github/scripts/test_test_runner.py` | Fast deterministic runner self-tests |
 | `tests/core-ir/` | Canonical Core IR contract/verifier fixtures |
@@ -229,6 +234,8 @@ The Test262 adapter responds with `outcome` equal to `completed`, `threw`, `unsu
 For async Test262 tests the runner adds `doneprintHandle.js` to the harness. The adapter's host `print` function must capture the official `Test262:AsyncTestComplete` or `Test262:AsyncTestFailure:…` signal and return it as `asyncSignal`. The worker must not return before that signal or the configured async timeout. This protocol deliberately follows the pinned Test262 harness, not `$DONE`.
 
 Parser adapters respond with `outcome: parsed` or `outcome: rejected`; rejected cases include `phase: parse` or `phase: early`. Adapters may also return `unsupported` or `harness_error`. For `pass/` and `pass-explicit/` positive cases, responses must also contain `normalizedAstSha256`, a lowercase SHA-256 of the canonical AST after removing irrelevant grouping-parentheses, whitespace, comments and semicolon differences.
+
+The OGM-41 implementation is `ogma-parser-adapter` in `crates/ogma-frontend`. It is a long-lived JSON-lines worker: one process handles successive requests, echoes each `requestId`, emits and flushes one response line per request, and exits successfully on clean stdin EOF. It limits each request line to 16 MiB. The adapter parses JavaScript Script/Module input, checks early errors, returns structured source diagnostics and reports runtime Test262 suites as `unsupported`; it does not execute JavaScript. Fast CI builds this binary and runs the bounded six-case smoke against the exact parser-corpus revision in `conformance/baseline.json`. The complete parser corpus remains a promotion-lane check; the bounded smoke is not a full conformance claim.
 
 The adapter is responsible for implementing the actual engine-facing details: parse-only mode, module linking/evaluation, correct strict/sloppy semantics (including insertion of the strict directive before metadata-driven source transformations), fresh-realm isolation for every test/variant, Test262 harness preparation, the `print`-based async protocol, `$262` host hooks required by the active profile, negative completion observation and resource cancellation. The request's `corpusRoot`, `testPath` and `testDirectory` identify the pinned source file so module requests can resolve relative `./` specifiers from the test directory. Files whose names contain `_FIXTURE` are dependencies, never standalone tests. The generic runner validates and reports this contract; it does not pretend to provide these engine capabilities. The parser adapter has its own readiness flag and does not have to wait for the ECMAScript execution adapter.
 

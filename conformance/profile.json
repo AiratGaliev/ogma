@@ -11,8 +11,7 @@
     "state": "not_implemented",
     "reason": "The repository does not yet contain an executable Ogma Runtime or engine adapter. Test262 cases must be reported as UNSUPPORTED rather than counted as passes."
   },
-  "parserStatus": "not_implemented",
-  "parserReason": "No Ogma parser executable is available in the current M0 bootstrap repository.",
+  "parserStatus": "ready",
   "defaultFeatureStatus": "deferred",
   "featureStatus": {
     "Intl": "deferred"
