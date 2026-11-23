@@ -1,6 +1,6 @@
 # Rust workspace and M1 crate boundaries
 
-**Status:** M1 bootstrap. The packages below establish ownership and dependency boundaries; they do not claim that parser, compiler, Runtime, verifier, interpreter or embedding behavior is already implemented.
+**Status:** M1 bootstrap. `ogma-frontend` now contains the implemented JavaScript parser/source-diagnostics slice delivered by OGM-41. The remaining packages establish ownership and dependency boundaries; their presence does not claim that compiler/Core IR lowering, Runtime, verifier execution, interpreter or embedding behavior is complete.
 
 ## Workspace baseline
 
