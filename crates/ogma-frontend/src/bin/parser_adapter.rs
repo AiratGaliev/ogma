@@ -6,8 +6,8 @@ use oxc_allocator::Allocator;
 use serde_json::{Value, json};
 
 use ogma_frontend::{
-    DiagnosticPhase, ParseGoal, ParseMode, ParseRequestOptions, SourceFile, normalized_ast_sha256,
-    parse,
+    DiagnosticPhase, DiagnosticSeverity, ParseDiagnostic, ParseGoal, ParseMode,
+    ParseRequestOptions, SourceFile, normalized_ast_sha256, parse,
 };
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -32,6 +32,47 @@ fn error_response(request_id: u64, outcome: &str, reason: &str) -> Value {
             "reason": reason
         }),
     )
+}
+
+fn phase_name(phase: DiagnosticPhase) -> &'static str {
+    match phase {
+        DiagnosticPhase::Parse => "parse",
+        DiagnosticPhase::Early => "early",
+    }
+}
+
+fn severity_name(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::Warning => "warning",
+        DiagnosticSeverity::Error => "error",
+    }
+}
+
+fn diagnostic_json(diagnostic: &ParseDiagnostic) -> Value {
+    json!({
+        "phase": phase_name(diagnostic.phase),
+        "code": diagnostic.code.as_deref(),
+        "severity": severity_name(diagnostic.severity),
+        "message": diagnostic.message.as_str(),
+        "labels": diagnostic.labels.iter().map(|label| {
+            json!({
+                "startByte": label.span.start_byte,
+                "endByte": label.span.end_byte,
+                "startLine": label.span.start.line,
+                "startColumnUtf16": label.span.start.column_utf16,
+                "endLine": label.span.end.line,
+                "endColumnUtf16": label.span.end.column_utf16,
+                "message": label.message.as_deref(),
+                "primary": label.primary
+            })
+        }).collect::<Vec<_>>(),
+        "help": diagnostic.help.as_deref(),
+        "note": diagnostic.note.as_deref()
+    })
+}
+
+fn diagnostics_json(diagnostics: &[ParseDiagnostic]) -> Vec<Value> {
+    diagnostics.iter().map(diagnostic_json).collect()
 }
 
 fn process_request(request: Value) -> Value {
@@ -127,7 +168,10 @@ fn process_request(request: Value) -> Value {
     let options = ParseRequestOptions { goal, mode };
     match parse(&allocator, &source_file, options) {
         Ok(parsed) => {
-            let mut body = json!({ "outcome": "parsed" });
+            let mut body = json!({
+                "outcome": "parsed",
+                "diagnostics": diagnostics_json(&parsed.diagnostics)
+            });
             if test
                 .get("equivalenceGroup")
                 .is_some_and(|value| !value.is_null())
@@ -136,37 +180,14 @@ fn process_request(request: Value) -> Value {
             }
             response_envelope(request_id, body)
         }
-        Err(failure) => {
-            let phase = match failure.phase {
-                DiagnosticPhase::Parse => "parse",
-                DiagnosticPhase::Early => "early",
-            };
-            response_envelope(
-                request_id,
-                json!({
-                    "outcome": "rejected",
-                    "phase": phase,
-                    "diagnostics": failure.diagnostics.iter().map(|diagnostic| {
-                        json!({
-                            "phase": phase,
-                            "code": diagnostic.code,
-                            "message": diagnostic.message,
-                            "labels": diagnostic.labels.iter().map(|label| {
-                                json!({
-                                    "startByte": label.span.start_byte,
-                                    "endByte": label.span.end_byte,
-                                    "startLine": label.span.start.line,
-                                    "startColumnUtf16": label.span.start.column_utf16,
-                                    "endLine": label.span.end.line,
-                                    "endColumnUtf16": label.span.end.column_utf16,
-                                    "primary": label.primary
-                                })
-                            }).collect::<Vec<_>>()
-                        })
-                    }).collect::<Vec<_>>()
-                }),
-            )
-        }
+        Err(failure) => response_envelope(
+            request_id,
+            json!({
+                "outcome": "rejected",
+                "phase": phase_name(failure.phase),
+                "diagnostics": diagnostics_json(&failure.diagnostics)
+            }),
+        )
     }
 }
 
@@ -216,7 +237,11 @@ fn main() -> io::Result<()> {
 mod tests {
     use serde_json::json;
 
-    use super::process_request;
+    use super::{diagnostic_json, process_request};
+    use ogma_frontend::{
+        DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity, ParseDiagnostic, SourcePosition,
+        SourceSpan,
+    };
 
     fn request(test_id: &str, source: &str, source_type: &str) -> serde_json::Value {
         json!({
@@ -258,6 +283,37 @@ mod tests {
         let response = process_request(request("fail/example.js", "var x, ;", "script"));
         assert_eq!(response["outcome"], "rejected");
         assert_eq!(response["phase"], "parse");
+    }
+
+    #[test]
+    fn diagnostic_json_preserves_phase_severity_labels_and_help() {
+        let diagnostic = ParseDiagnostic {
+            phase: DiagnosticPhase::Parse,
+            code: Some("E0001".to_owned()),
+            severity: DiagnosticSeverity::Warning,
+            message: "unexpected token".to_owned(),
+            labels: vec![DiagnosticLabel {
+                span: SourceSpan {
+                    start_byte: 2,
+                    end_byte: 3,
+                    start: SourcePosition { line: 1, column_utf16: 2 },
+                    end: SourcePosition { line: 1, column_utf16: 3 },
+                },
+                message: Some("token".to_owned()),
+                primary: true,
+            }],
+            help: Some("remove the token".to_owned()),
+            note: Some("parser note".to_owned()),
+        };
+
+        let value = diagnostic_json(&diagnostic);
+        assert_eq!(value["phase"], "parse");
+        assert_eq!(value["severity"], "warning");
+        assert_eq!(value["code"], "E0001");
+        assert_eq!(value["labels"][0]["message"], "token");
+        assert_eq!(value["labels"][0]["startColumnUtf16"], 2);
+        assert_eq!(value["help"], "remove the token");
+        assert_eq!(value["note"], "parser note");
     }
 
     #[test]
