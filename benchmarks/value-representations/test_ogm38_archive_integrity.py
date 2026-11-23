@@ -274,7 +274,7 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             historical["fragment_lengths_bytes"],
         )
         self.assertNotEqual(report["source_revision"], historical_report["source_revision"])
-        self.assertNotEqual(report["source_revision"], primary["source_revision"])
+        self.assertNotEqual(report["source_revision"], historical_primary["source_revision"])
 
     def test_manifest_records_the_pre_integrity_test_verification(self):
         manifest = json.loads((RESULTS / "ogm38-latest-evidence.json").read_text())
