@@ -20,7 +20,7 @@ The M2 generator emits a deterministic pair:
 1. A Rust source module (for example, `game.rs`).
 2. The companion canonical `game.ogmb` artifact referenced by that module.
 
-The Rust module uses compile-time inclusion, normally `include_bytes!`, to expose the exact artifact bytes and a small amount of stable module/format metadata. The companion `.ogmb` must be available while Rust compiles the generated module; after linking, the bytes are part of the Rust executable and the application does not need a separate `.ogmb` file at runtime.
+The Rust module uses compile-time inclusion, normally `include_bytes!`, to expose the exact artifact bytes and a small amount of stable module/format metadata. Generate one Rust module/artifact pair per canonical `.ogmb` compilation-unit artifact. This contract does not define a multi-artifact dependency graph, module registry bundle or application package; those remain separate build/packaging concerns. The companion `.ogmb` must be available while Rust compiles the generated module; after linking, the bytes are part of the Rust executable and the application does not need a separate `.ogmb` file at runtime.
 
 Illustrative generated surface (not a frozen API or an existing implementation):
 
