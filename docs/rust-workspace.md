@@ -36,11 +36,11 @@ ogma-runtime ──────┴──> ogma-embedding
 
 The `ogma-runtime` and `ogma-bytecode` packages do not depend on compile-time crates. The interpreter path is `ogma-interpreter → ogma-bytecode + ogma-runtime`; the embedding path adds only the embedding facade. Neither path depends on `ogma-compiler`, `ogma-frontend` or `ogma-core-ir`. A CI dependency-tree assertion protects this boundary.
 
-This is the complete initial production package set justified by M1. Do not scaffold separate crates for Node compatibility, TypeScript bindings, AOT backends, DAP, CLI, package resolution, fuzzing or release packaging in this task; their owning issues introduce those boundaries when implementation requires them.
+This is the complete initial production package set justified by M1. The JavaScript frontend is implemented in `ogma-frontend` using the pinned Oxc parser/semantic crates; it does not change the interpreter/Runtime dependency boundary. Do not scaffold separate crates for Node compatibility, TypeScript bindings, AOT backends, DAP, CLI, package resolution, fuzzing or release packaging in this task; their owning issues introduce those boundaries when implementation requires them.
 
 ## Dependency and feature policy
 
-- No third-party production dependency is introduced by the bootstrap. The M1 frontend task evaluates parser dependencies separately, including MSRV, license, feature and dependency-footprint impact.
+- The M1 JavaScript frontend pins Oxc 0.158.0 for parsing and early-error analysis. Its transitive dependency graph is locked at the root; Oxc stays within `ogma-frontend` and must not leak into interpreter-only Runtime packages. OGM-14 contains the bounded Oxc/SWC dependency-footprint evidence; OGM-41 records the production integration boundary.
 - Internal dependencies are declared once in `[workspace.dependencies]` and inherited by member manifests.
 - There are no Cargo feature flags at bootstrap. Do not create empty or speculative features merely to mirror logical identifiers in `contracts/runtime-profiles/v1/profiles.json`; those identifiers remain profile-contract data until a concrete implementation consumes them.
 - Keep the interpreter/embedding dependency path compile-time independent. Compiler, parser or semantic-analysis dependencies belong to the compiler/frontend side and must never be added to `ogma-runtime`, `ogma-bytecode` or `ogma-interpreter`.
@@ -66,4 +66,4 @@ The OGM-40 PR also runs a task-scoped matrix of the existing lockfile-bearing M0
 
 ## Smoke-test boundary
 
-The initial unit tests check only that the new crates compile and remain connected to the already-versioned Core IR, OGMB and Rust ABI identifiers. They do not test JavaScript parsing, bytecode execution, Runtime values, GC, callbacks or real embedding behavior. Those tests belong to their implementation issues; no runtime semantics are introduced by OGM-40.
+The initial OGM-40 bootstrap tests checked only crate compilation and contract identifiers. OGM-41 adds real JavaScript parser/source-diagnostic unit tests and a bounded pinned parser-corpus Fast-CI smoke through the Rust adapter. These checks do not execute JavaScript and do not test bytecode execution, Runtime values, GC, callbacks or embedding behavior; those remain with their owning issues.
