@@ -3485,13 +3485,36 @@ fn semantic_to_number(value: &SemanticValue) -> std::result::Result<f64, &'stati
 }
 
 fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletion {
+    // Keep this oracle independent from runtime_add: model the Object-to-primitive
+    // string result here instead of calling the Runtime helper's conversion path.
+    let left = match left {
+        SemanticValue::Object { primitive, .. } => SemanticValue::String(primitive.clone()),
+        value => value.clone(),
+    };
+    let right = match right {
+        SemanticValue::Object { primitive, .. } => SemanticValue::String(primitive.clone()),
+        value => value.clone(),
+    };
+
     if matches!(left, SemanticValue::Symbol(_)) || matches!(right, SemanticValue::Symbol(_)) {
         return SemanticCompletion::Throw {
             name: "TypeError",
             value: None,
         };
     }
-    if let (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) = (left, right) {
+
+    // ECMAScript addition checks for String primitives after ToPrimitive and
+    // before the BigInt/Number mixed-numeric restriction. Thus 1n + "x" is "1x".
+    if matches!(left, SemanticValue::String(_)) || matches!(right, SemanticValue::String(_)) {
+        return match (semantic_to_string(&left), semantic_to_string(&right)) {
+            (Ok(left), Ok(right)) => {
+                SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")))
+            }
+            (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw { name, value: None },
+        };
+    }
+
+    if let (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) = (&left, &right) {
         return SemanticCompletion::Normal(SemanticValue::BigInt(left + right));
     }
     if matches!(left, SemanticValue::BigInt(_)) || matches!(right, SemanticValue::BigInt(_)) {
@@ -3500,18 +3523,7 @@ fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompleti
             value: None,
         };
     }
-    if matches!(
-        left,
-        SemanticValue::String(_) | SemanticValue::Object { .. }
-    ) || matches!(
-        right,
-        SemanticValue::String(_) | SemanticValue::Object { .. }
-    ) {
-        let left = semantic_to_string(left).unwrap_or_else(|_| "[symbol]".to_owned());
-        let right = semantic_to_string(right).unwrap_or_else(|_| "[symbol]".to_owned());
-        return SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")));
-    }
-    match (semantic_to_number(left), semantic_to_number(right)) {
+    match (semantic_to_number(&left), semantic_to_number(&right)) {
         (Ok(left), Ok(right)) => SemanticCompletion::Normal(semantic_number(left + right)),
         _ => SemanticCompletion::Throw {
             name: "TypeError",
@@ -3600,6 +3612,16 @@ fn runtime_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletio
                 value: None,
             }
         }
+        // Apply the String case before rejecting mixed BigInt/Number operands:
+        // after ToPrimitive, BigInt + String is concatenation, not a TypeError.
+        (SemanticValue::String(_), _) | (_, SemanticValue::String(_)) => {
+            match (runtime_to_string(&left), runtime_to_string(&right)) {
+                (Ok(left), Ok(right)) => {
+                    SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")))
+                }
+                (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw { name, value: None },
+            }
+        }
         (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) => {
             match left.checked_add(*right) {
                 Some(sum) => SemanticCompletion::Normal(SemanticValue::BigInt(sum)),
@@ -3613,14 +3635,6 @@ fn runtime_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompletio
             SemanticCompletion::Throw {
                 name: "TypeError",
                 value: None,
-            }
-        }
-        (SemanticValue::String(_), _) | (_, SemanticValue::String(_)) => {
-            match (runtime_to_string(&left), runtime_to_string(&right)) {
-                (Ok(left), Ok(right)) => {
-                    SemanticCompletion::Normal(SemanticValue::String(format!("{left}{right}")))
-                }
-                (Err(name), _) | (_, Err(name)) => SemanticCompletion::Throw { name, value: None },
             }
         }
         _ => match (runtime_to_number(&left), runtime_to_number(&right)) {
@@ -7970,4 +7984,136 @@ mod tests {
             }
         }
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn generated_native_add_applies_string_precedence_before_mixed_bigint_error() -> Result<()> {
+        let cases = [
+            (
+                "bigint-string",
+                vec![
+                    SemanticValue::BigInt(7),
+                    SemanticValue::String("items".to_owned()),
+                ],
+                SemanticCompletion::Normal(SemanticValue::String("7items".to_owned())),
+            ),
+            (
+                "object-string-bigint",
+                vec![
+                    SemanticValue::Object {
+                        identity: 1,
+                        primitive: "item=".to_owned(),
+                    },
+                    SemanticValue::BigInt(7),
+                ],
+                SemanticCompletion::Normal(SemanticValue::String("item=7".to_owned())),
+            ),
+            (
+                "bigint-object-string",
+                vec![
+                    SemanticValue::BigInt(7),
+                    SemanticValue::Object {
+                        identity: 2,
+                        primitive: "items".to_owned(),
+                    },
+                ],
+                SemanticCompletion::Normal(SemanticValue::String("7items".to_owned())),
+            ),
+        ];
+
+        for (case_name, inputs, expected) in &cases {
+            assert_eq!(
+                semantic_add(&inputs[0], &inputs[1]),
+                *expected,
+                "independent semantic oracle: {case_name}"
+            );
+            assert_eq!(
+                runtime_add(&inputs[0], &inputs[1]),
+                *expected,
+                "M0 Runtime helper: {case_name}"
+            );
+        }
+
+        // Exercise the generated Cranelift entrypoint and candidate ABI rather
+        // than validating only the two Rust-side semantic functions.
+        for candidate in Candidate::ALL {
+            let root = env::temp_dir().join(format!(
+                "ogm38-native-add-regression-{}-{}",
+                std::process::id(),
+                candidate.name()
+            ));
+            if root.exists() {
+                fs::remove_dir_all(&root)?;
+            }
+            fs::create_dir_all(&root)?;
+
+            let verification = (|| -> Result<()> {
+                let object_path = candidate_output_path(&root, candidate, "o");
+                let library_path =
+                    candidate_output_path(&root, candidate, std::env::consts::DLL_EXTENSION);
+                make_candidate_function(candidate, &object_path)?;
+                link_shared_library(&object_path, &library_path)?;
+
+                // SAFETY: the library is built by this test and exports the
+                // exact OGM-38 candidate entrypoints looked up below.
+                let library = unsafe { Library::new(&library_path) }
+                    .context("load generated OGM-38 regression library")?;
+                // SAFETY: symbol names and ABI aliases match make_candidate_function.
+                let batch_dispatch = unsafe {
+                    *library
+                        .get::<NativeBatchHandleDispatch>(b"ogma_value_batch_handle_dispatch\0")?
+                };
+                let strict_equal = unsafe {
+                    *library.get::<NativeStrictEqual>(b"ogma_value_strict_equal\0")?
+                };
+                let value_move = unsafe {
+                    *library.get::<NativeValueMove>(b"ogma_value_move\0")?
+                };
+                let semantic_add_entry = unsafe {
+                    *library.get::<NativeSemanticAdd>(b"ogma_value_semantic_add\0")?
+                };
+
+                for (case_name, inputs, expected) in &cases {
+                    let result = dispatch_native_semantic_inputs(
+                        candidate,
+                        batch_dispatch,
+                        strict_equal,
+                        inputs,
+                        NativeSemanticDispatchOptions {
+                            invoke_aot_host: false,
+                            invoke_call_boundary: false,
+                            invoke_host_echo: false,
+                            invoke_semantic_add: true,
+                            perform_native_transition: false,
+                            strict_equal_slots: None,
+                        },
+                        value_move,
+                        semantic_add_entry,
+                    )?;
+                    assert_eq!(
+                        result.runtime_add_completion,
+                        Some(expected.clone()),
+                        "{} generated native js.add: {case_name}",
+                        candidate.name()
+                    );
+                    assert_eq!(
+                        result.native_runtime_add_calls,
+                        1,
+                        "{} generated native helper call count: {case_name}",
+                        candidate.name()
+                    );
+                }
+                Ok(())
+            })();
+
+            let cleanup = fs::remove_dir_all(&root);
+            verification?;
+            cleanup.with_context(|| {
+                format!("remove OGM-38 regression build directory {}", root.display())
+            })?;
+        }
+
+        Ok(())
+    }
+
 }
