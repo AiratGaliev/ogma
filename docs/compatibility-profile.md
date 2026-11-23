@@ -419,6 +419,36 @@ The corpus is versioned independently from the Node API matrix. Every executable
 |---|---|---|---|
 | SolidJS Native | AiratGaliev/solidjs-native@bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 | solid-js@1.9.18, local solid-native@0.1.0, TSX/JSX runtime, reactivity/effects, custom renderer and future Rust-host bridge | Primary planned runtime consumer; current smoke is still backed by rquickjs, not Ogma |
 | Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary reference repository only; not yet an executable Ogma consumer and therefore has no compatibility result or consumer-lockfile pin in profile 1.0.0 |
+| cge-experiments — Brick Breaker | AiratGaliev/cge-experiments@91dfa48300f6ba3f0bc4f2a9db9b7ac298dc508c (`main`) | Existing TypeScript Brick Breaker game hosted by a native Rust game loop; QuickJS-NG reference backend | M2 interpreter-only replacement/performance pilot; no Ogma execution or compatibility result yet. M4 OGM-78 remains the full Rust embedding/AOT consumer acceptance |
+
+### M2 interpreter pilot — cge-experiments Brick Breaker
+
+This is a pinned experimental workload for evaluating whether Ogma's portable bytecode/interpreter can replace the QuickJS-NG backend in a small existing native game. It is **not** a supported-consumer claim, Test262 result, release acceptance result or evidence that an Ogma runtime is already implemented.
+
+The baseline was captured from the current `main` after all changes previously developed on the repository's `dev` branch had been merged:
+
+| Item | Frozen baseline |
+|---|---|
+| Repository revision | [AiratGaliev/cge-experiments@91dfa48300f6ba3f0bc4f2a9db9b7ac298dc508c](https://github.com/AiratGaliev/cge-experiments/tree/91dfa48300f6ba3f0bc4f2a9db9b7ac298dc508c) |
+| Application | `rust-brick-breaker/` |
+| TypeScript game source | `scripts/game.ts`, blob `404916d5416077528920d9dbbf5a4769f5c8a502` |
+| Generated JavaScript | `assets/game.js`, blob `4fddc001d9ff946280309d72e38c0c72a0f57f31` |
+| Rust dependency lock | `Cargo.lock`, blob `9b262808a6dd59137afc47649dea6ac121d8029e` |
+| JavaScript build/test lock | `package-lock.json`, blob `5fb65ece1ba976cd649e711b8485baa1cec69f40` |
+| Existing Criterion harness | `benches/runtime.rs`, blob `56230eb9be0f0a51173d19f0690cd1dc90d3c5a9` |
+| Existing benchmark methodology | `BENCHMARKS.md`, blob `e1d840b56befe6b78c491b85dab2cb3ffa94c258` |
+| Reference runtime | `rquickjs 0.14.0`, QuickJS-NG commit `0fdea21ff1090084e91dad812b343d92e79ba9d9` |
+| Consumer build/test toolchain | Rust 1.97.0, Node.js 22.x, TypeScript 5.9.3; these are consumer prerequisites, not Ogma's normative TypeScript 7.0.2 / Node.js 26.13.0 references |
+
+The M2 experiment must preserve the current game design: gameplay state, collision reactions, score, lives, victory/game-over and restart stay in the TypeScript game. Rust continues to provide the native host services. QuickJS-NG remains a selectable reference backend until parity and performance evidence has been reviewed.
+
+For a fair runtime comparison, both backends execute the **identical generated `assets/game.js` bytes** through the same host API and deterministic input/physics observations. Independently, the original pinned `scripts/game.ts` must pass Ogma's TypeScript frontend and `ogma compile` path. This separates runtime performance from differences in TypeScript emit.
+
+The report must cover gameplay parity; runtime/context startup and script load/initialization; no-op lifecycle and real game update latency; host-boundary costs; a deterministic CPU-only game tick; and comparable process/runtime memory metrics. Record the same machine and build environment, at least three independent runs, raw machine-readable samples, p50/p95/p99 and Criterion confidence/variability where available. Keep GPU submission, present/vsync and historical pre-Jolt Box2D measurements out of interpreter CPU claims. CPU microbenchmarks are not whole-game FPS.
+
+The expected outcome is an evidence-based Go / Conditional Go / No-Go decision for replacing QuickJS-NG **for this workload**. There is no fabricated pass requirement that Ogma must be faster; an honest No-Go is a valid experiment result. This M2 pilot is interpreter/portable-bytecode only. Native AOT/hybrid execution belongs to M3, and the broader public Rust embedding, async, GC and interpreter/AOT consumer acceptance remains M4 in [OGM-78](https://linear.app/ogma-engine/issue/OGM-78/validate-rust-embedding-contract-and-integrate-the-cge-experiments). The pilot itself is tracked by [OGM-100](https://linear.app/ogma-engine/issue/OGM-100/run-the-cge-experiments-brick-breaker-on-ogma-and-compare-quickjs-ng).
+
+**Evidence state at this profile revision:** baseline and measurement method are pinned; only the QuickJS-NG consumer path and its existing benchmark harness are present. No Ogma execution, parity result or side-by-side Ogma performance result has been produced.
 
 For SolidJS Native, keep these categories separate:
 
@@ -468,4 +498,5 @@ This file is the single repository source of truth for compatibility status and 
 - [Node.js 26.0.0 release notes — Temporal availability](https://nodejs.org/en/blog/release/v26.0.0#temporal-api)
 - [SolidJS Native pinned consumer](https://github.com/AiratGaliev/solidjs-native/tree/bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668)
 - [Codogma Engine pinned secondary consumer](https://github.com/AiratGaliev/codogma-engine/tree/982d25c26da94c1f73d61457bf55da682413eff2)
+- [cge-experiments pinned Brick Breaker M2 workload](https://github.com/AiratGaliev/cge-experiments/tree/91dfa48300f6ba3f0bc4f2a9db9b7ac298dc508c/rust-brick-breaker)
 - [Ogma architecture specification — sections 3, 13 and 20](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a)
