@@ -174,6 +174,13 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         else:
             active_results = None
 
+        # This checksum is pinned to the immutable snapshot-producing run in
+        # the manifest; each later CI run emits a new live projection in its artifact.
+        self.assertRegex(
+            manifest["checksums"]["primary_projection_sha256"],
+            r"^[0-9a-f]{64}$",
+        )
+
         primary_path = (
             active_results / "ogm38-primary-benchmark-samples.json"
             if active_results is not None
@@ -181,21 +188,21 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         )
         if primary_path is not None and primary_path.is_file():
             # The specialized CI job first runs this suite before exporting the
-            # report, then runs it again after export. Validate the projection
-            # fully in the latter phase when the generated artifact exists.
-            primary_bytes = primary_path.read_bytes()
-            primary = json.loads(primary_bytes)
-            self.assertEqual(
-                hashlib.sha256(primary_bytes).hexdigest(),
-                manifest["checksums"]["primary_projection_sha256"],
-            )
+            # report, then runs it again after export. Validate the live projection
+            # against this run's native report and workflow identity in the latter phase.
+            primary = json.loads(primary_path.read_bytes())
             self.assertEqual(report["source_revision"], primary["source_revision"])
             self.assertEqual(report["tested_revision"], primary["tested_revision"])
-            self.assertEqual(snapshot_run["url"], primary["run_url"])
-            self.assertEqual(
-                snapshot_run["url"] + "/artifacts",
-                primary["full_report_artifact_url"],
-            )
+            current_run_id = os.environ.get("GITHUB_RUN_ID")
+            server_url = os.environ.get("GITHUB_SERVER_URL")
+            repository = os.environ.get("GITHUB_REPOSITORY")
+            if current_run_id and server_url and repository:
+                current_run_url = f"{server_url}/{repository}/actions/runs/{current_run_id}"
+                self.assertEqual(current_run_url, primary["run_url"])
+                self.assertEqual(
+                    current_run_url + "/artifacts",
+                    primary["full_report_artifact_url"],
+                )
             self.assertEqual(
                 EXPECTED_CANDIDATES,
                 {item["name"] for item in primary["candidates"]},
@@ -208,13 +215,6 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
                 self.assertTrue(
                     all(value >= 0 for value in candidate["native_loop_ns_per_call"])
                 )
-        else:
-            # Pre-export CI checks and local runs without generated output still
-            # validate the immutable archive and historical projection.
-            self.assertRegex(
-                manifest["checksums"]["primary_projection_sha256"],
-                r"^[0-9a-f]{64}$",
-            )
 
         # The older primary projection is a separate historical snapshot and no
         # longer occupies the active projection path after raw-snapshot rotation.
