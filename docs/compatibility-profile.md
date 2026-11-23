@@ -504,7 +504,7 @@ For SolidJS Native, keep these categories separate:
 
 Do not claim universal npm compatibility. A package becomes part of the supported corpus only after its exact version and lockfile are pinned and its install/build/runtime path is exercised. Transitive dependencies must be included in the captured lockfile graph. Native addons, install scripts and platform-specific binaries require separate review and do not become compatible merely because a pure-JS package imports successfully.
 
-### 8.1. JoltPhysics.js staged consumer probes
+### JoltPhysics.js staged consumer probes
 
 This is a separate, staged package consumer entry for **`jolt-physics@1.1.2`** from the official [JoltPhysics.js repository](https://github.com/jrouwe/JoltPhysics.js). It is distinct from the native Rust-host Jolt Physics integration used by cge-experiments and from OGM-23's FrameSnapshot/batch host benchmark. The npm package is ESM and exposes explicit `asm`, single-thread WASM and multithreaded subpaths. It has no runtime npm dependency graph; it does not replace the `strip-ansi@7.1.0 → ansi-regex@6.2.2` transitive-dependency control in OGM-101.
 
