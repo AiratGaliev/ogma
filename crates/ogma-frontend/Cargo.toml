@@ -6,5 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "ogma-parser-adapter"
+path = "src/bin/parser_adapter.rs"
+
+[dependencies]
+oxc_allocator = "=0.158.0"
+oxc_ast = "=0.158.0"
+oxc_diagnostics = "=0.158.0"
+oxc_parser = { version = "=0.158.0", default-features = true }
+oxc_semantic = "=0.158.0"
+oxc_span = "=0.158.0"
+serde_json = "1.0"
+
 [lints]
 workspace = true
