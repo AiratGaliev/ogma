@@ -2,7 +2,7 @@
 
 ## Status
 
-M0 implementation recommendation based on successful CI run [#45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950), measured source revision `74991baa54b346389b6193c1f7075954055be181`, Rust 1.100.0 and Cranelift 0.137.2.
+M0 implementation recommendation based on successful CI run [#45130525848](https://github.com/AiratGaliev/ogma/actions/runs/45130525848), measured source revision `69038fbbd6246f14466ab91821524f7cc0cfb04c`, Rust 1.100.0 and Cranelift 0.137.2.
 
 This decision establishes the conservative direction for the next Runtime/compiler implementation. It does not freeze a production binary layout and does not expose internal Value words through the embedding ABI.
 
@@ -17,12 +17,12 @@ This decision establishes the conservative direction for the next Runtime/compil
 
 | Candidate | Compile p50 | Loop p50 | Object bytes | Native pressure spills |
 |---|---:|---:|---:|---:|
-| Tagged16 + boxed SSA | 1.444 ms | 278.135 ns | 4,128 | 64 slots / 512 B |
-| Tagged16 + representation-aware SSA | 1.619 ms | 92.447 ns | 4,456 | 64 slots / 512 B |
-| NaN-box + boxed SSA | 1.360 ms | 278.053 ns | 3,720 | 32 slots / 256 B |
-| NaN-box + representation-aware SSA | 1.464 ms | 86.048 ns | 4,024 | 32 slots / 256 B |
+| Tagged16 + boxed SSA | 1.433 ms | 277.955 ns | 4,128 | 64 slots / 512 B |
+| Tagged16 + representation-aware SSA | 1.514 ms | 92.671 ns | 4,456 | 64 slots / 512 B |
+| NaN-box + boxed SSA | 1.222 ms | 277.306 ns | 3,720 | 32 slots / 256 B |
+| NaN-box + representation-aware SSA | 1.333 ms | 83.092 ns | 4,024 | 32 slots / 256 B |
 
-Representation-aware SSA improves p50 by about 3.01× for Tagged16 and 3.23× for NaN-box in this synthetic numeric loop. NaN-box reduces Value payload backing storage from 524,288 B to 262,144 B in the measured graph and halves the observed spills of the generated 32-live-Value pressure function. These are bounded M0 measurements, not whole-runtime performance claims. The p50 difference between the representation-aware layouts is only 6.9%; it does not justify choosing NaN-box before production multi-target and workload evidence exists.
+Representation-aware SSA improves p50 by about 3.00× for Tagged16 and 3.34× for NaN-box in this synthetic numeric loop. NaN-box reduces Value payload backing storage from 524,288 B to 262,144 B in the measured graph and halves the observed spills of the generated 32-live-Value pressure function. These are bounded M0 measurements, not whole-runtime performance claims. The p50 difference between the representation-aware layouts is 10.3%; it does not justify choosing NaN-box before production multi-target and workload evidence exists.
 
 ## Why NaN-box is not selected
 
@@ -38,7 +38,7 @@ Reopen the internal representation choice after the production heap/object model
 
 ## Raw evidence
 
-The full report and original lossless raw arrays are retained in [CI artifact #14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). The compact lossless 156-series/101-sample XZ dataset is committed in Git as 14 Base64 fragments under `results/ogm38-raw-native-samples.delta.json.xz.b64.parts/`. The decoder and regression tests reconstruct it and verify exact XZ/JSON checksums, fragment inventory, candidate matrix, all 36 GC/allocator workers and independent snapshot provenance. The final implementation-and-integrity [PR-head verification run #45058642369](https://github.com/AiratGaliev/ogma/actions/runs/45058642369) passed both Fast CI (203 tests) and the focused OGM-38 job (45 value-representation tests, 8 dual-backend tests and 65 Rust unit tests), including all four native candidates, OGM-31 differential, formatting, Clippy and raw archive reconstruction. Its report is retained in [artifact #14768059877](https://github.com/AiratGaliev/ogma/actions/runs/45058642369/artifacts/14768059877).
+The active full report and lossless raw arrays are retained in [CI artifact #14798285147](https://github.com/AiratGaliev/ogma/actions/runs/45130525848/artifacts/14798285147). The compact lossless 156-series/101-sample XZ dataset for measured revision `69038fbb…` is committed in Git as 13 Base64 fragments under `results/ogm38-raw-native-samples.delta.json.xz.b64.parts/`; the decoder checks exact XZ/JSON checksums, candidate matrix and all 36 GC/allocator workers. The previous `74991baa…` raw snapshot, full report and 14 fragments are preserved under `results/historical/` and validated against a separate immutable expectation. The current PR-head CI must also pass the same regression tests after this archive rotation.
 
 ## Scope boundary
 

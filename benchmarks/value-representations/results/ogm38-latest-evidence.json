@@ -3,22 +3,23 @@
   "version": 3,
   "task": "OGM-38",
   "evidence_status": "m0-evidence-complete-raw-archive-committed",
-  "source_revision": "74991baa54b346389b6193c1f7075954055be181",
-  "tested_revision": "74991baa54b346389b6193c1f7075954055be181",
+  "source_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c",
+  "tested_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c",
   "workflow_run": {
-    "id": 45044214950,
-    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950",
+    "id": 45130525848,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45130525848",
     "jobs": {
       "fast_checks": "success",
       "native_value_ssa_evidence": "success"
     },
     "artifact": {
-      "id": 14762343441,
+      "id": 14798285147,
       "name": "ogm38-native-value-ssa-evidence",
-      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441",
-      "zip_sha256": "156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d",
-      "size_bytes": 629779
-    }
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45130525848/artifacts/14798285147",
+      "zip_sha256": "3d6fceb2879bd1533f0e84333400b585f7b7f70a6768ada91cd34d3308a04b42",
+      "size_bytes": 629148
+    },
+    "tested_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c"
   },
   "toolchain": {
     "target": "x86_64-unknown-linux-gnu",
@@ -30,17 +31,17 @@
     "python": "3.12.16"
   },
   "checksums": {
-    "full_native_report_uncompressed_sha256": "938a8b2c1d81bbe81d7dd2aa212849442a5e4a749a16ed453e5ea9c6943e0c06",
-    "full_native_report_gzip_sha256": "746386cadf30fcb412ccc77a7fd7a33d631432854463580eb378e66ee63f45f0",
-    "differential_report_sha256": "5c17d9e29d24dbe1faf5544c48aca958c7103e110a60ac5de2b8b770d1be6da7",
-    "primary_projection_sha256": "247ed726c2f24366d9e6cceda4ccdc65ca59e931188faa2dfa9abe679c54235e",
-    "runtime_projection_gzip_sha256": "3730d8ae29f28265f7d1601a46ce049769a802de1ee6ee8718e7c34c617cdbde",
-    "raw_delta_base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
-    "raw_delta_xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
-    "raw_delta_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
-    "raw_columnar_gzip_base64_file_sha256": "5ab29b1558c43c750e0572710a771302b8e4bbc20889e9e28bc04f524afc11f1",
-    "raw_columnar_gzip_sha256": "1d39a921ba274d29d40889098f821ce027b0c1bd5a93a784bb7517ea035aa050",
-    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6"
+    "full_native_report_uncompressed_sha256": "1c797f3bd4a523ccb11c12803c43a9b9184d0a43aac8398308d3d245811c248f",
+    "full_native_report_gzip_sha256": "e1fd3bab0476f98eb48728a2916275eec386de337907e334e552fed0afbae73e",
+    "differential_report_sha256": "c8d2f9ac94993beed48a887e0e4896349a624c0a3f15906beeaddff6c260978b",
+    "primary_projection_sha256": "77f499d4d8d8ff9ecfc13f4772220ddb7195a8dc477287ceabfdfdc6f9a69d70",
+    "runtime_projection_gzip_sha256": "270e1cbc059fc6fd37d14984c7ddf4979db24f7ee51e30998723091ebfaa7564",
+    "raw_delta_base64_file_sha256": "416989398cac8614c6edebd8cddee3274d6e6dc53b2847f2738ca544b0321158",
+    "raw_delta_xz_sha256": "a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af",
+    "raw_delta_json_sha256": "3a165dc0e13c9bb92e7e773b4a39f51dc0fa875f255cd5411db9a364fe7bfe59",
+    "raw_columnar_gzip_base64_file_sha256": "873dd4cb7faf2b66a37906901eb4889522a7763055e2f71691d298be6c16ec83",
+    "raw_columnar_gzip_sha256": "551dff523e40dc83f9c251411ee94be46a6d6cde52ea3959cb3ea459fff73d7f",
+    "raw_columnar_json_sha256": "a3e63e4ee69a04412d38039007d0e6d53231c74090bae93abe192f410d4bccc2"
   },
   "sampling": {
     "warmup_rounds": 3,
@@ -60,7 +61,7 @@
     "collector_worker_combinations": 24,
     "allocator_worker_combinations": 12,
     "all_candidates_match_portable_ogm31_oracle": true,
-    "oracle_revision": "c6952c237a5a58088d1aff4e49949e4d3421a66f"
+    "oracle_revision": "a537958ad18b9e5ddc3460eaffd11e94c9a186fc"
   },
   "native_loop": {
     "workload": "Number-only specialization of canonical strict-equality-controlled loop (js.add + js.to_number); not representative application throughput",
@@ -68,14 +69,14 @@
       {
         "name": "tagged-16-boxed",
         "compile_ms_p50_p95_p99": [
-          1.444288,
-          1.605649,
-          1.662298
+          1.433031,
+          1.620851,
+          1.703047
         ],
         "loop_ns_p50_p95_p99": [
-          278.135,
-          289.19,
-          295.624
+          277.955,
+          295.05,
+          298.248
         ],
         "handle_dispatch_ns_p50": 5.413,
         "object_bytes": 4128,
@@ -89,14 +90,14 @@
       {
         "name": "tagged-16-representation-aware",
         "compile_ms_p50_p95_p99": [
-          1.619497,
-          1.826193,
-          1.947972
+          1.514269,
+          1.536349,
+          1.540277
         ],
         "loop_ns_p50_p95_p99": [
-          92.447,
-          103.353,
-          106.646
+          92.671,
+          104.834,
+          106.326
         ],
         "handle_dispatch_ns_p50": 5.413,
         "object_bytes": 4456,
@@ -110,14 +111,14 @@
       {
         "name": "nanbox-8-boxed",
         "compile_ms_p50_p95_p99": [
-          1.360383,
-          1.55807,
-          1.653655
+          1.221675,
+          1.26095,
+          1.44482
         ],
         "loop_ns_p50_p95_p99": [
-          278.053,
-          289.244,
-          292.306
+          277.306,
+          291.897,
+          298.524
         ],
         "handle_dispatch_ns_p50": 5.163,
         "object_bytes": 3720,
@@ -131,16 +132,16 @@
       {
         "name": "nanbox-8-representation-aware",
         "compile_ms_p50_p95_p99": [
-          1.464211,
-          1.650423,
-          1.786
+          1.332605,
+          1.574803,
+          1.653901
         ],
         "loop_ns_p50_p95_p99": [
-          86.048,
-          96.714,
-          102.456
+          83.092,
+          95.237,
+          96.427
         ],
-        "handle_dispatch_ns_p50": 5.411,
+        "handle_dispatch_ns_p50": 5.167,
         "object_bytes": 4024,
         "loop_code_bytes": 384,
         "pressure_code_bytes": 1039,
@@ -154,36 +155,36 @@
   },
   "native_add_p50_ns": {
     "tagged_16_boxed": {
-      "number_add": 39.307,
-      "string_concat": 4739.631,
-      "bigint_add": 8823.97,
-      "object_to_primitive_add": 4737.143,
-      "symbol_add_throws": 182.096,
-      "bigint_number_add_throws": 177.975
+      "number_add": 39.401,
+      "string_concat": 4783.544,
+      "bigint_add": 8842.78,
+      "object_to_primitive_add": 4851.693,
+      "symbol_add_throws": 181.875,
+      "bigint_number_add_throws": 177.903
     },
     "tagged_16_representation_aware": {
-      "number_add": 39.315,
-      "string_concat": 4762.928,
-      "bigint_add": 8770.836,
-      "object_to_primitive_add": 4805.377,
-      "symbol_add_throws": 182.079,
-      "bigint_number_add_throws": 177.593
+      "number_add": 39.397,
+      "string_concat": 4806.324,
+      "bigint_add": 8868.014,
+      "object_to_primitive_add": 4806.631,
+      "symbol_add_throws": 181.809,
+      "bigint_number_add_throws": 178.015
     },
     "nanbox_8_boxed": {
-      "number_add": 39.021,
-      "string_concat": 4853.913,
-      "bigint_add": 8869.891,
-      "object_to_primitive_add": 4830.519,
-      "symbol_add_throws": 181.796,
-      "bigint_number_add_throws": 178.166
+      "number_add": 39.118,
+      "string_concat": 4824.514,
+      "bigint_add": 8965.487,
+      "object_to_primitive_add": 4838.851,
+      "symbol_add_throws": 182.026,
+      "bigint_number_add_throws": 178.444
     },
     "nanbox_8_representation_aware": {
-      "number_add": 39.241,
-      "string_concat": 4824.774,
-      "bigint_add": 8973.212,
-      "object_to_primitive_add": 4820.699,
-      "symbol_add_throws": 182.169,
-      "bigint_number_add_throws": 178.034
+      "number_add": 39.124,
+      "string_concat": 4771.434,
+      "bigint_add": 8840.482,
+      "object_to_primitive_add": 4858.873,
+      "symbol_add_throws": 182.139,
+      "bigint_number_add_throws": 178.52
     }
   },
   "heap_gc": {
@@ -200,20 +201,20 @@
     },
     "vmhwm_peak_range_mib": {
       "tagged-16-boxed": [
-        4.73046875,
-        5.03515625
+        4.72265625,
+        4.84765625
       ],
       "tagged-16-representation-aware": [
-        4.7265625,
-        4.98828125
+        4.77734375,
+        4.828125
       ],
       "nanbox-8-boxed": [
-        4.47265625,
-        4.71484375
+        4.46875,
+        4.52734375
       ],
       "nanbox-8-representation-aware": [
-        4.46484375,
-        4.6640625
+        4.484375,
+        4.52734375
       ]
     },
     "allocation_failures": 0
@@ -227,21 +228,21 @@
     "spills": "GNU objdump disassembly of generated Cranelift 32-live-Value function; regalloc2 is supplemental."
   },
   "raw_dataset": {
-    "storage": "Git-tracked Base64 fragments in benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/; decode_ogm38_raw_archive.py reconstructs the XZ archive and verifies exact checksums.",
+    "storage": "Git-tracked Base64 fragments in benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/; decode_ogm38_raw_archive.py verifies the immutable snapshot against revision 69038fbbd6246f14466ab91821524f7cc0cfb04c.",
     "artifact_path": "ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64",
     "encoding": "XZ-compressed delta JSON; 156 101-sample series and 36 worker records; numeric scale 1000 (0.001-unit precision)",
-    "base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
-    "xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
-    "decoded_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
+    "base64_file_sha256": "416989398cac8614c6edebd8cddee3274d6e6dc53b2847f2738ca544b0321158",
+    "xz_sha256": "a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af",
+    "decoded_json_sha256": "3a165dc0e13c9bb92e7e773b4a39f51dc0fa875f255cd5411db9a364fe7bfe59",
     "series_count": 156,
     "worker_count": 36,
-    "xz_bytes": 39096,
-    "decoded_json_bytes": 163821,
-    "raw_columnar_gzip_base64_sha256": "5ab29b1558c43c750e0572710a771302b8e4bbc20889e9e28bc04f524afc11f1",
-    "raw_columnar_gzip_sha256": "1d39a921ba274d29d40889098f821ce027b0c1bd5a93a784bb7517ea035aa050",
-    "raw_columnar_json_sha256": "621dcbd85e4a67cf58701e5ca94ce5048fb602c755d7ad35cd6a9ffacb1e50b6",
+    "xz_bytes": 38988,
+    "decoded_json_bytes": 163793,
+    "raw_columnar_gzip_base64_sha256": "873dd4cb7faf2b66a37906901eb4889522a7763055e2f71691d298be6c16ec83",
+    "raw_columnar_gzip_sha256": "551dff523e40dc83f9c251411ee94be46a6d6cde52ea3959cb3ea459fff73d7f",
+    "raw_columnar_json_sha256": "a3e63e4ee69a04412d38039007d0e6d53231c74090bae93abe192f410d4bccc2",
     "git_tracked_parts": "benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/",
-    "fragment_count": 14,
+    "fragment_count": 13,
     "fragment_lengths_bytes": [
       4000,
       4000,
@@ -253,10 +254,7 @@
       4000,
       4000,
       4000,
-      4000,
-      4000,
-      4000,
-      128
+      3984
     ]
   },
   "checked_in_evidence": {
@@ -265,10 +263,10 @@
     "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
     "exporter": "benchmarks/value-representations/export_ogm38_raw_samples.py",
     "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py; benchmarks/value-representations/test_ogm38_archive_integrity.py",
-    "ci_artifact": "14762343441",
+    "ci_artifact": "14798285147",
     "decoder": "benchmarks/value-representations/decode_ogm38_raw_archive.py",
     "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
-    "ci_artifact_note": "Canonical measurement snapshot artifact: 14762343441 (run 45044214950); later PR-head verification: run 45055209774 / artifact 14767710910. The verification artifact contains a fresh report but does not replace the immutable Git-tracked raw snapshot.",
+    "ci_artifact_note": "Current raw snapshot artifact: #14798285147 from successful run #45130525848. The previous 74991 snapshot and artifact #14762343441 remain preserved under results/historical/.",
     "archive_integrity_tests": "benchmarks/value-representations/test_ogm38_archive_integrity.py"
   },
   "pre_integrity_test_verification": {
@@ -357,5 +355,41 @@
       "sha256": "1ed5c226edd88efdcf8218cb39fcaac7dc7fd69864bc2063a353cb208c801fbe"
     },
     "note": "The artifact was produced by a successful run on tested_revision. Documentation and manifest-only changes after that revision do not relabel the immutable raw measurement snapshot."
+  },
+  "historical_raw_snapshot": {
+    "storage": "Git-tracked Base64 fragments preserved under benchmarks/value-representations/results/historical/ogm38-raw-native-samples-74991.delta.json.xz.b64.parts/.",
+    "source_revision": "74991baa54b346389b6193c1f7075954055be181",
+    "tested_revision": "74991baa54b346389b6193c1f7075954055be181",
+    "workflow_run": {
+      "id": 45044214950,
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950"
+    },
+    "artifact": {
+      "id": 14762343441,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441",
+      "zip_sha256": "156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d",
+      "size_bytes": 629779
+    },
+    "base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
+    "xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+    "decoded_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
+    "base64_bytes": 52128,
+    "xz_bytes": 39096,
+    "decoded_json_bytes": 163821,
+    "fragment_count": 14,
+    "fragment_lengths_bytes": [
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      128
+    ]
   }
 }

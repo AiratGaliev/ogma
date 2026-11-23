@@ -132,7 +132,7 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
 
         self.assertEqual(report["source_revision"], manifest["source_revision"])
         self.assertEqual(report["tested_revision"], manifest["tested_revision"])
-        self.assertEqual(report["source_revision"], raw_archive.EXPECTED_SOURCE_REVISION)
+        self.assertEqual(raw_archive.EXPECTED_SOURCE_REVISION, report["source_revision"])
         self.assertEqual(hashlib.sha256(compressed).hexdigest(), raw["xz_sha256"])
         self.assertEqual(hashlib.sha256(raw_json).hexdigest(), raw["decoded_json_sha256"])
         self.assertEqual(len(compressed), raw["xz_bytes"])
@@ -158,6 +158,13 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             manifest["checksums"]["raw_delta_json_sha256"],
         )
 
+        snapshot_run = manifest["workflow_run"]
+        self.assertEqual(45130525848, snapshot_run["id"])
+        self.assertEqual("success", snapshot_run["jobs"]["fast_checks"])
+        self.assertEqual("success", snapshot_run["jobs"]["native_value_ssa_evidence"])
+        self.assertEqual(14798285147, snapshot_run["artifact"]["id"])
+        self.assertEqual(report["source_revision"], snapshot_run["tested_revision"])
+
         primary_path = RESULTS / "ogm38-primary-benchmark-samples.json"
         primary_bytes = primary_path.read_bytes()
         primary = json.loads(primary_bytes)
@@ -180,15 +187,6 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         self.assertEqual(44730458468, projection_meta["workflow_run_id"])
         self.assertEqual(14625194465, projection_meta["artifact_id"])
         self.assertEqual(
-            "74991baa54b346389b6193c1f7075954055be181",
-            report["source_revision"],
-        )
-        self.assertNotEqual(report["source_revision"], primary["source_revision"])
-
-        # The historical projection is validated against its own provenance.
-        # It must never be relabelled or compared as if it were the raw 74991
-        # snapshot; the latter is independently reconstructed and checked above.
-        self.assertEqual(
             EXPECTED_CANDIDATES,
             {item["name"] for item in primary["candidates"]},
         )
@@ -200,6 +198,41 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             self.assertTrue(
                 all(value >= 0 for value in candidate["native_loop_ns_per_call"])
             )
+
+        historical_compressed, historical_report = raw_archive.load_committed_archive(
+            raw_archive.HISTORICAL_PARTS_DIR,
+            expectation=raw_archive.HISTORICAL_ARCHIVE,
+        )
+        historical_json = __import__("lzma").decompress(historical_compressed)
+        historical = manifest["historical_raw_snapshot"]
+        self.assertEqual("74991baa54b346389b6193c1f7075954055be181", historical_report["source_revision"])
+        self.assertEqual(historical["source_revision"], historical_report["source_revision"])
+        self.assertEqual(historical["tested_revision"], historical_report["tested_revision"])
+        self.assertEqual(
+            hashlib.sha256(historical_compressed).hexdigest(),
+            historical["xz_sha256"],
+        )
+        self.assertEqual(
+            hashlib.sha256(historical_json).hexdigest(),
+            historical["decoded_json_sha256"],
+        )
+        historical_parts = raw_archive.HISTORICAL_PARTS_DIR
+        historical_encoded = b"".join(
+            (historical_parts / f"part-{index:02d}.b64").read_bytes()
+            for index in range(raw_archive.HISTORICAL_ARCHIVE.part_count)
+        )
+        self.assertEqual(raw_archive.HISTORICAL_ARCHIVE.base64_bytes, len(historical_encoded))
+        self.assertEqual(
+            hashlib.sha256(historical_encoded + bytes([10])).hexdigest(),
+            historical["base64_file_sha256"],
+        )
+        self.assertEqual(raw_archive.HISTORICAL_ARCHIVE.part_count, historical["fragment_count"])
+        self.assertEqual(
+            list(raw_archive.HISTORICAL_ARCHIVE.part_lengths),
+            historical["fragment_lengths_bytes"],
+        )
+        self.assertNotEqual(report["source_revision"], historical_report["source_revision"])
+        self.assertNotEqual(report["source_revision"], primary["source_revision"])
 
     def test_manifest_records_the_pre_integrity_test_verification(self):
         manifest = json.loads((RESULTS / "ogm38-latest-evidence.json").read_text())

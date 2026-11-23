@@ -17,19 +17,16 @@ All four use the same Core IR v1 contract, the same five canonical OGM-31 fixtur
 
 ## Reproducible CI run and evidence provenance
 
-- Snapshot-producing native-evidence run: [#45044214950](https://github.com/AiratGaliev/ogma/actions/runs/45044214950). The committed measurement snapshot is intentionally pinned to this run.
-- Measured source/tested revision: `74991baa54b346389b6193c1f7075954055be181`; the native report records identical source and tested revisions.
-- Both `fast-checks` and `OGM-38 native Value and SSA representation evidence` passed. The focused job completed Core IR/OGM-17 verification, formatting, Clippy with `-D warnings`, OGM-26/27/backend contract tests, all four native candidates, OGM-31 differential, compact raw export and validation/regression tests.
-- Full evidence artifact: [`ogm38-native-value-ssa-evidence`, artifact 14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). ZIP SHA-256: `156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d`; size 629,779 bytes. It contains the full native JSON, OGM-31 differential, Core IR report, generated Cranelift/LLVM objects, portable .ogmb fixtures, lockfile and raw samples.
+- Snapshot-producing native-evidence run: [#45130525848](https://github.com/AiratGaliev/ogma/actions/runs/45130525848). The active raw measurement snapshot is pinned to this successful run.
+- Measured source/tested revision: `69038fbbd6246f14466ab91821524f7cc0cfb04c`; the native and raw reports record identical source and tested revisions.
+- Both `fast-checks` and `OGM-38 native Value and SSA representation evidence` passed on the snapshot-producing revision. The focused job completed Core IR/OGM-17 verification, formatting, Clippy with `-D warnings`, OGM-26/27/backend contract tests, all four native candidates, OGM-31 differential, raw export and validation/regression tests.
+- Full evidence artifact: [`ogm38-native-value-ssa-evidence`, artifact 14798285147](https://github.com/AiratGaliev/ogma/actions/runs/45130525848/artifacts/14798285147). ZIP SHA-256: `3d6fceb2879bd1533f0e84333400b585f7b7f70a6768ada91cd34d3308a04b42`; size 629,148 bytes. It contains the full native JSON, OGM-31 differential, Core IR report, generated Cranelift/LLVM objects, portable .ogmb fixtures, lockfile and raw samples.
 - Target: `x86_64-unknown-linux-gnu`; CPU Intel Xeon 6975P-C; Linux 7.0.0-1014-aws; Rust 1.100.0; Cranelift 0.137.2; regalloc2 0.15.3; Python 3.12.16.
 - Sampling: three warmups, 101 measured samples per metric and 1,000 native calls per throughput sample.
-- Report checksums: native JSON `938a8b2c1d81bbe81d7dd2aa212849442a5e4a749a16ed453e5ea9c6943e0c06`; compressed native report `746386cadf30fcb412ccc77a7fd7a33d631432854463580eb378e66ee63f45f0`; differential `5c17d9e29d24dbe1faf5544c48aca958c7103e110a60ac5de2b8b770d1be6da7`; primary projection `18de679735ae6e80b60ab70bfe68a490ba3e5668517b9306818ea87db7404802`; runtime projection gzip `3730d8ae29f28265f7d1601a46ce049769a802de1ee6ee8718e7c34c617cdbde`.
-- Compact raw XZ dataset: 14 Git-tracked fragments under `benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/` (13 × 4,000 bytes and one 128-byte fragment; 52,128 Base64 bytes). Reconstructed XZ SHA-256 `ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d`, size 39,096 bytes; decompressed JSON SHA-256 `08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057`, size 163,821 bytes. The decoder and regression test verify the exact archive checksums, fragment inventory and pinned source revision.
-- The compact XZ dataset contains 156 raw series × 101 samples and 36 worker records (24 collector configurations and 12 direct allocator configurations). The complete columnar sample export is also retained in artifact #14762343441.
-- Exporter, validator, regression tests, decoder, all 14 raw archive fragments, decision record and checksum-pinned manifest are in Git. The raw archive is an immutable snapshot pinned to the source/tested revision above; it is not silently relabelled when later CI runs generate fresh measurements.
-- Final implementation-and-integrity verification: [CI run #45058642369](https://github.com/AiratGaliev/ogma/actions/runs/45058642369) checked out `0bac5df6da65d3655cc0114d32883865b02cd9f2`. Both required jobs passed: Fast CI ran 203 repository tests; the focused OGM-38 job ran 45 value-representation tests, 8 dual-backend tests and 65 Rust unit tests, alongside formatting, Clippy, all four native candidates, OGM-31 differential, raw archive reconstruction and upload. [Artifact #14768059877](https://github.com/AiratGaliev/ogma/actions/runs/45058642369/artifacts/14768059877) contains the resulting reports (626,960 bytes; SHA-256 `1ed5c226edd88efdcf8218cb39fcaac7dc7fd69864bc2063a353cb208c801fbe`). The subsequent branch update changes documentation and manifest only; the benchmark implementation and its integrity tests are unchanged.
-
-
+- Report checksums: native JSON `1c797f3bd4a523ccb11c12803c43a9b9184d0a43aac8398308d3d245811c248f`; compressed native report `e1fd3bab0476f98eb48728a2916275eec386de337907e334e552fed0afbae73e`; differential `c8d2f9ac94993beed48a887e0e4896349a624c0a3f15906beeaddff6c260978b`; primary projection `77f499d4d8d8ff9ecfc13f4772220ddb7195a8dc477287ceabfdfdc6f9a69d70`; runtime projection gzip `270e1cbc059fc6fd37d14984c7ddf4979db24f7ee51e30998723091ebfaa7564`.
+- Active compact XZ dataset: 13 Git-tracked fragments under `results/ogm38-raw-native-samples.delta.json.xz.b64.parts/` (12 × 4,000 bytes and one 3,984-byte fragment; 51,984 Base64 bytes). Reconstructed XZ SHA-256 `a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af`, size 38,988 bytes; decompressed JSON SHA-256 `3a165dc0e13c9bb92e7e773b4a39f51dc0fa875f255cd5411db9a364fe7bfe59`, size 163,793 bytes.
+- The active compact XZ dataset contains 156 raw series × 101 samples and 36 worker records (24 collector configurations and 12 allocator configurations). The complete columnar sample export is also retained in artifact #14798285147.
+- The previous source snapshot `74991baa54b346389b6193c1f7075954055be181` is preserved unchanged under `results/historical/`, including its 14 fragments, report and original artifact [#14762343441](https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441). The historical decoder expectation validates it independently; current evidence does not relabel it.
 
 ## Native code generation and throughput
 
@@ -37,14 +34,14 @@ The generated Cranelift ObjectModule functions are loaded and invoked as native 
 
 | Candidate | Value bytes | Compile p50 / p95 / p99 (ms) | Loop p50 / p95 / p99 (ns) | Handle dispatch p50 (ns) | Object bytes | Loop code bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| tagged-16-boxed | 16 | 1.444 / 1.606 / 1.662 | 278.135 / 289.190 / 295.624 | 5.413 | 4,128 | 336 |
-| tagged-16-representation-aware | 16 | 1.619 / 1.826 / 1.948 | 92.447 / 103.353 / 106.646 | 5.413 | 4,456 | 336 |
-| nanbox-8-boxed | 8 | 1.360 / 1.558 / 1.654 | 278.053 / 289.244 / 292.306 | 5.163 | 3,720 | 392 |
-| nanbox-8-representation-aware | 8 | 1.464 / 1.650 / 1.786 | 86.048 / 96.714 / 102.456 | 5.411 | 4,024 | 384 |
+| tagged-16-boxed | 16 | 1.433 / 1.621 / 1.703 | 277.955 / 295.050 / 298.248 | 5.413 | 4,128 | 336 |
+| tagged-16-representation-aware | 16 | 1.514 / 1.536 / 1.540 | 92.671 / 104.834 / 106.326 | 5.413 | 4,456 | 336 |
+| nanbox-8-boxed | 8 | 1.222 / 1.261 / 1.445 | 277.306 / 291.897 / 298.524 | 5.163 | 3,720 | 392 |
+| nanbox-8-representation-aware | 8 | 1.333 / 1.575 / 1.654 | 83.092 / 95.237 / 96.427 | 5.167 | 4,024 | 384 |
 
 All four shared libraries are 15,304 bytes in this run. Complete object size includes helper functions in addition to the Number loop. Compile p50 is candidate Cranelift function compilation, not whole-program compile/startup time. The large p99 compile outliers are retained in the raw sample set and should not be treated as steady-state compile latency.
 
-On this Number-only workload, representation-aware SSA reduces p50 latency by about 3.01× for Tagged16 and 3.23× for NaN-box compared with boxed SSA. The NaN-box representation-aware p50 is 6.9% lower than Tagged16 representation-aware, a small difference compared with the representation-policy gain. This supports representation-aware internal SSA as the compiler policy; it is not a universal application performance claim and does not establish NaN-box as a public or production ABI.
+On this Number-only workload, representation-aware SSA reduces p50 latency by about 3.00× for Tagged16 and 3.34× for NaN-box compared with boxed SSA. The NaN-box representation-aware p50 is 10.3% lower than Tagged16 representation-aware, a small difference compared with the representation-policy gain. This supports representation-aware internal SSA as the compiler policy; it is not a universal application performance claim and does not establish NaN-box as a public or production ABI.
 
 ## Canonical Core IR corpus and differential
 
@@ -77,10 +74,10 @@ The generated native candidate-layout callers enter shared M0 Rust semantic help
 
 | Candidate | Number add | String concat | BigInt add | Object ToPrimitive add | Symbol error | BigInt/Number error |
 |---|---:|---:|---:|---:|---:|---:|
-| tagged-16-boxed | 39.307 | 4,739.631 | 8,823.970 | 4,737.143 | 182.096 | 177.975 |
-| tagged-16-representation-aware | 39.315 | 4,762.928 | 8,770.836 | 4,805.377 | 182.079 | 177.593 |
-| nanbox-8-boxed | 39.021 | 4,853.913 | 8,869.891 | 4,830.519 | 181.796 | 178.166 |
-| nanbox-8-representation-aware | 39.241 | 4,824.774 | 8,973.212 | 4,820.699 | 182.169 | 178.034 |
+| tagged-16-boxed | 39.401 | 4,783.544 | 8,842.780 | 4,851.693 | 181.875 | 177.903 |
+| tagged-16-representation-aware | 39.397 | 4,806.324 | 8,868.014 | 4,806.631 | 181.809 | 178.015 |
+| nanbox-8-boxed | 39.118 | 4,824.514 | 8,965.487 | 4,838.851 | 182.026 | 178.444 |
+| nanbox-8-representation-aware | 39.124 | 4,771.434 | 8,840.482 | 4,858.873 | 182.139 | 178.520 |
 
 <em>Values are p50 nanoseconds per call; every helper case has 101 raw samples.</em>
 
@@ -99,10 +96,10 @@ Each of the 24 candidate × collector × allocator combinations runs in its own 
 
 | Candidate | Peak worker VmHWM across its six GC/allocator combinations |
 |---|---:|
-| tagged-16-boxed | 4.730–5.035 MiB |
-| tagged-16-representation-aware | 4.727–4.988 MiB |
-| nanbox-8-boxed | 4.473–4.715 MiB |
-| nanbox-8-representation-aware | 4.465–4.664 MiB |
+| tagged-16-boxed | 4.723–4.848 MiB |
+| tagged-16-representation-aware | 4.777–4.828 MiB |
+| nanbox-8-boxed | 4.469–4.527 MiB |
+| nanbox-8-representation-aware | 4.484–4.527 MiB |
 
 The worker report stores baseline/peak/delta for every combination, not only the range shown here. The exporter and regression tests verify that all 24 combinations exist, each has 101 raw samples, and `peak >= baseline` with `delta = peak - baseline`.
 
@@ -147,7 +144,7 @@ python benchmarks/value-representations/validate_ogm38_ogm31.py --native-report 
 python benchmarks/value-representations/export_ogm38_raw_samples.py --native-report /tmp/ogm38-native-value-ssa-report.json --differential-report /tmp/ogm38-ogm31-differential-report.json --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --artifact-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --output-dir /tmp/ogm38-results
 ~~~
 
-The full report, OGM-31 differential, generated portable/native artifacts and every raw compile/throughput/GC/allocator sample remain available in the CI run artifact. The latest-evidence manifest records checksums, source/tested revision, toolchain, worker peak-memory metrics and reproduction metadata. The older checked-in projections are explicitly historical and are not represented as the current run.
+The full report, OGM-31 differential, generated portable/native artifacts and every raw compile/throughput/GC/allocator sample remain available in the CI run artifact. The latest-evidence manifest records checksums, source/tested revision, toolchain, worker peak-memory metrics and reproduction metadata. The older primary projection is explicitly historical and is not represented as the current run.
 
 ## Acceptance-criteria status
 
@@ -158,10 +155,10 @@ The full report, OGM-31 differential, generated portable/native artifacts and ev
 | Equivalent heap/allocator/GC and peak memory | **Met for this M0 proof heap** | OGM-24 allocator blocks back the actual OGM-26 object payloads; both collectors × all three allocator strategies run equivalent workloads. Isolated worker VmHWM baseline/peak/delta is recorded. This is still not a production Runtime heap or total application footprint. |
 | Differential correctness for requested values and effects | **Met for the declared 31-case subset** | All 31 cases per candidate plus OGM-31 oracle match; NaN, signed zero, infinities, BigInt, undefined/null, Strings, Object/Symbol identity, type transitions, exceptions and host traces are covered. Shared helper/ABI boundaries are identified. |
 | Rooting, handle lifetime, safepoints and ABI transitions | **Met for the M0 integration model** | 28 generation-checked candidate roots survive entry/call-boundary collections and are reclaimed; OGM-27 frame/safepoint proof and OGM-19/32 versioned ABI/host-call contracts are exercised. No production stack-map encoder is claimed. |
-| Raw measurements, revisions, reproduction and machine-readable reports committed | **Met** | The 156-series/101-sample lossless XZ delta dataset is Git-tracked as 14 Base64 fragments. The decoder verifies exact XZ/JSON checksums, source/tested revision, four-candidate inventory and 36 worker records; the regression test reconstructs the archive. The complete source artifact and newer verification artifact remain available in CI. |
+| Raw measurements, revisions, reproduction and machine-readable reports committed | **Met** | The active 156-series/101-sample lossless XZ delta dataset is Git-tracked as 13 Base64 fragments; the previous 14-fragment snapshot remains independently verified under `results/historical/`.  The decoder verifies exact XZ/JSON checksums, source/tested revision, four-candidate inventory and 36 worker records; the regression test reconstructs the archive. The complete source artifact and newer verification artifact remain available in CI. |
 | Public Runtime ABI separated from internal SSA/layout decision | **Met as an M0 recommendation** | Keep the public embedding ABI opaque/versioned; use explicit tagged Value as the conservative internal M1 baseline; adopt representation-aware SSA; retain NaN-box as experimental, not selected from nominal width alone. |
 
-OGM-38's bounded M0 native evidence and Value/SSA recommendation are complete on tested revision `74991baa…`, including the Git-tracked raw archive. PR #32 remains open. Merge readiness requires successful Fast and focused OGM-38 native checks for the current PR head; Linear OGM-38 remains In Progress until the reviewed changes are integrated into `dev`. A production Runtime, general full-ECMAScript operator lowering and production machine stack-map emission remain outside this bounded M0 proof. The measured Rust/native implementation is unchanged between the pinned snapshot revision and implementation-and-integrity test revision `0bac5df6da65d3655cc0114d32883865b02cd9f2`; changes after the 74991 snapshot were confined to evidence documentation, decoder/manifest metadata and regression tests. PR #32 remains open; Linear OGM-38 stays In Progress until the reviewed changes are integrated into `dev`.
+OGM-38's bounded M0 native evidence and Value/SSA recommendation are complete on the active measured revision `69038fbb…`; the prior `74991baa…` archive is preserved as a separately verified historical snapshot. PR #32 remains open. Merge readiness requires successful Fast and focused OGM-38 native checks for the current PR head; Linear OGM-38 remains In Progress until the reviewed changes are integrated into `dev`. A production Runtime, general full-ECMAScript operator lowering and production machine stack-map emission remain outside this bounded M0 proof. The active measurement snapshot is pinned to `69038fbbd6246f14466ab91821524f7cc0cfb04c`; the earlier `74991baa…` snapshot is retained with independent provenance. The PR remains open until the current branch head passes both required CI jobs and is integrated into `dev`. PR #32 remains open; Linear OGM-38 stays In Progress until the reviewed changes are integrated into `dev`.
 
 
-Historical projection provenance: `ogm38-primary-benchmark-samples.json` is retained as a separate reference snapshot from run #447304 / revision `dfea7eb`. It is not mixed with the raw native/GC/allocator dataset pinned to run #450442 / revision `74991baa`; the manifest records both provenance chains independently.
+Historical projection provenance: `ogm38-primary-benchmark-samples.json` is retained as a separate reference snapshot from run #447304 / revision `dfea7eb`. It is not mixed with the current raw native/GC/allocator dataset pinned to run #451305 / revision `69038fbb`; the manifest records both provenance chains independently.
