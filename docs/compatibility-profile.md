@@ -217,16 +217,17 @@ Node stability is attached to individual public symbols, not uniformly to an ent
 | node:assert, node:assert/strict | Assertion functions and documented strict-mode behaviour used by consumer tests | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-assert*.js | deferred |
 | node:buffer | Buffer construction, encoding/decoding, comparison, slicing/copying and ArrayBuffer/TypedArray interop | none; memory quotas remain Runtime policy | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-buffer*.js | deferred |
 | node:events | EventEmitter core: on/once/off, emit, listener removal/order and error event behaviour | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-event-emitter*.js | deferred |
-| node:util | Selected format/inspect helpers, promisify and callbackify; no undocumented internals | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-util*.js | deferred |
+| node:util | M2: formatWithOptions(), inspect() and deprecate() only (debug@4.4.3; default warn-once path); M4: other explicitly selected exports, potentially promisify()/callbackify() | process.stderr.write for selected deprecation warnings; no arbitrary OS access | Windows, Linux, macOS; x86_64 and ARM64 | selected test/parallel/test-util*.js cases plus OGM-101 package fixture | deferred |
 | node:path | posix and win32 string semantics: normalize, join, resolve, relative, parse/format and separators | none | Windows, Linux, macOS; both variants tested on every target | test/parallel/test-path*.js | deferred |
 | node:url | URL/URLSearchParams and file URL conversion helpers in the declared subset | none; file conversion does not grant file access | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-url*.js | deferred |
 | node:module | createRequire() bound to an explicit parent URL/path, isBuiltin() and read-only builtinModules in the declared resolver profile | none; resolution remains constrained to the selected package graph and builtin registry | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-module-create-require*.js, test/parallel/test-module-isBuiltin.js, test/parallel/test-module-builtin.js | deferred |
+| node:tty | M2: isatty(fd) only, backed by host-provided terminal metadata; no TTY streams, raw mode or terminal-control APIs | terminal.isatty | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-tty-isatty.js and OGM-101 package fixture | deferred |
 | node:querystring | parse/stringify and documented escaping semantics | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-querystring*.js | deferred |
 | node:string_decoder | StringDecoder and encoding-boundary behaviour | none | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-string-decoder*.js | deferred |
 | node:stream | Readable, Writable, Duplex, Transform, PassThrough and selected pipeline/backpressure contracts | none for in-memory streams; external I/O requires a Host adapter | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-stream*.js, test/parallel/test-readable*.js | deferred |
 | node:timers and timer globals | setTimeout/setInterval/setImmediate with clearTimeout/clearInterval/clearImmediate cancellation and observable callback ordering | scheduler.timers | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-timers*.js, test/parallel/test-timers-clearImmediate.js, test/parallel/test-microtask-queue-run-immediate.js | deferred |
 | console global | log/info/warn/error and selected formatting behaviour | console.write | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-console*.js | deferred |
-| process facade | Read-only version/platform/arch metadata and env values; cwd read; `process.nextTick()` compatibility exception (Legacy); no env mutation or process control | process.metadata, optionally process.env.read, process.cwd.read, scheduler.next_tick | Windows, Linux, macOS; x86_64 and ARM64 | test/parallel/test-process-next-tick.js, test/parallel/test-next-tick*.js plus selected test-process metadata cases | deferred |
+| process facade | M2: Runtime/Realm-scoped allowlisted process.env string map (DEBUG/DEBUG_* only; local write/delete) and logical stderr fd=2/write; M4: other selected metadata/cwd/nextTick surface | process.env.read, process.stderr.write; process.metadata/process.cwd.read/scheduler.next_tick remain separately gated | Windows, Linux, macOS; x86_64 and ARM64 | selected test-process cases, test/parallel/test-process-next-tick.js and OGM-101 | deferred |
 
 ### 4.4. Node Host API matrix
 
@@ -276,7 +277,9 @@ The host owns permissions and resources. Importing a module never grants access.
 |---|---|---|
 | console.write | Write structured console output to a host sink | console |
 | process.metadata | Read limited Runtime/process metadata | process facade |
-| process.env.read | Read only explicitly allowed environment variables | process.env |
+| process.env.read | Seed a Runtime/Realm-scoped map from explicitly allowlisted environment values; later JS writes/deletes stay inside that map | process.env |
+| process.stderr.write | Write text to an explicit host-provided stderr/logging sink; the exposed fd=2 is logical, not an OS handle | process.stderr |
+| terminal.isatty | Read whether a declared logical stream is connected to a terminal | node:tty.isatty |
 | process.cwd.read | Read the configured application working directory | process.cwd() |
 | scheduler.next_tick | Enqueue Node-style nextTick callbacks | process.nextTick |
 | scheduler.timers | Schedule/cancel host-driven timers | node:timers |
@@ -335,7 +338,7 @@ The resolver must distinguish an unrecognized condition in a package's condition
 
 Unknown node:* built-ins, unsupported package entry points, denied host capabilities and unsupported module formats fail deterministically. Error identity/message mapping to Node error codes is part of the tested compatibility surface, not an excuse to silently resolve another path.
 
-Package managers (npm/pnpm/yarn) remain external build-time tools. They provide a lockfile and resolved dependency graph; Ogma Toolchain consumes that graph and builds the application bundle. Runtime startup must not require Node, npm, Corepack, network registry access or a source node_modules tree. Package lifecycle/install scripts are untrusted build-time code and are never run automatically when an embedded application starts.
+The initial package-manager baseline is **pnpm 12.18.0** with **pnpm-lock.yaml lockfile format 9.0**, matching the pinned SolidJS Native consumer (this is a project pin, not a claim that 12.18.0 is the latest pnpm). In M2, an isolated fixture pins packageManager to pnpm@12.18.0, uses .npmrc node-linker=isolated and stages the exact dependency tree with `pnpm install --frozen-lockfile --ignore-scripts`. M2 validates the materialized local node_modules tree, including the node_modules/.pnpm virtual store and symlink/nested-dependency topology; it does not parse pnpm-lock.yaml. M3 OGM-94 owns lockfile v9 ingestion, canonical dependency-graph construction and final application packaging. npm/yarn lockfile adapters are not in the initial baseline and require a separately reviewed profile change. pnpm, Node, Corepack, registry/network access and package lifecycle scripts remain build-time only; packaged Runtime startup must not require them or a source node_modules tree. Package lifecycle/install scripts are untrusted build-time code and are never run automatically at application startup.
 
 ### 5.4. Resolver precedence, diagnostics and module identity
 
@@ -440,6 +443,8 @@ The baseline was captured from the current `main` after all changes previously d
 | Reference runtime | `rquickjs 0.14.0`, QuickJS-NG commit `0fdea21ff1090084e91dad812b343d92e79ba9d9` |
 | Consumer build/test toolchain | Rust 1.97.0, Node.js 22.x, TypeScript 5.9.3; these are consumer prerequisites, not Ogma's normative TypeScript 7.0.2 / Node.js 26.13.0 references |
 
+The package-lock is retained solely as part of the pre-existing cge-experiments toolchain baseline. It does not select npm as Ogma's package manager or imply npm lockfile support; the separate M2 package/API micro-corpus uses the pinned pnpm baseline in OGM-101.
+
 The M2 experiment must preserve the current game design: gameplay state, collision reactions, score, lives, victory/game-over and restart stay in the TypeScript game. Rust continues to provide the native host services. QuickJS-NG remains a selectable reference backend until parity and performance evidence has been reviewed.
 
 For a fair runtime comparison, both backends execute the **identical generated `assets/game.js` bytes** through the same host API and deterministic input/physics observations. Independently, the original pinned `scripts/game.ts` must pass Ogma's TypeScript frontend and `ogma compile` path. This separates runtime performance from differences in TypeScript emit.
@@ -450,6 +455,33 @@ The expected outcome is an evidence-based Go / Conditional Go / No-Go decision f
 
 **Evidence state at this profile revision:** baseline and measurement method are pinned; only the QuickJS-NG consumer path and its existing benchmark harness are present. No Ogma execution, parity result or side-by-side Ogma performance result has been produced.
 
+### M2 pnpm-backed package and Node Base API proof
+
+This planned micro-corpus is owned by [OGM-101](https://linear.app/ogma-engine/issue/OGM-101/run-a-pnpm-backed-package-corpus-with-the-initial-node-base-api-slice). It is a narrow consumer-backed check, not a supported npm ecosystem claim. API rows above remain **deferred** until Ogma implements them and passes the pinned tests.
+
+| Item | M2 baseline |
+|---|---|
+| External package manager | pnpm 12.18.0; pinned to match the SolidJS Native baseline |
+| Lockfile | pnpm-lock.yaml, lockfileVersion 9.0; fixture must commit the exact lockfile and integrity values |
+| Install layout | .npmrc: node-linker=isolated; local node_modules/.pnpm virtual store plus symlinked package/dependency entries |
+| Staging command | pnpm install --frozen-lockfile --ignore-scripts |
+| CJS / Node Base package | debug@4.4.3; runtime dependency ms@2.1.3 is resolved and pinned by the fixture lockfile; optional supports-color is intentionally absent in the first test |
+| ESM / exports + dependency control | strip-ansi@7.1.0 → ansi-regex@6.2.2; both type=module with ESM default exports, strip-ansi has a string-form exports entry and imports ansi-regex at runtime |
+| Node reference | Node.js 26.13.0 and selected reference cases from sections 4.1–4.3 |
+
+Do not substitute p-limit@7.3.3/yocto-queue for this initial ESM control: yocto-queue uses private class fields and generator methods, which are not a reason to silently widen the M2 language contract. Add such a package only after those ECMAScript features are explicitly accepted and tested.
+
+The primary debug@4.4.3 scenario must exercise:
+
+- node:util.formatWithOptions(), inspect() and deprecate() only, with the exact formatting/inspection options and default warn-once behaviour exercised by the package and selected Node reference fixtures; other util exports remain deferred.
+- node:tty.isatty(fd) only, returning the Node-compatible result from host-provided terminal metadata; no TTY streams, raw mode or terminal control.
+- process.env as a Runtime/Realm-scoped string map seeded from the explicit DEBUG and DEBUG_* allowlist; support key enumeration, reads, string-coercing writes and deletes, without mutating the parent OS environment or exposing ambient secrets.
+- process.stderr.fd === 2 as a logical stream id and write(string) to a host-provided sink gated by process.stderr.write; return the Node-style boolean acceptance/backpressure result. It is not an OS file descriptor or filesystem capability.
+- Bare util/tty and node:util/node:tty aliases resolving to the same registered builtin identities/cache entries; missing optional supports-color must produce a normal missing-package error that the package catches.
+
+Node process.nextTick(), timers/immediates, broader Base APIs and Node Host I/O are not part of this M2 proof; they remain with OGM-95/96/98 in M4. PromiseJobs are not being claimed by this package set.
+
+**Package-manager boundary:** pnpm runs only in the developer/CI staging environment. OGM-59 resolves the materialized isolated layout, including validated symlinks and nested dependencies, within the host-authorized package graph. M2 does not read or implement pnpm lockfile resolution. M3 OGM-94 imports lockfile v9, validates resolved package metadata and builds the canonical application dependency graph. A packaged app must not need pnpm, Node, Corepack, registry access or the original node_modules tree at startup.
 For SolidJS Native, keep these categories separate:
 
 - Runtime packages: solid-js@1.9.18 and the local solid-native@0.1.0 adapter.
@@ -471,6 +503,25 @@ For SolidJS Native, keep these categories separate:
 | Current evidence state | These commands currently exercise the pinned rquickjs prototype only; none is an Ogma compatibility pass. Re-run them against the Ogma adapter before promoting this consumer entry to supported |
 
 Do not claim universal npm compatibility. A package becomes part of the supported corpus only after its exact version and lockfile are pinned and its install/build/runtime path is exercised. Transitive dependencies must be included in the captured lockfile graph. Native addons, install scripts and platform-specific binaries require separate review and do not become compatible merely because a pure-JS package imports successfully.
+
+### JoltPhysics.js staged consumer probes
+
+This is a separate, staged package consumer entry for **`jolt-physics@1.1.2`** from the official [JoltPhysics.js repository](https://github.com/jrouwe/JoltPhysics.js). It is distinct from the native Rust-host Jolt Physics integration used by cge-experiments and from OGM-23's FrameSnapshot/batch host benchmark. The npm package is ESM, declares MIT licensing, exposes explicit `asm`, single-thread WASM and multithreaded subpaths, and has no runtime npm dependency graph. Therefore it does not replace the `strip-ansi@7.1.0 → ansi-regex@6.2.2` transitive-dependency control in OGM-101.
+
+**Pin/fixture state:** `1.1.2` is the selected package version, but it is **not yet installed in the shared pnpm fixture**. OGM-102 must add this exact version and its npm tarball integrity to the OGM-101 pnpm 12.18.0 / lockfile v9 fixture, retaining `node-linker=isolated`, frozen installation and disabled lifecycle scripts. Until that fixture change is committed, the Jolt package is planned but not staged or runtime-tested; compatibility status remains **deferred**.
+
+| Stage | Tracked task | Package entrypoints | Required proof and boundary |
+|---|---|---|---|
+| M2 interpreter — planned | [OGM-102](https://linear.app/ogma-engine/issue/OGM-102/probe-jolt-physics-esmasmjs-compatibility-in-m2) | `jolt-physics/asm` only; `exports["./asm"].default` resolves to `./dist/jolt-physics.js` | Verify ESM `type`/`exports`, async initializer and a headless fixed-step one-body simulation plus deterministic teardown when initialization succeeds. Inventory all non-ECMAScript Emscripten globals/hooks and classify missing host capabilities. No WebAssembly, DOM/WebGL, Node/fs/network fallback, Workers or complete Jolt support. |
+| M3 packaging — conditional on an accepted single-thread WebAssembly path | [OGM-104](https://linear.app/ogma-engine/issue/OGM-104/validate-jolt-physics-webassembly-loading-and-packaging-in-m3) | `jolt-physics/wasm-compat` embeds WASM bytes as base64 in JS glue (no sidecar); `jolt-physics/wasm` exports JS glue plus `jolt-physics.wasm.wasm` | Inventory the actual `WebAssembly.*` and host-global surface in the generated glue. For `wasm`, verify Emscripten `Module.locateFile` plus an explicit host-backed asset loader/capability: `locateFile` resolves a location but does not load bytes. Verify pnpm package graph, selected-variant asset closure, MIT provenance/SBOM and clean relocated application launch. No ambient browser `fetch`, Node `fs`, Vite `?url`, arbitrary filesystem path or network fallback. Unsupported execution paths are OUT_OF_PROFILE; this task does not mandate a general-purpose WebAssembly engine. |
+| M4 multithreading — conditional platform assessment | [OGM-105](https://linear.app/ogma-engine/issue/OGM-105/evaluate-jolt-physics-multithreaded-variants-against-m4-host) | `jolt-physics/wasm-compat-multithread`, `jolt-physics/debug-wasm-compat-multithread`, `jolt-physics/wasm-multithread` | Inspect Emscripten pthread startup and Jolt's `multi-threaded.js` bootstrap, including `Module.configureWorkerScripts(scriptUrl, scriptParams)`, worker/pool readiness and shutdown. Record Worker, SharedArrayBuffer, Atomics and shared-memory requirements; browser COOP/COEP applies only to browser targets, while native hosts are assessed independently. Account for the documented small Emscripten thread-local residual separately from actual wrapper leaks. Classify the debug renderer's DOM/WebGL needs separately from core pthread support. Preserve the thread-affine Ogma Runtime. A justified EXCLUDED/OUT_OF_PROFILE result is valid. |
+
+All variants must follow Jolt's Emscripten ownership rules. Emscripten does not automatically destroy wrappers created with `new Jolt.XXX`: destroy owned wrappers with `Jolt.destroy(...)`; use `AddRef()/Release()` only for independently retained/released references; do not release objects after ownership has transferred to a parent; remove bodies through `BodyInterface.RemoveBody(body.GetID())` before `BodyInterface.DestroyBody(body.GetID())`; treat `GetPhysicsSystem()` and `GetBodyInterface()` results as borrowed views owned by the `JoltInterface`, not as independently owned objects. After destroying the Jolt interface, never reuse those borrowed views. Repeated lifecycle tests must detect double destroy, stale handles, use-after-destroy and unbounded memory growth.
+
+Record cold initialization, first step, steady-state step, memory and cleanup separately; do not infer game FPS from runtime/physics microbenchmarks. Every result must be tied to the exact package/tarball integrity, pnpm lockfile, Ogma commit, target tuple, selected entrypoint and test evidence. These staged probes are not blanket ECMAScript, WebAssembly, Worker, SharedArrayBuffer or Jolt compatibility claims.
+
+**Upstream references:** [JoltPhysics.js README and entrypoint variants](https://github.com/jrouwe/JoltPhysics.js/blob/main/README.md); [package exports](https://github.com/jrouwe/JoltPhysics.js/blob/main/package.json); [proper object cleanup example](https://github.com/jrouwe/JoltPhysics.js/blob/main/Examples/proper_cleanup.html); [Jolt multithread worker bootstrap](https://github.com/jrouwe/JoltPhysics.js/blob/main/multi-threaded.js); [Emscripten `Module.locateFile`](https://emscripten.org/docs/api_reference/module.html#Module.locateFile); [Emscripten pthreads](https://emscripten.org/docs/porting/pthreads.html).
+
 
 ## 9. Versioning and change control
 
