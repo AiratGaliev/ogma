@@ -284,6 +284,13 @@ pub struct ParsedProgram<'a> {
     pub program: Program<'a>,
     /// Source metadata that owns the text referenced by the AST.
     pub source: &'a SourceFile,
+    /// Original grammar goal selected for this source.
+    pub goal: ParseGoal,
+    /// Effective strictness after applying the parse mode and source directives.
+    ///
+    /// Modules are always strict. Function-local directive prologues remain
+    /// represented in the AST for the semantic-analysis stage to inspect.
+    pub is_strict: bool,
     /// Non-fatal parser/semantic diagnostics, if any.
     pub diagnostics: Vec<ParseDiagnostic>,
 }
@@ -396,9 +403,17 @@ pub fn parse<'a>(
         diagnostics.extend(semantic_diagnostics);
     }
 
+    let source_has_strict_directive = program
+        .directives
+        .iter()
+        .any(|directive| directive.directive.as_str() == "use strict");
     Ok(ParsedProgram {
         program,
         source,
+        goal: options.goal,
+        is_strict: options.goal == ParseGoal::Module
+            || options.mode == ParseMode::Strict
+            || source_has_strict_directive,
         diagnostics,
     })
 }
@@ -805,6 +820,20 @@ mod tests {
 
     #[test]
     fn source_directive_activates_strict_semantics_even_in_sloppy_mode() {
+        let allocator = Allocator::default();
+        let source = source("\"use strict\"; const value = 1;");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ParseGoal::Script,
+                mode: ParseMode::Sloppy,
+            },
+        )
+        .expect("valid strict script should parse");
+        assert_eq!(parsed.goal, ParseGoal::Script);
+        assert!(parsed.is_strict);
+
         let failure = parse_text(
             "\"use strict\"; function duplicate(a, a) {}",
             ParseGoal::Script,
@@ -812,6 +841,23 @@ mod tests {
         )
         .expect_err("the source directive is normative");
         assert_eq!(failure.phase, DiagnosticPhase::Early);
+    }
+
+    #[test]
+    fn modules_are_strict_even_when_sloppy_mode_is_requested() {
+        let allocator = Allocator::default();
+        let source = source("export const value = 1;");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ParseGoal::Module,
+                mode: ParseMode::Sloppy,
+            },
+        )
+        .expect("valid module should parse");
+        assert_eq!(parsed.goal, ParseGoal::Module);
+        assert!(parsed.is_strict);
     }
 
     #[test]
