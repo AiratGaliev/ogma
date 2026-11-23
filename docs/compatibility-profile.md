@@ -504,6 +504,22 @@ For SolidJS Native, keep these categories separate:
 
 Do not claim universal npm compatibility. A package becomes part of the supported corpus only after its exact version and lockfile are pinned and its install/build/runtime path is exercised. Transitive dependencies must be included in the captured lockfile graph. Native addons, install scripts and platform-specific binaries require separate review and do not become compatible merely because a pure-JS package imports successfully.
 
+### 8.1. JoltPhysics.js staged consumer probes
+
+This is a separate, staged package consumer entry for **`jolt-physics@1.1.2`** from the official [JoltPhysics.js repository](https://github.com/jrouwe/JoltPhysics.js). It is distinct from the native Rust-host Jolt Physics integration used by cge-experiments and from OGM-23's FrameSnapshot/batch host benchmark. The npm package is ESM and exposes explicit `asm`, single-thread WASM and multithreaded subpaths. It has no runtime npm dependency graph; it does not replace the `strip-ansi@7.1.0 → ansi-regex@6.2.2` transitive-dependency control in OGM-101.
+
+The exact package version/integrity is staged through the existing pnpm 12.18.0 / lockfile v9 fixture, with `node-linker=isolated`, frozen install and lifecycle scripts disabled. Compatibility status remains **deferred** until the corresponding Ogma consumer test has run; package availability is not evidence of runtime support.
+
+| Stage | Tracked task | Package entrypoints | Required proof and boundary |
+|---|---|---|---|
+| M2 interpreter — planned | [OGM-102](https://linear.app/ogma-engine/issue/OGM-102/probe-jolt-physics-esmasmjs-compatibility-in-m2) | `jolt-physics/asm` only | Verify ESM `type` / `exports`, default async initializer, then a headless fixed-step one-body simulation and deterministic wrapper cleanup where initialization succeeds. Classify exact unsupported syntax/API/runtime blocker otherwise. No WebAssembly, browser DOM/WebGL, Workers or complete Jolt support. |
+| M3 packaging — conditional on an accepted single-thread WebAssembly path | [OGM-104](https://linear.app/ogma-engine/issue/OGM-104/validate-jolt-physics-webassembly-loading-and-packaging-in-m3) | `jolt-physics/wasm-compat` and `jolt-physics/wasm` | Verify embedded-WASM initialization, separate `.wasm` loading through Emscripten `locateFile`, pnpm lockfile graph and app asset closure, and clean relocated package launch. This task does not mandate implementing WebAssembly; classify unsupported paths as OUT_OF_PROFILE. |
+| M4 multithreading — conditional platform assessment | [OGM-105](https://linear.app/ogma-engine/issue/OGM-105/evaluate-jolt-physics-multithreaded-variants-against-m4-host-capabilities) | `jolt-physics/wasm-compat-multithread`, `jolt-physics/debug-wasm-compat-multithread`, `jolt-physics/wasm-multithread` | Only evaluate for supported host targets that explicitly require Worker-style parallelism. Record Worker, SharedArrayBuffer, Atomics, shared-memory and worker lifecycle requirements; browser targets additionally review applicable COOP/COEP isolation. Preserve the thread-affine Ogma Runtime and host-mediated cross-thread boundary. A justified EXCLUDED/OUT_OF_PROFILE decision is valid. |
+
+All variants must follow Jolt's Emscripten object ownership contract: `Jolt.destroy(...)`, `AddRef()/Release()` for reference-counted objects, `BodyInterface.DestroyBody()` for bodies and deterministic destruction of the Jolt interface. Record cold initialization, steady-state step, memory and cleanup separately; do not infer game FPS from runtime/physics microbenchmarks.
+
+These staged probes are not blanket ECMAScript, WebAssembly, Worker, SharedArrayBuffer or Jolt compatibility claims. Every result must be tied to the exact package version, pnpm lockfile/integrity, Ogma commit, target tuple and test evidence.
+
 ## 9. Versioning and change control
 
 This file is the single repository source of truth for compatibility status and pinned baselines.
