@@ -856,7 +856,10 @@ mod tests {
                 .iter()
                 .all(|label| label.span.end_byte as usize <= source.text().len())
         );
-        let function_offset = source.text().find("function").expect("function keyword exists");
+        let function_offset = source
+            .text()
+            .find("function")
+            .expect("function keyword exists");
         assert!(
             labels.iter().any(|label| {
                 label.span.start.line == 2 && label.span.start_byte as usize >= function_offset
