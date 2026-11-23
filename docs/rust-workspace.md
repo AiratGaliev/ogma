@@ -20,16 +20,18 @@ The root `Cargo.lock` covers the seven production workspace members. The complet
 | `ogma-interpreter` | Execution of verified portable bytecode using the shared Runtime (OGM-46) | `ogma-bytecode`, `ogma-runtime` |
 | `ogma-embedding` | Consumer-facing Rust Runtime/Context and host-call API (OGM-47) | `ogma-interpreter`, `ogma-runtime` |
 
-The dependency graph is intentionally acyclic:
+The dependency graph is intentionally acyclic. Arrows point from a dependency to the crate that consumes it:
 
 ```text
 ogma-frontend ─────┐
-                   ├──> ogma-compiler ───> ogma-bytecode
-ogma-core-ir ──────┘
+ogma-core-ir ──────┼──> ogma-compiler
+ogma-bytecode ─────┘
 
 ogma-bytecode ─────┐
-                   ├──> ogma-interpreter ───> ogma-embedding
-ogma-runtime ──────┘                 └──────> ogma-runtime
+ogma-runtime ──────┴──> ogma-interpreter
+
+ogma-interpreter ──┐
+ogma-runtime ──────┴──> ogma-embedding
 ```
 
 The `ogma-runtime` and `ogma-bytecode` packages do not depend on compile-time crates. The interpreter path is `ogma-interpreter → ogma-bytecode + ogma-runtime`; the embedding path adds only the embedding facade. Neither path depends on `ogma-compiler`, `ogma-frontend` or `ogma-core-ir`. A CI dependency-tree assertion protects this boundary.
