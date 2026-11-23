@@ -3,3 +3,10 @@ version = 4
 [[package]]
 name = "ogma-gc-comparison-proof"
 version = "0.1.0"
+dependencies = [
+ "ogma-isolate-allocator-proof",
+]
+
+[[package]]
+name = "ogma-isolate-allocator-proof"
+version = "0.1.0"

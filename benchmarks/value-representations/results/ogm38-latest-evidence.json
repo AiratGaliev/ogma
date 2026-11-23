@@ -1,0 +1,400 @@
+{
+  "schema": "ogma.ogm38.latest-evidence",
+  "version": 3,
+  "task": "OGM-38",
+  "evidence_status": "m0-evidence-complete-raw-archive-committed",
+  "source_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c",
+  "tested_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c",
+  "workflow_run": {
+    "id": 45130525848,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45130525848",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "artifact": {
+      "id": 14798285147,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45130525848/artifacts/14798285147",
+      "zip_sha256": "3d6fceb2879bd1533f0e84333400b585f7b7f70a6768ada91cd34d3308a04b42",
+      "size_bytes": 629148
+    },
+    "tested_revision": "69038fbbd6246f14466ab91821524f7cc0cfb04c"
+  },
+  "toolchain": {
+    "target": "x86_64-unknown-linux-gnu",
+    "operating_system": "Linux 7.0.0-1014-aws",
+    "cpu": "Intel(R) Xeon(R) 6975P-C",
+    "rustc": "1.100.0 (0ef1bc386 2026-11-09)",
+    "cranelift": "0.137.2",
+    "regalloc2": "0.15.3",
+    "python": "3.12.16"
+  },
+  "checksums": {
+    "full_native_report_uncompressed_sha256": "1c797f3bd4a523ccb11c12803c43a9b9184d0a43aac8398308d3d245811c248f",
+    "full_native_report_gzip_sha256": "e1fd3bab0476f98eb48728a2916275eec386de337907e334e552fed0afbae73e",
+    "differential_report_sha256": "c8d2f9ac94993beed48a887e0e4896349a624c0a3f15906beeaddff6c260978b",
+    "primary_projection_sha256": "77f499d4d8d8ff9ecfc13f4772220ddb7195a8dc477287ceabfdfdc6f9a69d70",
+    "runtime_projection_gzip_sha256": "270e1cbc059fc6fd37d14984c7ddf4979db24f7ee51e30998723091ebfaa7564",
+    "raw_delta_base64_file_sha256": "416989398cac8614c6edebd8cddee3274d6e6dc53b2847f2738ca544b0321158",
+    "raw_delta_xz_sha256": "a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af",
+    "raw_delta_json_sha256": "3a165dc0e13c9bb92e7e773b4a39f51dc0fa875f255cd5411db9a364fe7bfe59",
+    "raw_columnar_gzip_base64_file_sha256": "873dd4cb7faf2b66a37906901eb4889522a7763055e2f71691d298be6c16ec83",
+    "raw_columnar_gzip_sha256": "551dff523e40dc83f9c251411ee94be46a6d6cde52ea3959cb3ea459fff73d7f",
+    "raw_columnar_json_sha256": "a3e63e4ee69a04412d38039007d0e6d53231c74090bae93abe192f410d4bccc2"
+  },
+  "sampling": {
+    "warmup_rounds": 3,
+    "samples_per_metric": 101,
+    "native_calls_per_throughput_sample": 1000
+  },
+  "corpus": {
+    "candidate_count": 4,
+    "canonical_fixture_count": 5,
+    "native_value_dispatches_per_candidate": 77,
+    "native_core_ir_batch_invocations_per_candidate": 5,
+    "semantic_cases_passed_per_candidate": 31,
+    "native_semantic_batch_dispatch_invocations_per_candidate": 31,
+    "native_callbacks_per_candidate": 70,
+    "forced_collections_per_candidate": 39,
+    "candidate_shadow_roots_per_candidate": 28,
+    "collector_worker_combinations": 24,
+    "allocator_worker_combinations": 12,
+    "all_candidates_match_portable_ogm31_oracle": true,
+    "oracle_revision": "a537958ad18b9e5ddc3460eaffd11e94c9a186fc"
+  },
+  "native_loop": {
+    "workload": "Number-only specialization of canonical strict-equality-controlled loop (js.add + js.to_number); not representative application throughput",
+    "candidates": [
+      {
+        "name": "tagged-16-boxed",
+        "compile_ms_p50_p95_p99": [
+          1.433031,
+          1.620851,
+          1.703047
+        ],
+        "loop_ns_p50_p95_p99": [
+          277.955,
+          295.05,
+          298.248
+        ],
+        "handle_dispatch_ns_p50": 5.413,
+        "object_bytes": 4128,
+        "loop_code_bytes": 336,
+        "pressure_code_bytes": 1460,
+        "spill_loads": 64,
+        "spill_stores": 64,
+        "spill_slots": 64,
+        "spill_slot_bytes": 512
+      },
+      {
+        "name": "tagged-16-representation-aware",
+        "compile_ms_p50_p95_p99": [
+          1.514269,
+          1.536349,
+          1.540277
+        ],
+        "loop_ns_p50_p95_p99": [
+          92.671,
+          104.834,
+          106.326
+        ],
+        "handle_dispatch_ns_p50": 5.413,
+        "object_bytes": 4456,
+        "loop_code_bytes": 336,
+        "pressure_code_bytes": 1789,
+        "spill_loads": 65,
+        "spill_stores": 64,
+        "spill_slots": 64,
+        "spill_slot_bytes": 512
+      },
+      {
+        "name": "nanbox-8-boxed",
+        "compile_ms_p50_p95_p99": [
+          1.221675,
+          1.26095,
+          1.44482
+        ],
+        "loop_ns_p50_p95_p99": [
+          277.306,
+          291.897,
+          298.524
+        ],
+        "handle_dispatch_ns_p50": 5.163,
+        "object_bytes": 3720,
+        "loop_code_bytes": 392,
+        "pressure_code_bytes": 727,
+        "spill_loads": 32,
+        "spill_stores": 32,
+        "spill_slots": 32,
+        "spill_slot_bytes": 256
+      },
+      {
+        "name": "nanbox-8-representation-aware",
+        "compile_ms_p50_p95_p99": [
+          1.332605,
+          1.574803,
+          1.653901
+        ],
+        "loop_ns_p50_p95_p99": [
+          83.092,
+          95.237,
+          96.427
+        ],
+        "handle_dispatch_ns_p50": 5.167,
+        "object_bytes": 4024,
+        "loop_code_bytes": 384,
+        "pressure_code_bytes": 1039,
+        "spill_loads": 32,
+        "spill_stores": 32,
+        "spill_slots": 32,
+        "spill_slot_bytes": 256
+      }
+    ],
+    "shared_library_bytes": 15304
+  },
+  "native_add_p50_ns": {
+    "tagged_16_boxed": {
+      "number_add": 39.401,
+      "string_concat": 4783.544,
+      "bigint_add": 8842.78,
+      "object_to_primitive_add": 4851.693,
+      "symbol_add_throws": 181.875,
+      "bigint_number_add_throws": 177.903
+    },
+    "tagged_16_representation_aware": {
+      "number_add": 39.397,
+      "string_concat": 4806.324,
+      "bigint_add": 8868.014,
+      "object_to_primitive_add": 4806.631,
+      "symbol_add_throws": 181.809,
+      "bigint_number_add_throws": 178.015
+    },
+    "nanbox_8_boxed": {
+      "number_add": 39.118,
+      "string_concat": 4824.514,
+      "bigint_add": 8965.487,
+      "object_to_primitive_add": 4838.851,
+      "symbol_add_throws": 182.026,
+      "bigint_number_add_throws": 178.444
+    },
+    "nanbox_8_representation_aware": {
+      "number_add": 39.124,
+      "string_concat": 4771.434,
+      "bigint_add": 8840.482,
+      "object_to_primitive_add": 4858.873,
+      "symbol_add_throws": 182.139,
+      "bigint_number_add_throws": 178.52
+    }
+  },
+  "heap_gc": {
+    "object_count": 2048,
+    "edge_count": 2121,
+    "encoded_object_values": 544,
+    "value_storage_bytes": {
+      "tagged16": 524288,
+      "nanbox8": 262144
+    },
+    "peak_logical_heap_bytes": {
+      "tagged16": 787600,
+      "nanbox8": 525456
+    },
+    "vmhwm_peak_range_mib": {
+      "tagged-16-boxed": [
+        4.72265625,
+        4.84765625
+      ],
+      "tagged-16-representation-aware": [
+        4.77734375,
+        4.828125
+      ],
+      "nanbox-8-boxed": [
+        4.46875,
+        4.52734375
+      ],
+      "nanbox-8-representation-aware": [
+        4.484375,
+        4.52734375
+      ]
+    },
+    "allocation_failures": 0
+  },
+  "evidence_boundary": {
+    "core_ir": "Five canonical fixtures and 77 candidate Value dispatches per candidate; generated native batch loops and bounded native semantic CFG, not general full-CFG compiler.",
+    "semantics": "31 candidate-layout native batch CFG invocations per candidate. Several dynamic semantics use shared M0 Rust helper/ABI paths, not full candidate-specific operator lowering.",
+    "rooting": "28 candidate roots survive entry/call-boundary collections and are reclaimed; OGM-26/27 M0 handle/root-frame model, not production stack-map encoder.",
+    "public_abi": "Versioned OGM-19/32 embedding API uses opaque handles and explicit completions; no candidate Value word is exposed publicly.",
+    "memory": "Isolated worker Linux VmHWM; includes executable/runtime/mappings and allocator, not heap-only RSS.",
+    "spills": "GNU objdump disassembly of generated Cranelift 32-live-Value function; regalloc2 is supplemental."
+  },
+  "raw_dataset": {
+    "storage": "Git-tracked Base64 fragments in benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/; decode_ogm38_raw_archive.py verifies the immutable snapshot against revision 69038fbbd6246f14466ab91821524f7cc0cfb04c.",
+    "artifact_path": "ogm38-committed-results/ogm38-raw-native-samples.delta.json.xz.b64",
+    "encoding": "XZ-compressed delta JSON; 156 101-sample series and 36 worker records; numeric scale 1000 (0.001-unit precision)",
+    "base64_file_sha256": "416989398cac8614c6edebd8cddee3274d6e6dc53b2847f2738ca544b0321158",
+    "xz_sha256": "a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af",
+    "decoded_json_sha256": "3a165dc0e13c9bb92e7e773b4a39f51dc0fa875f255cd5411db9a364fe7bfe59",
+    "series_count": 156,
+    "worker_count": 36,
+    "xz_bytes": 38988,
+    "decoded_json_bytes": 163793,
+    "raw_columnar_gzip_base64_sha256": "873dd4cb7faf2b66a37906901eb4889522a7763055e2f71691d298be6c16ec83",
+    "raw_columnar_gzip_sha256": "551dff523e40dc83f9c251411ee94be46a6d6cde52ea3959cb3ea459fff73d7f",
+    "raw_columnar_json_sha256": "a3e63e4ee69a04412d38039007d0e6d53231c74090bae93abe192f410d4bccc2",
+    "git_tracked_parts": "benchmarks/value-representations/results/ogm38-raw-native-samples.delta.json.xz.b64.parts/",
+    "fragment_count": 13,
+    "fragment_lengths_bytes": [
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      3984
+    ]
+  },
+  "checked_in_evidence": {
+    "native_evidence": "benchmarks/value-representations/native-evidence-ogm38.md",
+    "decision_record": "benchmarks/value-representations/decision-record-ogm38.md",
+    "latest_manifest": "benchmarks/value-representations/results/ogm38-latest-evidence.json",
+    "exporter": "benchmarks/value-representations/export_ogm38_raw_samples.py",
+    "regression_tests": "benchmarks/value-representations/test_ogm38_ogm31.py; benchmarks/value-representations/test_ogm38_archive_integrity.py",
+    "ci_artifact": "14798285147",
+    "decoder": "benchmarks/value-representations/decode_ogm38_raw_archive.py",
+    "raw_archive_test": "test_git_tracked_raw_archive_reconstructs_with_exact_checksums",
+    "ci_artifact_note": "Current raw snapshot artifact: #14798285147 from successful run #45130525848. The previous 74991 snapshot and artifact #14762343441 remain preserved under results/historical/.",
+    "archive_integrity_tests": "benchmarks/value-representations/test_ogm38_archive_integrity.py"
+  },
+  "pre_integrity_test_verification": {
+    "id": 45055209774,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45055209774",
+    "tested_revision": "7f84ccba117047218fcbf2954f5463e0764c6692",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "fast_checks": {
+      "python_tests": 203,
+      "result": "passed"
+    },
+    "focused_python_tests": {
+      "value_representation": {
+        "ran": 42,
+        "result": "passed"
+      },
+      "dual_backend": {
+        "ran": 8,
+        "result": "passed"
+      }
+    },
+    "rust_unit_tests": {
+      "ran": 65,
+      "result": "passed"
+    },
+    "artifact": {
+      "id": 14767710910,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45055209774/artifacts/14767710910",
+      "zip_sha256": "1b32c2d1ffdce6d3e962c934f8b4d4766ce7d28237cd21858ec3408d534a4926",
+      "size_bytes": 631852,
+      "note": "Fresh native/differential report for PR head 7f84ccba117047218fcbf2954f5463e0764c6692. The canonical Git-tracked raw sample snapshot remains pinned to source revision 74991baa54b346389b6193c1f7075954055be181."
+    }
+  },
+  "historical_primary_projection": {
+    "status": "reference-only-separate-snapshot",
+    "path": "benchmarks/value-representations/results/historical/ogm38-primary-benchmark-samples-dfea7.json",
+    "source_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
+    "tested_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
+    "workflow_run_id": 44730458468,
+    "run_url": "https://github.com/AiratGaliev/ogma/actions/runs/44730458468",
+    "artifact_id": 14625194465,
+    "artifact_url": "https://github.com/AiratGaliev/ogma/actions/runs/44730458468/artifacts/14625194465",
+    "sha256": "247ed726c2f24366d9e6cceda4ccdc65ca59e931188faa2dfa9abe679c54235e",
+    "note": "This projection is retained as a historical reference and is not part of the raw native/GC/allocator snapshot pinned by source_revision/tested_revision."
+  },
+  "implementation_and_integrity_verification": {
+    "id": 45058642369,
+    "url": "https://github.com/AiratGaliev/ogma/actions/runs/45058642369",
+    "tested_revision": "0bac5df6da65d3655cc0114d32883865b02cd9f2",
+    "jobs": {
+      "fast_checks": "success",
+      "native_value_ssa_evidence": "success"
+    },
+    "fast_checks": {
+      "python_tests": 203,
+      "result": "passed"
+    },
+    "focused_tests": {
+      "value_representation": {
+        "ran": 45,
+        "result": "passed"
+      },
+      "dual_backend": {
+        "ran": 8,
+        "result": "passed"
+      },
+      "rust_unit_tests": {
+        "ran": 65,
+        "result": "passed"
+      },
+      "formatting": "passed",
+      "clippy": "passed",
+      "four_native_candidates": "passed",
+      "ogm31_differential": "passed",
+      "committed_raw_archive_reconstruction": "passed"
+    },
+    "artifact": {
+      "id": 14768059877,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45058642369/artifacts/14768059877",
+      "size_bytes": 626960,
+      "sha256": "1ed5c226edd88efdcf8218cb39fcaac7dc7fd69864bc2063a353cb208c801fbe"
+    },
+    "note": "The artifact was produced by a successful run on tested_revision. Documentation and manifest-only changes after that revision do not relabel the immutable raw measurement snapshot."
+  },
+  "historical_raw_snapshot": {
+    "storage": "Git-tracked Base64 fragments preserved under benchmarks/value-representations/results/historical/ogm38-raw-native-samples-74991.delta.json.xz.b64.parts/.",
+    "source_revision": "74991baa54b346389b6193c1f7075954055be181",
+    "tested_revision": "74991baa54b346389b6193c1f7075954055be181",
+    "workflow_run": {
+      "id": 45044214950,
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950"
+    },
+    "artifact": {
+      "id": 14762343441,
+      "name": "ogm38-native-value-ssa-evidence",
+      "url": "https://github.com/AiratGaliev/ogma/actions/runs/45044214950/artifacts/14762343441",
+      "zip_sha256": "156490e9c2232534caf9c9e01293164cba2f38f1e2f9ec4cb438562dc436274d",
+      "size_bytes": 629779
+    },
+    "base64_file_sha256": "f38de73b15be4c1bf1bda3b93b64ed92bf3c1dff2c03aa7b7dbce930b0fea9eb",
+    "xz_sha256": "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+    "decoded_json_sha256": "08294c48b79b574593d3ba6c96e0baf885ae8ab8692a89abf8eb46e4e78d7057",
+    "base64_bytes": 52128,
+    "xz_bytes": 39096,
+    "decoded_json_bytes": 163821,
+    "fragment_count": 14,
+    "fragment_lengths_bytes": [
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      4000,
+      128
+    ]
+  }
+}

@@ -21,6 +21,9 @@ ogma-rust-abi-proof = { path = "../rust-abi" }
 ogma-native-runtime-boundary-proof = { path = "../native-runtime-boundary" }
 ogma-host-execution-scope-proof = { path = "../host-execution-scope" }
 ogma-typed-host-dispatch-proof = { path = "../typed-host-dispatch" }
+ogma-gc-comparison-proof = { path = "../gc-comparison" }
+ogma-isolate-allocator-proof = { path = "../isolate-allocator" }
+regalloc2 = "=0.15.3"
 
 [profile.release]
 panic = "unwind"

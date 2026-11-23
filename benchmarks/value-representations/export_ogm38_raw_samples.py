@@ -1,0 +1,641 @@
+#!/usr/bin/env python3
+"""Export committed OGM-38 raw evidence projections from authoritative CI JSON."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import gzip
+import hashlib
+import json
+import lzma
+from pathlib import Path
+from typing import Any
+
+from validate_ogm38_ogm31 import validate_semantic_case_evidence
+
+EXPECTED_CANDIDATES = {
+    "tagged-16-boxed",
+    "tagged-16-representation-aware",
+    "nanbox-8-boxed",
+    "nanbox-8-representation-aware",
+}
+EXPECTED_COLLECTORS = {"rc-cycle-removal", "non-moving-mark-sweep"}
+EXPECTED_ALLOCATORS = {
+    "system-allocator",
+    "per-isolate-exact-reuse",
+    "per-isolate-size-class-pool",
+}
+EXPECTED_FIXTURES = 5
+EXPECTED_DISPATCHES = 77
+EXPECTED_REFERENCES = 20
+EXPECTED_SAMPLES = 101
+
+
+def read_json(path: Path) -> tuple[dict[str, Any], bytes]:
+    raw = path.read_bytes()
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value, raw
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def validate_reports(native: dict[str, Any], differential: dict[str, Any]) -> None:
+    require(native.get("task") == "OGM-38", "native report task is not OGM-38")
+    require(native.get("schema_version") == 1, "unsupported native report schema")
+    source_revision = native.get("source_revision")
+    require(bool(source_revision), "native report source_revision is missing")
+    require(
+        source_revision == native.get("tested_revision"),
+        "native report source/tested revisions differ",
+    )
+    require(native.get("measurement_samples") == EXPECTED_SAMPLES, "expected 101 native samples")
+    require(native.get("warmup_rounds") == 3, "expected three warmup rounds")
+    require(native.get("iterations_per_sample") == 1000, "expected 1,000 iterations/sample")
+    require(native.get("target_triple") == "x86_64-unknown-linux-gnu", "unexpected CI target")
+
+    candidates = native.get("candidates")
+    require(isinstance(candidates, list), "native candidates must be an array")
+    require(
+        {item.get("name") for item in candidates} == EXPECTED_CANDIDATES,
+        "native candidate matrix differs from the four OGM-38 candidates",
+    )
+    require(len(candidates) == 4, "native report must contain exactly four candidates")
+
+    expected_pairs = {
+        (collector, allocator)
+        for collector in EXPECTED_COLLECTORS
+        for allocator in EXPECTED_ALLOCATORS
+    }
+    for candidate in candidates:
+        name = candidate["name"]
+        for metric in ("compile_ns", "throughput_ns_per_call"):
+            distribution = candidate.get(metric)
+            require(isinstance(distribution, dict), f"{name}.{metric} is missing")
+            samples = distribution.get("raw_samples_ns")
+            require(
+                isinstance(samples, list) and len(samples) == EXPECTED_SAMPLES,
+                f"{name}.{metric} must contain 101 raw values",
+            )
+            require(
+                all(isinstance(value, (int, float)) and value > 0 for value in samples),
+                f"{name}.{metric} contains non-positive samples",
+            )
+
+        try:
+            validate_semantic_case_evidence(
+                candidate.get("native_value_semantics"),
+                candidate=name,
+            )
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
+        corpus = candidate.get("native_core_ir_corpus", {})
+        require(
+            corpus.get("canonical_fixture_count") == EXPECTED_FIXTURES
+            and corpus.get("native_batch_invocations") == EXPECTED_FIXTURES
+            and corpus.get("native_value_dispatches") == EXPECTED_DISPATCHES
+            and corpus.get("reference_values_resolved_after_forced_gc") == EXPECTED_REFERENCES
+            and corpus.get("all_values_roundtripped_and_dispatched") is True,
+            f"{name} native Core IR Value corpus evidence is incomplete",
+        )
+
+        comparisons = candidate.get("gc", {}).get("collector_comparisons")
+        require(isinstance(comparisons, list), f"{name} GC collector comparisons are missing")
+        actual_pairs = set()
+        require(len(comparisons) == 6, f"{name} must contain six GC/allocator comparisons")
+        for comparison in comparisons:
+            pair = (comparison.get("collector"), comparison.get("allocator_strategy"))
+            actual_pairs.add(pair)
+            raw_samples = comparison.get("raw_samples")
+            require(
+                isinstance(raw_samples, list) and len(raw_samples) == EXPECTED_SAMPLES,
+                f"{name} {pair} must contain 101 GC samples",
+            )
+            baseline = comparison.get("process_peak_rss_baseline_bytes")
+            peak = comparison.get("process_peak_rss_bytes")
+            delta = comparison.get("process_peak_rss_delta_bytes")
+            require(
+                all(isinstance(value, int) and value > 0 for value in (baseline, peak, delta)),
+                f"{name} {pair} peak RSS values must be positive integers",
+            )
+            require(
+                peak >= baseline and peak - baseline == delta,
+                f"{name} {pair} peak RSS baseline/peak/delta are inconsistent",
+            )
+            require(
+                comparison.get("actual_value_storage_capacity_bytes")
+                == candidate["gc"]["value_storage_bytes"],
+                f"{name} {pair} Value payload backing bytes do not match the heap workload",
+            )
+        require(actual_pairs == expected_pairs, f"{name} GC/allocator matrix is incomplete")
+
+        allocator_comparisons = candidate.get("gc", {}).get("allocator_comparisons")
+        require(
+            isinstance(allocator_comparisons, list)
+            and {item.get("strategy") for item in allocator_comparisons} == EXPECTED_ALLOCATORS,
+            f"{name} direct allocator microbench matrix is incomplete",
+        )
+        for comparison in allocator_comparisons:
+            samples = comparison.get("raw_samples")
+            require(
+                isinstance(samples, list) and len(samples) == EXPECTED_SAMPLES,
+                f"{name} {comparison.get('strategy')} allocator sample count differs",
+            )
+
+    require(
+        differential.get("schema") == "ogma.ogm38-ogm31-differential-validation"
+        and differential.get("task") == "OGM-38"
+        and differential.get("native_revision") == source_revision
+        and differential.get("all_candidates_match_portable_ogm31_oracle") is True
+        and differential.get("candidate_count") == 4,
+        "OGM-31 differential report does not match the native report revision/candidates",
+    )
+
+
+def build_primary_projection(
+    native: dict[str, Any],
+    run_url: str,
+    artifact_url: str,
+    full_report_sha256: str,
+    differential_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "schema": "ogma.ogm38.primary-benchmark-samples",
+        "version": 2,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "run_url": run_url,
+        "full_report_artifact_url": artifact_url,
+        "full_report_sha256": full_report_sha256,
+        "differential_report_sha256": differential_sha256,
+        "target": native["target_triple"],
+        "cpu_model": native["cpu_model"],
+        "rustc": native["rustc"],
+        "operating_system": native["operating_system"],
+        "core_ir_contract": native["core_ir_contract"],
+        "warmups": native["warmup_rounds"],
+        "samples_per_metric": native["measurement_samples"],
+        "iterations_per_throughput_sample": native["iterations_per_sample"],
+        "semantic_workload": native["semantic_workload"],
+        "candidates": [
+            {
+                "name": candidate["name"],
+                "runtime_value_bytes": candidate["runtime_value_bytes"],
+                "compile_ns": candidate["compile_ns"]["raw_samples_ns"],
+                "native_loop_ns_per_call": candidate["throughput_ns_per_call"]["raw_samples_ns"],
+                "calls_per_second_p50": candidate["calls_per_second_p50"],
+                "object_bytes": candidate["object_bytes"],
+                "shared_library_bytes": candidate["shared_library_bytes"],
+                "loop_code_bytes": candidate["native_code"]["function_code_bytes"],
+                "semantic_cases_passed": len(candidate["native_value_semantics"]["cases"]),
+                "native_semantic_batch_dispatch_invocations": candidate["native_value_semantics"]["native_batch_dispatch_invocations"],
+                "native_batch_invocations": candidate["native_core_ir_corpus"]["native_batch_invocations"],
+                "native_value_dispatches": candidate["native_core_ir_corpus"]["native_value_dispatches"],
+                "reference_values_resolved_after_forced_gc": candidate["native_core_ir_corpus"]["reference_values_resolved_after_forced_gc"],
+                "all_semantic_cases_match": candidate["native_value_semantics"]["every_case_matches"],
+            }
+            for candidate in native["candidates"]
+        ],
+    }
+
+
+def build_runtime_projection(
+    native: dict[str, Any],
+    run_url: str,
+    artifact_url: str,
+    full_report_sha256: str,
+) -> dict[str, Any]:
+    candidates = []
+    for candidate in native["candidates"]:
+        gc = candidate["gc"]
+        comparisons = []
+        for item in gc["collector_comparisons"]:
+            comparisons.append(
+                {
+                    "collector": item["collector"],
+                    "allocator_strategy": item["allocator_strategy"],
+                    "object_count": item["object_count"],
+                    "edge_count": item["edge_count"],
+                    "interpreter_frame_roots": item["interpreter_frame_roots"],
+                    "native_frame_roots": item["native_frame_roots"],
+                    "persistent_host_handles": item["persistent_host_handles"],
+                    "temporary_scope_roots": item["temporary_scope_roots"],
+                    "peak_logical_heap_bytes_max": item["peak_logical_heap_bytes_max"],
+                    "actual_value_storage_capacity_bytes": item["actual_value_storage_capacity_bytes"],
+                    "allocator_peak_reserved_bytes_max": item["allocator_peak_reserved_bytes_max"],
+                    "allocator_peak_internal_fragmentation_bytes_max": item["allocator_peak_internal_fragmentation_bytes_max"],
+                    "process_peak_rss_baseline_bytes": item["process_peak_rss_baseline_bytes"],
+                    "process_peak_rss_bytes": item["process_peak_rss_bytes"],
+                    "process_peak_rss_delta_bytes": item["process_peak_rss_delta_bytes"],
+                    "encoded_object_values_resolved": item["encoded_object_values_resolved"],
+                    "build_ns": item["build_ns"]["raw_samples_ns"],
+                    "collection_ns": item["collection_ns"]["raw_samples_ns"],
+                    "root_scan_ns": item["root_scan_ns"]["raw_samples_ns"],
+                    "cleanup_collection_ns": item["cleanup_collection_ns"]["raw_samples_ns"],
+                    "raw_samples": item["raw_samples"],
+                }
+            )
+        allocator_comparisons = [
+            {
+                "strategy": item["strategy"],
+                "object_count": item["object_count"],
+                "payload_bytes_per_object": item["payload_bytes_per_object"],
+                "value_storage_bytes": item["value_storage_bytes"],
+                "allocation_rounds_per_sample": item["allocation_rounds_per_sample"],
+                "peak_reserved_bytes_max": item["peak_reserved_bytes_max"],
+                "peak_live_requested_bytes_max": item["peak_live_requested_bytes_max"],
+                "peak_internal_fragmentation_bytes_max": item["peak_internal_fragmentation_bytes_max"],
+                "reused_allocations_total": item["reused_allocations_total"],
+                "cache_evictions_total": item["cache_evictions_total"],
+                "allocation_failures_total": item["allocation_failures_total"],
+                "allocation_ns_per_sample": item["allocation_ns_per_sample"]["samples"],
+                "deallocation_ns_per_sample": item["deallocation_ns_per_sample"]["samples"],
+                "raw_samples": item["raw_samples"],
+            }
+            for item in gc["allocator_comparisons"]
+        ]
+        candidates.append(
+            {
+                "name": candidate["name"],
+                "runtime_value_bytes": candidate["runtime_value_bytes"],
+                "value_storage_bytes": gc["value_storage_bytes"],
+                "object_count": gc["object_count"],
+                "graph_edges": gc["graph_edges"],
+                "collector_comparisons": comparisons,
+                "allocator_comparisons": allocator_comparisons,
+                "native_shadow_roots": candidate["native_shadow_roots"],
+            }
+        )
+
+    return {
+        "schema": "ogma.ogm38.runtime-raw-samples",
+        "version": 2,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "run_url": run_url,
+        "full_report_artifact_url": artifact_url,
+        "full_report_sha256": full_report_sha256,
+        "target": native["target_triple"],
+        "cpu_model": native["cpu_model"],
+        "rustc": native["rustc"],
+        "operating_system": native["operating_system"],
+        "sample_count": native["measurement_samples"],
+        "warmups": native["warmup_rounds"],
+        "rss_method": "Linux /proc/self/status VmHWM in one isolated child per candidate x collector x allocator; baseline before warmups, peak after warmups and all samples",
+        "candidates": candidates,
+    }
+
+
+
+def _columnar_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    require(bool(samples), "raw sample array must not be empty")
+    fields = list(samples[0])
+    require(
+        all(isinstance(sample, dict) and list(sample) == fields for sample in samples),
+        "raw sample rows must have the same ordered fields",
+    )
+    return {
+        "raw_sample_fields": fields,
+        "raw_samples_columnar": {
+            field: [sample[field] for sample in samples]
+            for field in fields
+        },
+    }
+
+
+def build_compact_raw_measurements(
+    native: dict[str, Any],
+    differential: dict[str, Any],
+) -> dict[str, Any]:
+    candidates = []
+    for candidate in native["candidates"]:
+        gc = candidate["gc"]
+        collector_comparisons = [
+            {
+                **{key: value for key, value in comparison.items() if key != "raw_samples"},
+                **_columnar_samples(comparison["raw_samples"]),
+            }
+            for comparison in gc["collector_comparisons"]
+        ]
+        allocator_comparisons = [
+            {
+                **{key: value for key, value in comparison.items() if key != "raw_samples"},
+                **_columnar_samples(comparison["raw_samples"]),
+            }
+            for comparison in gc["allocator_comparisons"]
+        ]
+        semantic = candidate["native_value_semantics"]
+        candidates.append(
+            {
+                "name": candidate["name"],
+                "runtime_value_bytes": candidate["runtime_value_bytes"],
+                "compile_first_ns": candidate["compile_first_ns"],
+                "compile_ns": candidate["compile_ns"],
+                "object_bytes": candidate["object_bytes"],
+                "shared_library_bytes": candidate["shared_library_bytes"],
+                "iterations_per_sample": candidate["iterations_per_sample"],
+                "warmup_rounds": candidate["warmup_rounds"],
+                "throughput_ns_per_call": candidate["throughput_ns_per_call"],
+                "calls_per_second_p50": candidate["calls_per_second_p50"],
+                "native_code": candidate["native_code"],
+                "native_handle_dispatch": candidate["native_handle_dispatch"],
+                "native_core_ir_corpus": candidate["native_core_ir_corpus"],
+                "native_core_ir_execution": candidate["native_core_ir_execution"],
+                "native_value_semantics": {
+                    "cases": semantic["cases"],
+                    "native_callbacks": semantic["native_callbacks"],
+                    "forced_collections": semantic["forced_collections"],
+                    "native_batch_dispatch_invocations": semantic["native_batch_dispatch_invocations"],
+                    "native_semantic_add_code": semantic["native_semantic_add_code"],
+                    "native_runtime_add_measurements": semantic["native_runtime_add_measurements"],
+                    "every_case_matches": semantic["every_case_matches"],
+                },
+                "native_shadow_roots": candidate["native_shadow_roots"],
+                "native_pressure": candidate["native_pressure"],
+                "register_pressure": candidate["register_pressure"],
+                "gc": {
+                    "collector_implementation": gc["collector_implementation"],
+                    "object_count": gc["object_count"],
+                    "graph_edges": gc["graph_edges"],
+                    "value_slots_per_object": gc["value_slots_per_object"],
+                    "value_storage_bytes": gc["value_storage_bytes"],
+                    "value_layout_bytes": gc["value_layout_bytes"],
+                    "handle_payload_bits": gc["handle_payload_bits"],
+                    "encoded_object_values_resolved": gc["encoded_object_values_resolved"],
+                    "collector_comparisons": collector_comparisons,
+                    "allocator_comparisons": allocator_comparisons,
+                },
+            }
+        )
+    return {
+        "schema": "ogma.ogm38.raw-measurements",
+        "version": 1,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "toolchain": {
+            key: native[key]
+            for key in (
+                "rustc", "operating_system", "architecture", "target_triple", "cpu_model"
+            )
+        },
+        "core_ir_contract": native["core_ir_contract"],
+        "core_ir_fixture": native["core_ir_fixture"],
+        "core_ir_fixture_parameters": native["core_ir_fixture_parameters"],
+        "semantic_workload": native["semantic_workload"],
+        "iterations_per_sample": native["iterations_per_sample"],
+        "warmup_rounds": native["warmup_rounds"],
+        "measurement_samples": native["measurement_samples"],
+        "max_loop_iterations": native["max_loop_iterations"],
+        "candidates": candidates,
+        "measurement_boundaries": native["measurement_boundaries"],
+        "unsupported_native_semantics": native["unsupported_native_semantics"],
+        "differential_validation": differential,
+    }
+
+
+
+def build_delta_raw_measurements(native: dict[str, Any]) -> dict[str, Any]:
+    """Losslessly encode each 101-sample metric as a scaled first value + deltas."""
+    metric_arrays: list[list[Any]] = []
+    workers: list[dict[str, Any]] = []
+
+    def add_array(key: str, values: list[Any]) -> None:
+        require(
+            isinstance(values, list) and len(values) == EXPECTED_SAMPLES,
+            f"{key} must contain {EXPECTED_SAMPLES} raw samples",
+        )
+        scaled = []
+        for value in values:
+            require(
+                isinstance(value, (int, float)) and not isinstance(value, bool),
+                f"{key} contains a non-numeric sample",
+            )
+            scaled_value = int(round(float(value) * 1000))
+            require(
+                abs(scaled_value / 1000 - float(value)) <= 0.0000001,
+                f"{key} has precision finer than the declared 0.001 unit scale",
+            )
+            scaled.append(scaled_value)
+        metric_arrays.append(
+            [key, scaled[0], [scaled[index] - scaled[index - 1] for index in range(1, len(scaled))]]
+        )
+
+    candidates = []
+    for candidate in native["candidates"]:
+        name = candidate["name"]
+        add_array(f"{name}|compile_ns", candidate["compile_ns"]["raw_samples_ns"])
+        add_array(
+            f"{name}|loop_ns_per_call",
+            candidate["throughput_ns_per_call"]["raw_samples_ns"],
+        )
+        add_array(
+            f"{name}|handle_dispatch_ns_per_call",
+            candidate["native_handle_dispatch"]["throughput_ns_per_call"]["raw_samples_ns"],
+        )
+        semantic_add_cases = []
+        for measurement in candidate["native_value_semantics"]["native_runtime_add_measurements"]:
+            case_name = measurement["case"]
+            add_array(
+                f"{name}|semantic_add|{case_name}",
+                measurement["throughput"]["raw_samples_ns"],
+            )
+            semantic_add_cases.append(case_name)
+
+        gc = candidate["gc"]
+        for comparison in gc["collector_comparisons"]:
+            rows = comparison["raw_samples"]
+            require(len(rows) == EXPECTED_SAMPLES, f"{name} collector raw sample count differs")
+            constants: dict[str, Any] = {}
+            variable_fields = []
+            for field in rows[0]:
+                values = [row[field] for row in rows]
+                if all(value == values[0] for value in values):
+                    constants[field] = values[0]
+                else:
+                    add_array(
+                        f"{name}|collector|{comparison['collector']}|{comparison['allocator_strategy']}|{field}",
+                        values,
+                    )
+                    variable_fields.append(field)
+            workers.append(
+                {
+                    "candidate": name,
+                    "type": "collector",
+                    "collector": comparison["collector"],
+                    "allocator": comparison["allocator_strategy"],
+                    "rss_baseline_bytes": comparison["process_peak_rss_baseline_bytes"],
+                    "rss_peak_bytes": comparison["process_peak_rss_bytes"],
+                    "rss_delta_bytes": comparison["process_peak_rss_delta_bytes"],
+                    "constant_fields": constants,
+                    "variable_fields": variable_fields,
+                }
+            )
+
+        for comparison in gc["allocator_comparisons"]:
+            rows = comparison["raw_samples"]
+            require(len(rows) == EXPECTED_SAMPLES, f"{name} allocator raw sample count differs")
+            constants = {}
+            variable_fields = []
+            for field in rows[0]:
+                values = [row[field] for row in rows]
+                if all(value == values[0] for value in values):
+                    constants[field] = values[0]
+                else:
+                    add_array(
+                        f"{name}|allocator|{comparison['strategy']}|{field}",
+                        values,
+                    )
+                    variable_fields.append(field)
+            workers.append(
+                {
+                    "candidate": name,
+                    "type": "allocator",
+                    "allocator": comparison["strategy"],
+                    "constant_fields": constants,
+                    "variable_fields": variable_fields,
+                }
+            )
+        candidates.append(
+            {
+                "name": name,
+                "compile_metric": f"{name}|compile_ns",
+                "loop_metric": f"{name}|loop_ns_per_call",
+                "handle_dispatch_metric": f"{name}|handle_dispatch_ns_per_call",
+                "semantic_add_cases": semantic_add_cases,
+                "native_semantic_batch_dispatch_invocations": candidate["native_value_semantics"]["native_batch_dispatch_invocations"],
+                "native_semantic_case_count": len(candidate["native_value_semantics"]["cases"]),
+                "native_value_dispatches": candidate["native_core_ir_corpus"]["native_value_dispatches"],
+            }
+        )
+
+    return {
+        "schema": "ogma.ogm38.raw-measurements-delta",
+        "version": 1,
+        "task": "OGM-38",
+        "source_revision": native["source_revision"],
+        "tested_revision": native["tested_revision"],
+        "target": native["target_triple"],
+        "cpu": native["cpu_model"],
+        "rustc": native["rustc"],
+        "samples": native["measurement_samples"],
+        "warmups": native["warmup_rounds"],
+        "numeric_scale": 1000,
+        "encoding": "each metric array is [first value in milli-units, followed by 100 signed deltas]; worker fields constant across all 101 samples are stored once in constant_fields",
+        "candidates": candidates,
+        "workers": workers,
+        "metric_arrays": metric_arrays,
+    }
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native-report", type=Path, required=True)
+    parser.add_argument("--differential-report", type=Path, required=True)
+    parser.add_argument("--run-url", required=True)
+    parser.add_argument("--artifact-url", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    arguments = parser.parse_args()
+
+    native, native_bytes = read_json(arguments.native_report)
+    differential, differential_bytes = read_json(arguments.differential_report)
+    validate_reports(native, differential)
+
+    full_sha = hashlib.sha256(native_bytes).hexdigest()
+    differential_sha = hashlib.sha256(differential_bytes).hexdigest()
+    output_dir: Path = arguments.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keep the complete authoritative report, not merely the selected projections.
+    full_compressed = gzip.compress(native_bytes, compresslevel=9, mtime=0)
+    (output_dir / "ogm38-native-value-ssa-report.json.gz").write_bytes(full_compressed)
+
+    primary = build_primary_projection(
+        native,
+        arguments.run_url,
+        arguments.artifact_url,
+        full_sha,
+        differential_sha,
+    )
+    write_json(output_dir / "ogm38-primary-benchmark-samples.json", primary)
+
+    runtime = build_runtime_projection(
+        native,
+        arguments.run_url,
+        arguments.artifact_url,
+        full_sha,
+    )
+    runtime_bytes = json.dumps(
+        runtime, separators=(",", ":"), sort_keys=True, ensure_ascii=False
+    ).encode("utf-8")
+    (output_dir / "ogm38-runtime-raw-samples.json.gz").write_bytes(
+        gzip.compress(runtime_bytes, compresslevel=9, mtime=0)
+    )
+
+    (output_dir / "ogm38-ogm31-differential-report.json").write_bytes(
+        differential_bytes
+    )
+
+    compact_raw = build_compact_raw_measurements(native, differential)
+    compact_raw_bytes = json.dumps(
+        compact_raw, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    compact_raw_gzip = gzip.compress(compact_raw_bytes, compresslevel=9, mtime=0)
+    compact_raw_base64 = base64.b64encode(compact_raw_gzip).decode("ascii") + "\n"
+    (output_dir / "ogm38-raw-measurements.json.gz.b64").write_text(
+        compact_raw_base64, encoding="ascii"
+    )
+
+    delta_raw = build_delta_raw_measurements(native)
+    delta_raw_bytes = json.dumps(
+        delta_raw, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    delta_raw_xz = lzma.compress(delta_raw_bytes, preset=9)
+    delta_raw_base64 = base64.b64encode(delta_raw_xz).decode("ascii") + "\n"
+    (output_dir / "ogm38-raw-native-samples.delta.json.xz.b64").write_text(
+        delta_raw_base64, encoding="ascii"
+    )
+
+    print(
+        json.dumps(
+            {
+                "source_revision": native["source_revision"],
+                "full_report_sha256": full_sha,
+                "differential_report_sha256": differential_sha,
+                "candidates": len(native["candidates"]),
+                "gc_worker_comparisons": sum(
+                    len(candidate["gc"]["collector_comparisons"])
+                    for candidate in native["candidates"]
+                ),
+                "gc_samples_per_worker": EXPECTED_SAMPLES,
+                "outputs": [
+                    "ogm38-native-value-ssa-report.json.gz",
+                    "ogm38-primary-benchmark-samples.json",
+                    "ogm38-runtime-raw-samples.json.gz",
+                    "ogm38-ogm31-differential-report.json",
+                    "ogm38-raw-measurements.json.gz.b64",
+                    "ogm38-raw-native-samples.delta.json.xz.b64",
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -101,6 +101,57 @@ impl Allocation {
         self.pointer
     }
 
+    /// Borrow the uniquely owned allocation as bytes.
+    ///
+    /// The returned slice is limited to the requested size, not the allocator's
+    /// potentially larger size-class backing block.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: Allocation is a unique, live token owned by this instance.
+        // Its pointer/layout are kept valid until the token is deallocated.
+        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.requested_size) }
+    }
+
+    /// Mutably borrow the uniquely owned allocation as bytes.
+    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+        // SAFETY: Allocation is a unique, live token, and &mut self prevents
+        // aliasing another mutable borrow through this token.
+        unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.requested_size) }
+    }
+
+    /// Borrow the allocation as native-endian u64 words when its layout permits it.
+    pub fn as_words(&self) -> Option<&[u64]> {
+        if self.pointer.as_ptr() as usize % std::mem::align_of::<u64>() != 0
+            || self.requested_size % std::mem::size_of::<u64>() != 0
+        {
+            return None;
+        }
+        // SAFETY: the alignment and byte-length preconditions are checked
+        // above, and Allocation retains unique ownership of this live block.
+        Some(unsafe {
+            std::slice::from_raw_parts(
+                self.pointer.as_ptr().cast::<u64>(),
+                self.requested_size / std::mem::size_of::<u64>(),
+            )
+        })
+    }
+
+    /// Mutably borrow the allocation as native-endian u64 words.
+    pub fn as_words_mut(&mut self) -> Option<&mut [u64]> {
+        if self.pointer.as_ptr() as usize % std::mem::align_of::<u64>() != 0
+            || self.requested_size % std::mem::size_of::<u64>() != 0
+        {
+            return None;
+        }
+        // SAFETY: the alignment and byte-length preconditions are checked
+        // above, and &mut self guarantees unique access to this allocation.
+        Some(unsafe {
+            std::slice::from_raw_parts_mut(
+                self.pointer.as_ptr().cast::<u64>(),
+                self.requested_size / std::mem::size_of::<u64>(),
+            )
+        })
+    }
+
     pub fn requested_size(&self) -> usize {
         self.requested_size
     }
