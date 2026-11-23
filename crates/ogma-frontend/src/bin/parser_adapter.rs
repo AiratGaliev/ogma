@@ -6,8 +6,8 @@ use oxc_allocator::Allocator;
 use serde_json::{Value, json};
 
 use ogma_frontend::{
-    normalized_ast_sha256, parse, DiagnosticPhase, ParseGoal, ParseMode, ParseRequestOptions,
-    SourceFile,
+    DiagnosticPhase, ParseGoal, ParseMode, ParseRequestOptions, SourceFile, normalized_ast_sha256,
+    parse,
 };
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -39,15 +39,22 @@ fn process_request(request: Value) -> Value {
         .get("requestId")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    if request.get("protocol").and_then(Value::as_str)
-        != Some("ogma-test-runner-adapter")
+    if request.get("protocol").and_then(Value::as_str) != Some("ogma-test-runner-adapter")
         || request.get("version").and_then(Value::as_u64) != Some(1)
     {
-        return error_response(request_id, "harness_error", "invalid adapter request envelope");
+        return error_response(
+            request_id,
+            "harness_error",
+            "invalid adapter request envelope",
+        );
     }
 
     let Some(test) = request.get("test").and_then(Value::as_object) else {
-        return error_response(request_id, "harness_error", "request.test must be an object");
+        return error_response(
+            request_id,
+            "harness_error",
+            "request.test must be an object",
+        );
     };
     if test.get("suite").and_then(Value::as_str) != Some("test262-parser-tests") {
         return error_response(
@@ -57,11 +64,7 @@ fn process_request(request: Value) -> Value {
         );
     }
 
-    let string_field = |name: &str| {
-        test.get(name)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    };
+    let string_field = |name: &str| test.get(name).and_then(Value::as_str).map(str::to_owned);
     let Some(test_id) = string_field("id") else {
         return error_response(request_id, "harness_error", "test.id must be a string");
     };
@@ -69,10 +72,18 @@ fn process_request(request: Value) -> Value {
         return error_response(request_id, "harness_error", "test.source must be a string");
     };
     let Some(test_path) = string_field("testPath") else {
-        return error_response(request_id, "harness_error", "test.testPath must be a string");
+        return error_response(
+            request_id,
+            "harness_error",
+            "test.testPath must be a string",
+        );
     };
     let Some(source_type) = string_field("sourceType") else {
-        return error_response(request_id, "harness_error", "test.sourceType must be a string");
+        return error_response(
+            request_id,
+            "harness_error",
+            "test.sourceType must be a string",
+        );
     };
 
     let goal = match source_type.as_str() {
@@ -121,8 +132,7 @@ fn process_request(request: Value) -> Value {
                 .get("equivalenceGroup")
                 .is_some_and(|value| !value.is_null())
             {
-                body["normalizedAstSha256"] =
-                    json!(normalized_ast_sha256(&parsed.program));
+                body["normalizedAstSha256"] = json!(normalized_ast_sha256(&parsed.program));
             }
             response_envelope(request_id, body)
         }
