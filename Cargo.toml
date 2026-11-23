@@ -1,0 +1,71 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/ogma-bytecode",
+    "crates/ogma-compiler",
+    "crates/ogma-core-ir",
+    "crates/ogma-embedding",
+    "crates/ogma-frontend",
+    "crates/ogma-interpreter",
+    "crates/ogma-runtime",
+]
+# Keep all M0 evidence projects independent, with their own manifests and lockfiles.
+exclude = ["benchmarks"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+repository = "https://github.com/AiratGaliev/ogma"
+
+[workspace.dependencies]
+ogma-bytecode = { path = "crates/ogma-bytecode" }
+ogma-compiler = { path = "crates/ogma-compiler" }
+ogma-core-ir = { path = "crates/ogma-core-ir" }
+ogma-embedding = { path = "crates/ogma-embedding" }
+ogma-frontend = { path = "crates/ogma-frontend" }
+ogma-interpreter = { path = "crates/ogma-interpreter" }
+ogma-runtime = { path = "crates/ogma-runtime" }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Debug mirrors the M0 Debug build contract. Development keeps debug metadata
+# and assertions while optimizing routine development.
+[profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+codegen-units = 256
+panic = "unwind"
+
+[profile.test]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+panic = "unwind"
+
+[profile.development]
+inherits = "dev"
+opt-level = 1
+codegen-units = 16
+
+# Release is the portable-interpreter baseline. A hybrid-native profile is
+# introduced with the AOT backend when its symbol lifecycle is implemented.
+[profile.release]
+opt-level = 3
+debug = false
+debug-assertions = false
+overflow-checks = false
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "symbols"

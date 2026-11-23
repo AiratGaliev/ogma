@@ -125,7 +125,7 @@ jobs:
 
       - name: Set up Rust toolchain when a workspace exists
         if: hashFiles('Cargo.toml') != ''
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.100.0
         with:
           components: rustfmt, clippy
 
@@ -138,9 +138,23 @@ jobs:
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           cargo test --workspace --all-features --locked
 
+      - name: Verify interpreter-only dependency boundary
+        if: hashFiles('Cargo.toml') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          for package in ogma-interpreter ogma-embedding; do
+            dependency_tree="$(cargo tree --locked --package "$package" --edges normal --no-default-features)"
+            if grep -Eq 'ogma-(compiler|frontend|core-ir) v' <<<"$dependency_tree"; then
+              echo "::error::The interpreter-only dependency path for $package includes a compiler-only crate."
+              printf '%s\n' "$dependency_tree"
+              exit 1
+            fi
+          done
+
       - name: Report Rust checks are not applicable yet
         if: hashFiles('Cargo.toml') == ''
-        run: echo "::notice::No Cargo.toml is present yet; Rust build, Clippy and tests are not applicable to this documentation/bootstrap repository."
+        run: echo "::notice::This ref has no root Cargo.toml; root Rust workspace checks are not applicable."
 
   parser-frontend-benchmark:
     name: OGM-14 parser frontend benchmark
@@ -1532,3 +1546,51 @@ jobs:
             benchmarks/backend-codegen/Cargo.lock
           if-no-files-found: warn
           retention-days: 90
+
+  ogm40-standalone-m0-proofs:
+    name: OGM-40 standalone M0 proof (${{ matrix.crate }})
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' && startsWith(github.head_ref, 'feat/ogm-40-') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: backend-codegen
+            needs_llvm18: true
+          - crate: buffer-interop
+            needs_llvm18: false
+          - crate: frame-snapshot
+            needs_llvm18: false
+          - crate: gc-comparison
+            needs_llvm18: false
+          - crate: host-execution-scope
+            needs_llvm18: false
+          - crate: isolate-allocator
+            needs_llvm18: false
+          - crate: native-runtime-boundary
+            needs_llvm18: false
+          - crate: rust-abi
+            needs_llvm18: false
+          - crate: typed-host-dispatch
+            needs_llvm18: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LLVM_SYS_181_PREFIX: /usr/lib/llvm-18
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 18 for the backend-codegen proof
+        if: matrix.needs_llvm18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18-dev clang-18 build-essential binutils
+
+      - name: Set up pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Test the standalone proof with its own lockfile
+        shell: bash
+        run: cargo test --manifest-path "benchmarks/${{ matrix.crate }}/Cargo.toml" --all-features --locked

@@ -1,6 +1,6 @@
 # Ogma — development workflow and Linear working agreement
 
-This document is the canonical procedure for engineering work in the Ogma repository. It is adapted from the Codogma Engine workflow to Ogma's M0 phase and actual Linear status workflow. README.md is the public overview; AGENTS.md contains concise repository-wide instructions for coding agents.
+This document is the canonical procedure for engineering work in the Ogma repository. It follows the authorized M1 implementation phase and actual Linear status workflow. README.md is the public overview; AGENTS.md contains concise repository-wide instructions for coding agents.
 
 ## 1. Authority and scope
 
@@ -8,7 +8,7 @@ Use the following sources in this order:
 
 1. User request and explicit task scope.
 2. Accepted Ogma architecture decisions and the [Notion architecture/implementation specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
-3. The active Linear issue, its acceptance criteria, dependencies and M0 milestone.
+3. The active Linear issue, its acceptance criteria, dependencies and authorized milestone.
 4. README, AGENTS, this workflow document and accepted repository ADRs.
 5. Source code, tests and CI as evidence of current implementation behaviour.
 
@@ -27,7 +27,7 @@ Create a task only when its work has an independently verifiable result. Each is
 - the milestone and workstream label that match the task;
 - evidence requirements for benchmarks, prototypes and architectural decisions.
 
-Use parent issues for coherent workstreams and sub-issues for independently deliverable tasks. Use blocks/blockedBy only for real prerequisites. Do not create M1–M5 work as active Kanban tasks while M0 is the authorized execution scope.
+Use parent issues for coherent workstreams and sub-issues for independently deliverable tasks. Use blocks/blockedBy only for real prerequisites. Execute the authorized M1 issues within their stated scope; do not create duplicate tasks or start later-milestone work without authorization.
 
 ### Linear status semantics
 
@@ -151,7 +151,7 @@ Separate routine engineering feedback from full-system conformance and release a
 
 ### Fast CI — topic PR → dev
 
-The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the repository validator and Core IR/OGMB verifiers, validates both verifier corpora and uploads a separate machine-readable report for each. Before tests it deterministically generates binary/JSON .ogmb fixtures under the ignored `tests/ogmb/.generated/` directory. Fast CI also compiles the Python helpers and fixture generator, then runs the pinned Node.js package-resolution and scheduling reference corpora from `.node-version`. Rust formatting, Clippy and workspace tests run only after a root Cargo.toml exists. The repository currently has no Cargo workspace, so those Rust checks are explicitly not applicable.
+The current implementation lives in [CI Fast](../.github/workflows/ci.yml) and exposes the stable required status context **fast-checks**. It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the repository validator and Core IR/OGMB verifiers, validates both verifier corpora and uploads a separate machine-readable report for each. Before tests it deterministically generates binary/JSON .ogmb fixtures under the ignored `tests/ogmb/.generated/` directory. Fast CI also compiles the Python helpers and fixture generator, runs the pinned Node.js package-resolution and scheduling reference corpora from `.node-version`, and executes the root Rust workspace formatting, Clippy and locked tests using `rust-toolchain.toml`. The OGM-40 topic PR additionally checks existing M0 standalone proof lockfiles in a separate task-scoped matrix; it does not add these projects to the root workspace.
 
 The routine gate should remain fast and scoped. As each subsystem becomes available, it should include checks applicable to changed files, such as:
 

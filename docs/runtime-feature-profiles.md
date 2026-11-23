@@ -18,7 +18,7 @@ The initial profile contract is:
 4. **Release strips optional tooling and optional source/debug metadata by default.** It keeps metadata required by the bytecode verifier and Runtime contract. Native symbols, source maps and crash artifacts can be retained as separate build artifacts.
 5. **Node compatibility is a separate, explicit host layer.** Selecting an ECMAScript Runtime never implicitly enables Node resolution or Node APIs and does not grant ambient filesystem, process or network access.
 
-This is an M0 contract proof, not a production build implementation. Component identifiers in profiles.json are **logical build boundaries**, not existing Cargo crate names. The repository has no root Cargo workspace or production Ogma Runtime yet. Do not split these boundaries into crates until public and internal contracts are stable; OGM-19, OGM-25, OGM-27 and OGM-33 remain owners of the existing ABI, host-module, native-root and debugger subcontracts.
+This remains an M0 architectural profile contract, not a production build implementation. Component identifiers in profiles.json are **logical build boundaries**, not a one-to-one list of Cargo crates. OGM-40 introduces only the minimal M1 package boundaries documented in [Rust workspace](rust-workspace.md); the profile graph remains the source of truth for inclusion/stripping and must not be mechanically mapped to one crate per component. OGM-19, OGM-25, OGM-27 and OGM-33 remain owners of the existing ABI, host-module, native-root and debugger subcontracts.
 
 ## 2. Profile matrix
 
@@ -162,9 +162,9 @@ The Fast-PR-specific OGM-28 job emits ogm28-runtime-profile-evidence. It records
 - Rust/Python toolchain and runner metadata;
 - exact size and SHA-256 of the existing OGM-25 ogma-typed-dispatch-bench Release proof executable.
 
-The OGM-25 executable measurement is an **M0 tooling baseline only**. It is not the size of an Ogma Runtime and does not estimate the size delta between production profiles. The current repository has no production Runtime, root Cargo workspace, parser or AOT engine, so real per-profile Runtime binary sizes cannot yet be measured without fabricating numbers. The report explicitly marks productionRuntimeExecutable as not-implemented with no byte count.
+The OGM-25 executable measurement is an **M0 tooling baseline only**. It is not the size of an Ogma Runtime and does not estimate the size delta between production profiles. The current repository has no production Runtime, parser or AOT engine, so real per-profile Runtime binary sizes cannot yet be measured without fabricating numbers. The M1 Cargo workspace exists, but its initial crate boundaries are scaffolding rather than executable engine components. The report explicitly marks productionRuntimeExecutable as not-implemented with no byte count.
 
-At this stage, binary impact is therefore specified through the exact linked/tooling/metadata component sets, while the measured proof artifact and profile-manifest footprint provide the available initial baseline. Real interpreter-only, hybrid AOT and Node-overlay binary deltas belong with the future Cargo workspace/runtime implementation and OGM-29's footprint comparison; they must be captured from reproducible release builds on a pinned toolchain.
+At this stage, binary impact is therefore specified through the exact linked/tooling/metadata component sets, while the measured proof artifact and profile-manifest footprint provide the available initial baseline. Real interpreter-only, hybrid AOT and Node-overlay binary deltas belong with the production Runtime/profile implementation and OGM-29's footprint comparison; they must be captured from reproducible release builds on a pinned toolchain.
 
 ## 7. Validation and evidence
 
