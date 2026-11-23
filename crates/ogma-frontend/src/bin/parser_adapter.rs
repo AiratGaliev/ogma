@@ -187,7 +187,7 @@ fn process_request(request: Value) -> Value {
                 "phase": phase_name(failure.phase),
                 "diagnostics": diagnostics_json(&failure.diagnostics)
             }),
-        )
+        ),
     }
 }
 
@@ -296,8 +296,14 @@ mod tests {
                 span: SourceSpan {
                     start_byte: 2,
                     end_byte: 3,
-                    start: SourcePosition { line: 1, column_utf16: 2 },
-                    end: SourcePosition { line: 1, column_utf16: 3 },
+                    start: SourcePosition {
+                        line: 1,
+                        column_utf16: 2,
+                    },
+                    end: SourcePosition {
+                        line: 1,
+                        column_utf16: 3,
+                    },
                 },
                 message: Some("token".to_owned()),
                 primary: true,
