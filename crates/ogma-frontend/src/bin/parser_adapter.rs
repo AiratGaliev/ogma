@@ -1,6 +1,6 @@
 //! Line-delimited JSON parser adapter for the pinned Ogma conformance runner.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use oxc_allocator::Allocator;
 use serde_json::{Value, json};
@@ -179,21 +179,28 @@ fn main() -> io::Result<()> {
 
     loop {
         line.clear();
-        let bytes_read = reader.read_until(b'\n', &mut line)?;
+        let bytes_read = reader
+            .by_ref()
+            .take((MAX_REQUEST_BYTES + 1) as u64)
+            .read_until(b'\n', &mut line)?;
         if bytes_read == 0 {
             break;
         }
-        let response = if line.len() > MAX_REQUEST_BYTES {
-            error_response(0, "harness_error", "request exceeds 16 MiB protocol limit")
-        } else {
-            match serde_json::from_slice::<Value>(&line) {
-                Ok(request) => process_request(request),
-                Err(error) => error_response(
-                    0,
-                    "harness_error",
-                    &format!("request is not valid JSON: {error}"),
-                ),
-            }
+        if line.len() > MAX_REQUEST_BYTES {
+            let response = error_response(0, "harness_error", "request exceeds 16 MiB protocol limit");
+            serde_json::to_writer(&mut writer, &response)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            break;
+        }
+        let response = match serde_json::from_slice::<Value>(&line) {
+            Ok(request) => process_request(request),
+            Err(error) => error_response(
+                0,
+                "harness_error",
+                &format!("request is not valid JSON: {error}"),
+            ),
         };
         serde_json::to_writer(&mut writer, &response)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
