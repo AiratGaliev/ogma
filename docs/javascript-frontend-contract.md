@@ -36,7 +36,7 @@ This is the canonical source identity/position information for later AST → sem
 
 The caller creates a compile-unit `oxc_allocator::Allocator` and a `SourceFile`, then calls `ogma_frontend::parse(&allocator, &source, options)`.
 
-The returned `ParsedProgram` borrows both inputs. Drop it and all data derived from the AST before resetting/dropping the allocator or source. AST nodes, Oxc semantic structures and parser-owned slices must not escape into Runtime values or longer-lived compiled artifacts. OGM-42 must lower/copy durable facts into its owned semantic/Core IR representation before the compile-unit arena is released.
+The returned `ParsedProgram` borrows both inputs and carries the original `ParseGoal` plus effective `is_strict` metadata. Modules are strict, an explicit strict parse mode is strict, and a top-level `use strict` directive activates strictness even when Script mode was requested as sloppy. Function-local directive prologues remain in the AST for OGM-42 to inspect. Drop the parsed value and all data derived from the AST before resetting/dropping the allocator or source. AST nodes, Oxc semantic structures and parser-owned slices must not escape into Runtime values or longer-lived compiled artifacts. OGM-42 must lower/copy durable facts into its owned semantic/Core IR representation before the compile-unit arena is released.
 
 Oxc may produce a partial AST after recoverable syntax errors. Ogma never exposes it as a successful parse: any error-severity parser or early-error diagnostic returns `ParseFailure` without an AST. Oxc's recovery is used to collect diagnostics only; there is no best-effort compile mode.
 
