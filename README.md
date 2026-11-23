@@ -4,7 +4,7 @@
 
 Ogma is an independent engine project. It is not a wrapper around QuickJS-NG, a replacement for the host application/game engine, or a requirement to ship the Node.js runtime with a packaged native application.
 
-> **Current phase: M0 — Architectural Proofs & Decisions.** The repository is at its initial bootstrap stage. The target architecture is documented, but the production runtime and Rust workspace have not been implemented yet. Planned capabilities must not be described as available functionality.
+> **Current phase: M1 — Minimal Executable Runtime.** The root Rust workspace and minimal M1 crate boundaries are being bootstrapped. The production parser, compiler, Runtime, verifier, interpreter and embedding behavior are not implemented yet. Planned capabilities must not be described as available functionality.
 
 ## Project direction
 
@@ -25,7 +25,7 @@ The [Notion architecture specification](https://app.notion.com/p/Ogma-JS-TypeScr
 
 ## Current milestone and roadmap
 
-Only M0 is currently scheduled in Linear. M0 is a proof-and-decision phase, not a claim that production engine subsystems already exist.
+M0 architectural proofs and contracts provide the baseline for the authorized M1 implementation. M1 engineering work is tracked through OGM-39 and its scoped child issues; the existence of a workspace does not imply that production engine subsystems are implemented.
 
 | Milestone | Scope | Expected result |
 |---|---|---|
@@ -36,7 +36,7 @@ Only M0 is currently scheduled in Linear. M0 is a proof-and-decision phase, not 
 | **M4 — Compatibility and hardening** | Test262 and differential conformance, GC/security/fuzz/consumer tests, platform coverage and performance work. | Measured compatibility, reliability and production readiness. |
 | **M5 — Optional JIT research** | Only if profiling demonstrates a material need for dynamic-code acceleration. | Evidence-based decision to implement or reject JIT. |
 
-Track implementation work in the [Ogma Linear project](https://linear.app/ogma-engine/project/ogma-rust-native-jstypescript-execution-engine-1f94795b107b). Do not create M1–M5 implementation issues in the active Kanban before those milestones are authorized for execution.
+Track implementation work in the [Ogma Linear project](https://linear.app/ogma-engine/project/ogma-rust-native-jstypescript-execution-engine-1f94795b107b) and use the existing authorized issues for each milestone. Do not create duplicate implementation tasks or add work outside the active issue scope.
 
 ## Development workflow
 
@@ -61,11 +61,11 @@ The permanent branch flow is:
 - Test coverage is developed with each implementation. Add or update focused regression, parser, ABI and integration fixtures in the same topic PR when the changed contract needs them; delaying the full-suite run must not delay creating tests.
 - Long-running fuzzing, stress, GC/lifecycle, resource-limit and broad platform matrices belong in scheduled/manual lanes unless a specific change requires a focused check.
 - M0 benchmark spikes are task-scoped experiments, not an unconditional benchmark job for every PR. Every result must identify its commit, toolchain, workload, configuration, repetitions, metrics and limitations.
-- The CI Fast workflow conditionally adds Rust formatting, Clippy and workspace tests only when a root Cargo.toml exists. The current repository has no root Cargo workspace, so these checks are not reported as passed.
+- The CI Fast workflow runs Rust formatting, workspace Clippy and tests because the root Cargo workspace is now present. These checks establish workspace build health, not parser/runtime conformance.
 
 ### Current repository bootstrap status
 
-The repository remains in the M0 architectural-proof phase: there is no root Cargo workspace, executable Ogma parser, production ECMAScript Runtime or engine adapter. OGM-33, OGM-34, OGM-35 and OGM-37 have delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. The tooling is real; engine conformance is not yet available.
+The root Cargo workspace and minimal M1 crate boundaries are present, but there is no executable Ogma parser, production ECMAScript Runtime or engine adapter yet. OGM-33, OGM-34, OGM-35 and OGM-37 delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. The tooling is real; engine conformance is not yet available.
 
 - **CI Fast** runs for PRs to dev/test/main and pushes to those permanent branches. The current dev head has a successful fast-checks run with 203 Python tests; the exact evidence and other child-task runs are indexed in [OGM-10 Developer Tooling & Verification evidence](docs/developer-tooling-verification-evidence.md).
 - **Conformance Promotion** runs for PRs targeting test or main. OGM-35 delivered exact route validation, eight deterministic Test262 shards, four parser-corpus shards, JSON/JUnit artifacts and a required aggregate. Since the active profile still declares parser and execution as not_implemented, real corpus results remain unsupported and aggregation fails closed; no successful Ogma conformance promotion is claimed.
@@ -74,12 +74,12 @@ The repository remains in the M0 architectural-proof phase: there is no root Car
 - Active GitHub rulesets protect dev, test and main. All three require PRs, block deletion and non-fast-forward updates, and have no bypass actors. dev requires fast-checks; test and main require fast-checks plus conformance-promotion.
 - The rulesets are [protect-dev](https://github.com/AiratGaliev/ogma/rules/27364036), [protect-test](https://github.com/AiratGaliev/ogma/rules/27364037) and [protect-main](https://github.com/AiratGaliev/ogma/rules/27364038).
 
-The promotion infrastructure is implemented, but a configured gate is not a passed conformance suite. Keep the gate fail-closed until a real Ogma parser/runtime adapter produces supported results for the pinned inputs. Rust checks remain inapplicable until the root Cargo workspace exists.
+The promotion infrastructure is implemented, but a configured gate is not a passed conformance suite. Keep the gate fail-closed until a real Ogma parser/runtime adapter produces supported results for the pinned inputs. Root Cargo checks validate the workspace scaffold only and do not change parser/runtime readiness.
 
 ## Source of truth and project links
 
 - [Architecture and implementation specification (Notion)](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a) — authoritative architecture and milestone scope.
-- [Ogma project in Linear](https://linear.app/ogma-engine/project/ogma-rust-native-jstypescript-execution-engine-1f94795b107b) — issues, M0 milestone, dependencies and delivery evidence.
+- [Ogma project in Linear](https://linear.app/ogma-engine/project/ogma-rust-native-jstypescript-execution-engine-1f94795b107b) — issues, M1 milestone, dependencies and delivery evidence.
 - [Rust embedding & host-performance evidence (OGM-7)](docs/rust-embedding-host-performance-evidence.md) — consolidated index of the M0 ABI, dispatch, buffer, frame, allocator and static host-module proofs, measurements and limitations.
 - [Runtime, GC & memory evidence (OGM-8)](docs/runtime-gc-memory-evidence.md) — consolidated M0 collector/root recommendation, native-frame contract, runtime profiles, measured proof-tool footprint and production limitations.
 - [Developer Tooling & Verification evidence (OGM-10)](docs/developer-tooling-verification-evidence.md) — integrated debugger/source metadata, conformance runner, CI/promotion gates, delivery traceability and explicit M0 limits.

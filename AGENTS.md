@@ -16,9 +16,9 @@ Notion is the authority for architecture and milestone scope. Linear tracks exec
 
 ## Respect the current phase
 
-- The active execution phase is **M0 — Architectural Proofs & Decisions**.
-- M0 produces reproducible prototypes, comparisons, contracts and decision records. A spike or benchmark is not a production subsystem.
-- Do not start M1–M5 implementation work or add future-milestone tasks to the active Kanban before those milestones are authorized.
+- The active execution phase is **M1 — Minimal Executable Runtime**. M0 architectural proofs, contracts and benchmark projects remain independent evidence, not production subsystems.
+- Execute M1 implementation only through its authorized Linear issues under OGM-39; do not expand a child issue into unrelated M2–M5 work.
+- The root Rust workspace is defined by `Cargo.toml`; its crate ownership and dependency rules are documented in [docs/rust-workspace.md](docs/rust-workspace.md).
 - QuickJS-NG v0.18.0 is a pinned engineering/reference baseline, not a production runtime dependency or a reason to keep a C engine behind a Rust wrapper.
 - Keep ECMAScript semantics separate from TypeScript compile-time analysis and Node.js host compatibility.
 - Preserve the shared backend-neutral Core IR, portable bytecode/interpreter and native AOT as distinct but interoperable paths.
@@ -39,7 +39,7 @@ Notion is the authority for architecture and milestone scope. Linear tracks exec
 - Derive commands from files and tools that actually exist. Do not claim Cargo, Test262, differential, fuzz, AOT or runtime tests passed when the workspace/runner/path is not implemented or the check was not run.
 - Run focused checks for the modified scope. Preserve meaningful negative coverage; never weaken tests to obtain a green result.
 - Every PR targeting dev, test or main and every push to a permanent branch runs .github/workflows/ci.yml (job context: fast-checks). It validates PR routing, Markdown UTF-8/line endings/whitespace/fenced blocks/local links, tests the repository validator and Core IR/OGMB verifiers, validates the versioned Core IR and OGMB contracts and their positive/negative fixture corpora (with separate machine-readable JSON report artifacts), compiles Python helpers and the OGMB fixture generator, and runs the pinned Node.js package-resolution and scheduling reference corpora from `.node-version`. The generator writes only to the ignored `tests/ogmb/.generated/` directory.
-- When a root Cargo.toml exists, Fast CI also runs cargo fmt, Clippy and workspace tests. Until then, Rust checks are explicitly not applicable; do not report them as passed.
+- The root Cargo workspace is pinned by `rust-toolchain.toml`. Fast CI runs `cargo fmt`, workspace Clippy and workspace tests with `--locked`; the OGM-40 branch also checks the M0 standalone lockfile-bearing proof crates. Report only the checks that actually ran.
 - `.github/workflows/conformance-promotion.yml` runs for PRs targeting `test` or `main` and keeps the required `conformance-promotion` job context. It validates exact promotion direction, checks out the pinned Test262/parser corpora, plans eight Test262 and four parser shards, runs each through `tools/test_runner.py`, uploads JSON/JUnit reports and aggregates every available result. Aggregate coverage, failed classifications, worker errors, missing shards and readiness are fail-closed. The repository still has no executable Ogma parser/runtime adapter, so the active profile remains `not_implemented` and real promotion cannot pass; do not use the fake adapter outside self-tests. Real command strings are supplied through `OGMA_TEST262_ADAPTER` and `OGMA_PARSER_ADAPTER` repository Actions variables only after the corresponding adapters exist and are verified. Full differential execution is not wired yet and must not be claimed.
 - Do not run full Test262/differential/E2E suites on topic PRs. Long fuzz/stress/GC/resource-limit and broad target matrices use scheduled/manual lanes.
 - Develop focused tests alongside implementation even though aggregate suites are deferred to promotion.
