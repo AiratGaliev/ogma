@@ -8027,10 +8027,7 @@ mod tests {
             ),
             (
                 "bigint-overflow",
-                vec![
-                    SemanticValue::BigInt(i128::MAX),
-                    SemanticValue::BigInt(1),
-                ],
+                vec![SemanticValue::BigInt(i128::MAX), SemanticValue::BigInt(1)],
                 SemanticCompletion::Throw {
                     name: "RangeError: M0 BigInt exceeds signed 128-bit payload",
                     value: None,
