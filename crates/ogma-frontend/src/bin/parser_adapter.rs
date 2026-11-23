@@ -237,7 +237,7 @@ fn main() -> io::Result<()> {
 mod tests {
     use serde_json::json;
 
-    use super::{diagnostic_json, process_request};
+    use super::{diagnostics_json, process_request};
     use ogma_frontend::{
         DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity, ParseDiagnostic, SourcePosition,
         SourceSpan,
@@ -312,14 +312,17 @@ mod tests {
             note: Some("parser note".to_owned()),
         };
 
-        let value = diagnostic_json(&diagnostic);
-        assert_eq!(value["phase"], "parse");
-        assert_eq!(value["severity"], "warning");
-        assert_eq!(value["code"], "E0001");
-        assert_eq!(value["labels"][0]["message"], "token");
-        assert_eq!(value["labels"][0]["startColumnUtf16"], 2);
-        assert_eq!(value["help"], "remove the token");
-        assert_eq!(value["note"], "parser note");
+        let mut early_diagnostic = diagnostic.clone();
+        early_diagnostic.phase = DiagnosticPhase::Early;
+        let values = diagnostics_json(&[diagnostic, early_diagnostic]);
+        assert_eq!(values[0]["phase"], "parse");
+        assert_eq!(values[1]["phase"], "early");
+        assert_eq!(values[0]["severity"], "warning");
+        assert_eq!(values[0]["code"], "E0001");
+        assert_eq!(values[0]["labels"][0]["message"], "token");
+        assert_eq!(values[0]["labels"][0]["startColumnUtf16"], 2);
+        assert_eq!(values[0]["help"], "remove the token");
+        assert_eq!(values[0]["note"], "parser note");
     }
 
     #[test]
