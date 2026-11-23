@@ -937,6 +937,17 @@ mod tests {
     }
 
     #[test]
+    fn strict_script_does_not_enable_module_grammar() {
+        let failure = parse_text(
+            "export const value = 1;",
+            ParseGoal::Script,
+            ParseMode::Strict,
+        )
+        .expect_err("strict scripts must not be parsed with the Module grammar");
+        assert_eq!(failure.phase, DiagnosticPhase::Parse);
+    }
+
+    #[test]
     fn source_line_index_handles_all_ecmascript_line_terminators() {
         let text = "a\rb\nc\r\nd\u{2028}e\u{2029}f";
         let source = source(text);
