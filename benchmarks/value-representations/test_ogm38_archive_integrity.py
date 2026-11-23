@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import unittest
 from pathlib import Path
 
@@ -165,7 +166,8 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         self.assertEqual(14798285147, snapshot_run["artifact"]["id"])
         self.assertEqual(report["source_revision"], snapshot_run["tested_revision"])
 
-        primary_path = RESULTS / "ogm38-primary-benchmark-samples.json"
+        active_results = Path(os.environ.get("OGM38_RESULTS_DIR", RESULTS))
+        primary_path = active_results / "ogm38-primary-benchmark-samples.json"
         primary_bytes = primary_path.read_bytes()
         primary = json.loads(primary_bytes)
         self.assertEqual(
