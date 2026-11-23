@@ -604,12 +604,12 @@ class Ogm38Ogm31ValidationTests(unittest.TestCase):
 
     def test_git_tracked_raw_archive_reconstructs_with_exact_checksums(self):
         compressed, report = raw_archive.load_committed_archive()
-        self.assertEqual(39_096, len(compressed))
+        self.assertEqual(38_988, len(compressed))
         self.assertEqual(
-            "ebe31be1a8af18dda5f22b4dd078518fa7a492fb0a7038798ac572b7ba38d34d",
+            "a6f4e0485194cda809af97d5ce84049b0a7ec257adc80d3ee9150dddfe52b5af",
             hashlib.sha256(compressed).hexdigest(),
         )
-        self.assertEqual("74991baa54b346389b6193c1f7075954055be181", report["source_revision"])
+        self.assertEqual("69038fbbd6246f14466ab91821524f7cc0cfb04c", report["source_revision"])
         self.assertEqual(report["source_revision"], report["tested_revision"])
         self.assertEqual(101, report["samples"])
         self.assertEqual(156, len(report["metric_arrays"]))
