@@ -168,24 +168,17 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
         primary_path = RESULTS / "ogm38-primary-benchmark-samples.json"
         primary_bytes = primary_path.read_bytes()
         primary = json.loads(primary_bytes)
-        projection_meta = manifest["historical_primary_projection"]
         self.assertEqual(
             hashlib.sha256(primary_bytes).hexdigest(),
             manifest["checksums"]["primary_projection_sha256"],
         )
+        self.assertEqual(report["source_revision"], primary["source_revision"])
+        self.assertEqual(report["tested_revision"], primary["tested_revision"])
+        self.assertEqual(snapshot_run["url"], primary["run_url"])
         self.assertEqual(
-            "reference-only-separate-snapshot",
-            projection_meta["status"],
-        )
-        self.assertEqual(primary["source_revision"], projection_meta["source_revision"])
-        self.assertEqual(primary["tested_revision"], projection_meta["tested_revision"])
-        self.assertEqual(primary["run_url"], projection_meta["run_url"])
-        self.assertEqual(
+            snapshot_run["url"] + "/artifacts",
             primary["full_report_artifact_url"],
-            projection_meta["artifact_url"],
         )
-        self.assertEqual(44730458468, projection_meta["workflow_run_id"])
-        self.assertEqual(14625194465, projection_meta["artifact_id"])
         self.assertEqual(
             EXPECTED_CANDIDATES,
             {item["name"] for item in primary["candidates"]},
@@ -198,6 +191,31 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             self.assertTrue(
                 all(value >= 0 for value in candidate["native_loop_ns_per_call"])
             )
+
+        # The older primary projection is a separate historical snapshot and no
+        # longer occupies the active projection path after raw-snapshot rotation.
+        projection_meta = manifest["historical_primary_projection"]
+        historical_primary_path = RESULTS / "historical" / "ogm38-primary-benchmark-samples-dfea7.json"
+        historical_primary_bytes = historical_primary_path.read_bytes()
+        historical_primary = json.loads(historical_primary_bytes)
+        self.assertEqual(
+            "reference-only-separate-snapshot",
+            projection_meta["status"],
+        )
+        self.assertEqual(
+            hashlib.sha256(historical_primary_bytes).hexdigest(),
+            projection_meta["sha256"],
+        )
+        self.assertEqual(historical_primary["source_revision"], projection_meta["source_revision"])
+        self.assertEqual(historical_primary["tested_revision"], projection_meta["tested_revision"])
+        self.assertEqual(historical_primary["run_url"], projection_meta["run_url"])
+        self.assertEqual(
+            historical_primary["full_report_artifact_url"],
+            projection_meta["artifact_url"],
+        )
+        self.assertEqual(44730458468, projection_meta["workflow_run_id"])
+        self.assertEqual(14625194465, projection_meta["artifact_id"])
+        self.assertNotEqual(report["source_revision"], historical_primary["source_revision"])
 
         historical_compressed, historical_report = raw_archive.load_committed_archive(
             raw_archive.HISTORICAL_PARTS_DIR,

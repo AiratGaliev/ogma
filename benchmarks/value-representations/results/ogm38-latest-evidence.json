@@ -306,7 +306,7 @@
   },
   "historical_primary_projection": {
     "status": "reference-only-separate-snapshot",
-    "path": "benchmarks/value-representations/results/ogm38-primary-benchmark-samples.json",
+    "path": "benchmarks/value-representations/results/historical/ogm38-primary-benchmark-samples-dfea7.json",
     "source_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
     "tested_revision": "dfea7ebc25eec61665c93cfff5470251e00519df",
     "workflow_run_id": 44730458468,
