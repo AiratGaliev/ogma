@@ -845,12 +845,23 @@ mod tests {
         )
         .expect_err("duplicate parameters are an early strict error");
         assert_eq!(failure.phase, DiagnosticPhase::Early);
+        let labels: Vec<_> = failure
+            .diagnostics
+            .iter()
+            .flat_map(|diagnostic| diagnostic.labels.iter())
+            .collect();
+        assert!(!labels.is_empty());
         assert!(
-            failure
-                .diagnostics
+            labels
                 .iter()
-                .flat_map(|diagnostic| diagnostic.labels.iter())
                 .all(|label| label.span.end_byte as usize <= source.text().len())
+        );
+        let function_offset = source.text().find("function").expect("function keyword exists");
+        assert!(
+            labels.iter().any(|label| {
+                label.span.start.line == 2 && label.span.start_byte as usize >= function_offset
+            }),
+            "strict-mode diagnostic should map back to the original hashbang source",
         );
     }
 
@@ -920,6 +931,39 @@ mod tests {
         )
         .expect("second source parses");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn source_line_index_handles_all_ecmascript_line_terminators() {
+        let text = "a\rb\nc\r\nd\u{2028}e\u{2029}f";
+        let source = source(text);
+        for (marker, expected_line) in [('b', 2), ('c', 3), ('d', 4), ('e', 5), ('f', 6)] {
+            let offset = text.find(marker).expect("line marker exists");
+            assert_eq!(
+                source.position(offset),
+                super::SourcePosition {
+                    line: expected_line,
+                    column_utf16: 0,
+                },
+                "wrong line position after line terminator before {marker}",
+            );
+        }
+    }
+
+    #[test]
+    fn strict_directive_after_statement_does_not_activate_strict_mode() {
+        let allocator = Allocator::default();
+        let source = source("0; \"use strict\"; function duplicate(a, a) {}");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ParseGoal::Script,
+                mode: ParseMode::Sloppy,
+            },
+        )
+        .expect("a string after the directive prologue is not a strict-mode directive");
+        assert!(!parsed.is_strict);
     }
 
     #[test]
