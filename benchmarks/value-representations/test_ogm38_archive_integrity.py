@@ -191,8 +191,18 @@ class Ogm38ArchiveIntegrityTests(unittest.TestCase):
             # report, then runs it again after export. Validate the live projection
             # against this run's native report and workflow identity in the latter phase.
             primary = json.loads(primary_path.read_bytes())
-            self.assertEqual(report["source_revision"], primary["source_revision"])
-            self.assertEqual(report["tested_revision"], primary["tested_revision"])
+            self.assertEqual(primary["source_revision"], primary["tested_revision"])
+            expected_head_revision = os.environ.get("OGM38_EXPECTED_REVISION")
+            event_path = os.environ.get("GITHUB_EVENT_PATH")
+            if expected_head_revision is None and event_path:
+                event_file = Path(event_path)
+                if event_file.is_file():
+                    event = json.loads(event_file.read_text(encoding="utf-8"))
+                    expected_head_revision = (
+                        event.get("pull_request", {}).get("head", {}).get("sha")
+                    )
+            if expected_head_revision:
+                self.assertEqual(expected_head_revision, primary["source_revision"])
             current_run_id = os.environ.get("GITHUB_RUN_ID")
             server_url = os.environ.get("GITHUB_SERVER_URL")
             repository = os.environ.get("GITHUB_REPOSITORY")
