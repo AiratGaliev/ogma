@@ -187,7 +187,8 @@ fn main() -> io::Result<()> {
             break;
         }
         if line.len() > MAX_REQUEST_BYTES {
-            let response = error_response(0, "harness_error", "request exceeds 16 MiB protocol limit");
+            let response =
+                error_response(0, "harness_error", "request exceeds 16 MiB protocol limit");
             serde_json::to_writer(&mut writer, &response)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             writer.write_all(b"\n")?;
