@@ -354,7 +354,11 @@ pub fn parse<'a>(
         // reclassifying the source as a Module. This keeps Script-only grammar
         // (notably top-level await) distinct from Module grammar.
         let (strict_text, mapping) = strict_script_source(source, program.hashbang.as_ref());
-        let strict_parse = Parser::new(allocator, &strict_text, SourceType::script())
+        // Keep this validation-only AST out of the caller's compile-unit arena.
+        // It is discarded after syntax checking, so its allocations can be
+        // reclaimed immediately rather than retained beside the public AST.
+        let strict_allocator = Allocator::default();
+        let strict_parse = Parser::new(&strict_allocator, &strict_text, SourceType::script())
             .with_options(oxc_options)
             .parse();
         let strict_program = strict_parse.program;
