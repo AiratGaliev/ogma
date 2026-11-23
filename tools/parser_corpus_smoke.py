@@ -20,15 +20,19 @@ CASES = (
 )
 
 
-def run_case(adapter: Path, corpus: Path, case: tuple[str, str, str, str | None, str | None]) -> dict:
+def build_request(
+    corpus: Path,
+    case: tuple[str, str, str, str | None, str | None],
+    request_id: int,
+) -> dict:
     relative, expected, source_type, equivalence_group, role = case
     source_path = (corpus / relative).resolve(strict=True)
     source_path.relative_to(corpus.resolve(strict=True))
     source = source_path.read_text(encoding="utf-8")
-    request = {
+    return {
         "protocol": "ogma-test-runner-adapter",
         "version": 1,
-        "requestId": 1,
+        "requestId": request_id,
         "test": {
             "id": relative,
             "suite": "test262-parser-tests",
@@ -55,41 +59,63 @@ def run_case(adapter: Path, corpus: Path, case: tuple[str, str, str, str | None,
         },
         "timeoutMs": 5000,
     }
+
+
+def run_cases(adapter: Path, corpus: Path) -> list[dict]:
+    requests = [build_request(corpus, case, index) for index, case in enumerate(CASES, 1)]
+    payload = "".join(json.dumps(request, ensure_ascii=False) + "\n" for request in requests)
     completed = subprocess.run(
         [str(adapter.resolve())],
-        input=json.dumps(request, ensure_ascii=False) + "\n",
+        input=payload,
         text=True,
         capture_output=True,
         check=False,
-        timeout=10,
+        timeout=30,
     )
     if completed.returncode != 0:
         raise RuntimeError(
-            f"{relative}: parser adapter exited {completed.returncode}: {completed.stderr[-2000:]}"
+            f"parser adapter exited {completed.returncode}: {completed.stderr[-2000:]}"
         )
-    lines = completed.stdout.splitlines()
-    if len(lines) != 1:
-        raise RuntimeError(f"{relative}: expected one adapter response, got {len(lines)}")
-    response = json.loads(lines[0])
-    if (
-        response.get("protocol") != "ogma-test-runner-adapter"
-        or response.get("version") != 1
-        or response.get("requestId") != 1
-    ):
-        raise RuntimeError(f"{relative}: invalid adapter response envelope")
-    if response.get("outcome") != expected:
-        raise RuntimeError(
-            f"{relative}: expected {expected}, got {response.get('outcome')} "
-            f"({response.get('phase')}); {response.get('reason', '')}"
-        )
-    if expected == "rejected":
-        expected_phase = "early" if relative.startswith("early/") else "parse"
-        if response.get("phase") != expected_phase:
-            raise RuntimeError(
-                f"{relative}: expected rejection phase {expected_phase}, got {response.get('phase')}"
-            )
-    return response
 
+    lines = completed.stdout.splitlines()
+    if len(lines) != len(CASES):
+        raise RuntimeError(
+            f"expected {len(CASES)} JSONL responses from one worker, got {len(lines)}"
+        )
+
+    responses = []
+    for index, (case, line) in enumerate(zip(CASES, lines, strict=True), 1):
+        relative, expected, _source_type, _group, _role = case
+        try:
+            response = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"{relative}: adapter returned invalid JSON: {error}") from error
+        if (
+            response.get("protocol") != "ogma-test-runner-adapter"
+            or response.get("version") != 1
+            or response.get("requestId") != index
+        ):
+            raise RuntimeError(f"{relative}: invalid adapter response envelope or requestId")
+        if response.get("outcome") != expected:
+            raise RuntimeError(
+                f"{relative}: expected {expected}, got {response.get('outcome')} "
+                f"({response.get('phase')}); {response.get('reason', '')}"
+            )
+        diagnostics = response.get("diagnostics")
+        if not isinstance(diagnostics, list):
+            raise RuntimeError(f"{relative}: diagnostics must be an array")
+        if expected == "rejected":
+            expected_phase = "early" if relative.startswith("early/") else "parse"
+            if response.get("phase") != expected_phase:
+                raise RuntimeError(
+                    f"{relative}: expected rejection phase {expected_phase}, got {response.get('phase')}"
+                )
+            if not diagnostics:
+                raise RuntimeError(f"{relative}: rejected input must include diagnostics")
+            if any(item.get("phase") not in {"parse", "early"} for item in diagnostics):
+                raise RuntimeError(f"{relative}: diagnostic has an invalid source phase")
+        responses.append(response)
+    return responses
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -112,8 +138,7 @@ def main() -> int:
     fingerprints: dict[str, str] = {}
     passed = 0
     rejected = 0
-    for case in CASES:
-        response = run_case(args.adapter, corpus, case)
+    for case, response in zip(CASES, run_cases(args.adapter, corpus), strict=True):
         if case[1] == "parsed":
             passed += 1
         else:
