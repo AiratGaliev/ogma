@@ -3515,7 +3515,13 @@ fn semantic_add(left: &SemanticValue, right: &SemanticValue) -> SemanticCompleti
     }
 
     if let (SemanticValue::BigInt(left), SemanticValue::BigInt(right)) = (&left, &right) {
-        return SemanticCompletion::Normal(SemanticValue::BigInt(left + right));
+        return match left.checked_add(*right) {
+            Some(sum) => SemanticCompletion::Normal(SemanticValue::BigInt(sum)),
+            None => SemanticCompletion::Throw {
+                name: "RangeError: M0 BigInt exceeds signed 128-bit payload",
+                value: None,
+            },
+        };
     }
     if matches!(left, SemanticValue::BigInt(_)) || matches!(right, SemanticValue::BigInt(_)) {
         return SemanticCompletion::Throw {
@@ -8018,6 +8024,17 @@ mod tests {
                     },
                 ],
                 SemanticCompletion::Normal(SemanticValue::String("7items".to_owned())),
+            ),
+            (
+                "bigint-overflow",
+                vec![
+                    SemanticValue::BigInt(i128::MAX),
+                    SemanticValue::BigInt(1),
+                ],
+                SemanticCompletion::Throw {
+                    name: "RangeError: M0 BigInt exceeds signed 128-bit payload",
+                    value: None,
+                },
             ),
         ];
 
