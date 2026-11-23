@@ -6,7 +6,7 @@
 - **Baseline captured:** 2026-11-16
 - **Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
 
-This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. At this repository revision there is no Ogma Rust workspace or runtime implementation, so no runtime/API feature is reported as implemented or conformant.
+This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. The Rust workspace and initial JavaScript parser frontend now exist; the ECMAScript Runtime, runtime execution adapter, Node.js host layer and module resolver are not yet implemented. Parser availability does not imply runtime or full ECMAScript conformance.
 
 ## 1. Compatibility claims and status vocabulary
 
@@ -33,7 +33,7 @@ A feature must never be labelled supported merely because a parser accepts its s
 
 The architecture's `implemented` state is published as **supported** in this profile: both mean that the declared behaviour is implemented and has passed its required tests. The architecture's `host-provided` label describes ownership/provisioning, not conformance; it is represented by the required host-capability and provider columns, and it does not by itself mean that an API is supported.
 
-**Current implementation status:** no Ogma runtime, frontend, Node adapter, module resolver or conformance runner exists in this repository. Therefore every planned runtime capability below remains **deferred**. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
+**Current implementation status:** the Rust workspace and OGM-41 JavaScript parser/source-diagnostics frontend are implemented. The parser exposes a real parse-only adapter and a bounded Fast-CI smoke against the pinned supplementary parser corpus. The parser-only conformance runner readiness is **ready**; the execution adapter remains **not_implemented**. Full parser-corpus results are not inferred from the bounded smoke. Runtime capabilities, Node APIs and module resolution remain **deferred** until their own implementations and tests are delivered. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
 
 ## 2. ECMAScript baseline
 
