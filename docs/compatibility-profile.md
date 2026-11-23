@@ -438,12 +438,12 @@ The baseline was captured from the current `main` after all changes previously d
 | Generated JavaScript | `assets/game.js`, blob `4fddc001d9ff946280309d72e38c0c72a0f57f31` |
 | Rust dependency lock | `Cargo.lock`, blob `9b262808a6dd59137afc47649dea6ac121d8029e` |
 | JavaScript build/test lock | `package-lock.json`, blob `5fb65ece1ba976cd649e711b8485baa1cec69f40` |
-
-The package-lock is retained solely as part of the pre-existing cge-experiments toolchain baseline. It does not select npm as Ogma's package manager or imply npm lockfile support; the separate M2 package/API micro-corpus uses the pinned pnpm baseline in OGM-101.
 | Existing Criterion harness | `benches/runtime.rs`, blob `56230eb9be0f0a51173d19f0690cd1dc90d3c5a9` |
 | Existing benchmark methodology | `BENCHMARKS.md`, blob `e1d840b56befe6b78c491b85dab2cb3ffa94c258` |
 | Reference runtime | `rquickjs 0.14.0`, QuickJS-NG commit `0fdea21ff1090084e91dad812b343d92e79ba9d9` |
 | Consumer build/test toolchain | Rust 1.97.0, Node.js 22.x, TypeScript 5.9.3; these are consumer prerequisites, not Ogma's normative TypeScript 7.0.2 / Node.js 26.13.0 references |
+
+The package-lock is retained solely as part of the pre-existing cge-experiments toolchain baseline. It does not select npm as Ogma's package manager or imply npm lockfile support; the separate M2 package/API micro-corpus uses the pinned pnpm baseline in OGM-101.
 
 The M2 experiment must preserve the current game design: gameplay state, collision reactions, score, lives, victory/game-over and restart stay in the TypeScript game. Rust continues to provide the native host services. QuickJS-NG remains a selectable reference backend until parity and performance evidence has been reviewed.
 
