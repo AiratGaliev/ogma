@@ -656,22 +656,54 @@ fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
 
 fn normalize_span_offsets(debug_ast: &str) -> String {
     let mut result = String::with_capacity(debug_ast.len());
-    let mut cursor = 0;
-    while let Some(relative) = debug_ast[cursor..].find("Span {") {
-        let start = cursor + relative;
-        result.push_str(&debug_ast[cursor..start]);
-        let Some(relative_end) = debug_ast[start..].find('}') else {
-            result.push_str(&debug_ast[start..]);
-            return result;
-        };
-        let end = start + relative_end + 1;
-        let mut span_debug = debug_ast[start..end].to_owned();
-        normalize_numeric_field(&mut span_debug, "start: ");
-        normalize_numeric_field(&mut span_debug, "end: ");
-        result.push_str(&span_debug);
-        cursor = end;
+    let mut offset = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while offset < debug_ast.len() {
+        let character = debug_ast[offset..]
+            .chars()
+            .next()
+            .expect("offset is a valid UTF-8 boundary");
+
+        if in_string {
+            result.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+            }
+            offset += character.len_utf8();
+            continue;
+        }
+
+        if character == '"' {
+            in_string = true;
+            result.push(character);
+            offset += character.len_utf8();
+            continue;
+        }
+
+        if debug_ast[offset..].starts_with("Span {") {
+            let Some(relative_end) = debug_ast[offset..].find('}') else {
+                result.push_str(&debug_ast[offset..]);
+                break;
+            };
+            let end = offset + relative_end + 1;
+            let mut span_debug = debug_ast[offset..end].to_owned();
+            normalize_numeric_field(&mut span_debug, "start: ");
+            normalize_numeric_field(&mut span_debug, "end: ");
+            result.push_str(&span_debug);
+            offset = end;
+            continue;
+        }
+
+        result.push(character);
+        offset += character.len_utf8();
     }
-    result.push_str(&debug_ast[cursor..]);
+
     result
 }
 
@@ -865,6 +897,23 @@ mod tests {
         let second = parse_text("[1];", ParseGoal::Script, ParseMode::Sloppy)
             .expect("second variant parses");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn parser_normalization_does_not_rewrite_span_like_string_literals() {
+        let first = parse_text(
+            "const value = 'Span { start: 1, end: 2 }';",
+            ParseGoal::Script,
+            ParseMode::Sloppy,
+        )
+        .expect("first source parses");
+        let second = parse_text(
+            "const value = 'Span { start: 3, end: 4 }';",
+            ParseGoal::Script,
+            ParseMode::Sloppy,
+        )
+        .expect("second source parses");
+        assert_ne!(first, second);
     }
 
     #[test]
