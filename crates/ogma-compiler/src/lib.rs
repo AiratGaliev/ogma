@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 pub mod semantic;
+pub mod lowering;
 
 /// Canonical Core IR contract consumed by the compiler pipeline.
 pub const CORE_IR_CONTRACT_ID: &str = ogma_core_ir::CONTRACT_ID;

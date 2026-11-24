@@ -10,6 +10,7 @@ repository.workspace = true
 ogma-bytecode.workspace = true
 ogma-core-ir.workspace = true
 ogma-frontend.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
