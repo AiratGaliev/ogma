@@ -338,13 +338,16 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         let const_initializers = collect_const_initializers(&syntax.body);
-        let effect_enabled = semantic.environment.bindings.iter().any(|binding| {
-            matches!(
-                binding.kind,
-                BindingKind::Var | BindingKind::Let | BindingKind::Parameter | BindingKind::Catch
-            )
-        }) || !semantic.captures.is_empty()
-            || statements_need_effects(&syntax.body);
+        let effectful_bindings: HashSet<String> = semantic
+            .environment
+            .bindings
+            .iter()
+            .filter(|binding| binding.kind != BindingKind::Const)
+            .map(|binding| binding.id.clone())
+            .chain(semantic.captures.iter().map(|capture| capture.binding.clone()))
+            .collect();
+        let effect_enabled = !effectful_bindings.is_empty()
+            || statements_need_effects(&syntax.body, &effectful_bindings);
 
         Ok(Self {
             source_file,
@@ -2089,13 +2092,23 @@ fn collect_const_initializers(statements: &[SyntaxStatement]) -> HashMap<String,
     output
 }
 
-fn statements_need_effects(statements: &[SyntaxStatement]) -> bool {
-    statements.iter().any(statement_needs_effects)
+fn statements_need_effects(
+    statements: &[SyntaxStatement],
+    effectful_bindings: &HashSet<String>,
+) -> bool {
+    statements
+        .iter()
+        .any(|statement| statement_needs_effects(statement, effectful_bindings))
 }
 
-fn statement_needs_effects(statement: &SyntaxStatement) -> bool {
+fn statement_needs_effects(
+    statement: &SyntaxStatement,
+    effectful_bindings: &HashSet<String>,
+) -> bool {
     match statement {
-        SyntaxStatement::Block { body, .. } => statements_need_effects(body),
+        SyntaxStatement::Block { body, .. } => {
+            statements_need_effects(body, effectful_bindings)
+        }
         SyntaxStatement::Variable {
             kind, declarations, ..
         } => {
@@ -2103,25 +2116,28 @@ fn statement_needs_effects(statement: &SyntaxStatement) -> bool {
                 || declarations.iter().any(|item| {
                     item.initializer
                         .as_ref()
-                        .is_some_and(expression_needs_effects)
+                        .is_some_and(|expression| expression_needs_effects(expression, effectful_bindings))
                 })
         }
         SyntaxStatement::FunctionDeclaration { .. } => true,
-        SyntaxStatement::Expression { expression, .. } => expression_needs_effects(expression),
+        SyntaxStatement::Expression { expression, .. } => {
+            expression_needs_effects(expression, effectful_bindings)
+        }
         SyntaxStatement::If {
             test,
             consequent,
             alternate,
             ..
         } => {
-            expression_needs_effects(test)
-                || statement_needs_effects(consequent)
-                || alternate
-                    .as_ref()
-                    .is_some_and(|item| statement_needs_effects(item))
+            expression_needs_effects(test, effectful_bindings)
+                || statement_needs_effects(consequent, effectful_bindings)
+                || alternate.as_ref().is_some_and(|item| {
+                    statement_needs_effects(item, effectful_bindings)
+                })
         }
         SyntaxStatement::While { test, body, .. } => {
-            expression_needs_effects(test) || statement_needs_effects(body)
+            expression_needs_effects(test, effectful_bindings)
+                || statement_needs_effects(body, effectful_bindings)
         }
         SyntaxStatement::For {
             initializer,
@@ -2138,28 +2154,37 @@ fn statement_needs_effects(statement: &SyntaxStatement) -> bool {
                     } => {
                         *kind != SyntaxVariableKind::Const
                             || declarations.iter().any(|item| {
-                                item.initializer
-                                    .as_ref()
-                                    .is_some_and(expression_needs_effects)
+                                item.initializer.as_ref().is_some_and(|expression| {
+                                    expression_needs_effects(expression, effectful_bindings)
+                                })
                             })
                     }
                     SyntaxForInitializer::Expression(expression) => {
-                        expression_needs_effects(expression)
+                        expression_needs_effects(expression, effectful_bindings)
                     }
                 })
-                || test.as_ref().is_some_and(expression_needs_effects)
-                || update.as_ref().is_some_and(expression_needs_effects)
-                || statement_needs_effects(body)
+                || test.as_ref().is_some_and(|expression| {
+                    expression_needs_effects(expression, effectful_bindings)
+                })
+                || update.as_ref().is_some_and(|expression| {
+                    expression_needs_effects(expression, effectful_bindings)
+                })
+                || statement_needs_effects(body, effectful_bindings)
         }
         SyntaxStatement::Return { value, .. } => {
-            value.as_ref().is_some_and(expression_needs_effects)
+            value.as_ref().is_some_and(|expression| {
+                expression_needs_effects(expression, effectful_bindings)
+            })
         }
         SyntaxStatement::Throw { .. } => true,
         SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => false,
     }
 }
 
-fn expression_needs_effects(expression: &SyntaxExpression) -> bool {
+fn expression_needs_effects(
+    expression: &SyntaxExpression,
+    effectful_bindings: &HashSet<String>,
+) -> bool {
     match expression {
         SyntaxExpression::Literal { .. } => false,
         SyntaxExpression::Identifier {
@@ -2168,8 +2193,9 @@ fn expression_needs_effects(expression: &SyntaxExpression) -> bool {
             ..
         } => name != "undefined",
         SyntaxExpression::Identifier {
-            binding: Some(_), ..
-        } => true,
+            binding: Some(binding),
+            ..
+        } => effectful_bindings.contains(binding),
         SyntaxExpression::Binary {
             operator,
             left,
@@ -2179,23 +2205,31 @@ fn expression_needs_effects(expression: &SyntaxExpression) -> bool {
             !matches!(
                 operator,
                 SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual
-            ) || expression_needs_effects(left)
-                || expression_needs_effects(right)
+            ) || expression_needs_effects(left, effectful_bindings)
+                || expression_needs_effects(right, effectful_bindings)
         }
         SyntaxExpression::Unary {
             operator, argument, ..
         } => {
-            matches!(
+            (matches!(
                 operator,
                 SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
-            ) && expression_needs_effects(argument)
+            ) && !matches!(
+                argument.as_ref(),
+                SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(_),
+                    ..
+                }
+            )) || expression_needs_effects(argument, effectful_bindings)
         }
         SyntaxExpression::Call { .. }
         | SyntaxExpression::Member { .. }
         | SyntaxExpression::Assign { .. }
         | SyntaxExpression::Update { .. }
         | SyntaxExpression::Function { .. } => true,
-        SyntaxExpression::Parenthesized { expression, .. } => expression_needs_effects(expression),
+        SyntaxExpression::Parenthesized { expression, .. } => {
+            expression_needs_effects(expression, effectful_bindings)
+        }
         SyntaxExpression::Unsupported { .. } => false,
     }
 }
