@@ -318,8 +318,14 @@ mod tests {
                 .return_signature
                 .as_ref()
                 .expect("JavaScript functions always complete with a value");
-            assert_eq!(signature.semantic_type, ogma_core_ir::SemanticType::Undefined);
-            assert_eq!(signature.representation, ogma_core_ir::Representation::Boxed);
+            assert_eq!(
+                signature.semantic_type,
+                ogma_core_ir::SemanticType::Undefined
+            );
+            assert_eq!(
+                signature.representation,
+                ogma_core_ir::Representation::Boxed
+            );
 
             let returned: Vec<_> = document
                 .function
@@ -335,8 +341,14 @@ mod tests {
             assert!(document.function.blocks.iter().any(|block| {
                 block.instructions.iter().any(|instruction| {
                     instruction.op == "js.constant"
-                        && instruction.result.as_ref().is_some_and(|result| result.id == *return_value)
-                        && instruction.attributes.get("literal").and_then(serde_json::Value::as_str)
+                        && instruction
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| result.id == *return_value)
+                        && instruction
+                            .attributes
+                            .get("literal")
+                            .and_then(serde_json::Value::as_str)
                             == Some("undefined")
                 })
             }));
