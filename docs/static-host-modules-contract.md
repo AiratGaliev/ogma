@@ -98,7 +98,7 @@ A build plan is an immutable, registry-bound snapshot. Successful module registr
 | TypeScript declarations match Rust exports | generate_typescript_declarations; byte-for-byte .d.ts fixture test |
 | Static resolution only where semantics permit | resolve_import; immutable ESM binding gets slot; dynamic/mutable/namespace/CommonJS/property paths use generic fallback |
 | Capability and feature diagnostics are deterministic | stable ModuleDiagnostic; repeatability, feature-denial and capability-denial tests |
-| Runtime/native references cannot be stripped | build_profile; runtime import, native module dependency and native-library closure tests |
+| Runtime imports and native-module references cannot be stripped | build_profile; runtime import, native-module dependency and logical Native requirement availability/closure tests |
 
 Run from the repository root:
 
