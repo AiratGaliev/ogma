@@ -378,4 +378,33 @@ mod tests {
         assert!(diagnostic.span.is_some());
         assert!(diagnostic.message.contains("fresh lexical environment"));
     }
+    #[test]
+    fn lowers_for_header_let_binding_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "for-header-let-test",
+            "memory:///for-header-let-test.js",
+            None,
+            "function run() { for (let index = 0; index < 2; index = index + 1) { index; } }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("for-header lexical declaration parses");
+        let compiled = compile(&parsed)
+            .expect("for-header lexical environment is supported by the synchronous lowering subset");
+
+        let run = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "run")
+            .expect("run function Core IR document");
+        assert!(verify_document(run).is_empty());
+        assert!(run.function.blocks.iter().any(|block| {
+            block.instructions.iter().any(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").is_some()
+            })
+        }));
+    }
+
 }
