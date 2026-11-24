@@ -52,13 +52,18 @@ pub fn lower(
             code: "lowering.source_identity_mismatch",
             function: "<module>".to_owned(),
             span: None,
-            message: "semantic analysis was produced for a different source identity or content revision".to_owned(),
+            message:
+                "semantic analysis was produced for a different source identity or content revision"
+                    .to_owned(),
         }]);
     }
 
     let mut semantic_by_id = HashMap::with_capacity(semantic.functions.len());
     for function in &semantic.functions {
-        if semantic_by_id.insert(function.id.as_str(), function).is_some() {
+        if semantic_by_id
+            .insert(function.id.as_str(), function)
+            .is_some()
+        {
             return Err(vec![LoweringDiagnostic {
                 code: "lowering.duplicate_semantic_function",
                 function: function.id.clone(),
@@ -934,8 +939,8 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })
             }
-            EvaluatedMemberKey::Computed(key) => {
-                self.emit_instruction(
+            EvaluatedMemberKey::Computed(key) => self
+                .emit_instruction(
                     "js.set_element",
                     vec![object.id, key.id, value.id.clone()],
                     Some(value.ty),
@@ -950,8 +955,7 @@ impl<'a> FunctionCompiler<'a> {
                         Some(span),
                         "js.set_element produced no value",
                     )
-                })
-            }
+                }),
         }
     }
 
@@ -2097,20 +2101,14 @@ impl<'a> FunctionCompiler<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ogma_frontend::{SourceFile, SyntaxDeclarator, SyntaxMemberKey};
 
     fn source(text: &str) -> SourceFile {
-        SourceFile::new(
-            "lowering-tests",
-            "memory:///lowering-tests.js",
-            None,
-            text,
-        )
-        .expect("source is valid")
+        SourceFile::new("lowering-tests", "memory:///lowering-tests.js", None, text)
+            .expect("source is valid")
     }
 
     fn whole_span(source: &SourceFile) -> SourceSpan {
@@ -2242,9 +2240,16 @@ mod tests {
         )
         .expect("literal return lowers");
         assert_eq!(documents.len(), 1);
-        assert_eq!(documents[0].function.blocks[0].instructions[0].op, "js.constant");
         assert_eq!(
-            documents[0].function.return_signature.as_ref().map(|result| result.semantic_type),
+            documents[0].function.blocks[0].instructions[0].op,
+            "js.constant"
+        );
+        assert_eq!(
+            documents[0]
+                .function
+                .return_signature
+                .as_ref()
+                .map(|result| result.semantic_type),
             Some(SemanticType::Number)
         );
         assert!(verify_document(&documents[0]).is_empty());
@@ -2270,26 +2275,24 @@ mod tests {
             }],
             span: whole,
         };
-        let assignment = |number: f64, scope: &str| {
-            SyntaxStatement::Block {
-                scope: Some(scope.to_owned()),
-                body: vec![SyntaxStatement::Expression {
-                    expression: SyntaxExpression::Assign {
-                        target: SyntaxAssignmentTarget::Identifier {
-                            name: "value".to_owned(),
-                            binding: Some(binding.id.clone()),
-                            span: whole,
-                        },
-                        value: Box::new(SyntaxExpression::Literal {
-                            value: SyntaxLiteral::Number(number),
-                            span: whole,
-                        }),
+        let assignment = |number: f64, scope: &str| SyntaxStatement::Block {
+            scope: Some(scope.to_owned()),
+            body: vec![SyntaxStatement::Expression {
+                expression: SyntaxExpression::Assign {
+                    target: SyntaxAssignmentTarget::Identifier {
+                        name: "value".to_owned(),
+                        binding: Some(binding.id.clone()),
                         span: whole,
                     },
+                    value: Box::new(SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Number(number),
+                        span: whole,
+                    }),
                     span: whole,
-                }],
+                },
                 span: whole,
-            }
+            }],
+            span: whole,
         };
         let syntax = function_syntax(
             &source,
@@ -2330,7 +2333,10 @@ mod tests {
             .flat_map(|block| block.instructions.iter())
             .filter(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(binding.id.as_str())
             })
             .filter_map(|instruction| source_scope(&instruction.source))
@@ -2369,16 +2375,21 @@ mod tests {
             .iter()
             .find(|block| block.id == merge_targets[0])
             .expect("branch merge block exists");
-        assert!(merge
-            .parameters
-            .iter()
-            .any(|parameter| matches!(parameter, BlockParameter::Effect(_))));
+        assert!(
+            merge
+                .parameters
+                .iter()
+                .any(|parameter| matches!(parameter, BlockParameter::Effect(_)))
+        );
     }
 
     #[test]
     fn evaluates_computed_assignment_reference_before_right_hand_side() {
         let source = source("function run(obj, key, rhs) { obj[key] = rhs; }");
-        let assignment_start = source.text().rfind("obj[key]").expect("assignment target exists");
+        let assignment_start = source
+            .text()
+            .rfind("obj[key]")
+            .expect("assignment target exists");
         let obj_span = source.span(assignment_start, assignment_start + 3);
         let key_span = source.span(assignment_start + 4, assignment_start + 7);
         let rhs_start = source.text().rfind("rhs").expect("rhs reference exists");
@@ -2445,9 +2456,12 @@ mod tests {
             vec!["binding_obj", "binding_key", "binding_rhs"],
             "LHS object and key must be evaluated before the RHS"
         );
-        assert!(function.blocks[0].instructions.iter().any(|instruction| {
-            instruction.op == "js.set_element"
-        }));
+        assert!(
+            function.blocks[0]
+                .instructions
+                .iter()
+                .any(|instruction| { instruction.op == "js.set_element" })
+        );
         assert!(verify_document(&documents[0]).is_empty());
     }
 
