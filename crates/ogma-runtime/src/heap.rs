@@ -366,7 +366,7 @@ impl Heap {
     /// Creates an empty Runtime heap with the supplied hard allocation limits.
     pub fn new(config: HeapConfig) -> Result<Self, HeapError> {
         let heap_id = NEXT_HEAP_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| HeapError::HeapIdentityExhausted)?;
@@ -454,7 +454,7 @@ impl Heap {
         match self.try_allocate_cell(CellKind::Object) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Object)
+                self.try_allocate_cell(CellKind::Object).map(Value::from_object)
             }
             result => result.map(Value::from_object),
         }
@@ -465,7 +465,7 @@ impl Heap {
         match self.try_allocate_cell(CellKind::Function) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Function)
+                self.try_allocate_cell(CellKind::Function).map(Value::from_function)
             }
             result => result.map(Value::from_function),
         }
