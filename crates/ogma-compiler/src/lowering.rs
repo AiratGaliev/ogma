@@ -3461,7 +3461,10 @@ mod tests {
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0].op, "js.constant");
         assert_eq!(
-            instructions[0].attributes.get("value").and_then(JsonValue::as_str),
+            instructions[0]
+                .attributes
+                .get("value")
+                .and_then(JsonValue::as_str),
             Some("undefined")
         );
         assert!(verify_document(&documents[0]).is_empty());
