@@ -288,7 +288,6 @@ struct FunctionCompiler<'a> {
     syntax_registry: &'a HashMap<&'a str, &'a ResolvedSyntaxFunction>,
     semantic: &'a FunctionSemantics,
     syntax: &'a ResolvedSyntaxFunction,
-    current_scope: String,
     local_bindings: HashMap<String, Binding>,
     captures_by_binding: HashMap<String, Capture>,
     const_initializers: HashMap<String, SyntaxExpression>,
@@ -399,7 +398,6 @@ impl<'a> FunctionCompiler<'a> {
             syntax_registry,
             semantic,
             syntax,
-            current_scope: syntax.scope.clone(),
             local_bindings,
             captures_by_binding,
             const_initializers,
@@ -557,7 +555,7 @@ impl<'a> FunctionCompiler<'a> {
                 line: span.end.line,
                 column: span.end.column_utf16,
             },
-            scope: Some(self.current_scope.clone()),
+            scope: Some(self.semantic.environment.id.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -567,7 +565,7 @@ impl<'a> FunctionCompiler<'a> {
     fn generated_source(&self, reason: &str, bindings: Vec<String>) -> Source {
         Source::Generated {
             reason: reason.to_owned(),
-            scope: Some(self.current_scope.clone()),
+            scope: Some(self.semantic.environment.id.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -1423,15 +1421,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_statement(&mut self, statement: &SyntaxStatement) -> Result<(), LoweringDiagnostic> {
         match statement {
-            SyntaxStatement::Block { scope, body, .. } => {
-                let previous_scope = self.current_scope.clone();
-                if let Some(scope) = scope {
-                    self.current_scope = scope.clone();
-                }
-                let result = self.compile_sequence(body);
-                self.current_scope = previous_scope;
-                result
-            }
+            SyntaxStatement::Block { body, .. } => self.compile_sequence(body),
             SyntaxStatement::Variable {
                 kind,
                 declarations,
@@ -1523,14 +1513,13 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_if(test, consequent, alternate.as_deref(), *span),
             SyntaxStatement::While { test, body, span } => self.compile_while(test, body, *span),
             SyntaxStatement::For {
-                scope,
                 initializer,
                 test,
                 update,
                 body,
                 span,
+                ..
             } => self.compile_for(
-                scope.as_deref(),
                 initializer.as_ref(),
                 test.as_ref(),
                 update.as_ref(),
@@ -1706,24 +1695,6 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_for(
-        &mut self,
-        scope: Option<&str>,
-        initializer: Option<&SyntaxForInitializer>,
-        test: Option<&SyntaxExpression>,
-        update: Option<&SyntaxExpression>,
-        body: &SyntaxStatement,
-        span: SourceSpan,
-    ) -> Result<(), LoweringDiagnostic> {
-        let previous_scope = self.current_scope.clone();
-        if let Some(scope) = scope {
-            self.current_scope = scope.to_owned();
-        }
-        let result = self.compile_for_scoped(initializer, test, update, body, span);
-        self.current_scope = previous_scope;
-        result
-    }
-
-    fn compile_for_scoped(
         &mut self,
         initializer: Option<&SyntaxForInitializer>,
         test: Option<&SyntaxExpression>,
@@ -2104,6 +2075,8 @@ impl<'a> FunctionCompiler<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic::SemanticBinding;
+    use ogma_core_ir::{Environment, FunctionParameter};
     use ogma_frontend::{SourceFile, SyntaxDeclarator, SyntaxMemberKey};
 
     fn source(text: &str) -> SourceFile {
@@ -2256,7 +2229,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_if_branches_with_effect_token_merge_and_preserves_lexical_scope() {
+    fn lowers_if_branches_with_effect_token_merge_and_binding_provenance() {
         let source = source(
             "function run() { let value = 1; if (true) { value = 2; } else { value = 3; } return value; }",
         );
@@ -2341,9 +2314,20 @@ mod tests {
             })
             .filter_map(|instruction| source_scope(&instruction.source))
             .collect();
-        assert!(store_scopes.contains(&"scope_1"));
-        assert!(store_scopes.contains(&"scope_2"));
-        assert!(store_scopes.contains(&"scope_3"));
+        assert!(!store_scopes.is_empty());
+        assert!(store_scopes.iter().all(|scope| *scope == "scope_1"));
+        let binding_provenance: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter(|instruction| instruction.op == "env.store")
+            .filter_map(|instruction| match &instruction.source {
+                Source::User { bindings, .. } | Source::Generated { bindings, .. } => {
+                    bindings.first().map(String::as_str)
+                }
+            })
+            .collect();
+        assert!(binding_provenance.contains(&binding.id.as_str()));
 
         let branch = function
             .blocks
