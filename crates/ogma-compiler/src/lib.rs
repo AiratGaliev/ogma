@@ -178,7 +178,10 @@ mod tests {
         let typeof_value = instructions
             .iter()
             .find(|instruction| {
-                instruction.attributes.get("value").and_then(serde_json::Value::as_str)
+                instruction
+                    .attributes
+                    .get("value")
+                    .and_then(serde_json::Value::as_str)
                     == Some("undefined")
             })
             .expect("typeof unresolved identifier produces the string \"undefined\"");
@@ -203,16 +206,31 @@ mod tests {
         let completion = instructions
             .iter()
             .find(|instruction| {
-                instruction.result.as_ref().is_some_and(|result| result.id == return_value)
+                instruction
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| result.id == return_value)
             })
             .expect("Program completion value definition");
         assert_eq!(
-            completion.attributes.get("literal").and_then(serde_json::Value::as_str),
+            completion
+                .attributes
+                .get("literal")
+                .and_then(serde_json::Value::as_str),
             Some("undefined")
         );
-        assert!(completion.attributes.get("value").is_some_and(serde_json::Value::is_null));
+        assert!(
+            completion
+                .attributes
+                .get("value")
+                .is_some_and(serde_json::Value::is_null)
+        );
         assert_eq!(
-            program.function.return_signature.as_ref().map(|signature| signature.semantic_type),
+            program
+                .function
+                .return_signature
+                .as_ref()
+                .map(|signature| signature.semantic_type),
             Some(ogma_core_ir::SemanticType::Undefined)
         );
         assert!(program.function.effect_entry.is_none());
