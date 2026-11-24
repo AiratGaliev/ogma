@@ -1039,7 +1039,9 @@ impl Heap {
             .checked_mul(std::mem::size_of::<u16>())
             .ok_or(HeapError::SizeOverflow)?;
         self.check_single_allocation(payload_bytes)?;
+        self.check_cell_counters()?;
         self.ensure_slot_capacity()?;
+        self.check_publish_slot()?;
 
         let mut owned_units = Vec::new();
         reserve_vec(&mut self.budget, &mut owned_units, unit_count)?;
@@ -1068,23 +1070,10 @@ impl Heap {
     }
 
     fn publish_cell(&mut self, kind: CellKind) -> Result<GcRef, HeapError> {
-        if self.allocations == u64::MAX || self.live_objects == u64::MAX {
-            return Err(HeapError::SizeOverflow);
-        }
+        self.check_cell_counters()?;
+        self.check_publish_slot()?;
 
         let reusable_index = self.free_slot_head;
-        if let Some(index) = reusable_index {
-            let slot = self
-                .slots
-                .get(index as usize)
-                .ok_or(HeapError::AccountingInvariant)?;
-            if slot.cell.is_some() {
-                return Err(HeapError::AccountingInvariant);
-            }
-        } else if self.slots.len() >= self.slots.capacity() {
-            return Err(HeapError::AccountingInvariant);
-        }
-
         let storage = allocate_cell_storage(&mut self.budget, kind)?;
         let index = if let Some(index) = reusable_index {
             let slot = &mut self.slots[index as usize];
@@ -1211,6 +1200,28 @@ impl Heap {
             .checked_add(1)
             .ok_or(HeapError::RootTokenExhausted)?;
         Ok(serial)
+    }
+
+    fn check_cell_counters(&self) -> Result<(), HeapError> {
+        if self.allocations == u64::MAX || self.live_objects == u64::MAX {
+            return Err(HeapError::SizeOverflow);
+        }
+        Ok(())
+    }
+
+    fn check_publish_slot(&self) -> Result<(), HeapError> {
+        if let Some(index) = self.free_slot_head {
+            let slot = self
+                .slots
+                .get(index as usize)
+                .ok_or(HeapError::AccountingInvariant)?;
+            if slot.cell.is_some() {
+                return Err(HeapError::AccountingInvariant);
+            }
+        } else if self.slots.len() >= self.slots.capacity() {
+            return Err(HeapError::AccountingInvariant);
+        }
+        Ok(())
     }
 
     fn check_single_allocation(&self, bytes: usize) -> Result<(), HeapError> {
@@ -1650,6 +1661,27 @@ mod tests {
         assert_ne!(runtime_heap.slots.capacity(), 1);
         assert_eq!(address_before, address_after);
         assert_eq!(runtime_heap.validate_ref(reference), Ok(anchor_index));
+    }
+
+    #[test]
+    fn string_allocation_counter_exhaustion_does_not_charge_or_leak_payload() {
+        let mut allocation_counter_heap = heap(4096, 2048);
+        allocation_counter_heap.allocations = u64::MAX;
+        assert_eq!(
+            allocation_counter_heap.allocate_string_utf16(&[0x0061; 4]),
+            Err(HeapError::SizeOverflow)
+        );
+        assert_eq!(allocation_counter_heap.stats().used_bytes, 0);
+        assert_eq!(allocation_counter_heap.slots.capacity(), 0);
+
+        let mut live_counter_heap = heap(4096, 2048);
+        live_counter_heap.live_objects = u64::MAX;
+        assert_eq!(
+            live_counter_heap.allocate_string_utf16(&[0x0061; 4]),
+            Err(HeapError::SizeOverflow)
+        );
+        assert_eq!(live_counter_heap.stats().used_bytes, 0);
+        assert_eq!(live_counter_heap.slots.capacity(), 0);
     }
 
     #[test]

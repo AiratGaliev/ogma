@@ -7,27 +7,45 @@
 //! and allocation contracts. It must not depend on parser, compiler, Core IR or
 //! bytecode implementation crates.
 //!
-//! Thread affinity is enforced at the type level:
+//! Thread affinity is enforced at the type level. Each public value/token is
+//! independently prevented from satisfying `Send + Sync`:
+//!
+//! ```compile_fail
+//! use ogma_runtime::Value;
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! require_send_sync(Value::number(1.0));
+//! ```
 //!
 //! ```compile_fail
 //! use ogma_runtime::{Heap, HeapConfig};
-//!
-//! fn require_send<T: Send>(_: T) {}
-//!
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
 //! let mut heap = Heap::new(HeapConfig::default()).unwrap();
 //! let value = heap.allocate_object().unwrap();
-//! let host = heap.retain_host_value(value).unwrap();
-//! let frame = heap.enter_frame().unwrap();
-//! let scope = heap.open_scope().unwrap();
-//! let external = heap.charge_external_memory(1).unwrap();
-//! require_send(value);
-//! require_send(host);
-//! require_send(frame);
-//! require_send(scope);
-//! require_send(external);
+//! require_send_sync(heap.retain_host_value(value).unwrap());
 //! ```
 //!
-//! Opaque handles and root tokens share the same !Send/!Sync boundary.
+//! ```compile_fail
+//! use ogma_runtime::{Heap, HeapConfig};
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! let mut heap = Heap::new(HeapConfig::default()).unwrap();
+//! require_send_sync(heap.enter_frame().unwrap());
+//! ```
+//!
+//! ```compile_fail
+//! use ogma_runtime::{Heap, HeapConfig};
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! let mut heap = Heap::new(HeapConfig::default()).unwrap();
+//! require_send_sync(heap.open_scope().unwrap());
+//! ```
+//!
+//! ```compile_fail
+//! use ogma_runtime::{Heap, HeapConfig};
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! let mut heap = Heap::new(HeapConfig::default()).unwrap();
+//! require_send_sync(heap.charge_external_memory(1).unwrap());
+//! ```
+//!
+//! The heap and all public values/tokens share the same !Send/!Sync boundary.
 
 #![deny(missing_docs)]
 
