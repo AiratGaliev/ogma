@@ -3302,17 +3302,14 @@ mod tests {
             "const value = 1;",
         )
         .expect("source descriptor accepts a URI");
-        let error = core_source_file(&absolute).expect_err(
-            "absolute file URIs cannot be represented as repository-relative paths",
-        );
+        let error = core_source_file(&absolute)
+            .expect_err("absolute file URIs cannot be represented as repository-relative paths");
         assert_eq!(error.code, "lowering.source_path");
     }
 
     #[test]
     fn rejects_block_scoped_closure_capture_without_environment_materialization() {
-        let source = source(
-            "function run() { { let value = 1; return () => value; } }",
-        );
+        let source = source("function run() { { let value = 1; return () => value; } }");
         let span = whole_span(&source);
         let binding = binding("binding_block_value", "value", BindingKind::Let);
         let parent = function_syntax(
@@ -3425,5 +3422,4 @@ mod tests {
         .expect_err("block-scoped capture requires a per-block environment");
         assert_eq!(error[0].code, "lowering.block_capture_lifetime");
     }
-
 }
