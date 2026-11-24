@@ -10,9 +10,7 @@ use std::rc::Rc;
 
 use crate::value::{Value, ValueRepr, ValueType};
 
-use super::{
-    release_vec_capacity, reserve_vec, CellKind, GcRef, Heap, HeapError,
-};
+use super::{CellKind, GcRef, Heap, HeapError, release_vec_capacity, reserve_vec};
 
 /// Stable function-table identity. It is metadata, never a code pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
