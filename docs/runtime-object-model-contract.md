@@ -86,8 +86,8 @@ Function IDs are metadata, not native code pointers. The backend function table
 owns executable bodies; Runtime creates closures and prepares activations.
 
 A call activation:
-- roots callee, receiver, global receiver and arguments in an explicit GC
-  frame before allocating the activation environment;
+- roots the callee, effective receiver and arguments in an explicit GC frame
+  before allocating the activation environment;
 - binds parameters in source order, using `undefined` for missing arguments;
 - creates fresh local binding storage with the captured environment as parent;
 - supplies the function ID and effective `this` value to the backend;

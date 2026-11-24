@@ -1090,13 +1090,22 @@ impl Heap {
     }
 
     /// Creates a traced function object with explicit cell/value captures.
+    ///
+    /// `lexical_this` is captured only by arrow functions. Ordinary functions
+    /// ignore this argument and derive their receiver from each call.
     pub fn create_closure(
         &mut self,
         definition: &FunctionDefinition,
         outer: LexicalEnvironment,
         lexical_this: Value,
     ) -> Result<Value, HeapError> {
-        self.validate_value(lexical_this)?;
+        let stored_lexical_this = match definition.kind {
+            FunctionKind::Arrow => {
+                self.validate_value(lexical_this)?;
+                lexical_this
+            }
+            FunctionKind::Ordinary => Value::undefined(),
+        };
         let outer_index = self.validate_ref(outer.reference)?;
         if !matches!(
             &self.slots[outer_index]
@@ -1111,7 +1120,7 @@ impl Heap {
         let scope = self.open_scope()?;
         let result = (|| {
             self.scope_root_reference(scope, outer.reference)?;
-            self.scope_root(scope, lexical_this)?;
+            self.scope_root(scope, stored_lexical_this)?;
             let closure_ref = self.allocate_cell_with_retry(|| {
                 CellKind::Environment(Box::new(EnvironmentData {
                     parent: None,
@@ -1184,12 +1193,12 @@ impl Heap {
                     closure_ref,
                     definition.kind,
                     definition.strict,
-                    lexical_this,
+                    stored_lexical_this,
                 )))
             })?;
             self.scope_root_reference(scope, function)?;
             self.add_edge_ref(function, closure_ref)?;
-            if let Some(reference) = lexical_this.gc_ref() {
+            if let Some(reference) = stored_lexical_this.gc_ref() {
                 self.add_edge_ref(function, reference)?;
             }
             Ok(Value::from_function(function))
@@ -1270,8 +1279,9 @@ impl Heap {
         let frame = self.enter_frame()?;
         let result = (|| {
             self.frame_root(frame, callee)?;
-            self.frame_root(frame, this_argument)?;
-            self.frame_root(frame, global_this)?;
+            // Only the effective receiver is observable inside this activation.
+            // A call-site receiver ignored by an arrow (or globalThis ignored
+            // by a strict/non-nullish call) must not become an artificial root.
             self.frame_root(frame, this_value)?;
             for argument in arguments {
                 self.frame_root(frame, *argument)?;
@@ -2049,6 +2059,99 @@ mod tests {
     }
 
     #[test]
+    fn property_key_conversion_uses_ecmascript_number_format_boundaries() {
+        let mut heap = heap();
+        let cases = [
+            (Value::number(-0.0), "0"),
+            (Value::number(f64::NAN), "NaN"),
+            (Value::number(f64::INFINITY), "Infinity"),
+            (Value::number(f64::NEG_INFINITY), "-Infinity"),
+            (Value::number(1e-6), "0.000001"),
+            (Value::number(1e-7), "1e-7"),
+            (Value::number(1e20), "100000000000000000000"),
+            (Value::number(1e21), "1e+21"),
+        ];
+        for (value, expected) in cases {
+            let key = heap.to_property_key(value).unwrap();
+            let actual = String::from_utf16(heap.property_key_utf16(key).unwrap()).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn string_property_key_conversion_preserves_unpaired_surrogates() {
+        let mut heap = heap();
+        let string = heap.allocate_string_utf16(&[0x0061, 0xD800]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, string).unwrap();
+
+        let key = heap.to_property_key(string).unwrap();
+        assert_eq!(heap.property_key_utf16(key).unwrap(), &[0x0061, 0xD800]);
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn own_property_keys_order_indices_then_strings_and_array_length() {
+        let mut heap = heap();
+        let object = heap.allocate_object().unwrap();
+        let array = heap.allocate_array().unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, object).unwrap();
+        heap.scope_root(roots, array).unwrap();
+
+        for name in ["tail", "10", "2", "01", "4294967295", "0"] {
+            let key = heap.intern_property_key(name).unwrap();
+            assert!(heap.set_property(object, key, Value::undefined()).unwrap());
+        }
+        let names = heap
+            .own_property_keys(object)
+            .unwrap()
+            .iter()
+            .map(|key| String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["0", "2", "10", "tail", "01", "4294967295"]);
+
+        let one = heap.intern_property_key("1").unwrap();
+        let three = heap.intern_property_key("3").unwrap();
+        let extra = heap.intern_property_key("extra").unwrap();
+        assert!(heap.set_property(array, three, Value::undefined()).unwrap());
+        assert!(heap.set_property(array, extra, Value::undefined()).unwrap());
+        assert!(heap.set_property(array, one, Value::undefined()).unwrap());
+        let names = heap
+            .own_property_keys(array)
+            .unwrap()
+            .iter()
+            .map(|key| String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["1", "3", "length", "extra"]);
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn inherited_length_assignment_uses_array_receiver_semantics() {
+        let mut heap = heap();
+        let prototype = heap.allocate_object().unwrap();
+        let array = heap.allocate_array().unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, prototype).unwrap();
+        heap.scope_root(roots, array).unwrap();
+        let length = key(&mut heap, "length");
+        assert!(heap
+            .define_own_property(
+                prototype,
+                length,
+                PropertyDescriptor::data(Value::number(8.0), true, true, true),
+            )
+            .unwrap());
+
+        assert!(heap
+            .set_property_with_receiver(prototype, length, Value::number(2.0), array)
+            .unwrap());
+        assert_eq!(heap.array_length(array).unwrap(), 2);
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
     fn sparse_arrays_preserve_holes_and_length_semantics() {
         let mut heap = heap();
         let array = heap.allocate_array().unwrap();
@@ -2473,6 +2576,117 @@ mod tests {
             .unwrap();
         heap.scope_root(roots, closure).unwrap();
         assert_eq!(heap.function_id(closure).unwrap(), definition.id);
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn arrow_uses_lexical_receiver_and_does_not_root_ignored_call_receiver() {
+        let mut heap = heap();
+        let lexical_this = heap.allocate_object().unwrap();
+        let ignored_call_this = heap.allocate_object().unwrap();
+        let outer = heap.create_environment(None, &[]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, lexical_this).unwrap();
+        heap.scope_root_environment(roots, outer).unwrap();
+
+        let definition = FunctionDefinition {
+            id: FunctionId(34),
+            parameters: Vec::new(),
+            locals: Vec::new(),
+            captures: Vec::new(),
+            kind: FunctionKind::Arrow,
+            strict: false,
+        };
+        let arrow = heap
+            .create_closure(&definition, outer, lexical_this)
+            .unwrap();
+        heap.scope_root(roots, arrow).unwrap();
+        let activation = heap
+            .enter_function_call(
+                arrow,
+                &definition,
+                ignored_call_this,
+                &[],
+                Value::undefined(),
+            )
+            .unwrap();
+
+        let report = heap.collect().unwrap();
+        assert!(report.reclaimed_objects >= 1);
+        assert!(heap.strict_equal(activation.this_value(), lexical_this).unwrap());
+        heap.leave_function_call(activation).unwrap();
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn ordinary_function_does_not_capture_or_retain_lexical_this() {
+        let mut heap = heap();
+        let outer = heap.create_environment(None, &[]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root_environment(roots, outer).unwrap();
+
+        let unused_lexical_this = heap.allocate_object().unwrap();
+        let definition = FunctionDefinition {
+            id: FunctionId(35),
+            parameters: Vec::new(),
+            locals: Vec::new(),
+            captures: Vec::new(),
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let function = heap
+            .create_closure(&definition, outer, unused_lexical_this)
+            .unwrap();
+        heap.scope_root(roots, function).unwrap();
+
+        let report = heap.collect().unwrap();
+        assert!(report.reclaimed_objects >= 1);
+        let activation = heap
+            .enter_function_call(
+                function,
+                &definition,
+                Value::null(),
+                &[],
+                Value::undefined(),
+            )
+            .unwrap();
+        assert!(activation.this_value().is_null());
+        heap.leave_function_call(activation).unwrap();
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn sloppy_ordinary_call_substitutes_global_receiver_for_nullish_this() {
+        let mut heap = heap();
+        let global_this = heap.allocate_object().unwrap();
+        let outer = heap.create_environment(None, &[]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, global_this).unwrap();
+        heap.scope_root_environment(roots, outer).unwrap();
+        let definition = FunctionDefinition {
+            id: FunctionId(36),
+            parameters: Vec::new(),
+            locals: Vec::new(),
+            captures: Vec::new(),
+            kind: FunctionKind::Ordinary,
+            strict: false,
+        };
+        let function = heap
+            .create_closure(&definition, outer, Value::undefined())
+            .unwrap();
+        heap.scope_root(roots, function).unwrap();
+
+        let activation = heap
+            .enter_function_call(
+                function,
+                &definition,
+                Value::undefined(),
+                &[],
+                global_this,
+            )
+            .unwrap();
+        assert!(heap.strict_equal(activation.this_value(), global_this).unwrap());
+        heap.leave_function_call(activation).unwrap();
         heap.close_scope(roots).unwrap();
     }
 
