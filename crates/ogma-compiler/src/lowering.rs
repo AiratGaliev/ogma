@@ -2015,11 +2015,6 @@ impl<'a> FunctionCompiler<'a> {
                 | SyntaxBinaryOperator::StrictNotEqual
                 | SyntaxBinaryOperator::LessThan
                 | SyntaxBinaryOperator::GreaterThan => Ok(ValueType::BOOLEAN),
-                SyntaxBinaryOperator::GreaterThan => self.fail(
-                    "lowering.greater_than_not_in_core_ir",
-                    None,
-                    "greater-than requires its own Core IR operation",
-                ),
             },
             SyntaxExpression::Unary {
                 operator,
@@ -3104,11 +3099,11 @@ mod tests {
 
     #[test]
     fn lowers_uninitialized_let_and_hoisted_var_without_losing_tdz_semantics() {
-        let source = source("function run() { let local; return local; }");
-        let span = whole_span(&source);
+        let let_source = source("function run() { let local; return local; }");
+        let span = whole_span(&let_source);
         let local = binding("binding_local", "local", BindingKind::Let);
         let syntax = function_syntax(
-            &source,
+            &let_source,
             vec![
                 SyntaxStatement::Variable {
                     kind: SyntaxVariableKind::Let,
@@ -3127,9 +3122,9 @@ mod tests {
             ],
             Vec::new(),
         );
-        let module = semantic_module(&source, &syntax, vec![local.clone()], Vec::new());
+        let module = semantic_module(&let_source, &syntax, vec![local.clone()], Vec::new());
         let documents = lower(
-            &source,
+            &let_source,
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
