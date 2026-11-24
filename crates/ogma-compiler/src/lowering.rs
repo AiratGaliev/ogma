@@ -2427,16 +2427,31 @@ fn expression_needs_effects(
         SyntaxExpression::Unary {
             operator, argument, ..
         } => {
-            (matches!(
-                operator,
-                SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
-            ) && !matches!(
-                argument.as_ref(),
-                SyntaxExpression::Literal {
-                    value: SyntaxLiteral::Number(_),
-                    ..
-                }
-            )) || expression_needs_effects(argument, effectful_bindings)
+            if *operator == SyntaxUnaryOperator::Typeof
+                && matches!(
+                    argument.as_ref(),
+                    SyntaxExpression::Identifier {
+                        name,
+                        binding: None,
+                        ..
+                    } if name != "undefined"
+                )
+            {
+                // typeof on an unresolvable reference is a pure operation and
+                // produces the string "undefined" without a global lookup.
+                false
+            } else {
+                (matches!(
+                    operator,
+                    SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
+                ) && !matches!(
+                    argument.as_ref(),
+                    SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Number(_),
+                        ..
+                    }
+                )) || expression_needs_effects(argument, effectful_bindings)
+            }
         }
         SyntaxExpression::Call { .. }
         | SyntaxExpression::Member { .. }
@@ -3467,6 +3482,7 @@ mod tests {
                 .and_then(JsonValue::as_str),
             Some("undefined")
         );
+        assert!(documents[0].function.effect_entry.is_none());
         assert!(verify_document(&documents[0]).is_empty());
     }
 
