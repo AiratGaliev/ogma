@@ -2339,18 +2339,45 @@ mod tests {
         assert!(store_scopes.contains(&"scope_2"));
         assert!(store_scopes.contains(&"scope_3"));
 
+        let branch = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                Terminator::Branch {
+                    then_edge,
+                    else_edge,
+                    ..
+                } => Some((then_edge, else_edge)),
+                _ => None,
+            })
+            .expect("if branch exists");
+        assert_eq!(branch.0.arguments.len(), 1);
+        assert_eq!(branch.1.arguments.len(), 1);
+
+        let merge_targets: Vec<_> = function
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator {
+                Terminator::Jump { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(merge_targets.len(), 2);
+        assert_eq!(merge_targets[0], merge_targets[1]);
         let merge = function
             .blocks
             .iter()
-            .find(|block| block.id.starts_with("bb") && !block.instructions.is_empty() == false)
-            .expect("merge or exit block exists");
-        assert!(merge.parameters.iter().any(|parameter| matches!(parameter, BlockParameter::Effect(_))));
+            .find(|block| block.id == merge_targets[0])
+            .expect("branch merge block exists");
+        assert!(merge
+            .parameters
+            .iter()
+            .any(|parameter| matches!(parameter, BlockParameter::Effect(_))));
     }
 
     #[test]
     fn evaluates_computed_assignment_reference_before_right_hand_side() {
         let source = source("function run(obj, key, rhs) { obj[key] = rhs; }");
-        let whole = whole_span(&source);
         let assignment_start = source.text().rfind("obj[key]").expect("assignment target exists");
         let obj_span = source.span(assignment_start, assignment_start + 3);
         let key_span = source.span(assignment_start + 4, assignment_start + 7);
