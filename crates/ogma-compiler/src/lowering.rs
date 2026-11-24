@@ -1352,11 +1352,10 @@ impl<'a> FunctionCompiler<'a> {
                 span,
                 ..
             } = statement
+                && self.hoisted_functions.insert(binding.clone())
             {
-                if self.hoisted_functions.insert(binding.clone()) {
-                    let closure = self.emit_closure(function, *span)?;
-                    self.emit_env_store(binding, closure, Some(*span), None)?;
-                }
+                let closure = self.emit_closure(function, *span)?;
+                self.emit_env_store(binding, closure, Some(*span), None)?;
             }
         }
         Ok(())
