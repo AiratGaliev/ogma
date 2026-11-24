@@ -2072,6 +2072,257 @@ impl<'a> FunctionCompiler<'a> {
     }
 }
 
+fn dynamic_effects() -> Effects {
+    Effects {
+        may_allocate: true,
+        may_gc: true,
+        may_throw: true,
+        may_suspend: false,
+        may_call_host: true,
+        may_reenter: true,
+        may_mutate_shape: true,
+    }
+}
+
+fn literal_type(literal: &SyntaxLiteral) -> ValueType {
+    match literal {
+        SyntaxLiteral::Null => ValueType {
+            semantic: SemanticType::Null,
+            representation: Representation::Boxed,
+        },
+        SyntaxLiteral::Boolean(_) => ValueType::BOOLEAN,
+        SyntaxLiteral::Number(_) => ValueType::NUMBER,
+        SyntaxLiteral::String(_) => ValueType::STRING,
+        SyntaxLiteral::Bigint(_) => ValueType {
+            semantic: SemanticType::Bigint,
+            representation: Representation::BigintRef,
+        },
+    }
+}
+
+fn number_literal_json(value: f64) -> JsonValue {
+    if value.is_nan() {
+        JsonValue::String("NaN".to_owned())
+    } else if value == f64::INFINITY {
+        JsonValue::String("Infinity".to_owned())
+    } else if value == f64::NEG_INFINITY {
+        JsonValue::String("-Infinity".to_owned())
+    } else if value == 0.0 && value.is_sign_negative() {
+        JsonValue::String("-0".to_owned())
+    } else {
+        json!(value)
+    }
+}
+
+fn collect_const_initializers(statements: &[SyntaxStatement]) -> HashMap<String, SyntaxExpression> {
+    fn visit(statements: &[SyntaxStatement], output: &mut HashMap<String, SyntaxExpression>) {
+        for statement in statements {
+            match statement {
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Const,
+                    declarations,
+                    ..
+                } => {
+                    for declaration in declarations {
+                        if let (Some(binding), Some(initializer)) =
+                            (&declaration.binding, &declaration.initializer)
+                        {
+                            output.insert(binding.clone(), initializer.clone());
+                        }
+                    }
+                }
+                SyntaxStatement::Block { body, .. } => visit(body, output),
+                SyntaxStatement::If {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
+                    visit(std::slice::from_ref(consequent), output);
+                    if let Some(alternate) = alternate {
+                        visit(std::slice::from_ref(alternate), output);
+                    }
+                }
+                SyntaxStatement::While { body, .. } | SyntaxStatement::For { body, .. } => {
+                    visit(std::slice::from_ref(body), output);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut output = HashMap::new();
+    visit(statements, &mut output);
+    output
+}
+
+fn statements_need_effects(
+    statements: &[SyntaxStatement],
+    effectful_bindings: &HashSet<String>,
+) -> bool {
+    statements
+        .iter()
+        .any(|statement| statement_needs_effects(statement, effectful_bindings))
+}
+
+fn statement_needs_effects(
+    statement: &SyntaxStatement,
+    effectful_bindings: &HashSet<String>,
+) -> bool {
+    match statement {
+        SyntaxStatement::Block { body, .. } => statements_need_effects(body, effectful_bindings),
+        SyntaxStatement::Variable {
+            kind, declarations, ..
+        } => {
+            *kind != SyntaxVariableKind::Const
+                || declarations.iter().any(|item| {
+                    item.initializer.as_ref().is_some_and(|expression| {
+                        expression_needs_effects(expression, effectful_bindings)
+                    })
+                })
+        }
+        SyntaxStatement::FunctionDeclaration { .. } => true,
+        SyntaxStatement::Expression { expression, .. } => {
+            expression_needs_effects(expression, effectful_bindings)
+        }
+        SyntaxStatement::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
+            expression_needs_effects(test, effectful_bindings)
+                || statement_needs_effects(consequent, effectful_bindings)
+                || alternate
+                    .as_ref()
+                    .is_some_and(|item| statement_needs_effects(item, effectful_bindings))
+        }
+        SyntaxStatement::While { test, body, .. } => {
+            expression_needs_effects(test, effectful_bindings)
+                || statement_needs_effects(body, effectful_bindings)
+        }
+        SyntaxStatement::For {
+            initializer,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            initializer
+                .as_ref()
+                .is_some_and(|initializer| match initializer {
+                    SyntaxForInitializer::Variable {
+                        kind, declarations, ..
+                    } => {
+                        *kind != SyntaxVariableKind::Const
+                            || declarations.iter().any(|item| {
+                                item.initializer.as_ref().is_some_and(|expression| {
+                                    expression_needs_effects(expression, effectful_bindings)
+                                })
+                            })
+                    }
+                    SyntaxForInitializer::Expression(expression) => {
+                        expression_needs_effects(expression, effectful_bindings)
+                    }
+                })
+                || test.as_ref().is_some_and(|expression| {
+                    expression_needs_effects(expression, effectful_bindings)
+                })
+                || update.as_ref().is_some_and(|expression| {
+                    expression_needs_effects(expression, effectful_bindings)
+                })
+                || statement_needs_effects(body, effectful_bindings)
+        }
+        SyntaxStatement::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|expression| expression_needs_effects(expression, effectful_bindings)),
+        SyntaxStatement::Throw { .. } => true,
+        SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => false,
+    }
+}
+
+fn expression_needs_effects(
+    expression: &SyntaxExpression,
+    effectful_bindings: &HashSet<String>,
+) -> bool {
+    match expression {
+        SyntaxExpression::Literal { .. } => false,
+        SyntaxExpression::Identifier {
+            binding: None,
+            name,
+            ..
+        } => name != "undefined",
+        SyntaxExpression::Identifier {
+            binding: Some(binding),
+            ..
+        } => effectful_bindings.contains(binding),
+        SyntaxExpression::Binary {
+            operator,
+            left,
+            right,
+            ..
+        } => {
+            !matches!(
+                operator,
+                SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual
+            ) || expression_needs_effects(left, effectful_bindings)
+                || expression_needs_effects(right, effectful_bindings)
+        }
+        SyntaxExpression::Unary {
+            operator, argument, ..
+        } => {
+            (matches!(
+                operator,
+                SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
+            ) && !matches!(
+                argument.as_ref(),
+                SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(_),
+                    ..
+                }
+            )) || expression_needs_effects(argument, effectful_bindings)
+        }
+        SyntaxExpression::Call { .. }
+        | SyntaxExpression::Member { .. }
+        | SyntaxExpression::Assign { .. }
+        | SyntaxExpression::Update { .. }
+        | SyntaxExpression::Function { .. } => true,
+        SyntaxExpression::Parenthesized { expression, .. } => {
+            expression_needs_effects(expression, effectful_bindings)
+        }
+        SyntaxExpression::Unsupported { .. } => false,
+    }
+}
+
+fn sequence_can_fallthrough(statements: &[SyntaxStatement]) -> bool {
+    let mut reachable = true;
+    for statement in statements {
+        if !reachable {
+            break;
+        }
+        reachable = statement_can_fallthrough(statement);
+    }
+    reachable
+}
+
+fn statement_can_fallthrough(statement: &SyntaxStatement) -> bool {
+    match statement {
+        SyntaxStatement::Return { .. } | SyntaxStatement::Throw { .. } => false,
+        SyntaxStatement::Block { body, .. } => sequence_can_fallthrough(body),
+        SyntaxStatement::If {
+            consequent,
+            alternate,
+            ..
+        } => {
+            statement_can_fallthrough(consequent)
+                || alternate
+                    .as_ref()
+                    .is_none_or(|item| statement_can_fallthrough(item))
+        }
+        SyntaxStatement::While { .. } | SyntaxStatement::For { .. } => true,
+        _ => true,
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2483,255 +2734,5 @@ mod tests {
         )
         .expect_err("unsupported statement must fail closed");
         assert_eq!(unsupported[0].code, "lowering.unsupported_statement");
-    }
-}
-
-fn dynamic_effects() -> Effects {
-    Effects {
-        may_allocate: true,
-        may_gc: true,
-        may_throw: true,
-        may_suspend: false,
-        may_call_host: true,
-        may_reenter: true,
-        may_mutate_shape: true,
-    }
-}
-
-fn literal_type(literal: &SyntaxLiteral) -> ValueType {
-    match literal {
-        SyntaxLiteral::Null => ValueType {
-            semantic: SemanticType::Null,
-            representation: Representation::Boxed,
-        },
-        SyntaxLiteral::Boolean(_) => ValueType::BOOLEAN,
-        SyntaxLiteral::Number(_) => ValueType::NUMBER,
-        SyntaxLiteral::String(_) => ValueType::STRING,
-        SyntaxLiteral::Bigint(_) => ValueType {
-            semantic: SemanticType::Bigint,
-            representation: Representation::BigintRef,
-        },
-    }
-}
-
-fn number_literal_json(value: f64) -> JsonValue {
-    if value.is_nan() {
-        JsonValue::String("NaN".to_owned())
-    } else if value == f64::INFINITY {
-        JsonValue::String("Infinity".to_owned())
-    } else if value == f64::NEG_INFINITY {
-        JsonValue::String("-Infinity".to_owned())
-    } else if value == 0.0 && value.is_sign_negative() {
-        JsonValue::String("-0".to_owned())
-    } else {
-        json!(value)
-    }
-}
-
-fn collect_const_initializers(statements: &[SyntaxStatement]) -> HashMap<String, SyntaxExpression> {
-    fn visit(statements: &[SyntaxStatement], output: &mut HashMap<String, SyntaxExpression>) {
-        for statement in statements {
-            match statement {
-                SyntaxStatement::Variable {
-                    kind: SyntaxVariableKind::Const,
-                    declarations,
-                    ..
-                } => {
-                    for declaration in declarations {
-                        if let (Some(binding), Some(initializer)) =
-                            (&declaration.binding, &declaration.initializer)
-                        {
-                            output.insert(binding.clone(), initializer.clone());
-                        }
-                    }
-                }
-                SyntaxStatement::Block { body, .. } => visit(body, output),
-                SyntaxStatement::If {
-                    consequent,
-                    alternate,
-                    ..
-                } => {
-                    visit(std::slice::from_ref(consequent), output);
-                    if let Some(alternate) = alternate {
-                        visit(std::slice::from_ref(alternate), output);
-                    }
-                }
-                SyntaxStatement::While { body, .. } | SyntaxStatement::For { body, .. } => {
-                    visit(std::slice::from_ref(body), output);
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut output = HashMap::new();
-    visit(statements, &mut output);
-    output
-}
-
-fn statements_need_effects(
-    statements: &[SyntaxStatement],
-    effectful_bindings: &HashSet<String>,
-) -> bool {
-    statements
-        .iter()
-        .any(|statement| statement_needs_effects(statement, effectful_bindings))
-}
-
-fn statement_needs_effects(
-    statement: &SyntaxStatement,
-    effectful_bindings: &HashSet<String>,
-) -> bool {
-    match statement {
-        SyntaxStatement::Block { body, .. } => statements_need_effects(body, effectful_bindings),
-        SyntaxStatement::Variable {
-            kind, declarations, ..
-        } => {
-            *kind != SyntaxVariableKind::Const
-                || declarations.iter().any(|item| {
-                    item.initializer.as_ref().is_some_and(|expression| {
-                        expression_needs_effects(expression, effectful_bindings)
-                    })
-                })
-        }
-        SyntaxStatement::FunctionDeclaration { .. } => true,
-        SyntaxStatement::Expression { expression, .. } => {
-            expression_needs_effects(expression, effectful_bindings)
-        }
-        SyntaxStatement::If {
-            test,
-            consequent,
-            alternate,
-            ..
-        } => {
-            expression_needs_effects(test, effectful_bindings)
-                || statement_needs_effects(consequent, effectful_bindings)
-                || alternate
-                    .as_ref()
-                    .is_some_and(|item| statement_needs_effects(item, effectful_bindings))
-        }
-        SyntaxStatement::While { test, body, .. } => {
-            expression_needs_effects(test, effectful_bindings)
-                || statement_needs_effects(body, effectful_bindings)
-        }
-        SyntaxStatement::For {
-            initializer,
-            test,
-            update,
-            body,
-            ..
-        } => {
-            initializer
-                .as_ref()
-                .is_some_and(|initializer| match initializer {
-                    SyntaxForInitializer::Variable {
-                        kind, declarations, ..
-                    } => {
-                        *kind != SyntaxVariableKind::Const
-                            || declarations.iter().any(|item| {
-                                item.initializer.as_ref().is_some_and(|expression| {
-                                    expression_needs_effects(expression, effectful_bindings)
-                                })
-                            })
-                    }
-                    SyntaxForInitializer::Expression(expression) => {
-                        expression_needs_effects(expression, effectful_bindings)
-                    }
-                })
-                || test.as_ref().is_some_and(|expression| {
-                    expression_needs_effects(expression, effectful_bindings)
-                })
-                || update.as_ref().is_some_and(|expression| {
-                    expression_needs_effects(expression, effectful_bindings)
-                })
-                || statement_needs_effects(body, effectful_bindings)
-        }
-        SyntaxStatement::Return { value, .. } => value
-            .as_ref()
-            .is_some_and(|expression| expression_needs_effects(expression, effectful_bindings)),
-        SyntaxStatement::Throw { .. } => true,
-        SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => false,
-    }
-}
-
-fn expression_needs_effects(
-    expression: &SyntaxExpression,
-    effectful_bindings: &HashSet<String>,
-) -> bool {
-    match expression {
-        SyntaxExpression::Literal { .. } => false,
-        SyntaxExpression::Identifier {
-            binding: None,
-            name,
-            ..
-        } => name != "undefined",
-        SyntaxExpression::Identifier {
-            binding: Some(binding),
-            ..
-        } => effectful_bindings.contains(binding),
-        SyntaxExpression::Binary {
-            operator,
-            left,
-            right,
-            ..
-        } => {
-            !matches!(
-                operator,
-                SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual
-            ) || expression_needs_effects(left, effectful_bindings)
-                || expression_needs_effects(right, effectful_bindings)
-        }
-        SyntaxExpression::Unary {
-            operator, argument, ..
-        } => {
-            (matches!(
-                operator,
-                SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
-            ) && !matches!(
-                argument.as_ref(),
-                SyntaxExpression::Literal {
-                    value: SyntaxLiteral::Number(_),
-                    ..
-                }
-            )) || expression_needs_effects(argument, effectful_bindings)
-        }
-        SyntaxExpression::Call { .. }
-        | SyntaxExpression::Member { .. }
-        | SyntaxExpression::Assign { .. }
-        | SyntaxExpression::Update { .. }
-        | SyntaxExpression::Function { .. } => true,
-        SyntaxExpression::Parenthesized { expression, .. } => {
-            expression_needs_effects(expression, effectful_bindings)
-        }
-        SyntaxExpression::Unsupported { .. } => false,
-    }
-}
-
-fn sequence_can_fallthrough(statements: &[SyntaxStatement]) -> bool {
-    let mut reachable = true;
-    for statement in statements {
-        if !reachable {
-            break;
-        }
-        reachable = statement_can_fallthrough(statement);
-    }
-    reachable
-}
-
-fn statement_can_fallthrough(statement: &SyntaxStatement) -> bool {
-    match statement {
-        SyntaxStatement::Return { .. } | SyntaxStatement::Throw { .. } => false,
-        SyntaxStatement::Block { body, .. } => sequence_can_fallthrough(body),
-        SyntaxStatement::If {
-            consequent,
-            alternate,
-            ..
-        } => {
-            statement_can_fallthrough(consequent)
-                || alternate
-                    .as_ref()
-                    .is_none_or(|item| statement_can_fallthrough(item))
-        }
-        SyntaxStatement::While { .. } | SyntaxStatement::For { .. } => true,
-        _ => true,
     }
 }
