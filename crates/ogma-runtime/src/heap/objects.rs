@@ -1201,6 +1201,23 @@ impl Heap {
         result
     }
 
+    /// Returns the backend-owned function-table identity stored in a closure.
+    ///
+    /// The interpreter uses this identity to select canonical function metadata
+    /// before asking the Runtime to prepare an activation.
+    pub fn function_id(&self, function: Value) -> Result<FunctionId, HeapError> {
+        let index = self.function_index(function)?;
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
+            CellKind::Function(data) => data.id.ok_or(HeapError::NotCallable),
+            _ => Err(HeapError::NotCallable),
+        }
+    }
+
     /// Prepares a call, binds arguments and roots the complete activation.
     ///
     /// Execution itself belongs to the interpreter/native dispatcher. For
@@ -2426,6 +2443,33 @@ mod tests {
             Some(99.0)
         );
         heap.leave_function_call(outer_call).unwrap();
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn closure_exposes_function_table_identity_and_unbound_function_is_not_callable() {
+        let mut heap = heap();
+        let outer = heap.create_environment(None, &[]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root_environment(roots, outer).unwrap();
+
+        let unbound = heap.allocate_function().unwrap();
+        heap.scope_root(roots, unbound).unwrap();
+        assert!(matches!(heap.function_id(unbound), Err(HeapError::NotCallable)));
+
+        let definition = FunctionDefinition {
+            id: FunctionId(33),
+            parameters: Vec::new(),
+            locals: Vec::new(),
+            captures: Vec::new(),
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let closure = heap
+            .create_closure(&definition, outer, Value::undefined())
+            .unwrap();
+        heap.scope_root(roots, closure).unwrap();
+        assert_eq!(heap.function_id(closure).unwrap(), definition.id);
         heap.close_scope(roots).unwrap();
     }
 
