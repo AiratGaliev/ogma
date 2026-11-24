@@ -78,7 +78,7 @@ mod tests {
             "compile-test",
             "memory:///compile-test.js",
             None,
-            "function run(seed) { const value = seed + 1; return () => value; }",
+            "let counter = 0; function increment() { counter = counter + 1; return counter; } function run(seed) { const value = seed + 1; return () => value; }",
         )
         .expect("source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
@@ -88,15 +88,24 @@ mod tests {
         assert_eq!(compiled.functions.len(), parsed.syntax.functions.len());
         assert_eq!(compiled.semantic.source_id, source.id().as_str());
         assert_eq!(compiled.semantic.source_sha256, source.content_sha256());
+        let increment = compiled
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.name == "increment")
+            .expect("top-level function semantic descriptor exists");
         assert_eq!(
-            compiled
-                .semantic
-                .functions
-                .iter()
-                .find(|function| function.is_arrow)
-                .map(|function| function.captures.len()),
-            Some(1)
+            increment.parent_function_scope.as_deref(),
+            Some(compiled.semantic.root_scope.as_str())
         );
+        assert_eq!(increment.captures.len(), 1);
+        let arrow = compiled
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .expect("nested arrow semantic descriptor exists");
+        assert_eq!(arrow.captures.len(), 1);
         assert!(
             compiled
                 .functions
@@ -104,29 +113,19 @@ mod tests {
                 .all(|document| verify_document(document).is_empty())
         );
 
-        let closure = compiled
+        let capture_modes: Vec<_> = compiled
             .functions
             .iter()
             .flat_map(|document| document.function.blocks.iter())
             .flat_map(|block| block.instructions.iter())
-            .find(|instruction| {
-                instruction.op == "closure.create"
-                    && instruction
-                        .attributes
-                        .get("captures")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|captures| !captures.is_empty())
-            })
-            .expect("real arrow closure is lowered");
-        assert_eq!(
-            closure
-                .attributes
-                .get("captures")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|captures| captures.first())
-                .and_then(|capture| capture.get("mode"))
-                .and_then(serde_json::Value::as_str),
-            Some("value")
-        );
+            .filter(|instruction| instruction.op == "closure.create")
+            .filter_map(|instruction| instruction.attributes.get("captures"))
+            .filter_map(serde_json::Value::as_array)
+            .flatten()
+            .filter_map(|capture| capture.get("mode"))
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert!(capture_modes.contains(&"cell"));
+        assert!(capture_modes.contains(&"value"));
     }
 }
