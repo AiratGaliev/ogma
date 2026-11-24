@@ -402,7 +402,7 @@ mod tests {
         assert!(verify_document(run).is_empty());
         assert!(run.function.blocks.iter().any(|block| {
             block.instructions.iter().any(|instruction| {
-                instruction.op == "env.store" && instruction.attributes.get("binding").is_some()
+                instruction.op == "env.store" && instruction.attributes.contains_key("binding")
             })
         }));
     }
