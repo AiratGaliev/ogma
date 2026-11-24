@@ -1532,23 +1532,26 @@ mod tests {
 
     #[test]
     fn invalid_or_stale_roots_are_not_published() {
-        let mut heap = heap(8192, 2048);
-        let mut other = heap(8192, 2048);
-        let foreign = other.allocate_object().unwrap();
-        let frame = heap.enter_frame().unwrap();
-        assert_eq!(heap.frame_root(frame, foreign), Err(HeapError::WrongHeap));
-        assert_eq!(heap.root_snapshot().interpreter_frame_roots, 0);
-        heap.leave_frame(frame).unwrap();
-
-        let stale = heap.allocate_object().unwrap();
-        heap.collect().unwrap();
-        let scope = heap.open_scope().unwrap();
+        let mut runtime_heap = heap(8192, 2048);
+        let mut other_heap = heap(8192, 2048);
+        let foreign = other_heap.allocate_object().unwrap();
+        let frame = runtime_heap.enter_frame().unwrap();
         assert_eq!(
-            heap.scope_root(scope, stale),
+            runtime_heap.frame_root(frame, foreign),
+            Err(HeapError::WrongHeap)
+        );
+        assert_eq!(runtime_heap.root_snapshot().interpreter_frame_roots, 0);
+        runtime_heap.leave_frame(frame).unwrap();
+
+        let stale = runtime_heap.allocate_object().unwrap();
+        runtime_heap.collect().unwrap();
+        let scope = runtime_heap.open_scope().unwrap();
+        assert_eq!(
+            runtime_heap.scope_root(scope, stale),
             Err(HeapError::StaleReference)
         );
-        assert_eq!(heap.root_snapshot().temporary_scope_roots, 0);
-        heap.close_scope(scope).unwrap();
+        assert_eq!(runtime_heap.root_snapshot().temporary_scope_roots, 0);
+        runtime_heap.close_scope(scope).unwrap();
     }
 
     #[test]
@@ -1566,21 +1569,23 @@ mod tests {
 
     #[test]
     fn oversized_allocations_fail_before_publishing_a_cell() {
-        let mut heap = heap(4096, 128);
-        let error = heap.allocate_string_utf16(&[0x0061; 100]).unwrap_err();
+        let mut runtime_heap = heap(4096, 128);
+        let error = runtime_heap
+            .allocate_string_utf16(&[0x0061; 100])
+            .unwrap_err();
         assert!(matches!(error, HeapError::AllocationTooLarge { .. }));
-        let stats = heap.stats();
+        let stats = runtime_heap.stats();
         assert_eq!(stats.live_objects, 0);
         assert_eq!(stats.allocations, 0);
         assert_eq!(stats.used_bytes, 0);
 
-        let mut tiny = heap(4096, 1);
+        let mut tiny_heap = heap(4096, 1);
         assert!(matches!(
-            tiny.allocate_object(),
+            tiny_heap.allocate_object(),
             Err(HeapError::AllocationTooLarge { .. })
         ));
-        assert_eq!(tiny.stats().used_bytes, 0);
-        assert_eq!(tiny.stats().live_objects, 0);
+        assert_eq!(tiny_heap.stats().used_bytes, 0);
+        assert_eq!(tiny_heap.stats().live_objects, 0);
     }
 
     #[test]
