@@ -355,4 +355,30 @@ mod tests {
         assert!(verify_document(invoke).is_empty());
     }
 
+    #[test]
+    fn rejects_reentered_block_let_without_a_fresh_lexical_environment() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "block-tdz-reentry-test",
+            "memory:///block-tdz-reentry-test.js",
+            None,
+            "function run() { let index = 0; while (index < 2) { if (index === 1) { value; } let value = 1; index = index + 1; } }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("lexical reference before declaration parses");
+
+        let failure = compile(&parsed)
+            .expect_err("block-scoped let must not be flattened into a persistent function slot");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach the lexical environment lowering diagnostic");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lowering.block_environment_lifetime")
+            .expect("block environment lifetime diagnostic");
+        assert!(diagnostic.span.is_some());
+        assert!(diagnostic.message.contains("fresh lexical environment"));
+    }
+
 }

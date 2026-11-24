@@ -319,6 +319,31 @@ fn member_call_reference(
     }
 }
 
+fn collect_for_loop_scopes(statements: &[SyntaxStatement], output: &mut HashSet<String>) {
+    for statement in statements {
+        match statement {
+            SyntaxStatement::Block { body, .. } => collect_for_loop_scopes(body, output),
+            SyntaxStatement::If { consequent, alternate, .. } => {
+                collect_for_loop_scopes(std::slice::from_ref(consequent), output);
+                if let Some(alternate) = alternate {
+                    collect_for_loop_scopes(std::slice::from_ref(alternate), output);
+                }
+            }
+            SyntaxStatement::While { body, .. } => {
+                collect_for_loop_scopes(std::slice::from_ref(body), output);
+            }
+            SyntaxStatement::For { scope, body, .. } => {
+                if let Some(scope) = scope {
+                    output.insert(scope.clone());
+                }
+                collect_for_loop_scopes(std::slice::from_ref(body), output);
+            }
+            _ => {}
+        }
+    }
+}
+
+
 struct FunctionCompiler<'a> {
     source_file: &'a CoreSourceFile,
     semantic_module: &'a SemanticModule,
@@ -370,6 +395,44 @@ impl<'a> FunctionCompiler<'a> {
             .cloned()
             .map(|capture| (capture.binding.clone(), capture))
             .collect();
+
+        // Core IR v1 exposes a function environment but has no operation for
+        // entering/resetting a nested lexical environment. Flattening mutable
+        // block bindings into it would retain stale TDZ state when a block is
+        // re-entered (for example, from a loop). Only a for-header binding has
+        // a lifetime that this subset can safely represent without closures.
+        let mut for_scopes = HashSet::new();
+        collect_for_loop_scopes(&syntax.body, &mut for_scopes);
+        for binding in &semantic.environment.bindings {
+            if !matches!(binding.kind, BindingKind::Let | BindingKind::Catch) {
+                continue;
+            }
+            let Some(source_binding) = semantic_module
+                .bindings
+                .iter()
+                .find(|item| item.ir.id == binding.id)
+            else {
+                return Err(diag(
+                    syntax,
+                    "lowering.binding_source_missing",
+                    Some(syntax.span),
+                    format!("binding {:?} has no source lexical scope", binding.id),
+                ));
+            };
+            if source_binding.lexical_scope != semantic.environment.id
+                && !for_scopes.contains(&source_binding.lexical_scope)
+            {
+                return Err(diag(
+                    syntax,
+                    "lowering.block_environment_lifetime",
+                    Some(source_binding.declaration),
+                    format!(
+                        "mutable block-scoped binding {:?} requires a fresh lexical environment on block entry; Core IR v1 lowering only represents function environments and for-header bindings",
+                        binding.name
+                    ),
+                ));
+            }
+        }
 
         for capture in &semantic.captures {
             let Some(binding) = semantic_module
