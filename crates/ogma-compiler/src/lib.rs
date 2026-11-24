@@ -10,7 +10,7 @@
 pub mod lowering;
 pub mod semantic;
 
-use ogma_core_ir::{FunctionDocument, CONTRACT_ID};
+use ogma_core_ir::{CONTRACT_ID, FunctionDocument};
 use ogma_frontend::{ParseDiagnostic, ParsedProgram};
 
 /// Canonical Core IR contract consumed by the compiler pipeline.
@@ -47,8 +47,8 @@ pub enum CompileFailure {
 /// compiler-owned semantic model, then emits and verifies canonical Core IR v1
 /// documents. It does not execute code or emit bytecode.
 pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFailure> {
-    let semantic = semantic::analyze(parsed.source, &parsed.semantic)
-        .map_err(CompileFailure::Semantic)?;
+    let semantic =
+        semantic::analyze(parsed.source, &parsed.semantic).map_err(CompileFailure::Semantic)?;
     let functions = lowering::lower(parsed.source, &semantic, &parsed.syntax)
         .map_err(CompileFailure::Lowering)?;
     Ok(CompiledModule {
@@ -62,7 +62,7 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
 mod tests {
     use super::*;
     use ogma_core_ir::verify_document;
-    use ogma_frontend::{parse, ParseRequestOptions, SourceFile};
+    use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
     use oxc_allocator::Allocator;
 
     #[test]
@@ -89,19 +89,39 @@ mod tests {
         assert_eq!(compiled.semantic.source_id, source.id().as_str());
         assert_eq!(compiled.semantic.source_sha256, source.content_sha256());
         assert_eq!(
-            compiled.semantic.functions.iter().find(|function| function.is_arrow)
+            compiled
+                .semantic
+                .functions
+                .iter()
+                .find(|function| function.is_arrow)
                 .map(|function| function.captures.len()),
             Some(1)
         );
-        assert!(compiled.functions.iter().all(|document| verify_document(document).is_empty()));
+        assert!(
+            compiled
+                .functions
+                .iter()
+                .all(|document| verify_document(document).is_empty())
+        );
 
-        let closure = compiled.functions.iter()
+        let closure = compiled
+            .functions
+            .iter()
             .flat_map(|document| document.function.blocks.iter())
             .flat_map(|block| block.instructions.iter())
-            .find(|instruction| instruction.op == "closure.create")
+            .find(|instruction| {
+                instruction.op == "closure.create"
+                    && instruction
+                        .attributes
+                        .get("captures")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|captures| !captures.is_empty())
+            })
             .expect("real arrow closure is lowered");
         assert_eq!(
-            closure.attributes.get("captures")
+            closure
+                .attributes
+                .get("captures")
                 .and_then(serde_json::Value::as_array)
                 .and_then(|captures| captures.first())
                 .and_then(|capture| capture.get("mode"))
