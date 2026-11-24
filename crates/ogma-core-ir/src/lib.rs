@@ -1527,15 +1527,13 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                         let binding_type = local
                             .map(|binding| (binding.semantic_type, binding.representation))
                             .or_else(|| {
-                                capture.map(|capture| {
-                                    (capture.semantic_type, capture.representation)
-                                })
+                                capture
+                                    .map(|capture| (capture.semantic_type, capture.representation))
                             });
                         if binding_type.is_some_and(|binding_type| {
                             binding_type != (SemanticType::Dynamic, Representation::Boxed)
                                 && operand_type.is_some_and(|operand_type| {
-                                    operand_type
-                                        != (Some(binding_type.0), Some(binding_type.1))
+                                    operand_type != (Some(binding_type.0), Some(binding_type.1))
                                 })
                         }) {
                             errors.push(Diagnostic::new(
