@@ -1199,22 +1199,49 @@ fn reserve_vec<T>(
         return Ok(());
     }
     let current_capacity = vector.capacity();
-    let doubled = current_capacity.checked_mul(2).unwrap_or(required);
-    let target_capacity = required.max(if current_capacity == 0 { 1 } else { doubled });
-    let backing_bytes = target_capacity
-        .checked_mul(std::mem::size_of::<T>())
+    let element_size = std::mem::size_of::<T>();
+    let minimum_backing_bytes = required
+        .checked_mul(element_size)
         .ok_or(HeapError::SizeOverflow)?;
-    if backing_bytes > budget.max_allocation_bytes {
+    if minimum_backing_bytes > budget.max_allocation_bytes {
         return Err(HeapError::AllocationTooLarge {
-            requested_bytes: backing_bytes,
+            requested_bytes: minimum_backing_bytes,
             maximum_bytes: budget.max_allocation_bytes,
         });
     }
+
+    let minimum_growth = required
+        .checked_sub(current_capacity)
+        .ok_or(HeapError::SizeOverflow)?;
+    let minimum_growth_bytes = minimum_growth
+        .checked_mul(element_size)
+        .ok_or(HeapError::SizeOverflow)?;
+    let available_bytes = budget.quota_bytes.saturating_sub(budget.used_bytes);
+    if minimum_growth_bytes > available_bytes {
+        return Err(HeapError::QuotaExceeded {
+            requested_bytes: minimum_growth_bytes,
+            available_bytes,
+        });
+    }
+
+    let doubled = current_capacity.checked_mul(2).unwrap_or(required);
+    let preferred_capacity = required.max(if current_capacity == 0 { 1 } else { doubled });
+    let preferred_growth = preferred_capacity - current_capacity;
+    let preferred_backing_bytes = preferred_capacity.checked_mul(element_size);
+    let preferred_growth_bytes = preferred_growth.checked_mul(element_size);
+    let target_capacity = match (preferred_backing_bytes, preferred_growth_bytes) {
+        (Some(backing_bytes), Some(growth_bytes))
+            if backing_bytes <= budget.max_allocation_bytes && growth_bytes <= available_bytes =>
+        {
+            preferred_capacity
+        }
+        _ => required,
+    };
     let growth = target_capacity
         .checked_sub(current_capacity)
         .ok_or(HeapError::SizeOverflow)?;
     let requested_bytes = growth
-        .checked_mul(std::mem::size_of::<T>())
+        .checked_mul(element_size)
         .ok_or(HeapError::SizeOverflow)?;
     budget.charge(requested_bytes)?;
     let reserve_count = target_capacity
@@ -1552,6 +1579,22 @@ mod tests {
         );
         assert_eq!(runtime_heap.root_snapshot().temporary_scope_roots, 0);
         runtime_heap.close_scope(scope).unwrap();
+    }
+
+    #[test]
+    fn vector_growth_uses_minimum_capacity_when_quota_or_single_limit_is_tight() {
+        let slot_bytes = std::mem::size_of::<HeapSlot>();
+        let limit = slot_bytes * 3;
+        let mut runtime_heap = heap(limit, limit);
+
+        let _first = runtime_heap.allocate_object().unwrap();
+        let _second = runtime_heap.allocate_object().unwrap();
+        let _third = runtime_heap.allocate_object().unwrap();
+
+        assert_eq!(runtime_heap.slots.capacity(), 3);
+        assert_eq!(runtime_heap.stats().used_bytes, limit);
+        assert_eq!(runtime_heap.stats().live_objects, 3);
+        assert_eq!(runtime_heap.stats().collections, 0);
     }
 
     #[test]
