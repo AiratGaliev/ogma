@@ -3387,13 +3387,20 @@ mod tests {
         let documents = lower(
             &source,
             &module,
-            &ResolvedSyntaxProgram { functions: vec![syntax] },
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
         )
         .expect("block-scoped declaration lowers");
-        let store = documents[0].function.blocks[0].instructions.iter()
+        let store = documents[0].function.blocks[0]
+            .instructions
+            .iter()
             .find(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(inner.id.as_str())
             })
             .expect("block binding initializer store exists");
@@ -3628,7 +3635,10 @@ mod tests {
             .iter()
             .find(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(index.id.as_str())
             })
             .expect("for-loop binding initialized in its lexical scope");
