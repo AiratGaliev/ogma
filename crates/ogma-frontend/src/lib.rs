@@ -1122,7 +1122,7 @@ pub struct ResolvedFunction {
     pub is_async: bool,
     /// Whether this function is a generator.
     pub is_generator: bool,
-    /// Whether all parameters are simple identifiers (no destructuring/rest).
+    /// Whether all parameters are simple identifiers (no defaults, destructuring or rest).
     pub simple_parameters: bool,
 }
 
@@ -1184,6 +1184,9 @@ impl<'a> Visit<'a> for SemanticCollector {
             let mut parameters = Vec::with_capacity(node.params.items.len());
             let mut simple_parameters = node.params.rest.is_none();
             for parameter in &node.params.items {
+                if parameter.initializer.is_some() {
+                    simple_parameters = false;
+                }
                 match &parameter.pattern {
                     ast::BindingPattern::BindingIdentifier(identifier) => {
                         if let Some(symbol) = identifier.symbol_id.get() {
@@ -1220,6 +1223,9 @@ impl<'a> Visit<'a> for SemanticCollector {
             let mut parameters = Vec::with_capacity(node.params.items.len());
             let mut simple_parameters = node.params.rest.is_none();
             for parameter in &node.params.items {
+                if parameter.initializer.is_some() {
+                    simple_parameters = false;
+                }
                 match &parameter.pattern {
                     ast::BindingPattern::BindingIdentifier(identifier) => {
                         if let Some(symbol) = identifier.symbol_id.get() {
@@ -1579,6 +1585,34 @@ mod semantic_snapshot_tests {
         assert!(!inner.mutable);
     }
 
+    #[test]
+    fn marks_default_initialized_function_and_arrow_parameters_as_non_simple() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "default-parameters",
+            "memory://default-parameters.js",
+            None,
+            "function run(value = 1) { return value; } const callback = (value = 2) => value;",
+        )
+        .expect("valid source file");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("JavaScript default parameters parse");
+
+        let run = parsed
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("ordinary function descriptor");
+        let arrow = parsed
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .expect("arrow function descriptor");
+        assert!(!run.simple_parameters);
+        assert!(!arrow.simple_parameters);
+    }
     #[test]
     fn identifies_parameter_bindings_and_transitive_closure_captures() {
         let allocator = Allocator::default();

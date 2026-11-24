@@ -294,6 +294,33 @@ mod tests {
         );
     }
     #[test]
+    fn rejects_default_parameters_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "default-parameter-lowering-test",
+            "memory:///default-parameter-lowering-test.js",
+            None,
+            "function run(value = 1) { return value; } const callback = (value = 2) => value;",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("default parameters are valid JavaScript syntax");
+
+        let failure = compile(&parsed)
+            .expect_err("default parameter initializers must not be silently discarded");
+        let CompileFailure::Semantic(diagnostics) = failure else {
+            panic!("non-simple parameters must fail during semantic validation");
+        };
+        let parameter_diagnostics: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "semantic.unsupported_parameter_pattern")
+            .collect();
+        assert_eq!(parameter_diagnostics.len(), 2);
+        assert!(parameter_diagnostics.iter().all(|diagnostic| {
+            diagnostic.span.is_some() && diagnostic.message.contains("default")
+        }));
+    }
+    #[test]
     fn preserves_method_receiver_through_parenthesized_member_callees() {
         let allocator = Allocator::default();
         let source = SourceFile::new(

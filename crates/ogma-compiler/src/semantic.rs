@@ -258,7 +258,7 @@ pub fn analyze(
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.unsupported_parameter_pattern",
                 span: Some(function.span),
-                message: "destructured and rest parameters are not representable by the current M1 function parameter contract".to_owned(),
+                message: "default, destructured and rest parameters are not representable by the current M1 function parameter contract".to_owned(),
             });
             continue;
         }
