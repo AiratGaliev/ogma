@@ -2240,10 +2240,7 @@ mod tests {
         heap.scope_root_environment(outer_roots, outer).unwrap();
         let definition = FunctionDefinition {
             id: FunctionId(10),
-            parameters: vec![BindingDefinition::mutable(
-                BindingId(3),
-                Value::undefined(),
-            )],
+            parameters: vec![BindingDefinition::mutable(BindingId(3), Value::undefined())],
             locals: Vec::new(),
             captures: vec![
                 CaptureDefinition {
@@ -2293,12 +2290,8 @@ mod tests {
                 .as_number(),
             Some(1.0)
         );
-        heap.store_binding(
-            first_call.environment(),
-            BindingId(11),
-            Value::number(2.0),
-        )
-        .unwrap();
+        heap.store_binding(first_call.environment(), BindingId(11), Value::number(2.0))
+            .unwrap();
         heap.leave_function_call(first_call).unwrap();
         heap.collect().unwrap();
 
@@ -2340,14 +2333,12 @@ mod tests {
         let mut heap = heap();
         let outer_environment = heap.create_environment(None, &[]).unwrap();
         let roots = heap.open_scope().unwrap();
-        heap.scope_root_environment(roots, outer_environment).unwrap();
+        heap.scope_root_environment(roots, outer_environment)
+            .unwrap();
 
         let outer_definition = FunctionDefinition {
             id: FunctionId(20),
-            parameters: vec![BindingDefinition::mutable(
-                BindingId(1),
-                Value::undefined(),
-            )],
+            parameters: vec![BindingDefinition::mutable(BindingId(1), Value::undefined())],
             locals: Vec::new(),
             captures: Vec::new(),
             kind: FunctionKind::Ordinary,
@@ -2369,10 +2360,7 @@ mod tests {
 
         let inner_definition = FunctionDefinition {
             id: FunctionId(21),
-            parameters: vec![BindingDefinition::mutable(
-                BindingId(2),
-                Value::undefined(),
-            )],
+            parameters: vec![BindingDefinition::mutable(BindingId(2), Value::undefined())],
             locals: Vec::new(),
             captures: vec![CaptureDefinition {
                 source: BindingId(1),
@@ -2420,12 +2408,8 @@ mod tests {
                 .as_number(),
             Some(42.0)
         );
-        heap.store_binding(
-            inner_call.environment(),
-            BindingId(11),
-            Value::number(99.0),
-        )
-        .unwrap();
+        heap.store_binding(inner_call.environment(), BindingId(11), Value::number(99.0))
+            .unwrap();
         assert_eq!(
             heap.load_binding(outer_call.environment(), BindingId(1))
                 .unwrap()
