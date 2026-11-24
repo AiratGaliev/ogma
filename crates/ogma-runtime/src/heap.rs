@@ -1543,6 +1543,51 @@ mod tests {
     }
 
     #[test]
+    fn managed_cell_addresses_remain_stable_when_slot_directory_grows() {
+        let mut runtime_heap = heap(64 * 1024, 16 * 1024);
+        let anchor = runtime_heap.allocate_object().unwrap();
+        let reference = anchor.gc_ref().unwrap();
+        let anchor_index = runtime_heap.validate_ref(reference).unwrap();
+        let address_before = runtime_heap.slots[anchor_index]
+            .cell
+            .as_ref()
+            .map(|cell| std::ptr::from_ref(&**cell) as usize)
+            .unwrap();
+
+        for _ in 0..128 {
+            let _ = runtime_heap.allocate_object().unwrap();
+        }
+
+        let address_after = runtime_heap.slots[anchor_index]
+            .cell
+            .as_ref()
+            .map(|cell| std::ptr::from_ref(&**cell) as usize)
+            .unwrap();
+        assert_ne!(runtime_heap.slots.capacity(), 1);
+        assert_eq!(address_before, address_after);
+        assert_eq!(runtime_heap.validate_ref(reference), Ok(anchor_index));
+    }
+
+    #[test]
+    fn failed_cell_header_allocation_releases_preallocated_string_payload() {
+        let slot_bytes = std::mem::size_of::<HeapSlot>();
+        let cell_bytes = std::mem::size_of::<HeapCell>();
+        let payload_bytes = 8;
+        let quota = slot_bytes + cell_bytes + payload_bytes - 1;
+        let mut runtime_heap = heap(quota, quota);
+        let _unrooted_object = runtime_heap.allocate_object().unwrap();
+        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + cell_bytes);
+
+        assert!(matches!(
+            runtime_heap.allocate_string_utf16(&[0x0061; 4]),
+            Err(HeapError::QuotaExceeded { .. })
+        ));
+        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes);
+        assert_eq!(runtime_heap.stats().live_objects, 0);
+        assert_eq!(runtime_heap.stats().reclaimed_objects, 1);
+    }
+
+    #[test]
     fn mark_sweep_reclaims_unreachable_cycles_and_keeps_live_graph_non_moving() {
         let mut heap = heap(16 * 1024, 4096);
         let root = heap.allocate_object().unwrap();
