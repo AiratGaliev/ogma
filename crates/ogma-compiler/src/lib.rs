@@ -173,14 +173,47 @@ mod tests {
             .iter()
             .flat_map(|block| block.instructions.iter())
             .collect();
-        assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0].op, "js.constant");
+        assert_eq!(instructions.len(), 2);
+
+        let typeof_value = instructions
+            .iter()
+            .find(|instruction| {
+                instruction.attributes.get("value").and_then(serde_json::Value::as_str)
+                    == Some("undefined")
+            })
+            .expect("typeof unresolved identifier produces the string \"undefined\"");
+        assert_eq!(typeof_value.op, "js.constant");
         assert_eq!(
-            instructions[0]
+            typeof_value
                 .attributes
-                .get("value")
+                .get("literal")
                 .and_then(serde_json::Value::as_str),
+            Some("string")
+        );
+
+        let return_value = program
+            .function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator {
+                ogma_core_ir::Terminator::Return { value, .. } => value.as_deref(),
+                _ => None,
+            })
+            .expect("Program completion returns a value");
+        let completion = instructions
+            .iter()
+            .find(|instruction| {
+                instruction.result.as_ref().is_some_and(|result| result.id == return_value)
+            })
+            .expect("Program completion value definition");
+        assert_eq!(
+            completion.attributes.get("literal").and_then(serde_json::Value::as_str),
             Some("undefined")
+        );
+        assert!(completion.attributes.get("value").is_some_and(serde_json::Value::is_null));
+        assert_eq!(
+            program.function.return_signature.as_ref().map(|signature| signature.semantic_type),
+            Some(ogma_core_ir::SemanticType::Undefined)
         );
         assert!(program.function.effect_entry.is_none());
         assert!(verify_document(program).is_empty());
