@@ -920,7 +920,7 @@ impl Heap {
     ///
     /// Object-to-primitive conversion is owned by the object model and is
     /// rejected until that layer supplies the corresponding semantics.
-    pub fn to_number(&self, value: Value) -> Result<f64, HeapError> {
+    pub fn to_number(&mut self, value: Value) -> Result<f64, HeapError> {
         match value.repr() {
             ValueRepr::Undefined => Ok(f64::NAN),
             ValueRepr::Null => Ok(0.0),
@@ -928,7 +928,7 @@ impl Heap {
             ValueRepr::Number(number) => Ok(number),
             ValueRepr::String(reference) => {
                 let units = self.string_utf16(Value::from_string(reference))?;
-                Ok(string_to_number(units))
+                string_to_number(units, &mut self.budget)
             }
             ValueRepr::Object(_) | ValueRepr::Function(_) => Err(HeapError::UnsupportedCoercion),
         }
@@ -1274,14 +1274,30 @@ fn release_vec_capacity<T>(budget: &mut HeapBudget, vector: &Vec<T>) -> Result<(
     budget.release(bytes)
 }
 
-fn string_to_number(units: &[u16]) -> f64 {
-    let Ok(text) = String::from_utf16(units) else {
-        return f64::NAN;
+fn string_to_number(units: &[u16], budget: &mut HeapBudget) -> Result<f64, HeapError> {
+    let Some(start) = units.iter().position(|unit| !is_ecmascript_whitespace(*unit)) else {
+        return Ok(0.0);
     };
-    let text = text.trim_matches(is_ecmascript_whitespace);
-    if text.is_empty() {
-        return 0.0;
+    let end = units
+        .iter()
+        .rposition(|unit| !is_ecmascript_whitespace(*unit))
+        .ok_or(HeapError::AccountingInvariant)?;
+    let trimmed = &units[start..=end];
+    if trimmed.iter().any(|unit| *unit > 0x7F) {
+        return Ok(f64::NAN);
     }
+
+    // Numeric and Infinity tokens are ASCII. Charge the short-lived conversion
+    // buffer to the Runtime instead of allocating an untracked Rust String.
+    let mut bytes = Vec::new();
+    reserve_vec(budget, &mut bytes, trimmed.len())?;
+    bytes.extend(trimmed.iter().map(|unit| *unit as u8));
+    let result = std::str::from_utf8(&bytes).map_or(f64::NAN, parse_ascii_string_number);
+    release_vec_capacity(budget, &bytes)?;
+    Ok(result)
+}
+
+fn parse_ascii_string_number(text: &str) -> f64 {
     match text {
         "Infinity" | "+Infinity" => return f64::INFINITY,
         "-Infinity" => return f64::NEG_INFINITY,
@@ -1317,25 +1333,20 @@ fn parse_radix_number(digits: &str, radix: u32) -> Option<f64> {
     Some(result)
 }
 
-fn is_ecmascript_whitespace(character: char) -> bool {
+fn is_ecmascript_whitespace(unit: u16) -> bool {
     matches!(
-        character,
-        '\u{0009}'
-            | '\u{000A}'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{000D}'
-            | '\u{0020}'
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{2000}'
-            ..='\u{200A}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202F}'
-                | '\u{205F}'
-                | '\u{3000}'
-                | '\u{FEFF}'
+        unit,
+        0x0009..=0x000D
+            | 0x0020
+            | 0x00A0
+            | 0x1680
+            | 0x2000..=0x200A
+            | 0x2028
+            | 0x2029
+            | 0x202F
+            | 0x205F
+            | 0x3000
+            | 0xFEFF
     )
 }
 
@@ -1443,6 +1454,28 @@ mod tests {
         assert!(heap.to_number(invalid).unwrap().is_nan());
         let object = heap.allocate_object().unwrap();
         assert_eq!(heap.to_number(object), Err(HeapError::UnsupportedCoercion));
+    }
+
+    #[test]
+    fn number_conversion_scratch_is_quota_accounted_and_released() {
+        let slot_bytes = std::mem::size_of::<HeapSlot>();
+        let mut runtime_heap = heap(slot_bytes + 6, slot_bytes + 6);
+        let value = runtime_heap.allocate_string("123").unwrap();
+        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + 6);
+        assert!(matches!(
+            runtime_heap.to_number(value),
+            Err(HeapError::QuotaExceeded {
+                requested_bytes: 3,
+                available_bytes: 0
+            })
+        ));
+        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + 6);
+
+        let mut roomier_heap = heap(slot_bytes + 9, slot_bytes + 9);
+        let numeric = roomier_heap.allocate_string("123").unwrap();
+        let before = roomier_heap.stats().used_bytes;
+        assert_eq!(roomier_heap.to_number(numeric).unwrap(), 123.0);
+        assert_eq!(roomier_heap.stats().used_bytes, before);
     }
 
     #[test]
