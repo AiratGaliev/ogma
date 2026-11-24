@@ -2455,7 +2455,10 @@ mod tests {
 
         let unbound = heap.allocate_function().unwrap();
         heap.scope_root(roots, unbound).unwrap();
-        assert!(matches!(heap.function_id(unbound), Err(HeapError::NotCallable)));
+        assert!(matches!(
+            heap.function_id(unbound),
+            Err(HeapError::NotCallable)
+        ));
 
         let definition = FunctionDefinition {
             id: FunctionId(33),
