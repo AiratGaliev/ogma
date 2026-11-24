@@ -115,33 +115,39 @@ pub(crate) struct GcRef {
 ///
 /// The fields and representation are private. A handle is meaningful only to
 /// the heap that created it and never contains an object pointer or Value bits.
+/// It is also !Send and !Sync: callers must keep it on the owning Runtime thread.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HostHandle {
     heap_id: u64,
     index: u32,
     generation: u32,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
-/// Opaque token for an active interpreter root frame.
+/// Opaque token for an active interpreter root frame. It is !Send and !Sync.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameToken {
     heap_id: u64,
     serial: u64,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
-/// Opaque token for an active temporary root scope.
+/// Opaque token for an active temporary root scope. It is !Send and !Sync.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScopeToken {
     heap_id: u64,
     serial: u64,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 /// Runtime-owned token for externally allocated memory charged to the heap.
+/// It is !Send and !Sync and must be released on the owning Runtime thread.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExternalMemoryCharge {
     heap_id: u64,
     index: u32,
     generation: u32,
+    _thread_affinity: PhantomData<Rc<()>>,
 }
 
 impl fmt::Debug for HostHandle {
@@ -565,6 +571,7 @@ impl Heap {
         Ok(FrameToken {
             heap_id: self.heap_id,
             serial,
+            _thread_affinity: PhantomData,
         })
     }
 
@@ -604,6 +611,7 @@ impl Heap {
         Ok(ScopeToken {
             heap_id: self.heap_id,
             serial,
+            _thread_affinity: PhantomData,
         })
     }
 
@@ -664,6 +672,7 @@ impl Heap {
             heap_id: self.heap_id,
             index,
             generation,
+            _thread_affinity: PhantomData,
         })
     }
 
@@ -749,6 +758,7 @@ impl Heap {
             heap_id: self.heap_id,
             index,
             generation,
+            _thread_affinity: PhantomData,
         })
     }
 

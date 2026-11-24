@@ -3,6 +3,9 @@
 //! The representation is deliberately private and has no stable C layout. The
 //! embedding boundary exports opaque handles, never this representation.
 
+use std::marker::PhantomData;
+use std::rc::Rc;
+
 use crate::heap::GcRef;
 
 /// The ECMAScript value category represented by a Value.
@@ -24,13 +27,14 @@ pub enum ValueType {
     Function,
 }
 
-/// An opaque Runtime value.
+/// An opaque, thread-affine Runtime value.
 ///
 /// Values use a private tagged Rust representation. No field, discriminant,
 /// pointer, or bit-level encoding is part of the public ABI. In particular,
 /// this type is not repr(C) and must not be serialized by copying its memory.
+/// Values are deliberately !Send and !Sync and must remain on the owner thread.
 #[derive(Clone, Copy)]
-pub struct Value(ValueRepr);
+pub struct Value(ValueRepr, PhantomData<Rc<()>>);
 
 impl std::fmt::Debug for Value {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -56,25 +60,25 @@ impl Value {
     /// Creates the JavaScript undefined value.
     #[must_use]
     pub const fn undefined() -> Self {
-        Self(ValueRepr::Undefined)
+        Self(ValueRepr::Undefined, PhantomData)
     }
 
     /// Creates the JavaScript null value.
     #[must_use]
     pub const fn null() -> Self {
-        Self(ValueRepr::Null)
+        Self(ValueRepr::Null, PhantomData)
     }
 
     /// Creates a Boolean value.
     #[must_use]
     pub const fn boolean(value: bool) -> Self {
-        Self(ValueRepr::Boolean(value))
+        Self(ValueRepr::Boolean(value), PhantomData)
     }
 
     /// Creates a Number without canonicalizing NaN or signed zero.
     #[must_use]
     pub const fn number(value: f64) -> Self {
-        Self(ValueRepr::Number(value))
+        Self(ValueRepr::Number(value), PhantomData)
     }
 
     /// Returns this value's ECMAScript category.
@@ -122,15 +126,15 @@ impl Value {
     }
 
     pub(crate) const fn from_string(reference: GcRef) -> Self {
-        Self(ValueRepr::String(reference))
+        Self(ValueRepr::String(reference), PhantomData)
     }
 
     pub(crate) const fn from_object(reference: GcRef) -> Self {
-        Self(ValueRepr::Object(reference))
+        Self(ValueRepr::Object(reference), PhantomData)
     }
 
     pub(crate) const fn from_function(reference: GcRef) -> Self {
-        Self(ValueRepr::Function(reference))
+        Self(ValueRepr::Function(reference), PhantomData)
     }
 
     pub(crate) const fn gc_ref(self) -> Option<GcRef> {
