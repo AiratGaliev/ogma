@@ -455,7 +455,7 @@ fn expression(
                 value: SyntaxLiteral::String(value.to_owned()),
                 span,
             }
-        },
+        }
         E::BigIntLiteral(literal) => SyntaxExpression::Literal {
             value: SyntaxLiteral::Bigint(literal.value.to_string()),
             span,
