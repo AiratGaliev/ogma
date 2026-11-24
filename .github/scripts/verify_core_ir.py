@@ -38,7 +38,7 @@ OPS = {
     "js.strict_equal": (2, 2, "boolean", set(), set()),
     "js.typeof": (1, 1, "string", set(), set()),
     "env.load": (0, 0, "binding", {"binding"}, {"may_throw"}),
-    "env.store": (1, 1, "binding", {"binding"}, {"may_throw"}),
+    "env.store": (1, 1, "operand:0", {"binding"}, {"may_throw"}),
     "closure.create": (0, 0, "function", {"function", "captures"}, {"may_allocate", "may_gc"}),
     "host.call": (0, None, "dynamic", {"symbol"}, {"may_allocate", "may_gc", "may_throw", "may_call_host", "may_reenter", "may_mutate_shape"}),
     "async.await": (1, 1, "dynamic", set(), {"may_allocate", "may_gc", "may_throw", "may_suspend"}),
