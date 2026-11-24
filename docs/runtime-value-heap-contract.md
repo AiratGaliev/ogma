@@ -22,7 +22,7 @@ This implementation replaces the earlier M0 proof-only models in the production 
 | String | Internal generation-checked `GcRef` |
 | Object / Function | Internal generation-checked `GcRef` |
 
-There is no `repr(C)`, NaN-boxing, pointer tagging, architecture-specific encoding or supported public layout. The custom `Debug` output exposes only the value category, not the internal object identity.
+There is no `repr(C)`, NaN-boxing, pointer tagging, architecture-specific encoding or supported public layout. The custom `Debug` output exposes only the value category, not the internal object identity. `Value` is `!Send` and `!Sync` at the type level, including primitive values, so a JavaScript value cannot be transferred to or shared with another thread.
 
 The Rust embedding ABI must continue to use its opaque `HostHandle` / ABI token contract. It must not copy `Value` bytes, expose `GcRef` or pass managed-object pointers to hosts.
 
@@ -39,7 +39,7 @@ ECMAScript strings are represented as UTF-16 code units. The heap preserves unpa
 
 Each Runtime owns a thread-affine `Heap` and receives a unique heap identity. Internal `GcRef` identifies a non-moving cell by heap identity, slot index and generation. The slot directory stores a separately allocated, pointer-stable cell block; growing the directory moves slot metadata/pointers but never moves an existing managed cell. Every internal access validates all three identity fields; slot reuse increments the generation.
 
-`HostHandle` is a separate opaque persistent token with its own generation-checked registry. It may retain a primitive or a managed value; only managed values contribute a GC root. Releasing a handle invalidates the token before a slot can be reused. Ordinary object graph operations use `GcRef` directly and never resolve a host handle.
+`HostHandle` is a separate opaque persistent token with its own generation-checked registry. It may retain a primitive or a managed value; only managed values contribute a GC root. Releasing a handle invalidates the token before a slot can be reused. Ordinary object graph operations use `GcRef` directly and never resolve a host handle. `HostHandle`, `FrameToken`, `ScopeToken` and `ExternalMemoryCharge` are also `!Send` and `!Sync`; all Runtime values and tokens must stay on the owning Runtime thread.
 
 The first production collector is non-moving tracing mark-sweep, consistent with the preferred M0 comparison candidate. The mark worklist is linked through metadata in the separately allocated cell blocks. This avoids allocating an unbounded traversal vector during collection and prevents collection scratch allocation from bypassing the heap quota.
 
