@@ -294,6 +294,56 @@ mod tests {
         );
     }
     #[test]
+    fn returns_undefined_for_fallthrough_and_bare_return_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "undefined-return-test",
+            "memory:///undefined-return-test.js",
+            None,
+            "function implicit() {} function explicit() { return; } function explicitUndefined() { return undefined; }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("functions with implicit and bare returns parse");
+        let compiled = compile(&parsed).expect("all JavaScript return paths lower to values");
+
+        for name in ["implicit", "explicit", "explicitUndefined"] {
+            let document = compiled
+                .functions
+                .iter()
+                .find(|document| document.function.name == name)
+                .expect("function Core IR document");
+            let signature = document
+                .function
+                .return_signature
+                .as_ref()
+                .expect("JavaScript functions always complete with a value");
+            assert_eq!(signature.semantic_type, ogma_core_ir::SemanticType::Undefined);
+            assert_eq!(signature.representation, ogma_core_ir::Representation::Boxed);
+
+            let returned: Vec<_> = document
+                .function
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.terminator {
+                    ogma_core_ir::Terminator::Return { value, .. } => value.as_ref(),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(returned.len(), 1);
+            let return_value = returned[0];
+            assert!(document.function.blocks.iter().any(|block| {
+                block.instructions.iter().any(|instruction| {
+                    instruction.op == "js.constant"
+                        && instruction.result.as_ref().is_some_and(|result| result.id == *return_value)
+                        && instruction.attributes.get("literal").and_then(serde_json::Value::as_str)
+                            == Some("undefined")
+                })
+            }));
+            assert!(verify_document(document).is_empty());
+        }
+    }
+    #[test]
     fn rejects_default_parameters_through_real_frontend_pipeline() {
         let allocator = Allocator::default();
         let source = SourceFile::new(

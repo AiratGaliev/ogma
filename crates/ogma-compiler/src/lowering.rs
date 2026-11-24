@@ -558,8 +558,9 @@ impl<'a> FunctionCompiler<'a> {
 
         if let Some(cursor) = self.cursor() {
             self.restore_cursor(cursor);
+            let undefined = self.emit_undefined("materialize implicit JavaScript return value")?;
             self.terminate_return(
-                None,
+                Some(undefined.id),
                 self.generated_source("implicit JavaScript function completion", Vec::new()),
             )?;
         }
@@ -1781,14 +1782,12 @@ impl<'a> FunctionCompiler<'a> {
                 *span,
             ),
             SyntaxStatement::Return { value, span } => {
-                let value = value
-                    .as_ref()
-                    .map(|value| self.emit_expression(value))
-                    .transpose()?;
-                self.terminate_return(
-                    value.as_ref().map(|value| value.id.clone()),
-                    self.user_source(*span, Vec::new()),
-                )
+                let value = if let Some(value) = value {
+                    self.emit_expression(value)?
+                } else {
+                    self.emit_undefined("materialize undefined return value")?
+                };
+                self.terminate_return(Some(value.id), self.user_source(*span, Vec::new()))
             }
             SyntaxStatement::Throw { value, span } => {
                 let value = self.emit_expression(value)?;
@@ -2116,25 +2115,29 @@ impl<'a> FunctionCompiler<'a> {
     fn infer_return_signature(&self) -> Result<Option<ReturnSignature>, LoweringDiagnostic> {
         let mut returns = Vec::new();
         self.collect_return_types(&self.syntax.body, &mut returns)?;
-        if returns.is_empty() {
-            return Ok(None);
-        }
-        let first = returns[0];
-        if returns.iter().any(|item| *item != first) {
+        let undefined = ValueType {
+            semantic: SemanticType::Undefined,
+            representation: Representation::Boxed,
+        };
+        let returns: Vec<_> = returns
+            .into_iter()
+            .map(|value| value.unwrap_or(undefined))
+            .collect();
+        let Some(ty) = returns.first().copied().or(Some(undefined)) else {
+            unreachable!("an absent return list has the JavaScript undefined completion type");
+        };
+        if returns.iter().any(|item| *item != ty) {
             return self.fail(
                 "lowering.mixed_return_types",
                 Some(self.syntax.span),
-                "function returns incompatible Core IR value types or mixes value and void returns",
+                "function returns incompatible Core IR value types",
             );
         }
-        let Some(ty) = first else {
-            return Ok(None);
-        };
-        if sequence_can_fallthrough(&self.syntax.body) {
+        if ty != undefined && sequence_can_fallthrough(&self.syntax.body) {
             return self.fail(
                 "lowering.implicit_return_type",
                 Some(self.syntax.span),
-                "function has a value-returning path and a reachable fallthrough path",
+                "function has a value-returning path and a reachable undefined fallthrough path",
             );
         }
         Ok(Some(ReturnSignature {
