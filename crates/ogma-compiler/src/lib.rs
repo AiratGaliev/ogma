@@ -381,6 +381,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_for_header_binding_when_its_lexical_scope_is_reentered_by_an_outer_loop() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "nested-for-header-tdz-test",
+            "memory:///nested-for-header-tdz-test.js",
+            None,
+            "function run() { let outer = 0; while (outer < 2) { for (let index = outer === 0 ? 0 : index; index < 1; index = index + 1) {} outer = outer + 1; } }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("conditional for initializer is valid JavaScript");
+
+        let failure = compile(&parsed)
+            .expect_err("a nested for-header lexical environment is re-entered by the outer loop");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach lexical environment lowering validation");
+        };
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "lowering.block_environment_lifetime"
+                && diagnostic.message.contains("loop-reentered lexical scope")
+        }));
+    }
+    #[test]
     fn rejects_reentered_block_let_without_a_fresh_lexical_environment() {
         let allocator = Allocator::default();
         let source = SourceFile::new(

@@ -317,7 +317,7 @@ fn member_call_reference(
     }
 }
 
-fn collect_reentered_block_scopes(
+fn collect_reentered_lexical_scopes(
     statements: &[SyntaxStatement],
     inside_loop_body: bool,
     output: &mut HashSet<String>,
@@ -330,28 +330,36 @@ fn collect_reentered_block_scopes(
                         output.insert(scope.clone());
                     }
                 }
-                collect_reentered_block_scopes(body, inside_loop_body, output);
+                collect_reentered_lexical_scopes(body, inside_loop_body, output);
             }
             SyntaxStatement::If {
                 consequent,
                 alternate,
                 ..
             } => {
-                collect_reentered_block_scopes(
+                collect_reentered_lexical_scopes(
                     std::slice::from_ref(consequent),
                     inside_loop_body,
                     output,
                 );
                 if let Some(alternate) = alternate {
-                    collect_reentered_block_scopes(
+                    collect_reentered_lexical_scopes(
                         std::slice::from_ref(alternate),
                         inside_loop_body,
                         output,
                     );
                 }
             }
-            SyntaxStatement::While { body, .. } | SyntaxStatement::For { body, .. } => {
-                collect_reentered_block_scopes(std::slice::from_ref(body), true, output);
+            SyntaxStatement::While { body, .. } => {
+                collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
+            }
+            SyntaxStatement::For { scope, body, .. } => {
+                if inside_loop_body {
+                    if let Some(scope) = scope {
+                        output.insert(scope.clone());
+                    }
+                }
+                collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
             _ => {}
         }
@@ -418,7 +426,7 @@ impl<'a> FunctionCompiler<'a> {
         // are rejected separately because their environment must outlive the
         // block. For-header bindings are represented by their loop binding ID.
         let mut reentered_block_scopes = HashSet::new();
-        collect_reentered_block_scopes(&syntax.body, false, &mut reentered_block_scopes);
+        collect_reentered_lexical_scopes(&syntax.body, false, &mut reentered_block_scopes);
         for binding in &semantic.environment.bindings {
             if binding.kind != BindingKind::Let {
                 continue;
