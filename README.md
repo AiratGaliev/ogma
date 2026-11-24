@@ -4,7 +4,7 @@
 
 Ogma is an independent engine project. It is not a wrapper around QuickJS-NG, a replacement for the host application/game engine, or a requirement to ship the Node.js runtime with a packaged native application.
 
-> **Current phase: M1 — Minimal Executable Runtime.** The root Rust workspace and minimal M1 crate boundaries are in place. OGM-41 has implemented the JavaScript parser/source-diagnostics frontend and a parse-only conformance adapter. The production compiler/Core IR lowering, ECMAScript Runtime execution, interpreter and embedding behavior are still under implementation; parser availability must not be described as runtime or full language conformance.
+> **Current phase: M1 — Minimal Executable Runtime.** The root Rust workspace and minimal M1 crate boundaries are in place. OGM-41 provides the pinned Oxc JavaScript parser, source diagnostics and a parse-only adapter. OGM-42 is implementing Oxc-backed semantic analysis, an owned syntax projection and verified Core IR v1 lowering for the currently supported synchronous JavaScript subset, exposed through the compiler `compile()` API. Portable bytecode lowering, ECMAScript Runtime execution, interpreter and embedding remain in their owning issues; parser or compiler availability must not be described as runtime or full language conformance.
 
 ## Project direction
 
@@ -68,7 +68,7 @@ The permanent branch flow is:
 
 ### Current repository bootstrap status
 
-The root Cargo workspace and minimal M1 crate boundaries are present. OGM-41 delivered a real JavaScript parser/frontend and parse-only adapter; a production ECMAScript Runtime and runtime Test262 adapter are not yet available. OGM-33, OGM-34, OGM-35 and OGM-37 delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. Parser availability is real, but runtime conformance is not yet available.
+The root Cargo workspace and minimal M1 crate boundaries are present. OGM-41 delivered a real JavaScript parser/frontend and parse-only adapter. OGM-42 currently provides the owned semantic model, source-spanned syntax projection and Core IR v1 lowering/verification path for its supported synchronous subset; the full M1 language/runtime surface is not implied. A production ECMAScript Runtime, portable bytecode interpreter and runtime Test262 adapter are not yet available. OGM-33, OGM-34, OGM-35 and OGM-37 delivered the debugger contracts, test-runner infrastructure, CI/promotion wiring and repository workflow. Parser readiness is real; runtime conformance is not yet available.
 
 - **CI Fast** runs for PRs to dev/test/main and pushes to those permanent branches. The current dev head has a successful fast-checks run with 203 Python tests; the exact evidence and other child-task runs are indexed in [OGM-10 Developer Tooling & Verification evidence](docs/developer-tooling-verification-evidence.md).
 - **Conformance Promotion** runs for PRs targeting test or main. OGM-35 delivered exact route validation, eight deterministic Test262 shards, four parser-corpus shards, JSON/JUnit artifacts and a required aggregate. OGM-41 marks parser readiness as `ready`; full parser-corpus promotion requires `OGMA_PARSER_ADAPTER` to be configured. Runtime execution remains `not_implemented`, so runtime Test262 promotion remains fail-closed. No full parser or runtime conformance result is claimed.

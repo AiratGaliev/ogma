@@ -26,6 +26,8 @@ DYNAMIC = {"may_allocate", "may_gc", "may_throw", "may_call_host", "may_reenter"
 OPS = {
     "js.constant": (0, 0, "literal", {"literal", "value"}, set()),
     "js.add": (2, 2, "dynamic", set(), DYNAMIC),
+    "js.less_than": (2, 2, "boolean", set(), DYNAMIC),
+    "js.greater_than": (2, 2, "boolean", set(), DYNAMIC),
     "js.get_property": (1, 1, "dynamic", {"key"}, DYNAMIC),
     "js.set_property": (2, 2, "operand:1", {"key"}, DYNAMIC),
     "js.get_element": (2, 2, "dynamic", set(), DYNAMIC),
@@ -38,7 +40,7 @@ OPS = {
     "js.strict_equal": (2, 2, "boolean", set(), set()),
     "js.typeof": (1, 1, "string", set(), set()),
     "env.load": (0, 0, "binding", {"binding"}, {"may_throw"}),
-    "env.store": (1, 1, "binding", {"binding"}, {"may_throw"}),
+    "env.store": (1, 1, "operand:0", {"binding"}, {"may_throw"}),
     "closure.create": (0, 0, "function", {"function", "captures"}, {"may_allocate", "may_gc"}),
     "host.call": (0, None, "dynamic", {"symbol"}, {"may_allocate", "may_gc", "may_throw", "may_call_host", "may_reenter", "may_mutate_shape"}),
     "async.await": (1, 1, "dynamic", set(), {"may_allocate", "may_gc", "may_throw", "may_suspend"}),
@@ -403,7 +405,10 @@ class Verifier:
                             self.err("environment.immutable_store",ip+".attributes.binding","cannot store to immutable or by-value captured binding")
                         source_type=value_type(ins["operands"][0]) if ins["operands"] else None
                         expected_type=(target["semantic_type"],target["representation"])
-                        if source_type is not None and source_type!=expected_type:
+                        # A dynamic lexical slot stores the full JavaScript value domain.
+                        # The runtime performs the representation boxing at this semantic boundary.
+                        if (source_type is not None and source_type!=expected_type
+                                and expected_type != ("dynamic", "boxed")):
                             self.err("environment.store_type",ip+".operands[0]","stored value type differs from lexical binding")
                 if op=="closure.create":
                     if not self.valid_id(ins["attributes"].get("function")):

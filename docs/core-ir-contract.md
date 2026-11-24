@@ -4,7 +4,7 @@
 - **Contract version:** `1.0.0`
 - **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
 - **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
-- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
+- **Status:** canonical backend-neutral v1 contract. The JSON Schema and Python verifier remain the cross-language reference; `ogma-core-ir::verify_document` is the Rust implementation-level validation boundary used by `ogma-compiler`, and must remain consistent with those references. OGM-42 currently lowers its supported synchronous subset into verified function documents. This contract is not a bytecode format, native ABI or Runtime API.
 - **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
 
 ## 1. Purpose and boundaries
@@ -18,7 +18,7 @@ Both paths must preserve the same ECMAScript-visible values, exceptions, side ef
 
 Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
 
-The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
+The contract was established before the production Rust workspace and remains its sole canonical function-level IR boundary. `ogma-core-ir` owns the Rust model and implementation-level checks; `ogma-compiler` owns AST/semantic lowering into this contract. The Python verifier and fixture corpus remain independent reference checks. This does not claim that the portable interpreter or native AOT consumer is complete; those consumers remain owned by their downstream issues.
 
 ## 2. Document envelope and versioning
 
@@ -34,43 +34,7 @@ A function document has exactly this top-level shape:
 
 The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
 
-All identifiers use the stable ASCII grammar `^[A-Za-z_][A-Za-z0-9_.:-]{0,127}# Ogma Core IR Contract v1
-
-- **Contract ID:** `ogma.core-ir`
-- **Contract version:** `1.0.0`
-- **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
-- **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
-- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
-- **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
-
-## 1. Purpose and boundaries
-
-Core IR is Ogma's backend-neutral, function-level semantic boundary between frontend analysis and execution backends. The same verified function representation is the input contract for:
-
-1. **Portable path:** Core IR → bytecode lowering → verifier → portable `.ogmb` → interpreter.
-2. **Native path:** Core IR → native lowering → selected code generator → target object → linker.
-
-Both paths must preserve the same ECMAScript-visible values, exceptions, side effects, host calls and source-level provenance, and use the shared Ogma Runtime/ABI contracts. The IR producer and verifier must not depend on Cranelift, LLVM, a register VM, a stack VM, target pointer width, native calling conventions or a particular object layout.
-
-Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
-
-The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
-
-## 2. Document envelope and versioning
-
-A function document has exactly this top-level shape:
-
-```json
-{
-  "contract": "ogma.core-ir",
-  "version": "1.0.0",
-  "function": {}
-}
-```
-
-The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
-
-. SSA value IDs and effect-token IDs are unique across a function; block IDs and instruction IDs are unique in their own function-wide namespaces. Lexical binding IDs are unique in the environment, capture IDs and imported binding IDs are individually unique, and capture aliases may not collide with local lexical binding IDs or one another. Nullable references (`parent`, `scope`, `suspension`, `effect_entry`, `effect_in` and `effect_out`) use the same grammar when non-null.
+All identifiers use the stable ASCII grammar `^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$`. SSA value IDs and effect-token IDs are unique across a function; block IDs and instruction IDs are unique in their own function-wide namespaces. Lexical binding IDs are unique in the environment, capture IDs and imported binding IDs are individually unique, and capture aliases may not collide with local lexical binding IDs or one another. Nullable references (`parent`, `scope`, `suspension`, `effect_entry`, `effect_in` and `effect_out`) use the same grammar when non-null.
 
 ## 3. Function and control-flow model
 
@@ -130,6 +94,8 @@ The operation name identifies language/runtime semantics, never a backend opcode
 |---|---|---|---|
 | `js.constant` | no operands; attributes `literal`, `value` | type follows literal kind | none |
 | `js.add` | `[left, right]`; full ECMAScript `+` semantics | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.less_than` | `[left, right]`; ECMAScript Abstract Relational Comparison with left-to-right coercion | boolean | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.greater_than` | `[left, right]`; ECMAScript greater-than comparison with left-to-right evaluation and relational coercion semantics | boolean | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_property` | `[object]`; string `attributes.key` (including the empty string) | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.set_property` | `[object, value]`; string `attributes.key` (including the empty string) | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_element` | `[object, key]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
@@ -148,7 +114,7 @@ The operation name identifies language/runtime semantics, never a backend opcode
 | `async.await` | `[awaitable]` | `dynamic/boxed` | allocate, GC, throw, suspend |
 | `js.throw` | `[exceptionValue]` | no result | throw |
 
-The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` can invoke `ToPrimitive`, call user code and allocate a string. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
+The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` and `<`/`>` comparisons can invoke `ToPrimitive`, call user code and allocate strings. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
 
 `js.call` explicitly carries the receiver (`thisArg`) and `js.construct` explicitly carries `newTarget`; backends must not reconstruct these from syntax or guess them from the callee. Computed property keys use `js.get_element`/`js.set_element`; named property operations carry an explicit string key. `host.call` names a capability-bound host symbol, not an arbitrary native address.
 
@@ -159,7 +125,7 @@ Every function carries an `environment` descriptor: a stable lexical environment
 - `cell`: shared mutable lexical storage; mutations remain observable by all closures sharing the cell.
 - `value`: immutable captured value copied into the closure environment. A mutable binding cannot use this mode.
 
-`env.load` and `env.store` reference stable binding IDs, not backend frame slots or object offsets. `env.store` cannot target immutable bindings or by-value captures. `closure.create` names a stable target function ID and lists each captured binding with its capture mode; the capture list must be an array of exact `{binding, mode}` descriptors, where `mode` is `cell` or `value`. One imported lexical binding may be captured only once, including through an alias. Mutable bindings must be captured by cell; an imported by-value capture cannot later be promoted to a shared cell. Function and binding IDs are metadata identifiers, not object addresses.
+`env.load` and `env.store` reference stable binding IDs, not backend frame slots or object offsets. `env.store` cannot target immutable bindings or by-value captures. Mutable `dynamic/boxed` bindings are polymorphic JavaScript slots: `env.store` may accept any valid SSA value representation and performs the required runtime boxing at the environment boundary. Statically represented mutable bindings still require an exact semantic-type/representation match. `env.store` always returns the assigned value's original type/representation. A `var` binding is initialized to `undefined` on entry to its owning function environment; a `let` binding remains in TDZ until its declaration's initializing store executes. Immutable `const` values are represented by their unique SSA definition; the initializer's source metadata retains the binding ID, and closure-by-value capture refers to that ID. A compiler must preserve the definition/use association and must reject any transformation that would permit a const read before initialization without retaining the TDZ check. `closure.create` names a stable target function ID and lists each captured binding with its capture mode; the capture list must be an array of exact `{binding, mode}` descriptors, where `mode` is `cell` or `value`. One imported lexical binding may be captured only once, including through an alias. Mutable bindings must be captured by cell; an imported by-value capture cannot later be promoted to a shared cell. Function and binding IDs are metadata identifiers, not object addresses.
 
 ## 6. Effect and exception contract
 
@@ -240,9 +206,9 @@ python .github/scripts/verify_core_ir.py --manifest tests/core-ir/manifest.json 
 
 The corpus manifest defines expected acceptance/rejection and, for negative cases, required diagnostic codes. The report is deterministic JSON containing contract/verifier versions, a per-fixture result, structured diagnostics (`code`, JSONPath-like `path`, `message`) and summary totals. Exit code `0` means all fixture expectations matched; `1` means a fixture was unexpectedly accepted/rejected or an expected diagnostic was absent; `2` means verifier invocation, manifest or JSON input failed to load.
 
-The verifier checks JSON Schema structure plus semantic invariants: stable ID references, declaration-kind/mutability consistency, canonical literal payload encodings, unique capture/suspension identities, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/instruction-level dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. It rejects duplicate JSON object keys, non-finite JSON numbers and malformed attribute payloads without crashing.
+The verifier checks JSON Schema structure plus semantic invariants: stable ID references, declaration-kind/mutability consistency, canonical literal payload encodings, unique capture/suspension identities, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/instruction-level dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. Both the Rust and Python verifier entrypoints reject duplicate JSON object keys at any nesting level, non-finite JSON numbers and malformed attribute payloads without crashing.
 
-The fixture corpus contains 25 cases (4 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
+The fixture corpus contains 29 cases (8 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
 
 ## 10. Compatibility and change policy
 
@@ -253,6 +219,13 @@ The fixture corpus contains 25 cases (4 accepted and 21 rejected). It includes p
 - A backend-specific encoding decision belongs in its own contract and must not leak into Core IR.
 - Production Rust crate boundaries remain deferred until real compile/runtime API boundaries require them; this proof does not create empty `ogma-ir` crates or start M1.
 
-## 11. Current proof limits
+## 11. Current implementation limits
 
-Verified in this change: the v1 schema/semantic verifier and checked-in fixture corpus. Not yet verified because the repository has no corresponding implementation: real frontend-to-Core-IR production, interpreter consumption, AOT consumption, optimizer transformation preservation, Test262/runtime behavior, and cross-backend equivalence. The latter is owned by OGM-31 after this foundational contract is delivered. Full Test262, differential, fuzz and promotion suites remain outside topic PR Fast CI as required by the repository workflow.
+OGM-42 now provides an Oxc-backed owned frontend semantic snapshot and syntax projection, a Rust-owned Core IR v1 model/verifier, and a compiler lowering subset that verifies each emitted function before returning it. Fast CI cross-checks the canonical Python fixture verifier, Rust workspace tests, the parser adapter and a bounded pinned parser-corpus smoke.
+
+This is not full ECMAScript lowering. Unsupported syntax and function forms fail closed with source-positioned diagnostics. The initial synchronous subset does not lower async/generator suspension, default/destructured/rest parameters, `try`/`catch` handler regions, `break`/`continue`, optional calls/members, update expressions, dynamic unary negation, unresolved globals or Node-specific module semantics. Per-block/per-iteration mutable lexical environments are not materialized. Mutable block-scoped `let` bindings in loop-reentered blocks, and mutable `for`-header bindings whose `for` statement is itself re-entered by an enclosing loop, are rejected even when they are not captured: flattening them into the function environment would retain stale initialized state on the next lexical-scope entry and could bypass TDZ. A non-reentrant single-entry block binding may be flattened when it is not captured; a mutable block binding captured by a closure is still rejected because its environment must outlive the block. A non-re-entered `for`-header binding remains in the synchronous no-capture subset; reads in a self-referential initializer are emitted as `env.load` before the corresponding `env.store`, preserving the initial TDZ check. `try`/`catch` remains unsupported as a statement form and fails closed. Captures whose lifetime cannot be represented by the v1 function environment are also rejected. The current IR uses function-environment `source.scope` plus stable `source.bindings`; it does not serialize Oxc block-scope IDs into Core IR v1.
+
+TDZ coverage for immutable `const` bindings is intentionally narrower than for mutable lexical bindings. A `let` read is represented by `env.load` and retains the runtime TDZ check. A `const` value is represented by its initialized SSA definition; a read before that definition is available fails lowering with `lowering.const_tdz`. Likewise, a hoisted closure created before the initializer of a captured `const` fails with `lowering.const_capture_tdz`, because Core IR v1 has no operation for loading an uninitialized immutable SSA binding or capturing its temporal state. These are valid JavaScript source patterns, but this lowering subset rejects them rather than emitting IR with incorrect observable semantics. The compile-time diagnostic is not a claim that ECMAScript runtime `ReferenceError` behaviour has been implemented for these `const` cases. Supporting them requires a compatible Core IR/Runtime semantic contract and regression fixtures; this task does not silently extend v1.
+
+
+This task does not implement Core IR consumers, portable bytecode execution, native AOT, optimization preservation, Test262 conformance or cross-backend equivalence. Those remain owned by downstream issues. Full Test262, differential, fuzz and promotion suites stay outside topic PR Fast CI as required by the repository workflow.

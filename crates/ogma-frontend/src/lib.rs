@@ -13,11 +13,20 @@
 use std::{fmt, sync::Arc};
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::Program;
+use oxc_ast::ast::{self, Program};
+use oxc_ast_visit::{Visit, walk};
 use oxc_diagnostics::{OxcDiagnostic, Severity as OxcSeverity};
 use oxc_parser::{ParseOptions as OxcParseOptions, Parser};
-use oxc_semantic::SemanticBuilder;
+use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_span::SourceType;
+use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
+
+mod syntax;
+pub use syntax::{
+    ResolvedSyntaxFunction, ResolvedSyntaxProgram, SyntaxAssignmentTarget, SyntaxBinaryOperator,
+    SyntaxDeclarator, SyntaxExpression, SyntaxForInitializer, SyntaxLiteral, SyntaxMemberKey,
+    SyntaxStatement, SyntaxUnaryOperator, SyntaxUpdateOperator, SyntaxVariableKind,
+};
 
 /// Stable identity for one source file within a compilation/debugging session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -293,6 +302,10 @@ pub struct ParsedProgram<'a> {
     pub is_strict: bool,
     /// Non-fatal parser/semantic diagnostics, if any.
     pub diagnostics: Vec<ParseDiagnostic>,
+    /// Oxc-resolved lexical scopes, bindings, references and closure captures.
+    pub semantic: SemanticSnapshot,
+    /// Owned source-spanned syntax projection for the compiler lowering boundary.
+    pub syntax: ResolvedSyntaxProgram,
 }
 
 /// Options for parsing the M1 JavaScript frontend subset.
@@ -349,14 +362,10 @@ pub fn parse<'a>(
     }
 
     let mut diagnostics = parser_diagnostics;
-    if options.goal == ParseGoal::Script && options.mode == ParseMode::Strict {
-        // A strict directive is inserted into a temporary source instead of
-        // reclassifying the source as a Module. This keeps Script-only grammar
-        // (notably top-level await) distinct from Module grammar.
+    let semantic = if options.goal == ParseGoal::Script && options.mode == ParseMode::Strict {
+        // Validate strict Script grammar in a temporary source while retaining
+        // a separate semantic result attached to the caller's original AST.
         let (strict_text, mapping) = strict_script_source(source, program.hashbang.as_ref());
-        // Keep this validation-only AST out of the caller's compile-unit arena.
-        // It is discarded after syntax checking, so its allocations can be
-        // reclaimed immediately rather than retained beside the public AST.
         let strict_allocator = Allocator::default();
         let strict_parse = Parser::new(&strict_allocator, &strict_text, SourceType::script())
             .with_options(oxc_options)
@@ -376,12 +385,27 @@ pub fn parse<'a>(
         }
         diagnostics.extend(strict_parser_diagnostics);
 
-        let semantic_result = SemanticBuilder::new_compiler().build(&strict_program);
+        let strict_semantic = SemanticBuilder::new_compiler().build(&strict_program);
+        let strict_diagnostics = convert_diagnostics(
+            strict_semantic.diagnostics.into_vec(),
+            DiagnosticPhase::Early,
+            source,
+            mapping,
+        );
+        if has_errors(&strict_diagnostics) {
+            return Err(ParseFailure {
+                phase: DiagnosticPhase::Early,
+                diagnostics: merge_diagnostics(diagnostics, strict_diagnostics),
+            });
+        }
+        diagnostics.extend(strict_diagnostics);
+
+        let semantic_result = SemanticBuilder::new_compiler().build(&program);
         let semantic_diagnostics = convert_diagnostics(
             semantic_result.diagnostics.into_vec(),
             DiagnosticPhase::Early,
             source,
-            mapping,
+            OffsetMapping::Identity,
         );
         if has_errors(&semantic_diagnostics) {
             return Err(ParseFailure {
@@ -390,6 +414,7 @@ pub fn parse<'a>(
             });
         }
         diagnostics.extend(semantic_diagnostics);
+        build_semantic_snapshot(&program, source, &semantic_result.semantic)
     } else {
         let semantic_result = SemanticBuilder::new_compiler().build(&program);
         let semantic_diagnostics = convert_diagnostics(
@@ -405,8 +430,10 @@ pub fn parse<'a>(
             });
         }
         diagnostics.extend(semantic_diagnostics);
-    }
+        build_semantic_snapshot(&program, source, &semantic_result.semantic)
+    };
 
+    let syntax = syntax::build_syntax_program(&program, source, &semantic);
     let source_has_strict_directive = program
         .directives
         .iter()
@@ -419,6 +446,8 @@ pub fn parse<'a>(
             || options.mode == ParseMode::Strict
             || source_has_strict_directive,
         diagnostics,
+        semantic,
+        syntax,
     })
 }
 
@@ -997,5 +1026,767 @@ mod tests {
         )
         .expect_err("with statements are rejected in strict scripts");
         assert_eq!(strict.phase, DiagnosticPhase::Early);
+    }
+}
+
+/// Classification of a resolved ECMAScript lexical binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedBindingKind {
+    /// Function-scoped var declaration.
+    Var,
+    /// Block-scoped let declaration.
+    Let,
+    /// Immutable const declaration.
+    Const,
+    /// Function parameter.
+    Parameter,
+    /// Catch-clause binding.
+    Catch,
+    /// Imported module binding.
+    Import,
+    /// Function declaration or named function-expression binding.
+    Function,
+    /// A symbol kind outside the supported JavaScript value bindings.
+    Other,
+}
+
+/// One lexical scope produced by Oxc's scope resolver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedScope {
+    /// Stable identity local to this source program.
+    pub id: String,
+    /// Parent lexical scope, if any.
+    pub parent: Option<String>,
+    /// Whether this scope is a function or arrow-function environment.
+    pub is_function: bool,
+    /// Whether this scope is a var declaration environment.
+    pub is_var: bool,
+}
+
+/// A resolved lexical binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedBinding {
+    /// Stable identity local to this source program.
+    pub id: String,
+    /// Identifier spelling.
+    pub name: String,
+    /// Classification derived from Oxc declaration flags.
+    pub kind: ResolvedBindingKind,
+    /// Whether ECMAScript assignment to this binding is permitted.
+    pub mutable: bool,
+    /// Owning lexical scope identity.
+    pub scope: String,
+    /// Source range of the declaration.
+    pub declaration: SourceSpan,
+    /// Raw Oxc symbol flags for diagnostics and future lowering.
+    pub symbol_flags: u32,
+}
+
+/// A resolved or global/unresolved identifier reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedReference {
+    /// Identifier spelling.
+    pub name: String,
+    /// Source range of the reference.
+    pub span: SourceSpan,
+    /// Lexical scope in which the reference occurs.
+    pub scope: String,
+    /// Resolved binding identity, or None for a global/unresolved name.
+    pub binding: Option<String>,
+    /// Whether the reference reads the binding's value.
+    pub read: bool,
+    /// Whether the reference writes the binding.
+    pub write: bool,
+}
+
+/// Function/arrow-function scope and its resolved closure environment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedFunction {
+    /// Stable function identity within this source.
+    pub id: String,
+    /// Source name or a deterministic generated label.
+    pub name: String,
+    /// Owning function scope identity.
+    pub scope: String,
+    /// Nearest enclosing function scope, if nested.
+    pub parent_function_scope: Option<String>,
+    /// Function source range.
+    pub span: SourceSpan,
+    /// Parameter binding identities in source order.
+    pub parameters: Vec<String>,
+    /// Resolved outer bindings referenced by this function.
+    pub captures: Vec<String>,
+    /// Whether this is an arrow function.
+    pub is_arrow: bool,
+    /// Whether this function is async.
+    pub is_async: bool,
+    /// Whether this function is a generator.
+    pub is_generator: bool,
+    /// Whether all parameters are simple identifiers (no defaults, destructuring or rest).
+    pub simple_parameters: bool,
+}
+
+/// Owned semantic snapshot detached from Oxc's internal tables.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SemanticSnapshot {
+    /// Root Program scope identity.
+    pub root_scope: String,
+    /// Lexical scopes in deterministic Oxc scope order.
+    pub scopes: Vec<ResolvedScope>,
+    /// Binding declarations in Oxc symbol order.
+    pub bindings: Vec<ResolvedBinding>,
+    /// Identifier references in AST traversal order.
+    pub references: Vec<ResolvedReference>,
+    /// Program scope plus every function and arrow-function scope.
+    pub functions: Vec<ResolvedFunction>,
+}
+
+#[derive(Clone)]
+struct RawReference {
+    id: Option<ReferenceId>,
+    name: String,
+    start: u32,
+    end: u32,
+}
+
+#[derive(Clone)]
+struct RawFunction {
+    scope: ScopeId,
+    name: String,
+    start: u32,
+    end: u32,
+    parameters: Vec<SymbolId>,
+    simple_parameters: bool,
+    is_arrow: bool,
+    is_async: bool,
+    is_generator: bool,
+}
+
+#[derive(Default)]
+struct SemanticCollector {
+    references: Vec<RawReference>,
+    functions: Vec<RawFunction>,
+}
+
+impl<'a> Visit<'a> for SemanticCollector {
+    fn visit_identifier_reference(&mut self, node: &ast::IdentifierReference<'a>) {
+        self.references.push(RawReference {
+            id: node.reference_id.get(),
+            name: node.name.as_str().to_owned(),
+            start: node.span.start,
+            end: node.span.end,
+        });
+        walk::walk_identifier_reference(self, node);
+    }
+
+    fn visit_function(&mut self, node: &ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
+        if let Some(scope) = node.scope_id.get() {
+            let mut parameters = Vec::with_capacity(node.params.items.len());
+            let mut simple_parameters = node.params.rest.is_none();
+            for parameter in &node.params.items {
+                if parameter.initializer.is_some() {
+                    simple_parameters = false;
+                }
+                match &parameter.pattern {
+                    ast::BindingPattern::BindingIdentifier(identifier) => {
+                        if let Some(symbol) = identifier.symbol_id.get() {
+                            parameters.push(symbol);
+                        } else {
+                            simple_parameters = false;
+                        }
+                    }
+                    _ => simple_parameters = false,
+                }
+            }
+            let name = node
+                .id
+                .as_ref()
+                .map(|identifier| identifier.name.as_str().to_owned())
+                .unwrap_or_else(|| format!("<function@{}>", node.span.start));
+            self.functions.push(RawFunction {
+                scope,
+                name,
+                start: node.span.start,
+                end: node.span.end,
+                parameters,
+                simple_parameters,
+                is_arrow: false,
+                is_async: node.r#async,
+                is_generator: node.generator,
+            });
+        }
+        walk::walk_function(self, node, flags);
+    }
+
+    fn visit_arrow_function_expression(&mut self, node: &ast::ArrowFunctionExpression<'a>) {
+        if let Some(scope) = node.scope_id.get() {
+            let mut parameters = Vec::with_capacity(node.params.items.len());
+            let mut simple_parameters = node.params.rest.is_none();
+            for parameter in &node.params.items {
+                if parameter.initializer.is_some() {
+                    simple_parameters = false;
+                }
+                match &parameter.pattern {
+                    ast::BindingPattern::BindingIdentifier(identifier) => {
+                        if let Some(symbol) = identifier.symbol_id.get() {
+                            parameters.push(symbol);
+                        } else {
+                            simple_parameters = false;
+                        }
+                    }
+                    _ => simple_parameters = false,
+                }
+            }
+            self.functions.push(RawFunction {
+                scope,
+                name: format!("<arrow@{}>", node.span.start),
+                start: node.span.start,
+                end: node.span.end,
+                parameters,
+                simple_parameters,
+                is_arrow: true,
+                is_async: node.r#async,
+                is_generator: false,
+            });
+        }
+        walk::walk_arrow_function_expression(self, node);
+    }
+}
+
+fn scope_identity(scope: ScopeId) -> String {
+    format!("scope_{}", scope.index())
+}
+
+fn binding_identity(symbol: SymbolId) -> String {
+    format!("binding_{}", symbol.index())
+}
+
+fn nearest_function_scope(semantic: &Semantic<'_>, from: ScopeId) -> Option<ScopeId> {
+    let scoping = semantic.scoping();
+    scoping
+        .scope_ancestors(from)
+        .find(|scope| scoping.scope_flags(*scope).is_function())
+}
+
+fn is_owned_by_function(
+    semantic: &Semantic<'_>,
+    binding_scope: ScopeId,
+    function_scope: ScopeId,
+) -> bool {
+    semantic
+        .scoping()
+        .scope_ancestors(binding_scope)
+        .any(|scope| scope == function_scope)
+}
+
+fn build_semantic_snapshot(
+    program: &Program<'_>,
+    source: &SourceFile,
+    semantic: &Semantic<'_>,
+) -> SemanticSnapshot {
+    let scoping = semantic.scoping();
+    let root_scope_id = scoping.root_scope_id();
+    let root_scope = scope_identity(root_scope_id);
+
+    let mut collector = SemanticCollector::default();
+    collector.visit_program(program);
+
+    let scopes = scoping
+        .scope_descendants_from_root()
+        .map(|scope| {
+            let flags = scoping.scope_flags(scope);
+            ResolvedScope {
+                id: scope_identity(scope),
+                parent: scoping.scope_parent_id(scope).map(scope_identity),
+                is_function: flags.is_function(),
+                is_var: flags.is_var(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut raw_functions = collector.functions;
+    raw_functions.sort_by_key(|function| (function.start, function.end, function.scope.index()));
+    let parameter_symbols: std::collections::HashSet<usize> = raw_functions
+        .iter()
+        .flat_map(|function| function.parameters.iter().map(|symbol| symbol.index()))
+        .collect();
+
+    let mut bindings = Vec::with_capacity(scoping.symbols_len());
+    for symbol in scoping.symbol_ids() {
+        let flags = scoping.symbol_flags(symbol);
+        let owner_scope = scoping.symbol_scope_id(symbol);
+        let kind = if flags.is_catch_variable() {
+            ResolvedBindingKind::Catch
+        } else if flags.is_import() {
+            ResolvedBindingKind::Import
+        } else if flags.contains(oxc_syntax::symbol::SymbolFlags::FunctionExpression)
+            || flags.is_const_variable()
+        {
+            ResolvedBindingKind::Const
+        } else if flags.contains(oxc_syntax::symbol::SymbolFlags::BlockScopedVariable) {
+            ResolvedBindingKind::Let
+        } else if flags.is_function_scoped_declaration()
+            && parameter_symbols.contains(&symbol.index())
+        {
+            ResolvedBindingKind::Parameter
+        } else if flags.is_function_scoped_declaration() {
+            ResolvedBindingKind::Var
+        } else if flags.is_function() {
+            if scoping.scope_flags(owner_scope).is_var() {
+                ResolvedBindingKind::Var
+            } else {
+                ResolvedBindingKind::Function
+            }
+        } else {
+            ResolvedBindingKind::Other
+        };
+        let mutable = !matches!(
+            kind,
+            ResolvedBindingKind::Const | ResolvedBindingKind::Import | ResolvedBindingKind::Other
+        );
+        let span = scoping.symbol_span(symbol);
+        bindings.push(ResolvedBinding {
+            id: binding_identity(symbol),
+            name: scoping.symbol_name(symbol).to_owned(),
+            kind,
+            mutable,
+            scope: scope_identity(owner_scope),
+            declaration: source.span(span.start as usize, span.end as usize),
+            symbol_flags: flags.bits(),
+        });
+    }
+
+    let mut references = Vec::with_capacity(collector.references.len());
+    let mut captures_by_function: std::collections::HashMap<
+        usize,
+        std::collections::BTreeSet<String>,
+    > = std::collections::HashMap::new();
+    for raw in collector.references {
+        let resolved = raw
+            .id
+            .map(|reference_id| scoping.get_reference(reference_id));
+        let reference_scope = resolved.map(|reference| reference.scope_id());
+        let binding_symbol = resolved.and_then(|reference| reference.symbol_id());
+        let function_scope = reference_scope
+            .and_then(|scope| nearest_function_scope(semantic, scope))
+            .unwrap_or(root_scope_id);
+        if let Some(symbol) = binding_symbol {
+            let binding_scope = scoping.symbol_scope_id(symbol);
+            if function_scope != root_scope_id
+                && !is_owned_by_function(semantic, binding_scope, function_scope)
+            {
+                captures_by_function
+                    .entry(function_scope.index())
+                    .or_default()
+                    .insert(binding_identity(symbol));
+            }
+        }
+        references.push(ResolvedReference {
+            name: raw.name,
+            span: source.span(raw.start as usize, raw.end as usize),
+            scope: reference_scope
+                .map(scope_identity)
+                .unwrap_or_else(|| root_scope.clone()),
+            binding: binding_symbol.map(binding_identity),
+            read: resolved.is_some_and(|reference| reference.is_read()),
+            write: resolved.is_some_and(|reference| reference.is_write()),
+        });
+    }
+
+    // A nested closure may capture a grandparent binding even when its
+    // immediate parent does not reference that binding itself. The parent
+    // closure must carry the same cell/value so it can construct the child.
+    let mut symbol_scope_by_binding = std::collections::HashMap::new();
+    for symbol in scoping.symbol_ids() {
+        symbol_scope_by_binding.insert(binding_identity(symbol), scoping.symbol_scope_id(symbol));
+    }
+    for function in &raw_functions {
+        let captured = captures_by_function
+            .get(&function.scope.index())
+            .cloned()
+            .unwrap_or_default();
+        if captured.is_empty() {
+            continue;
+        }
+        let mut parent = scoping.scope_parent_id(function.scope);
+        let mut parent_function = None;
+        while let Some(scope) = parent {
+            if scoping.scope_flags(scope).is_function() {
+                parent_function = Some(scope);
+                break;
+            }
+            parent = scoping.scope_parent_id(scope);
+        }
+        for binding_id in captured {
+            let Some(binding_scope) = symbol_scope_by_binding.get(&binding_id).copied() else {
+                continue;
+            };
+            let owner_function =
+                nearest_function_scope(semantic, binding_scope).unwrap_or(root_scope_id);
+            let mut ancestor = parent_function;
+            while let Some(ancestor_scope) = ancestor {
+                if ancestor_scope == owner_function || ancestor_scope == root_scope_id {
+                    break;
+                }
+                captures_by_function
+                    .entry(ancestor_scope.index())
+                    .or_default()
+                    .insert(binding_id.clone());
+                ancestor = scoping
+                    .scope_parent_id(ancestor_scope)
+                    .and_then(|mut scope| {
+                        loop {
+                            if scoping.scope_flags(scope).is_function() {
+                                return Some(scope);
+                            }
+                            scope = scoping.scope_parent_id(scope)?;
+                        }
+                    });
+            }
+        }
+    }
+
+    let mut functions = Vec::with_capacity(raw_functions.len() + 1);
+    functions.push(ResolvedFunction {
+        id: "fn_program".to_owned(),
+        name: "<program>".to_owned(),
+        scope: root_scope.clone(),
+        parent_function_scope: None,
+        span: source.span(0, source.text().len()),
+        parameters: Vec::new(),
+        captures: Vec::new(),
+        is_arrow: false,
+        is_async: false,
+        is_generator: false,
+        simple_parameters: true,
+    });
+    for function in raw_functions {
+        let parent_scope = scoping
+            .scope_parent_id(function.scope)
+            .and_then(|mut parent| {
+                loop {
+                    if parent == root_scope_id || scoping.scope_flags(parent).is_function() {
+                        return Some(parent);
+                    }
+                    parent = scoping.scope_parent_id(parent)?;
+                }
+            });
+        let captures = captures_by_function
+            .remove(&function.scope.index())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        functions.push(ResolvedFunction {
+            id: format!("fn_{}", function.scope.index()),
+            name: function.name,
+            scope: scope_identity(function.scope),
+            parent_function_scope: parent_scope.map(scope_identity),
+            span: source.span(function.start as usize, function.end as usize),
+            parameters: function
+                .parameters
+                .into_iter()
+                .map(binding_identity)
+                .collect(),
+            captures,
+            is_arrow: function.is_arrow,
+            is_async: function.is_async,
+            is_generator: function.is_generator,
+            simple_parameters: function.simple_parameters,
+        });
+    }
+    functions.sort_by_key(|function| {
+        (
+            function.span.start_byte,
+            function.span.end_byte,
+            function.id.clone(),
+        )
+    });
+
+    SemanticSnapshot {
+        root_scope,
+        scopes,
+        bindings,
+        references,
+        functions,
+    }
+}
+
+#[cfg(test)]
+mod semantic_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_shadowed_bindings_and_resolves_each_reference() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "shadowing",
+            "memory://shadowing.js",
+            None,
+            "let value = 1; { let value = 2; value; } value;",
+        )
+        .expect("valid source file");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
+
+        let values: Vec<_> = parsed
+            .semantic
+            .bindings
+            .iter()
+            .filter(|binding| binding.name == "value")
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert_ne!(values[0].id, values[1].id);
+        assert_ne!(values[0].scope, values[1].scope);
+        assert!(
+            values
+                .iter()
+                .all(|binding| binding.kind == ResolvedBindingKind::Let)
+        );
+
+        let references: Vec<_> = parsed
+            .semantic
+            .references
+            .iter()
+            .filter(|reference| reference.name == "value")
+            .collect();
+        assert_eq!(references.len(), 2);
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.read && !reference.write)
+        );
+        assert_ne!(references[0].binding, references[1].binding);
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.binding.is_some())
+        );
+    }
+
+    #[test]
+    fn treats_named_function_expression_name_as_immutable_lexical_binding() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "named-function",
+            "memory://named-function.js",
+            None,
+            "const value = function inner() { return inner; };",
+        )
+        .expect("valid source file");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
+        let inner = parsed
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "inner")
+            .expect("named function expression binding");
+        assert_eq!(inner.kind, ResolvedBindingKind::Const);
+        assert!(!inner.mutable);
+    }
+
+    #[test]
+    fn marks_default_initialized_function_and_arrow_parameters_as_non_simple() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "default-parameters",
+            "memory://default-parameters.js",
+            None,
+            "function run(value = 1) { return value; } const callback = (value = 2) => value;",
+        )
+        .expect("valid source file");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("JavaScript default parameters parse");
+
+        let run = parsed
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.name == "run")
+            .expect("ordinary function descriptor");
+        let arrow = parsed
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .expect("arrow function descriptor");
+        assert!(!run.simple_parameters);
+        assert!(!arrow.simple_parameters);
+    }
+    #[test]
+    fn identifies_parameter_bindings_and_transitive_closure_captures() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "closures",
+            "memory://closures.js",
+            None,
+            "function outer(arg) { let local = arg; return () => local; }",
+        )
+        .expect("valid source file");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
+
+        let parameter = parsed
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "arg")
+            .expect("parameter binding");
+        assert_eq!(parameter.kind, ResolvedBindingKind::Parameter);
+        assert!(parameter.mutable);
+
+        let local = parsed
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "local")
+            .expect("local binding");
+        assert_eq!(local.kind, ResolvedBindingKind::Let);
+
+        let arrow = parsed
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .expect("arrow function");
+        assert_eq!(arrow.captures, vec![local.id.clone()]);
+        assert_eq!(
+            local.scope,
+            arrow
+                .parent_function_scope
+                .as_deref()
+                .expect("nested arrow has an enclosing function environment"),
+            "function-body lexical bindings must share the owning activation environment"
+        );
+        assert!(parsed.semantic.references.iter().any(|reference| {
+            reference.name == "local"
+                && reference.binding.as_deref() == Some(local.id.as_str())
+                && reference.read
+        }));
+    }
+
+    #[test]
+    fn keeps_unresolved_global_references_distinct_from_lexical_bindings() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "globals",
+            "memory://globals.js",
+            None,
+            "const local = 1; console.log(local);",
+        )
+        .expect("valid source file");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("unresolved globals are not parser errors");
+
+        let console = parsed
+            .semantic
+            .references
+            .iter()
+            .find(|reference| reference.name == "console")
+            .expect("global console reference");
+        assert!(console.binding.is_none());
+        let local = parsed
+            .semantic
+            .references
+            .iter()
+            .find(|reference| reference.name == "local")
+            .expect("local reference");
+        assert!(local.binding.is_some());
+    }
+}
+
+#[cfg(test)]
+mod syntax_projection_tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+
+    fn parse_syntax(code: &str) -> (SourceFile, ParsedProgram<'static>) {
+        let allocator = Box::leak(Box::new(Allocator::default()));
+        let source = Box::leak(Box::new(
+            SourceFile::new("syntax-test", "memory:///syntax.js", None, code)
+                .expect("source is valid"),
+        ));
+        let parsed = parse(allocator, source, ParseRequestOptions::default())
+            .expect("JavaScript syntax should parse");
+        (source.clone(), parsed)
+    }
+
+    #[test]
+    fn projects_shadowed_declarations_and_control_flow_with_original_spans() {
+        let code = "let value = 1; { let value = 2; value; } if (value < 3) value = value + 1;";
+        let (_source, parsed) = parse_syntax(code);
+        let program = &parsed.syntax.functions[0];
+        let values: Vec<_> = parsed
+            .semantic
+            .bindings
+            .iter()
+            .filter(|binding| binding.name == "value")
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert_ne!(values[0].id, values[1].id);
+        assert!(
+            program
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::Block { .. }))
+        );
+        assert!(
+            program
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::If { .. }))
+        );
+        assert!(program.span.end_byte as usize <= code.len());
+    }
+
+    #[test]
+    fn projects_function_parameters_calls_and_arrow_captures() {
+        let code = "function outer(seed) { const callback = () => call(seed); return callback; }";
+        let (_source, parsed) = parse_syntax(code);
+        let outer = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.name == "outer")
+            .unwrap();
+        let arrow = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .unwrap();
+        assert_eq!(outer.parameters.len(), 1);
+        assert_eq!(arrow.captures.len(), 1);
+        assert!(
+            outer
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::Variable { .. }))
+        );
+        assert!(arrow.body.iter().any(|statement| matches!(
+            statement,
+            SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Call { .. }),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn unsupported_spread_arguments_are_explicit_not_silently_dropped() {
+        let (_source, parsed) = parse_syntax("function invoke(fn, args) { return fn(...args); }");
+        let function = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.name == "invoke")
+            .unwrap();
+        assert!(matches!(
+            function.body.first(),
+            Some(SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Unsupported { syntax, .. }),
+                ..
+            }) if syntax == "spread_call_argument"
+        ));
     }
 }

@@ -177,6 +177,10 @@
     {
       "path": "tests/core-ir/fixtures/positive-host-call.json",
       "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-dynamic-environment-store.json",
+      "expect": "accepted"
     }
   ]
 }

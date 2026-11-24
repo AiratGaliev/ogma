@@ -1,6 +1,6 @@
 # Rust workspace and M1 crate boundaries
 
-**Status:** M1 bootstrap. `ogma-frontend` now contains the implemented JavaScript parser/source-diagnostics slice delivered by OGM-41. The remaining packages establish ownership and dependency boundaries; their presence does not claim that compiler/Core IR lowering, Runtime, verifier execution, interpreter or embedding behavior is complete.
+**Status:** M1 implementation is in progress. OGM-41 delivers the pinned Oxc parser and source diagnostics. OGM-42 currently provides the owned Rust Core IR v1 model/verifier, Oxc-backed semantic/syntax projection and compiler-owned AST-to-Core-IR lowering for the supported synchronous subset. `ogma-compiler::compile()` composes semantic analysis and verified function-document emission; Core IR-to-OGMB compilation, Runtime, interpreter and embedding remain owned by their respective issues.
 
 ## Workspace baseline
 
@@ -12,11 +12,11 @@ The root `Cargo.lock` covers the seven production workspace members. The complet
 
 | Crate | Responsibility | Internal dependencies |
 |---|---|---|
-| `ogma-frontend` | JavaScript parsing boundary, AST ownership, source spans and diagnostics (OGM-41) | None |
-| `ogma-core-ir` | Canonical backend-neutral Core IR representation and validation (OGM-42) | None |
+| `ogma-frontend` | JavaScript parsing, Oxc semantic resolution, AST ownership, source spans/diagnostics and owned scope/binding/reference/capture snapshot (OGM-41/42) | Oxc parser/semantic/AST visitor crates |
+| `ogma-core-ir` | Canonical backend-neutral Core IR v1 owned representation, semantic verifier and fixture cross-checks (OGM-42) | `serde`, `serde_json` |
 | `ogma-runtime` | Runtime Values, heap, objects/functions, explicit roots and shared language operations (OGM-43/44) | None |
 | `ogma-bytecode` | Portable OGMB container, decoding/encoding and verifier boundary (OGM-45) | None |
-| `ogma-compiler` | Compile-time orchestration from frontend/Core IR to portable bytecode (OGM-42/45) | `ogma-frontend`, `ogma-core-ir`, `ogma-bytecode` |
+| `ogma-compiler` | Compiler-owned semantic analysis and lowering of frontend syntax into verified Core IR v1 documents (OGM-42); later Core IR-to-OGMB compilation (OGM-45) | `ogma-frontend`, `ogma-core-ir`, `ogma-bytecode` |
 | `ogma-interpreter` | Execution of verified portable bytecode using the shared Runtime (OGM-46) | `ogma-bytecode`, `ogma-runtime` |
 | `ogma-embedding` | Consumer-facing Rust Runtime/Context and host-call API (OGM-47) | `ogma-interpreter`, `ogma-runtime` |
 
@@ -40,7 +40,7 @@ This is the complete initial production package set justified by M1. The JavaScr
 
 ## Dependency and feature policy
 
-- The M1 JavaScript frontend pins Oxc 0.158.0 for parsing and early-error analysis. Its transitive dependency graph is locked at the root; Oxc stays within `ogma-frontend` and must not leak into interpreter-only Runtime packages. OGM-14 contains the bounded Oxc/SWC dependency-footprint evidence; OGM-41 records the production integration boundary.
+- The M1 JavaScript frontend pins Oxc 0.158.0 for parsing, early-error analysis and lexical symbol/reference resolution. Oxc stays within `ogma-frontend`; compiler, Core IR, interpreter and Runtime consume the owned Ogma contracts and must not depend directly on Oxc. OGM-14 contains the bounded Oxc/SWC dependency-footprint evidence; OGM-41/42 record the production integration boundary.
 - Internal dependencies are declared once in `[workspace.dependencies]` and inherited by member manifests.
 - There are no Cargo feature flags at bootstrap. Do not create empty or speculative features merely to mirror logical identifiers in `contracts/runtime-profiles/v1/profiles.json`; those identifiers remain profile-contract data until a concrete implementation consumes them.
 - Native Providers are a future Host Integration/build capability, not a reason to add an M1 crate. Their logical requirement IDs are not Cargo crate names or feature flags; provider crates must be explicitly present in the Rust host's Cargo graph, and Cargo remains authoritative for their versions, feature unification and target dependencies. See [Native Provider Architecture](native-provider-architecture.md).
