@@ -213,7 +213,7 @@ pub struct CollectionReport {
     pub marked_objects: usize,
     /// Number of unreachable cells reclaimed.
     pub reclaimed_objects: usize,
-    /// Charged payload/edge bytes released by the collection.
+    /// Charged cell, payload and edge bytes released by the collection.
     pub reclaimed_bytes: usize,
     /// Charged bytes remaining after sweeping.
     pub used_bytes_after: usize,
@@ -1863,6 +1863,34 @@ mod tests {
             heap.release_external_memory(charge),
             Err(HeapError::StaleExternalCharge)
         );
+
+        let replacement = heap.charge_external_memory(128).unwrap();
+        assert_ne!(charge, replacement);
+        assert_eq!(heap.stats().external_memory_bytes, 128);
+        assert_eq!(
+            heap.release_external_memory(charge),
+            Err(HeapError::StaleExternalCharge)
+        );
+        assert_eq!(heap.stats().external_memory_bytes, 128);
+        heap.release_external_memory(replacement).unwrap();
+        assert_eq!(heap.stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn primitive_host_handles_are_persistent_but_not_gc_roots() {
+        let mut runtime_heap = heap(4096, 1024);
+        let handle = runtime_heap
+            .retain_host_value(Value::number(42.0))
+            .unwrap();
+
+        assert_eq!(runtime_heap.root_snapshot().persistent_host_roots, 0);
+        assert_eq!(
+            runtime_heap.resolve_host_handle(handle).unwrap().as_number(),
+            Some(42.0)
+        );
+        assert_eq!(runtime_heap.collect().unwrap().marked_objects, 0);
+        runtime_heap.release_host_handle(handle).unwrap();
+        assert_eq!(runtime_heap.resolve_host_handle(handle), Err(HeapError::StaleHostHandle));
     }
 
     #[test]
