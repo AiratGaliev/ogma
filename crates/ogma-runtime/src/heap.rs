@@ -478,7 +478,12 @@ impl Heap {
             _ => return Err(HeapError::InvalidObjectKind),
         };
         let index = self.validate_ref(reference)?;
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::String(units) => Ok(units),
             CellKind::Object | CellKind::Function => Err(HeapError::InvalidObjectKind),
         }
@@ -862,8 +867,9 @@ impl Heap {
                 slot.generation = next_generation;
                 if next_generation != u32::MAX {
                     slot.free_next = self.free_slot_head;
-                    self.free_slot_head = Some(u32::try_from(slot_index)
-                        .map_err(|_| HeapError::HeapCapacityExceeded)?);
+                    self.free_slot_head = Some(
+                        u32::try_from(slot_index).map_err(|_| HeapError::HeapCapacityExceeded)?,
+                    );
                 }
             }
             reclaimed_objects = reclaimed_objects.saturating_add(1);
@@ -878,7 +884,10 @@ impl Heap {
             .reclaimed_objects
             .checked_add(reclaimed_objects as u64)
             .ok_or(HeapError::SizeOverflow)?;
-        self.collections = self.collections.checked_add(1).ok_or(HeapError::SizeOverflow)?;
+        self.collections = self
+            .collections
+            .checked_add(1)
+            .ok_or(HeapError::SizeOverflow)?;
 
         Ok(CollectionReport {
             roots_scanned,
@@ -895,7 +904,9 @@ impl Heap {
             ValueRepr::Undefined | ValueRepr::Null => Ok(false),
             ValueRepr::Boolean(boolean) => Ok(boolean),
             ValueRepr::Number(number) => Ok(number != 0.0 && !number.is_nan()),
-            ValueRepr::String(reference) => Ok(!self.string_utf16(Value::from_string(reference))?.is_empty()),
+            ValueRepr::String(reference) => {
+                Ok(!self.string_utf16(Value::from_string(reference))?.is_empty())
+            }
             ValueRepr::Object(reference) | ValueRepr::Function(reference) => {
                 self.validate_ref(reference)?;
                 Ok(true)
@@ -929,8 +940,9 @@ impl Heap {
         self.validate_value(left)?;
         self.validate_value(right)?;
         match (left.repr(), right.repr()) {
-            (ValueRepr::Undefined, ValueRepr::Undefined)
-            | (ValueRepr::Null, ValueRepr::Null) => Ok(true),
+            (ValueRepr::Undefined, ValueRepr::Undefined) | (ValueRepr::Null, ValueRepr::Null) => {
+                Ok(true)
+            }
             (ValueRepr::Boolean(a), ValueRepr::Boolean(b)) => Ok(a == b),
             (ValueRepr::Number(a), ValueRepr::Number(b)) => Ok(a == b),
             (ValueRepr::String(a), ValueRepr::String(b)) => {
@@ -948,7 +960,8 @@ impl Heap {
         self.validate_value(right)?;
         match (left.repr(), right.repr()) {
             (ValueRepr::Number(a), ValueRepr::Number(b)) => {
-                Ok((a.is_nan() && b.is_nan()) || (a == b && (a != 0.0 || a.to_bits() == b.to_bits())))
+                Ok((a.is_nan() && b.is_nan())
+                    || (a == b && (a != 0.0 || a.to_bits() == b.to_bits())))
             }
             (ValueRepr::String(a), ValueRepr::String(b)) => {
                 Ok(self.string_at(a)? == self.string_at(b)?)
@@ -1032,7 +1045,8 @@ impl Heap {
             });
             index
         } else {
-            let index = u32::try_from(self.slots.len()).map_err(|_| HeapError::HeapCapacityExceeded)?;
+            let index =
+                u32::try_from(self.slots.len()).map_err(|_| HeapError::HeapCapacityExceeded)?;
             self.slots.push(HeapSlot {
                 generation: 1,
                 cell: Some(HeapCell {
@@ -1046,8 +1060,14 @@ impl Heap {
             index
         };
         let generation = self.slots[index as usize].generation;
-        self.allocations = self.allocations.checked_add(1).ok_or(HeapError::SizeOverflow)?;
-        self.live_objects = self.live_objects.checked_add(1).ok_or(HeapError::SizeOverflow)?;
+        self.allocations = self
+            .allocations
+            .checked_add(1)
+            .ok_or(HeapError::SizeOverflow)?;
+        self.live_objects = self
+            .live_objects
+            .checked_add(1)
+            .ok_or(HeapError::SizeOverflow)?;
         Ok(GcRef {
             heap_id: self.heap_id,
             index,
@@ -1088,7 +1108,12 @@ impl Heap {
 
     fn string_at(&self, reference: GcRef) -> Result<&[u16], HeapError> {
         let index = self.validate_ref(reference)?;
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::String(units) => Ok(units),
             CellKind::Object | CellKind::Function => Err(HeapError::InvalidObjectKind),
         }
@@ -1098,9 +1123,17 @@ impl Heap {
         if frame.heap_id != self.heap_id {
             return Err(HeapError::WrongHeap);
         }
-        if self.frames.last().is_some_and(|current| current.serial == frame.serial) {
+        if self
+            .frames
+            .last()
+            .is_some_and(|current| current.serial == frame.serial)
+        {
             Ok(())
-        } else if self.frames.iter().any(|current| current.serial == frame.serial) {
+        } else if self
+            .frames
+            .iter()
+            .any(|current| current.serial == frame.serial)
+        {
             Err(HeapError::RootStackOrder)
         } else {
             Err(HeapError::InvalidFrame)
@@ -1111,9 +1144,17 @@ impl Heap {
         if scope.heap_id != self.heap_id {
             return Err(HeapError::WrongHeap);
         }
-        if self.scopes.last().is_some_and(|current| current.serial == scope.serial) {
+        if self
+            .scopes
+            .last()
+            .is_some_and(|current| current.serial == scope.serial)
+        {
             Ok(())
-        } else if self.scopes.iter().any(|current| current.serial == scope.serial) {
+        } else if self
+            .scopes
+            .iter()
+            .any(|current| current.serial == scope.serial)
+        {
             Err(HeapError::RootStackOrder)
         } else {
             Err(HeapError::InvalidScope)
@@ -1249,13 +1290,14 @@ fn is_ecmascript_whitespace(character: char) -> bool {
             | '\u{0020}'
             | '\u{00A0}'
             | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{FEFF}'
+            | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
     )
 }
 
@@ -1271,9 +1313,15 @@ mod tests {
     #[test]
     fn utf16_strings_preserve_code_units_and_compare_by_content() {
         let mut heap = heap(4096, 2048);
-        let first = heap.allocate_string_utf16(&[0x0061, 0xD800, 0x0062]).unwrap();
-        let second = heap.allocate_string_utf16(&[0x0061, 0xD800, 0x0062]).unwrap();
-        let different = heap.allocate_string_utf16(&[0x0061, 0xD801, 0x0062]).unwrap();
+        let first = heap
+            .allocate_string_utf16(&[0x0061, 0xD800, 0x0062])
+            .unwrap();
+        let second = heap
+            .allocate_string_utf16(&[0x0061, 0xD800, 0x0062])
+            .unwrap();
+        let different = heap
+            .allocate_string_utf16(&[0x0061, 0xD801, 0x0062])
+            .unwrap();
         assert_eq!(heap.string_utf16(first).unwrap(), &[0x0061, 0xD800, 0x0062]);
         assert!(heap.strict_equal(first, second).unwrap());
         assert!(!heap.strict_equal(first, different).unwrap());
@@ -1287,12 +1335,36 @@ mod tests {
         assert!(!heap.strict_equal(nan_a, nan_b).unwrap());
         assert!(heap.same_value(nan_a, nan_b).unwrap());
         assert!(heap.same_value_zero(nan_a, nan_b).unwrap());
-        assert!(heap.strict_equal(Value::number(0.0), Value::number(-0.0)).unwrap());
-        assert!(!heap.same_value(Value::number(0.0), Value::number(-0.0)).unwrap());
-        assert!(heap.same_value_zero(Value::number(0.0), Value::number(-0.0)).unwrap());
-        assert!(heap.strict_equal(Value::number(f64::INFINITY), Value::number(f64::INFINITY)).unwrap());
-        assert!(!heap.strict_equal(Value::number(f64::INFINITY), Value::number(f64::NEG_INFINITY)).unwrap());
-        assert!(!heap.strict_equal(Value::undefined(), Value::null()).unwrap());
+        assert!(
+            heap.strict_equal(Value::number(0.0), Value::number(-0.0))
+                .unwrap()
+        );
+        assert!(
+            !heap
+                .same_value(Value::number(0.0), Value::number(-0.0))
+                .unwrap()
+        );
+        assert!(
+            heap.same_value_zero(Value::number(0.0), Value::number(-0.0))
+                .unwrap()
+        );
+        assert!(
+            heap.strict_equal(Value::number(f64::INFINITY), Value::number(f64::INFINITY))
+                .unwrap()
+        );
+        assert!(
+            !heap
+                .strict_equal(
+                    Value::number(f64::INFINITY),
+                    Value::number(f64::NEG_INFINITY)
+                )
+                .unwrap()
+        );
+        assert!(
+            !heap
+                .strict_equal(Value::undefined(), Value::null())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1391,13 +1463,19 @@ mod tests {
         let mut second = heap(8192, 2048);
         let outer_scope = first.open_scope().unwrap();
         let inner_scope = first.open_scope().unwrap();
-        assert_eq!(first.close_scope(outer_scope), Err(HeapError::RootStackOrder));
+        assert_eq!(
+            first.close_scope(outer_scope),
+            Err(HeapError::RootStackOrder)
+        );
         first.close_scope(inner_scope).unwrap();
         first.close_scope(outer_scope).unwrap();
 
         let outer_frame = first.enter_frame().unwrap();
         let inner_frame = first.enter_frame().unwrap();
-        assert_eq!(first.leave_frame(outer_frame), Err(HeapError::RootStackOrder));
+        assert_eq!(
+            first.leave_frame(outer_frame),
+            Err(HeapError::RootStackOrder)
+        );
         first.leave_frame(inner_frame).unwrap();
         first.leave_frame(outer_frame).unwrap();
 
@@ -1414,17 +1492,31 @@ mod tests {
         let original_ref = original.gc_ref().unwrap();
         let old_handle = heap.retain_host_value(original).unwrap();
         heap.release_host_handle(old_handle).unwrap();
-        assert_eq!(heap.resolve_host_handle(old_handle).unwrap_err(), HeapError::StaleHostHandle);
+        assert_eq!(
+            heap.resolve_host_handle(old_handle).unwrap_err(),
+            HeapError::StaleHostHandle
+        );
         heap.collect().unwrap();
         let replacement = heap.allocate_object().unwrap();
         let replacement_ref = replacement.gc_ref().unwrap();
         assert_eq!(original_ref.index, replacement_ref.index);
         assert_ne!(original_ref.generation, replacement_ref.generation);
-        assert_eq!(heap.strict_equal(original, replacement), Err(HeapError::StaleReference));
+        assert_eq!(
+            heap.strict_equal(original, replacement),
+            Err(HeapError::StaleReference)
+        );
         let replacement_handle = heap.retain_host_value(replacement).unwrap();
         assert_ne!(old_handle, replacement_handle);
-        assert_eq!(heap.resolve_host_handle(replacement_handle).unwrap().value_type(), ValueType::Object);
-        assert_eq!(heap.resolve_host_handle(old_handle).unwrap_err(), HeapError::StaleHostHandle);
+        assert_eq!(
+            heap.resolve_host_handle(replacement_handle)
+                .unwrap()
+                .value_type(),
+            ValueType::Object
+        );
+        assert_eq!(
+            heap.resolve_host_handle(old_handle).unwrap_err(),
+            HeapError::StaleHostHandle
+        );
     }
 
     #[test]
@@ -1440,7 +1532,10 @@ mod tests {
         let stale = heap.allocate_object().unwrap();
         heap.collect().unwrap();
         let scope = heap.open_scope().unwrap();
-        assert_eq!(heap.scope_root(scope, stale), Err(HeapError::StaleReference));
+        assert_eq!(
+            heap.scope_root(scope, stale),
+            Err(HeapError::StaleReference)
+        );
         assert_eq!(heap.root_snapshot().temporary_scope_roots, 0);
         heap.close_scope(scope).unwrap();
     }
@@ -1493,7 +1588,10 @@ mod tests {
         let value = first.allocate_object().unwrap();
         let handle = first.retain_host_value(value).unwrap();
         let charge = first.charge_external_memory(32).unwrap();
-        assert_eq!(second.resolve_host_handle(handle).unwrap_err(), HeapError::WrongHeap);
+        assert_eq!(
+            second.resolve_host_handle(handle).unwrap_err(),
+            HeapError::WrongHeap
+        );
         assert_eq!(
             second.release_external_memory(charge),
             Err(HeapError::WrongHeap)
@@ -1523,10 +1621,16 @@ mod tests {
         let inner = heap.open_scope().unwrap();
         heap.scope_root(inner, callback_value).unwrap();
         heap.collect().unwrap();
-        assert_eq!(heap.resolve_host_handle(persistent).unwrap().value_type(), ValueType::Object);
+        assert_eq!(
+            heap.resolve_host_handle(persistent).unwrap().value_type(),
+            ValueType::Object
+        );
         heap.close_scope(inner).unwrap();
         heap.collect().unwrap();
-        assert_eq!(heap.resolve_host_handle(persistent).unwrap().value_type(), ValueType::Object);
+        assert_eq!(
+            heap.resolve_host_handle(persistent).unwrap().value_type(),
+            ValueType::Object
+        );
         heap.close_scope(outer).unwrap();
         heap.release_host_handle(persistent).unwrap();
         assert_eq!(heap.collect().unwrap().reclaimed_objects, 1);

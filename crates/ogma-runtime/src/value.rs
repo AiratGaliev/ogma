@@ -189,10 +189,19 @@ mod tests {
         assert_eq!(Value::undefined().value_type(), ValueType::Undefined);
         assert_eq!(Value::null().value_type(), ValueType::Null);
         assert_eq!(Value::boolean(true).as_boolean(), Some(true));
-        assert_eq!(Value::number(f64::INFINITY).as_number(), Some(f64::INFINITY));
-        assert_eq!(Value::number(f64::NEG_INFINITY).as_number(), Some(f64::NEG_INFINITY));
+        assert_eq!(
+            Value::number(f64::INFINITY).as_number(),
+            Some(f64::INFINITY)
+        );
+        assert_eq!(
+            Value::number(f64::NEG_INFINITY).as_number(),
+            Some(f64::NEG_INFINITY)
+        );
         assert!(Value::number(f64::NAN).as_number().unwrap().is_nan());
-        assert_eq!(Value::number(-0.0).as_number().unwrap().to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(
+            Value::number(-0.0).as_number().unwrap().to_bits(),
+            (-0.0_f64).to_bits()
+        );
         assert!(Value::undefined().is_undefined());
         assert!(Value::null().is_null());
         assert_eq!(Value::from(42_i32).as_number(), Some(42.0));
@@ -205,9 +214,18 @@ mod tests {
             index: 0,
             generation: 1,
         };
-        assert_eq!(Value::from_string(reference).value_type(), ValueType::String);
-        assert_eq!(Value::from_object(reference).value_type(), ValueType::Object);
-        assert_eq!(Value::from_function(reference).value_type(), ValueType::Function);
+        assert_eq!(
+            Value::from_string(reference).value_type(),
+            ValueType::String
+        );
+        assert_eq!(
+            Value::from_object(reference).value_type(),
+            ValueType::Object
+        );
+        assert_eq!(
+            Value::from_function(reference).value_type(),
+            ValueType::Function
+        );
         assert_eq!(Value::from_object(reference).gc_ref(), Some(reference));
     }
 }
