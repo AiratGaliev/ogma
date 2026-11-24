@@ -160,6 +160,10 @@ class CoreIRVerifierTests(unittest.TestCase):
         m=load(MANIFEST); self.assertEqual(sum(x["expect"]=="accepted" for x in m["fixtures"]),8)
         self.assertEqual(sum(x["expect"]=="rejected" for x in m["fixtures"]),21)
 
+    def test_dynamic_environment_store_accepts_unboxed_values(self):
+        doc=fixture("positive-dynamic-environment-store.json")
+        self.assertEqual(codes(doc), set())
+
     def test_environment_store_requires_matching_value_type(self):
         doc=fixture("positive-closure-source.json")
         store=next(i for b in doc["function"]["blocks"] for i in b["instructions"] if i["op"]=="env.store")
