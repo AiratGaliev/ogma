@@ -41,7 +41,7 @@ Each Runtime owns a thread-affine `Heap` and receives a unique heap identity. In
 
 `HostHandle` is a separate opaque persistent token with its own generation-checked registry. It may retain a primitive or a managed value; only managed values contribute a GC root. Releasing a handle invalidates the token before a slot can be reused. Ordinary object graph operations use `GcRef` directly and never resolve a host handle.
 
-The first production collector is non-moving tracing mark-sweep, consistent with the preferred M0 comparison candidate. The mark worklist is linked through cell metadata already stored in the slot table. This avoids allocating an unbounded traversal vector during collection and prevents collection scratch allocation from bypassing the heap quota.
+The first production collector is non-moving tracing mark-sweep, consistent with the preferred M0 comparison candidate. The mark worklist is linked through metadata in the separately allocated cell blocks. This avoids allocating an unbounded traversal vector during collection and prevents collection scratch allocation from bypassing the heap quota.
 
 ## 4. Explicit roots
 
