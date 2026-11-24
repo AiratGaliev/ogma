@@ -3464,7 +3464,8 @@ mod tests {
 
     #[test]
     fn lowers_c_style_for_loop_with_effect_backedge() {
-        let source = source("function run() { for (let index = 0; index < 2; index = index + 1) {} }");
+        let source =
+            source("function run() { for (let index = 0; index < 2; index = index + 1) {} }");
         let span = whole_span(&source);
         let index = binding("binding_index", "index", BindingKind::Let);
         let initializer = SyntaxForInitializer::Variable {
@@ -3557,17 +3558,18 @@ mod tests {
             update_block.terminator,
             Terminator::Jump { ref target, .. } if target == &header.id
         ));
-        assert!(header.parameters.iter().any(|parameter| {
-            matches!(parameter, BlockParameter::Effect(_))
-        }));
+        assert!(
+            header
+                .parameters
+                .iter()
+                .any(|parameter| { matches!(parameter, BlockParameter::Effect(_)) })
+        );
         assert!(verify_document(&documents[0]).is_empty());
     }
 
     #[test]
     fn hoists_function_declarations_before_the_first_read() {
-        let source = source(
-            "function run() { return child; function child() { return 7; } }",
-        );
+        let source = source("function run() { return child; function child() { return 7; } }");
         let span = whole_span(&source);
         let child_binding = binding("binding_child", "child", BindingKind::Var);
         let parent = function_syntax(
@@ -3666,18 +3668,25 @@ mod tests {
             .iter()
             .position(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(child_binding.id.as_str())
-                    && instruction.result.as_ref().is_some_and(|result| {
-                        result.semantic_type == SemanticType::Function
-                    })
+                    && instruction
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.semantic_type == SemanticType::Function)
             })
             .expect("hoisted function binding receives a closure");
         let load = instructions
             .iter()
             .position(|instruction| {
                 instruction.op == "env.load"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(child_binding.id.as_str())
             })
             .expect("the earlier source return reads the initialized binding");
