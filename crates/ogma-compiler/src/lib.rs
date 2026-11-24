@@ -381,6 +381,44 @@ mod tests {
     }
 
     #[test]
+    fn uses_last_duplicate_sloppy_function_declaration_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "duplicate-function-declarations",
+            "memory:///duplicate-function-declarations.js",
+            None,
+            "function choose() { return 1; } function choose() { return 2; } choose();",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("duplicate function declarations are valid in sloppy Script code");
+        let compiled = compile(&parsed).expect("duplicate function binding lowers");
+
+        let declarations: Vec<_> = compiled
+            .semantic
+            .functions
+            .iter()
+            .filter(|function| function.name == "choose")
+            .collect();
+        assert_eq!(declarations.len(), 2);
+        let program = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "<program>")
+            .expect("Program Core IR document");
+        let closures: Vec<_> = program
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter(|instruction| instruction.op == "closure.create")
+            .filter_map(|instruction| instruction.attributes.get("function"))
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert_eq!(closures, vec![declarations[1].id.as_str()]);
+        assert!(verify_document(program).is_empty());
+    }
+    #[test]
     fn preserves_for_header_tdz_load_before_initialization_through_real_frontend_pipeline() {
         let allocator = Allocator::default();
         let source = SourceFile::new(

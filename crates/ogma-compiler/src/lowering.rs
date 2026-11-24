@@ -1643,7 +1643,11 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         statements: &[SyntaxStatement],
     ) -> Result<(), LoweringDiagnostic> {
-        for statement in statements {
+        // Sloppy scripts may contain duplicate function declarations in
+        // the same function-scoped environment. FunctionDeclarationInstantiation
+        // keeps the last declaration for a duplicate name, so visit declarations
+        // in reverse source order and materialize each binding once.
+        for statement in statements.iter().rev() {
             if let SyntaxStatement::FunctionDeclaration {
                 function,
                 binding: Some(binding),
