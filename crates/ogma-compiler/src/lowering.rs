@@ -320,7 +320,6 @@ struct FunctionCompiler<'a> {
     blocks: Vec<BasicBlock>,
     current: Option<usize>,
     current_effect: Option<String>,
-    current_scope: String,
     effect_enabled: bool,
     next_value: u64,
     next_instruction: u64,
@@ -431,7 +430,6 @@ impl<'a> FunctionCompiler<'a> {
             blocks: Vec::new(),
             current: None,
             current_effect: None,
-            current_scope: semantic.environment.id.clone(),
             effect_enabled,
             next_value: 0,
             next_instruction: 0,
@@ -581,7 +579,7 @@ impl<'a> FunctionCompiler<'a> {
                 line: span.end.line,
                 column: span.end.column_utf16,
             },
-            scope: Some(self.current_scope.clone()),
+            scope: Some(self.semantic.environment.id.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -591,7 +589,7 @@ impl<'a> FunctionCompiler<'a> {
     fn generated_source(&self, reason: &str, bindings: Vec<String>) -> Source {
         Source::Generated {
             reason: reason.to_owned(),
-            scope: Some(self.current_scope.clone()),
+            scope: Some(self.semantic.environment.id.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -1509,15 +1507,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_statement(&mut self, statement: &SyntaxStatement) -> Result<(), LoweringDiagnostic> {
         match statement {
-            SyntaxStatement::Block { scope, body, .. } => {
-                let previous_scope = self.current_scope.clone();
-                if let Some(scope) = scope {
-                    self.current_scope.clone_from(scope);
-                }
-                let result = self.compile_sequence(body);
-                self.current_scope = previous_scope;
-                result
-            }
+            SyntaxStatement::Block { body, .. } => self.compile_sequence(body),
             SyntaxStatement::Variable {
                 kind,
                 declarations,
@@ -1614,27 +1604,19 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_if(test, consequent, alternate.as_deref(), *span),
             SyntaxStatement::While { test, body, span } => self.compile_while(test, body, *span),
             SyntaxStatement::For {
-                scope,
                 initializer,
                 test,
                 update,
                 body,
                 span,
-            } => {
-                let previous_scope = self.current_scope.clone();
-                if let Some(scope) = scope {
-                    self.current_scope.clone_from(scope);
-                }
-                let result = self.compile_for(
-                    initializer.as_ref(),
-                    test.as_ref(),
-                    update.as_ref(),
-                    body,
-                    *span,
-                );
-                self.current_scope = previous_scope;
-                result
-            }
+                ..
+            } => self.compile_for(
+                initializer.as_ref(),
+                test.as_ref(),
+                update.as_ref(),
+                body,
+                *span,
+            ),
             SyntaxStatement::Return { value, span } => {
                 let value = value
                     .as_ref()
@@ -3357,7 +3339,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_nested_lexical_scope_identity_in_instruction_metadata() {
+    fn preserves_nested_binding_identity_in_function_scope_metadata() {
         let source = source("function run() { { let inner = 1; } }");
         let span = whole_span(&source);
         let inner = binding("binding_inner", "inner", BindingKind::Let);
@@ -3407,7 +3389,11 @@ mod tests {
         let scope = match &store.source {
             Source::User { scope, .. } | Source::Generated { scope, .. } => scope.as_deref(),
         };
-        assert_eq!(scope, Some("scope_inner_block"));
+        assert_eq!(scope, Some("scope_1"));
+        let source_bindings = match &store.source {
+            Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings,
+        };
+        assert!(source_bindings.contains(&inner.id));
         assert!(verify_document(&documents[0]).is_empty());
     }
 
@@ -3645,7 +3631,11 @@ mod tests {
         let initializer_scope = match &initializer_store.source {
             Source::User { scope, .. } | Source::Generated { scope, .. } => scope.as_deref(),
         };
-        assert_eq!(initializer_scope, Some("scope_for"));
+        assert_eq!(initializer_scope, Some("scope_1"));
+        let initializer_bindings = match &initializer_store.source {
+            Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings,
+        };
+        assert!(initializer_bindings.contains(&index.id));
         let header = function
             .blocks
             .iter()
