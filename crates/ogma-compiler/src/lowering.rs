@@ -2734,4 +2734,278 @@ mod tests {
         .expect_err("unsupported statement must fail closed");
         assert_eq!(unsupported[0].code, "lowering.unsupported_statement");
     }
+
+    #[test]
+    fn lowers_loop_cfg_with_verified_backedge() {
+        let source = source("function run() { while (false) {} }");
+        let span = whole_span(&source);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::While {
+                test: SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Boolean(false),
+                    span,
+                },
+                body: Box::new(SyntaxStatement::Empty { span }),
+                span,
+            }],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("while loop lowers to verified CFG");
+        let function = &documents[0].function;
+        assert_eq!(function.blocks.len(), 4);
+        let header = function
+            .blocks
+            .iter()
+            .find(|block| matches!(block.terminator, Terminator::Branch { .. }))
+            .expect("loop header branch exists");
+        let body_id = match &header.terminator {
+            Terminator::Branch { then_edge, .. } => then_edge.target.as_str(),
+            _ => unreachable!(),
+        };
+        let body = function
+            .blocks
+            .iter()
+            .find(|block| block.id == body_id)
+            .expect("loop body block exists");
+        assert!(matches!(
+            body.terminator,
+            Terminator::Jump { ref target, .. } if target == &header.id
+        ));
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_calls_with_explicit_receiver_effects_and_typed_result() {
+        let source = source("function run(callback) { return callback(7); }");
+        let span = whole_span(&source);
+        let callback = binding("binding_callback", "callback", BindingKind::Parameter);
+        let param = parameter("param_run_0", "callback", &callback.id);
+        let call_span = span;
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Call {
+                    callee: Box::new(identifier("callback", &callback.id, span)),
+                    arguments: vec![SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Number(7.0),
+                        span,
+                    }],
+                    span: call_span,
+                }),
+                span,
+            }],
+            vec![callback.id.clone()],
+        );
+        let module = semantic_module(&source, &syntax, vec![callback], vec![param]);
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("call lowering succeeds");
+        let function = &documents[0].function;
+        let call = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instruction| instruction.op == "js.call")
+            .expect("js.call emitted");
+        assert_eq!(call.operands.len(), 3);
+        assert!(call.effects.may_throw);
+        assert!(call.effects.may_call_host);
+        assert!(call.effects.may_reenter);
+        assert!(call.effect_in.is_some());
+        assert!(call.effect_out.is_some());
+        assert_eq!(
+            function.return_signature.as_ref().map(|result| result.semantic_type),
+            Some(SemanticType::Dynamic)
+        );
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_throw_to_after_throw_completion() {
+        let source = source("function run() { throw 'failure'; }");
+        let span = whole_span(&source);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Throw {
+                value: SyntaxExpression::Literal {
+                    value: SyntaxLiteral::String("failure".to_owned()),
+                    span,
+                },
+                span,
+            }],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("throw completion lowers");
+        let function = &documents[0].function;
+        let block = &function.blocks[0];
+        assert_eq!(block.instructions.last().map(|item| item.op.as_str()), Some("js.throw"));
+        assert!(matches!(
+            block.terminator,
+            Terminator::Unreachable {
+                reason: UnreachableReason::AfterThrow,
+                ..
+            }
+        ));
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_mutable_closure_capture_as_shared_environment_cell() {
+        let source = source(
+            "function run() { let value = 1; return function child() { return value; }; }",
+        );
+        let span = whole_span(&source);
+        let binding = binding("binding_value", "value", BindingKind::Let);
+        let parent = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Let,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(binding.id.clone()),
+                        name: binding.name.clone(),
+                        initializer: Some(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(1.0),
+                            span,
+                        }),
+                        span,
+                    }],
+                    span,
+                },
+                SyntaxStatement::Return {
+                    value: Some(SyntaxExpression::Function {
+                        function: "fn_child".to_owned(),
+                        captures: vec![binding.id.clone()],
+                        span,
+                    }),
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let child = ResolvedSyntaxFunction {
+            id: "fn_child".to_owned(),
+            name: "child".to_owned(),
+            scope: "scope_2".to_owned(),
+            parent_function_scope: Some(parent.scope.clone()),
+            parameters: Vec::new(),
+            captures: vec![binding.id.clone()],
+            body: vec![SyntaxStatement::Return {
+                value: Some(identifier("value", &binding.id, span)),
+                span,
+            }],
+            span,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        };
+        let capture = Capture {
+            id: "capture_value".to_owned(),
+            source_environment: parent.scope.clone(),
+            binding: binding.id.clone(),
+            name: binding.name.clone(),
+            mutable: true,
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Cell,
+        };
+        let parent_semantics = FunctionSemantics {
+            id: parent.id.clone(),
+            name: parent.name.clone(),
+            environment: Environment {
+                id: parent.scope.clone(),
+                parent: parent.parent_function_scope.clone(),
+                bindings: vec![binding.clone()],
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: parent.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let child_semantics = FunctionSemantics {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            environment: Environment {
+                id: child.scope.clone(),
+                parent: child.parent_function_scope.clone(),
+                bindings: Vec::new(),
+            },
+            parameters: Vec::new(),
+            captures: vec![capture.clone()],
+            span,
+            parent_function_scope: child.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let module = SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![parent_semantics, child_semantics],
+            bindings: vec![SemanticBinding {
+                ir: binding.clone(),
+                lexical_scope: parent.scope.clone(),
+                declaration: span,
+            }],
+        };
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![parent, child],
+            },
+        )
+        .expect("captured mutable closure lowers");
+        assert_eq!(documents.len(), 2);
+        let closure = documents[0]
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instruction| instruction.op == "closure.create")
+            .expect("closure.create emitted");
+        let captures = closure
+            .attributes
+            .get("captures")
+            .and_then(JsonValue::as_array)
+            .expect("capture descriptors emitted");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(
+            captures[0].get("binding").and_then(JsonValue::as_str),
+            Some(binding.id.as_str())
+        );
+        assert_eq!(
+            captures[0].get("mode").and_then(JsonValue::as_str),
+            Some("cell")
+        );
+        assert!(verify_document(&documents[0]).is_empty());
+        assert!(verify_document(&documents[1]).is_empty());
+    }
+
 }
