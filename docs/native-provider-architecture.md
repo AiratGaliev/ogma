@@ -1,8 +1,9 @@
 # Native Provider Architecture
 
 **Status:** Target architecture contract; not a production implementation claim.
+**Implementation owner:** [OGM-107](https://linear.app/ogma-engine/issue/OGM-107/resolve-logical-native-requirements-through-registered-rust-providers), planned M3 capability.
 
-**Architecture authority:** Ogma Notion specification, sections 7.4, 8.9.6, 11 and 20.9.
+**Architecture authority:** Ogma Notion specification, sections 7.4, 8.9.6, 11, 20.9 and 20.12.
 **Related contracts:** [Static Host Modules](static-host-modules-contract.md), [Rust Embedding Code Generation](rust-embedding-codegen-contract.md), [Runtime Feature Profiles](runtime-feature-profiles.md), [Compatibility Profile](compatibility-profile.md), [Rust Workspace](rust-workspace.md).
 
 ## 1. Decision
