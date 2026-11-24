@@ -628,11 +628,7 @@ impl Heap {
             enumerable: descriptor.enumerable.unwrap_or(false),
             configurable: descriptor.configurable.unwrap_or(false),
         };
-        reserve_vec(
-            &mut self.budget,
-            &mut self.object_data_mut(object_index)?.properties,
-            1,
-        )?;
+        self.reserve_object_properties(object_index, 1)?;
         self.add_value_edge(object_index, next.value)?;
         self.object_data_mut(object_index)?
             .properties
@@ -912,11 +908,7 @@ impl Heap {
             })?;
             self.scope_root_reference(scope, reference)?;
             let index = self.validate_ref(reference)?;
-            reserve_vec(
-                &mut self.budget,
-                &mut self.environment_data_mut(index)?.bindings,
-                bindings.len(),
-            )?;
+            self.reserve_environment_bindings(index, bindings.len())?;
             if let Some(parent) = parent {
                 self.add_edge_ref(reference, parent.reference)?;
             }
@@ -1133,11 +1125,7 @@ impl Heap {
             })?;
             self.scope_root_reference(scope, closure_ref)?;
             let closure_index = self.validate_ref(closure_ref)?;
-            reserve_vec(
-                &mut self.budget,
-                &mut self.environment_data_mut(closure_index)?.bindings,
-                definition.captures.len(),
-            )?;
+            self.reserve_environment_bindings(closure_index, definition.captures.len())?;
 
             for (position, capture) in definition.captures.iter().enumerate() {
                 if definition.captures[..position].iter().any(|previous| {
@@ -1527,6 +1515,42 @@ impl Heap {
         }
     }
 
+    fn reserve_object_properties(
+        &mut self,
+        index: usize,
+        additional: usize,
+    ) -> Result<(), HeapError> {
+        let Self { budget, slots, .. } = self;
+        let cell = slots
+            .get_mut(index)
+            .and_then(|slot| slot.cell.as_mut())
+            .ok_or(HeapError::StaleReference)?;
+        let object = match &mut cell.kind {
+            CellKind::Object(data) => data,
+            CellKind::Array(data) => &mut data.object,
+            CellKind::Function(data) => &mut data.object,
+            _ => return Err(HeapError::NotObject),
+        };
+        reserve_vec(budget, &mut object.properties, additional)
+    }
+
+    fn reserve_environment_bindings(
+        &mut self,
+        index: usize,
+        additional: usize,
+    ) -> Result<(), HeapError> {
+        let Self { budget, slots, .. } = self;
+        let cell = slots
+            .get_mut(index)
+            .and_then(|slot| slot.cell.as_mut())
+            .ok_or(HeapError::StaleReference)?;
+        let environment = match &mut cell.kind {
+            CellKind::Environment(data) => data,
+            _ => return Err(HeapError::InvalidObjectKind),
+        };
+        reserve_vec(budget, &mut environment.bindings, additional)
+    }
+
     fn environment_data_mut(&mut self, index: usize) -> Result<&mut EnvironmentData, HeapError> {
         match &mut self.slots[index]
             .cell
@@ -1628,11 +1652,7 @@ impl Heap {
                 }
             }
         }
-        reserve_vec(
-            &mut self.budget,
-            &mut self.object_data_mut(receiver)?.properties,
-            1,
-        )?;
+        self.reserve_object_properties(receiver, 1)?;
         self.add_value_edge(receiver, value)?;
         self.object_data_mut(receiver)?
             .properties
