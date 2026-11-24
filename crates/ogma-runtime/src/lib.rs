@@ -68,9 +68,9 @@ mod heap;
 mod value;
 
 pub use heap::{
-    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    CollectionReport, CompletePropertyDescriptor, ExternalMemoryCharge, FrameToken,
-    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapConfig, HeapError, HeapStats,
-    HostHandle, LexicalEnvironment, PropertyDescriptor, PropertyKey, RootSnapshot, ScopeToken,
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
+    CompletePropertyDescriptor, ExternalMemoryCharge, FrameToken, FunctionDefinition, FunctionId,
+    FunctionKind, Heap, HeapConfig, HeapError, HeapStats, HostHandle, LexicalEnvironment,
+    PropertyDescriptor, PropertyKey, RootSnapshot, ScopeToken,
 };
 pub use value::{Value, ValueType};

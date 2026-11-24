@@ -118,19 +118,31 @@ impl BindingDefinition {
     /// Creates an initialized mutable binding.
     #[must_use]
     pub const fn mutable(id: BindingId, value: Value) -> Self {
-        Self { id, mutable: true, initial_value: Some(value) }
+        Self {
+            id,
+            mutable: true,
+            initial_value: Some(value),
+        }
     }
 
     /// Creates a binding in TDZ.
     #[must_use]
     pub const fn uninitialized(id: BindingId, mutable: bool) -> Self {
-        Self { id, mutable, initial_value: None }
+        Self {
+            id,
+            mutable,
+            initial_value: None,
+        }
     }
 
     /// Creates an initialized immutable binding.
     #[must_use]
     pub const fn immutable(id: BindingId, value: Value) -> Self {
-        Self { id, mutable: false, initial_value: Some(value) }
+        Self {
+            id,
+            mutable: false,
+            initial_value: Some(value),
+        }
     }
 }
 
@@ -194,15 +206,21 @@ pub struct CallActivation {
 impl CallActivation {
     /// Function-table identity to dispatch.
     #[must_use]
-    pub const fn function_id(self) -> FunctionId { self.function_id }
+    pub const fn function_id(self) -> FunctionId {
+        self.function_id
+    }
 
     /// Activation lexical environment.
     #[must_use]
-    pub const fn environment(self) -> LexicalEnvironment { self.environment }
+    pub const fn environment(self) -> LexicalEnvironment {
+        self.environment
+    }
 
     /// Receiver visible to the function body.
     #[must_use]
-    pub const fn this_value(self) -> Value { self.this_value }
+    pub const fn this_value(self) -> Value {
+        self.this_value
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,7 +246,11 @@ pub(super) struct ObjectData {
 
 impl ObjectData {
     pub(super) fn new() -> Self {
-        Self { prototype: None, properties: Vec::new(), extensible: true }
+        Self {
+            prototype: None,
+            properties: Vec::new(),
+            extensible: true,
+        }
     }
 }
 
@@ -241,7 +263,11 @@ pub(super) struct ArrayData {
 
 impl ArrayData {
     pub(super) fn new() -> Self {
-        Self { object: ObjectData::new(), length: 0, length_writable: true }
+        Self {
+            object: ObjectData::new(),
+            length: 0,
+            length_writable: true,
+        }
     }
 }
 
@@ -313,7 +339,11 @@ impl FunctionData {
 impl Heap {
     /// Interns UTF-8 text as an ECMAScript property-key atom.
     pub fn intern_property_key(&mut self, text: &str) -> Result<PropertyKey, HeapError> {
-        if let Some(index) = self.atoms.iter().position(|entry| entry.iter().copied().eq(text.encode_utf16())) {
+        if let Some(index) = self
+            .atoms
+            .iter()
+            .position(|entry| entry.iter().copied().eq(text.encode_utf16()))
+        {
             return Ok(self.property_key_for_index(
                 u32::try_from(index).map_err(|_| HeapError::HeapCapacityExceeded)?,
             ));
@@ -336,7 +366,11 @@ impl Heap {
 
     /// Interns UTF-16 key units without replacing lone surrogates.
     pub fn intern_property_key_utf16(&mut self, units: &[u16]) -> Result<PropertyKey, HeapError> {
-        if let Some(index) = self.atoms.iter().position(|entry| entry.as_slice() == units) {
+        if let Some(index) = self
+            .atoms
+            .iter()
+            .position(|entry| entry.as_slice() == units)
+        {
             return Ok(self.property_key_for_index(
                 u32::try_from(index).map_err(|_| HeapError::HeapCapacityExceeded)?,
             ));
@@ -374,7 +408,9 @@ impl Heap {
             ValueRepr::Null => self.intern_property_key("null"),
             ValueRepr::Boolean(false) => self.intern_property_key("false"),
             ValueRepr::Boolean(true) => self.intern_property_key("true"),
-            ValueRepr::Number(number) => self.intern_property_key(&number_to_property_string(number)),
+            ValueRepr::Number(number) => {
+                self.intern_property_key(&number_to_property_string(number))
+            }
             ValueRepr::Object(_) | ValueRepr::Function(_) => Err(HeapError::UnsupportedCoercion),
         }
     }
@@ -388,7 +424,12 @@ impl Heap {
     /// Returns an array's current length.
     pub fn array_length(&self, array: Value) -> Result<u32, HeapError> {
         let index = self.array_index(array)?;
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Array(data) => Ok(data.length),
             _ => Err(HeapError::InvalidObjectKind),
         }
@@ -403,7 +444,12 @@ impl Heap {
         let key_index = self.validate_property_key(key)?;
         let object_index = self.object_index(object)?;
         if self.is_array_length_key(key_index) {
-            if let CellKind::Array(array) = &self.slots[object_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &self.slots[object_index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 return Ok(Some(CompletePropertyDescriptor {
                     value: Value::number(f64::from(array.length)),
                     writable: array.length_writable,
@@ -431,12 +477,19 @@ impl Heap {
         for _ in 0..=self.slots.len() {
             let index = self.validate_ref(current)?;
             if self.is_array_length_key(key_index) {
-                if let CellKind::Array(array) = &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+                if let CellKind::Array(array) = &self.slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
                     return Ok(Value::number(f64::from(array.length)));
                 }
             }
             if let Some(position) = self.find_own_property(index, key_index)? {
-                return Ok(self.object_data(index)?.properties[position].descriptor.value);
+                return Ok(self.object_data(index)?.properties[position]
+                    .descriptor
+                    .value);
             }
             let Some(prototype) = self.object_data(index)?.prototype else {
                 return Ok(Value::undefined());
@@ -451,7 +504,14 @@ impl Heap {
         let key_index = self.validate_property_key(key)?;
         let index = self.object_index(object)?;
         if self.is_array_length_key(key_index)
-            && matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_))
+            && matches!(
+                &self.slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind,
+                CellKind::Array(_)
+            )
         {
             return Ok(true);
         }
@@ -465,7 +525,14 @@ impl Heap {
         for _ in 0..=self.slots.len() {
             let index = self.validate_ref(current)?;
             if self.is_array_length_key(key_index)
-                && matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_))
+                && matches!(
+                    &self.slots[index]
+                        .cell
+                        .as_ref()
+                        .ok_or(HeapError::StaleReference)?
+                        .kind,
+                    CellKind::Array(_)
+                )
             {
                 return Ok(true);
             }
@@ -496,7 +563,14 @@ impl Heap {
             self.validate_value(value)?;
         }
         if self.is_array_length_key(key_index)
-            && matches!(&self.slots[object_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_))
+            && matches!(
+                &self.slots[object_index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind,
+                CellKind::Array(_)
+            )
         {
             return self.define_array_length(object_index, descriptor);
         }
@@ -505,7 +579,9 @@ impl Heap {
             let current = self.object_data(object_index)?.properties[position].descriptor;
             if !current.configurable {
                 if descriptor.configurable == Some(true)
-                    || descriptor.enumerable.is_some_and(|v| v != current.enumerable)
+                    || descriptor
+                        .enumerable
+                        .is_some_and(|v| v != current.enumerable)
                 {
                     return Ok(false);
                 }
@@ -535,7 +611,12 @@ impl Heap {
             return Ok(false);
         }
         if let Some(array_index) = self.array_index_from_atom(key_index) {
-            if let CellKind::Array(array) = &self.slots[object_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &self.slots[object_index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 if array_index >= array.length && !array.length_writable {
                     return Ok(false);
                 }
@@ -547,14 +628,25 @@ impl Heap {
             enumerable: descriptor.enumerable.unwrap_or(false),
             configurable: descriptor.configurable.unwrap_or(false),
         };
-        reserve_vec(&mut self.budget, &mut self.object_data_mut(object_index)?.properties, 1)?;
+        reserve_vec(
+            &mut self.budget,
+            &mut self.object_data_mut(object_index)?.properties,
+            1,
+        )?;
         self.add_value_edge(object_index, next.value)?;
-        self.object_data_mut(object_index)?.properties.push(OwnProperty {
-            key: key_index as u32,
-            descriptor: next,
-        });
+        self.object_data_mut(object_index)?
+            .properties
+            .push(OwnProperty {
+                key: key_index as u32,
+                descriptor: next,
+            });
         if let Some(array_index) = self.array_index_from_atom(key_index) {
-            if let CellKind::Array(array) = &mut self.slots[object_index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &mut self.slots[object_index]
+                .cell
+                .as_mut()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 if array_index >= array.length {
                     array.length = array_index + 1;
                 }
@@ -582,7 +674,12 @@ impl Heap {
             };
             let index = self.validate_ref(reference)?;
             if self.is_array_length_key(key_index) {
-                if let CellKind::Array(array) = &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+                if let CellKind::Array(array) = &self.slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
                     if !array.length_writable {
                         return Ok(false);
                     }
@@ -593,7 +690,10 @@ impl Heap {
                 }
             }
             if let Some(position) = self.find_own_property(index, key_index)? {
-                if !self.object_data(index)?.properties[position].descriptor.writable {
+                if !self.object_data(index)?.properties[position]
+                    .descriptor
+                    .writable
+                {
                     return Ok(false);
                 }
                 return self.define_assignment_property(receiver_index, key_index, value);
@@ -604,13 +704,27 @@ impl Heap {
     }
 
     /// Sets a property with the target object as receiver.
-    pub fn set_property(&mut self, object: Value, key: PropertyKey, value: Value) -> Result<bool, HeapError> {
+    pub fn set_property(
+        &mut self,
+        object: Value,
+        key: PropertyKey,
+        value: Value,
+    ) -> Result<bool, HeapError> {
         self.set_property_with_receiver(object, key, value, object)
     }
 
     /// Strict assignment form: a rejected write becomes a TypeError-equivalent error.
-    pub fn set_property_or_throw(&mut self, object: Value, key: PropertyKey, value: Value) -> Result<(), HeapError> {
-        if self.set_property(object, key, value)? { Ok(()) } else { Err(HeapError::ReadOnlyProperty) }
+    pub fn set_property_or_throw(
+        &mut self,
+        object: Value,
+        key: PropertyKey,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        if self.set_property(object, key, value)? {
+            Ok(())
+        } else {
+            Err(HeapError::ReadOnlyProperty)
+        }
     }
 
     /// Deletes an own property. Deleting an array index leaves a hole.
@@ -618,16 +732,27 @@ impl Heap {
         let key_index = self.validate_property_key(key)?;
         let object_index = self.object_index(object)?;
         if self.is_array_length_key(key_index)
-            && matches!(&self.slots[object_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_))
+            && matches!(
+                &self.slots[object_index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind,
+                CellKind::Array(_)
+            )
         {
             return Ok(false);
         }
-        let Some(position) = self.find_own_property(object_index, key_index)? else { return Ok(true) };
+        let Some(position) = self.find_own_property(object_index, key_index)? else {
+            return Ok(true);
+        };
         let property = self.object_data(object_index)?.properties[position];
         if !property.descriptor.configurable {
             return Ok(false);
         }
-        self.object_data_mut(object_index)?.properties.remove(position);
+        self.object_data_mut(object_index)?
+            .properties
+            .remove(position);
         self.remove_value_edge(object_index, property.descriptor.value)?;
         Ok(true)
     }
@@ -647,28 +772,47 @@ impl Heap {
     /// Returns the prototype or None for null.
     pub fn get_prototype_of(&self, object: Value) -> Result<Option<Value>, HeapError> {
         let index = self.object_index(object)?;
-        self.object_data(index)?.prototype.map(|r| self.value_for_object_ref(r)).transpose()
+        self.object_data(index)?
+            .prototype
+            .map(|r| self.value_for_object_ref(r))
+            .transpose()
     }
 
     /// Sets the prototype, returning false for cycles or a non-extensible target.
-    pub fn set_prototype_of(&mut self, object: Value, prototype: Option<Value>) -> Result<bool, HeapError> {
+    pub fn set_prototype_of(
+        &mut self,
+        object: Value,
+        prototype: Option<Value>,
+    ) -> Result<bool, HeapError> {
         let object_ref = self.object_reference(object)?;
         let object_index = self.validate_ref(object_ref)?;
         let prototype_ref = prototype.map(|v| self.object_reference(v)).transpose()?;
-        if prototype_ref == self.object_data(object_index)?.prototype { return Ok(true); }
-        if !self.object_data(object_index)?.extensible { return Ok(false); }
+        if prototype_ref == self.object_data(object_index)?.prototype {
+            return Ok(true);
+        }
+        if !self.object_data(object_index)?.extensible {
+            return Ok(false);
+        }
         if let Some(mut current) = prototype_ref {
             for _ in 0..=self.slots.len() {
-                if current == object_ref { return Ok(false); }
+                if current == object_ref {
+                    return Ok(false);
+                }
                 let index = self.validate_ref(current)?;
-                let Some(next) = self.object_data(index)?.prototype else { break };
+                let Some(next) = self.object_data(index)?.prototype else {
+                    break;
+                };
                 current = next;
             }
         }
-        if let Some(reference) = prototype_ref { self.add_edge_ref(object_ref, reference)?; }
+        if let Some(reference) = prototype_ref {
+            self.add_edge_ref(object_ref, reference)?;
+        }
         let previous = self.object_data(object_index)?.prototype;
         self.object_data_mut(object_index)?.prototype = prototype_ref;
-        if let Some(reference) = previous { self.remove_edge_ref(object_ref, reference)?; }
+        if let Some(reference) = previous {
+            self.remove_edge_ref(object_ref, reference)?;
+        }
         Ok(true)
     }
 
@@ -676,7 +820,11 @@ impl Heap {
     pub fn own_property_keys(&mut self, object: Value) -> Result<Vec<PropertyKey>, HeapError> {
         let index = self.object_index(object)?;
         let length_key = if matches!(
-            &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind,
+            &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
             CellKind::Array(_)
         ) {
             Some(self.intern_property_key("length")?)
@@ -728,7 +876,10 @@ impl Heap {
         bindings: &[BindingDefinition],
     ) -> Result<LexicalEnvironment, HeapError> {
         for (index, binding) in bindings.iter().enumerate() {
-            if bindings[..index].iter().any(|previous| previous.id == binding.id) {
+            if bindings[..index]
+                .iter()
+                .any(|previous| previous.id == binding.id)
+            {
                 return Err(HeapError::InvalidFunctionDefinition);
             }
         }
@@ -736,30 +887,49 @@ impl Heap {
         let result = (|| {
             if let Some(parent) = parent {
                 let index = self.validate_ref(parent.reference)?;
-                if !matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Environment(_)) {
+                if !matches!(
+                    &self.slots[index]
+                        .cell
+                        .as_ref()
+                        .ok_or(HeapError::StaleReference)?
+                        .kind,
+                    CellKind::Environment(_)
+                ) {
                     return Err(HeapError::InvalidObjectKind);
                 }
                 self.scope_root_reference(scope, parent.reference)?;
             }
             for binding in bindings {
-                if let Some(value) = binding.initial_value { self.scope_root(scope, value)?; }
+                if let Some(value) = binding.initial_value {
+                    self.scope_root(scope, value)?;
+                }
             }
-            let reference = self.allocate_cell_with_retry(|| CellKind::Environment(EnvironmentData {
-                parent: parent.map(|environment| environment.reference),
-                bindings: Vec::new(),
-            }))?;
+            let reference = self.allocate_cell_with_retry(|| {
+                CellKind::Environment(EnvironmentData {
+                    parent: parent.map(|environment| environment.reference),
+                    bindings: Vec::new(),
+                })
+            })?;
             self.scope_root_reference(scope, reference)?;
             let index = self.validate_ref(reference)?;
-            reserve_vec(&mut self.budget, &mut self.environment_data_mut(index)?.bindings, bindings.len())?;
-            if let Some(parent) = parent { self.add_edge_ref(reference, parent.reference)?; }
+            reserve_vec(
+                &mut self.budget,
+                &mut self.environment_data_mut(index)?.bindings,
+                bindings.len(),
+            )?;
+            if let Some(parent) = parent {
+                self.add_edge_ref(reference, parent.reference)?;
+            }
             for binding in bindings {
                 let storage = if binding.mutable {
                     let value = binding.initial_value.unwrap_or_else(Value::undefined);
-                    let cell = self.allocate_cell_with_retry(|| CellKind::BindingCell(BindingCellData {
-                        value,
-                        mutable: true,
-                        initialized: binding.initial_value.is_some(),
-                    }))?;
+                    let cell = self.allocate_cell_with_retry(|| {
+                        CellKind::BindingCell(BindingCellData {
+                            value,
+                            mutable: true,
+                            initialized: binding.initial_value.is_some(),
+                        })
+                    })?;
                     self.scope_root_reference(scope, cell)?;
                     let cell_index = self.validate_ref(cell)?;
                     self.add_value_edge(cell_index, value)?;
@@ -768,26 +938,52 @@ impl Heap {
                 } else {
                     let value = binding.initial_value.unwrap_or_else(Value::undefined);
                     self.add_value_edge(index, value)?;
-                    BindingStorage::Value { value, initialized: binding.initial_value.is_some() }
+                    BindingStorage::Value {
+                        value,
+                        initialized: binding.initial_value.is_some(),
+                    }
                 };
-                self.environment_data_mut(index)?.bindings.push(EnvironmentBinding { id: binding.id, storage });
+                self.environment_data_mut(index)?
+                    .bindings
+                    .push(EnvironmentBinding {
+                        id: binding.id,
+                        storage,
+                    });
             }
-            Ok(LexicalEnvironment { reference, _thread_affinity: PhantomData })
+            Ok(LexicalEnvironment {
+                reference,
+                _thread_affinity: PhantomData,
+            })
         })();
         self.close_scope(scope)?;
-        if result.is_err() { self.collect()?; }
+        if result.is_err() {
+            self.collect()?;
+        }
         result
     }
 
     /// Loads a binding through parent environments, throwing on missing/TDZ state.
-    pub fn load_binding(&self, environment: LexicalEnvironment, binding: BindingId) -> Result<Value, HeapError> {
+    pub fn load_binding(
+        &self,
+        environment: LexicalEnvironment,
+        binding: BindingId,
+    ) -> Result<Value, HeapError> {
         match self.resolve_binding_storage(environment.reference, binding)? {
             BindingStorage::Value { value, initialized } => {
-                if initialized { Ok(value) } else { Err(HeapError::UninitializedBinding) }
+                if initialized {
+                    Ok(value)
+                } else {
+                    Err(HeapError::UninitializedBinding)
+                }
             }
             BindingStorage::Cell(reference) => {
                 let index = self.validate_ref(reference)?;
-                match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+                match &self.slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
                     CellKind::BindingCell(cell) if cell.initialized => Ok(cell.value),
                     CellKind::BindingCell(_) => Err(HeapError::UninitializedBinding),
                     _ => Err(HeapError::AccountingInvariant),
@@ -797,24 +993,50 @@ impl Heap {
     }
 
     /// Stores into an already initialized mutable binding; use initialize_binding for TDZ slots.
-    pub fn store_binding(&mut self, environment: LexicalEnvironment, binding: BindingId, value: Value) -> Result<Value, HeapError> {
+    pub fn store_binding(
+        &mut self,
+        environment: LexicalEnvironment,
+        binding: BindingId,
+        value: Value,
+    ) -> Result<Value, HeapError> {
         self.validate_value(value)?;
-        let BindingStorage::Cell(reference) = self.resolve_binding_storage(environment.reference, binding)? else {
+        let BindingStorage::Cell(reference) =
+            self.resolve_binding_storage(environment.reference, binding)?
+        else {
             return Err(HeapError::ImmutableBinding);
         };
         let index = self.validate_ref(reference)?;
-        let (old, mutable) = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        let (old, mutable) = match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::BindingCell(cell) => (cell.value, cell.mutable),
             _ => return Err(HeapError::AccountingInvariant),
         };
-        if !mutable { return Err(HeapError::ImmutableBinding); }
-        let initialized = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        if !mutable {
+            return Err(HeapError::ImmutableBinding);
+        }
+        let initialized = match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::BindingCell(cell) => cell.initialized,
             _ => return Err(HeapError::AccountingInvariant),
         };
-        if !initialized { return Err(HeapError::UninitializedBinding); }
+        if !initialized {
+            return Err(HeapError::UninitializedBinding);
+        }
         self.replace_cell_value(reference, old, value)?;
-        if let CellKind::BindingCell(cell) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+        if let CellKind::BindingCell(cell) = &mut self.slots[index]
+            .cell
+            .as_mut()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             cell.value = value;
             cell.initialized = true;
         }
@@ -822,28 +1044,56 @@ impl Heap {
     }
 
     /// Initializes a lexical binding once; repeated initialization is rejected.
-    pub fn initialize_binding(&mut self, environment: LexicalEnvironment, binding: BindingId, value: Value) -> Result<Value, HeapError> {
+    pub fn initialize_binding(
+        &mut self,
+        environment: LexicalEnvironment,
+        binding: BindingId,
+        value: Value,
+    ) -> Result<Value, HeapError> {
         self.validate_value(value)?;
         match self.resolve_binding_storage(environment.reference, binding)? {
             BindingStorage::Cell(reference) => {
                 let index = self.validate_ref(reference)?;
-                let (old, mutable, initialized) = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+                let (old, mutable, initialized) = match &self.slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
                     CellKind::BindingCell(cell) => (cell.value, cell.mutable, cell.initialized),
                     _ => return Err(HeapError::AccountingInvariant),
                 };
-                if initialized { return Err(HeapError::AlreadyInitialized); }
-                if !mutable { return Err(HeapError::ImmutableBinding); }
+                if initialized {
+                    return Err(HeapError::AlreadyInitialized);
+                }
+                if !mutable {
+                    return Err(HeapError::ImmutableBinding);
+                }
                 self.replace_cell_value(reference, old, value)?;
-                if let CellKind::BindingCell(cell) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+                if let CellKind::BindingCell(cell) = &mut self.slots[index]
+                    .cell
+                    .as_mut()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
                     cell.value = value;
                     cell.initialized = true;
                 }
             }
-            BindingStorage::Value { initialized: true, .. } => return Err(HeapError::AlreadyInitialized),
-            BindingStorage::Value { initialized: false, .. } => {
-                let (index, position) = self.find_environment_binding(environment.reference, binding)?;
+            BindingStorage::Value {
+                initialized: true, ..
+            } => return Err(HeapError::AlreadyInitialized),
+            BindingStorage::Value {
+                initialized: false, ..
+            } => {
+                let (index, position) =
+                    self.find_environment_binding(environment.reference, binding)?;
                 self.add_value_edge(index, value)?;
-                if let BindingStorage::Value { value: stored, initialized } = &mut self.environment_data_mut(index)?.bindings[position].storage {
+                if let BindingStorage::Value {
+                    value: stored,
+                    initialized,
+                } = &mut self.environment_data_mut(index)?.bindings[position].storage
+                {
                     *stored = value;
                     *initialized = true;
                 }
@@ -853,29 +1103,53 @@ impl Heap {
     }
 
     /// Creates a traced function object with explicit cell/value captures.
-    pub fn create_closure(&mut self, definition: &FunctionDefinition, outer: LexicalEnvironment, lexical_this: Value) -> Result<Value, HeapError> {
+    pub fn create_closure(
+        &mut self,
+        definition: &FunctionDefinition,
+        outer: LexicalEnvironment,
+        lexical_this: Value,
+    ) -> Result<Value, HeapError> {
         self.validate_value(lexical_this)?;
         let outer_index = self.validate_ref(outer.reference)?;
-        if !matches!(&self.slots[outer_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Environment(_)) {
+        if !matches!(
+            &self.slots[outer_index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
+            CellKind::Environment(_)
+        ) {
             return Err(HeapError::InvalidObjectKind);
         }
         let scope = self.open_scope()?;
         let result = (|| {
             self.scope_root_reference(scope, outer.reference)?;
             self.scope_root(scope, lexical_this)?;
-            let closure_ref = self.allocate_cell_with_retry(|| CellKind::Environment(EnvironmentData {
-                parent: None,
-                bindings: Vec::new(),
-            }))?;
+            let closure_ref = self.allocate_cell_with_retry(|| {
+                CellKind::Environment(EnvironmentData {
+                    parent: None,
+                    bindings: Vec::new(),
+                })
+            })?;
             self.scope_root_reference(scope, closure_ref)?;
             let closure_index = self.validate_ref(closure_ref)?;
-            reserve_vec(&mut self.budget, &mut self.environment_data_mut(closure_index)?.bindings, definition.captures.len())?;
+            reserve_vec(
+                &mut self.budget,
+                &mut self.environment_data_mut(closure_index)?.bindings,
+                definition.captures.len(),
+            )?;
 
             for (position, capture) in definition.captures.iter().enumerate() {
-                if definition.captures[..position].iter().any(|previous|
+                if definition.captures[..position].iter().any(|previous| {
                     previous.alias == capture.alias || previous.source == capture.source
-                ) || definition.parameters.iter().any(|binding| binding.id == capture.alias)
-                    || definition.locals.iter().any(|binding| binding.id == capture.alias)
+                }) || definition
+                    .parameters
+                    .iter()
+                    .any(|binding| binding.id == capture.alias)
+                    || definition
+                        .locals
+                        .iter()
+                        .any(|binding| binding.id == capture.alias)
                 {
                     return Err(HeapError::InvalidFunctionDefinition);
                 }
@@ -883,37 +1157,64 @@ impl Heap {
                 let imported = match (capture.mode, source) {
                     (CaptureMode::Cell, BindingStorage::Cell(reference)) => {
                         let index = self.validate_ref(reference)?;
-                        if !matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind,
-                            CellKind::BindingCell(BindingCellData { mutable: true, .. })) {
+                        if !matches!(
+                            &self.slots[index]
+                                .cell
+                                .as_ref()
+                                .ok_or(HeapError::StaleReference)?
+                                .kind,
+                            CellKind::BindingCell(BindingCellData { mutable: true, .. })
+                        ) {
                             return Err(HeapError::InvalidFunctionDefinition);
                         }
                         self.scope_root_reference(scope, reference)?;
                         self.add_edge_ref(closure_ref, reference)?;
                         BindingStorage::Cell(reference)
                     }
-                    (CaptureMode::Value, BindingStorage::Value { value, initialized: true }) => {
+                    (
+                        CaptureMode::Value,
+                        BindingStorage::Value {
+                            value,
+                            initialized: true,
+                        },
+                    ) => {
                         self.scope_root(scope, value)?;
                         self.add_value_edge(closure_index, value)?;
-                        BindingStorage::Value { value, initialized: true }
+                        BindingStorage::Value {
+                            value,
+                            initialized: true,
+                        }
                     }
                     _ => return Err(HeapError::InvalidFunctionDefinition),
                 };
-                self.environment_data_mut(closure_index)?.bindings.push(EnvironmentBinding {
-                    id: capture.alias,
-                    storage: imported,
-                });
+                self.environment_data_mut(closure_index)?
+                    .bindings
+                    .push(EnvironmentBinding {
+                        id: capture.alias,
+                        storage: imported,
+                    });
             }
 
-            let function = self.allocate_cell_with_retry(|| CellKind::Function(FunctionData::closure(
-                definition.id, closure_ref, definition.kind, definition.strict, lexical_this,
-            )))?;
+            let function = self.allocate_cell_with_retry(|| {
+                CellKind::Function(FunctionData::closure(
+                    definition.id,
+                    closure_ref,
+                    definition.kind,
+                    definition.strict,
+                    lexical_this,
+                ))
+            })?;
             self.scope_root_reference(scope, function)?;
             self.add_edge_ref(function, closure_ref)?;
-            if let Some(reference) = lexical_this.gc_ref() { self.add_edge_ref(function, reference)?; }
+            if let Some(reference) = lexical_this.gc_ref() {
+                self.add_edge_ref(function, reference)?;
+            }
             Ok(Value::from_function(function))
         })();
         self.close_scope(scope)?;
-        if result.is_err() { self.collect()?; }
+        if result.is_err() {
+            self.collect()?;
+        }
         result
     }
 
@@ -931,19 +1232,37 @@ impl Heap {
         global_this: Value,
     ) -> Result<CallActivation, HeapError> {
         let function_index = self.function_index(callee)?;
-        let function = match &self.slots[function_index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        let function = match &self.slots[function_index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Function(function) => function,
             _ => return Err(HeapError::NotCallable),
         };
         let function_id = function.id.ok_or(HeapError::NotCallable)?;
-        if function_id != definition.id { return Err(HeapError::InvalidFunctionDefinition); }
-        let closure_environment = function.closure_environment.ok_or(HeapError::InvalidFunctionDefinition)?;
+        if function_id != definition.id {
+            return Err(HeapError::InvalidFunctionDefinition);
+        }
+        let closure_environment = function
+            .closure_environment
+            .ok_or(HeapError::InvalidFunctionDefinition)?;
         let (kind, strict, lexical_this) = (function.kind, function.strict, function.lexical_this);
         let this_value = match kind {
             FunctionKind::Arrow => lexical_this,
             FunctionKind::Ordinary if strict => this_argument,
-            FunctionKind::Ordinary if this_argument.is_null() || this_argument.is_undefined() => global_this,
-            FunctionKind::Ordinary if matches!(this_argument.value_type(), ValueType::Object | ValueType::Function) => this_argument,
+            FunctionKind::Ordinary if this_argument.is_null() || this_argument.is_undefined() => {
+                global_this
+            }
+            FunctionKind::Ordinary
+                if matches!(
+                    this_argument.value_type(),
+                    ValueType::Object | ValueType::Function
+                ) =>
+            {
+                this_argument
+            }
             FunctionKind::Ordinary => return Err(HeapError::UnsupportedCoercion),
         };
         self.validate_value(this_value)?;
@@ -954,9 +1273,15 @@ impl Heap {
             self.frame_root(frame, this_argument)?;
             self.frame_root(frame, global_this)?;
             self.frame_root(frame, this_value)?;
-            for argument in arguments { self.frame_root(frame, *argument)?; }
+            for argument in arguments {
+                self.frame_root(frame, *argument)?;
+            }
 
-            if definition.parameters.iter().any(|parameter| !parameter.mutable) {
+            if definition
+                .parameters
+                .iter()
+                .any(|parameter| !parameter.mutable)
+            {
                 return Err(HeapError::InvalidFunctionDefinition);
             }
             let binding_count = definition
@@ -971,7 +1296,10 @@ impl Heap {
                     id: parameter.id,
                     mutable: true,
                     initial_value: Some(
-                        arguments.get(index).copied().unwrap_or_else(Value::undefined),
+                        arguments
+                            .get(index)
+                            .copied()
+                            .unwrap_or_else(Value::undefined),
                     ),
                 });
             }
@@ -986,9 +1314,16 @@ impl Heap {
             release_vec_capacity(&mut self.budget, &activation_bindings)?;
             let environment = environment_result?;
             self.frame_root_reference(frame, environment.reference)?;
-            Ok(CallActivation { frame, environment, function_id, this_value })
+            Ok(CallActivation {
+                frame,
+                environment,
+                function_id,
+                this_value,
+            })
         })();
-        if result.is_err() { self.leave_frame(frame)?; }
+        if result.is_err() {
+            self.leave_frame(frame)?;
+        }
         result
     }
 
@@ -998,19 +1333,38 @@ impl Heap {
     }
 
     /// Adds an environment to a temporary root scope.
-    pub fn scope_root_environment(&mut self, scope: super::ScopeToken, environment: LexicalEnvironment) -> Result<(), HeapError> {
+    pub fn scope_root_environment(
+        &mut self,
+        scope: super::ScopeToken,
+        environment: LexicalEnvironment,
+    ) -> Result<(), HeapError> {
         self.scope_root_reference(scope, environment.reference)
     }
 
     /// Adds an environment to an interpreter frame.
-    pub fn frame_root_environment(&mut self, frame: super::FrameToken, environment: LexicalEnvironment) -> Result<(), HeapError> {
+    pub fn frame_root_environment(
+        &mut self,
+        frame: super::FrameToken,
+        environment: LexicalEnvironment,
+    ) -> Result<(), HeapError> {
         self.frame_root_reference(frame, environment.reference)
     }
 
     fn intern_string_property_key(&mut self, reference: GcRef) -> Result<PropertyKey, HeapError> {
         let index = self.validate_ref(reference)?;
-        let Self { budget, slots, atoms, heap_id, .. } = self;
-        let units = match &slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        let Self {
+            budget,
+            slots,
+            atoms,
+            heap_id,
+            ..
+        } = self;
+        let units = match &slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::String(units) => units,
             _ => return Err(HeapError::InvalidObjectKind),
         };
@@ -1041,28 +1395,44 @@ impl Heap {
     }
 
     fn validate_property_key(&self, key: PropertyKey) -> Result<usize, HeapError> {
-        if key.heap_id != self.heap_id { return Err(HeapError::WrongHeap); }
+        if key.heap_id != self.heap_id {
+            return Err(HeapError::WrongHeap);
+        }
         let index = key.index as usize;
-        if index >= self.atoms.len() { return Err(HeapError::InvalidPropertyKey); }
+        if index >= self.atoms.len() {
+            return Err(HeapError::InvalidPropertyKey);
+        }
         Ok(index)
     }
 
     fn property_key_for_index(&self, index: u32) -> PropertyKey {
-        PropertyKey { heap_id: self.heap_id, index, _thread_affinity: PhantomData }
+        PropertyKey {
+            heap_id: self.heap_id,
+            index,
+            _thread_affinity: PhantomData,
+        }
     }
 
     fn is_array_length_key(&self, index: usize) -> bool {
-        self.atoms.get(index).is_some_and(|units| units.as_slice() == [108, 101, 110, 103, 116, 104])
+        self.atoms
+            .get(index)
+            .is_some_and(|units| units.as_slice() == [108, 101, 110, 103, 116, 104])
     }
 
     fn array_index_from_atom(&self, index: usize) -> Option<u32> {
         let units = self.atoms.get(index)?;
-        if units.is_empty() || units.len() > 10 || (units.len() > 1 && units[0] == 48) { return None; }
+        if units.is_empty() || units.len() > 10 || (units.len() > 1 && units[0] == 48) {
+            return None;
+        }
         let mut value = 0_u64;
         for unit in units {
-            if !(48..=57).contains(unit) { return None; }
+            if !(48..=57).contains(unit) {
+                return None;
+            }
             value = value.checked_mul(10)?.checked_add(u64::from(*unit - 48))?;
-            if value > u64::from(u32::MAX - 1) { return None; }
+            if value > u64::from(u32::MAX - 1) {
+                return None;
+            }
         }
         Some(value as u32)
     }
@@ -1082,7 +1452,12 @@ impl Heap {
             _ => return Err(HeapError::NotObject),
         };
         let index = self.validate_ref(reference)?;
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Object(_) | CellKind::Array(_) | CellKind::Function(_) => Ok(index),
             _ => Err(HeapError::NotObject),
         }
@@ -1090,7 +1465,14 @@ impl Heap {
 
     fn array_index(&self, value: Value) -> Result<usize, HeapError> {
         let index = self.object_index(value)?;
-        if matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_)) {
+        if matches!(
+            &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
+            CellKind::Array(_)
+        ) {
             Ok(index)
         } else {
             Err(HeapError::InvalidObjectKind)
@@ -1103,7 +1485,14 @@ impl Heap {
             _ => return Err(HeapError::NotCallable),
         };
         let index = self.validate_ref(reference)?;
-        if matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Function(_)) {
+        if matches!(
+            &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
+            CellKind::Function(_)
+        ) {
             Ok(index)
         } else {
             Err(HeapError::NotCallable)
@@ -1111,7 +1500,12 @@ impl Heap {
     }
 
     fn object_data(&self, index: usize) -> Result<&ObjectData, HeapError> {
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Object(data) => Ok(data),
             CellKind::Array(data) => Ok(&data.object),
             CellKind::Function(data) => Ok(&data.object),
@@ -1120,7 +1514,12 @@ impl Heap {
     }
 
     fn object_data_mut(&mut self, index: usize) -> Result<&mut ObjectData, HeapError> {
-        match &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+        match &mut self.slots[index]
+            .cell
+            .as_mut()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Object(data) => Ok(data),
             CellKind::Array(data) => Ok(&mut data.object),
             CellKind::Function(data) => Ok(&mut data.object),
@@ -1129,14 +1528,23 @@ impl Heap {
     }
 
     fn environment_data_mut(&mut self, index: usize) -> Result<&mut EnvironmentData, HeapError> {
-        match &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+        match &mut self.slots[index]
+            .cell
+            .as_mut()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Environment(data) => Ok(data),
             _ => Err(HeapError::InvalidObjectKind),
         }
     }
 
     fn find_own_property(&self, index: usize, key: usize) -> Result<Option<usize>, HeapError> {
-        Ok(self.object_data(index)?.properties.iter().position(|property| property.key as usize == key))
+        Ok(self
+            .object_data(index)?
+            .properties
+            .iter()
+            .position(|property| property.key as usize == key))
     }
 
     fn add_value_edge(&mut self, parent_index: usize, value: Value) -> Result<(), HeapError> {
@@ -1163,73 +1571,153 @@ impl Heap {
         Ok(())
     }
 
-    fn replace_property_value(&mut self, index: usize, old: Value, new: Value) -> Result<(), HeapError> {
-        if old.gc_ref() == new.gc_ref() { return Ok(()); }
+    fn replace_property_value(
+        &mut self,
+        index: usize,
+        old: Value,
+        new: Value,
+    ) -> Result<(), HeapError> {
+        if old.gc_ref() == new.gc_ref() {
+            return Ok(());
+        }
         self.add_value_edge(index, new)?;
         self.remove_value_edge(index, old)
     }
 
-    fn define_assignment_property(&mut self, receiver: usize, key: usize, value: Value) -> Result<bool, HeapError> {
+    fn define_assignment_property(
+        &mut self,
+        receiver: usize,
+        key: usize,
+        value: Value,
+    ) -> Result<bool, HeapError> {
         if self.is_array_length_key(key)
-            && matches!(&self.slots[receiver].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_))
+            && matches!(
+                &self.slots[receiver]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind,
+                CellKind::Array(_)
+            )
         {
             return self.define_array_length(receiver, PropertyDescriptor::value(value));
         }
         if let Some(position) = self.find_own_property(receiver, key)? {
             let current = self.object_data(receiver)?.properties[position].descriptor;
-            if !current.writable { return Ok(false); }
+            if !current.writable {
+                return Ok(false);
+            }
             self.replace_property_value(receiver, current.value, value)?;
-            self.object_data_mut(receiver)?.properties[position].descriptor.value = value;
+            self.object_data_mut(receiver)?.properties[position]
+                .descriptor
+                .value = value;
             return Ok(true);
         }
-        if !self.object_data(receiver)?.extensible { return Ok(false); }
+        if !self.object_data(receiver)?.extensible {
+            return Ok(false);
+        }
         if let Some(array_index) = self.array_index_from_atom(key) {
-            if let CellKind::Array(array) = &self.slots[receiver].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
-                if array_index >= array.length && !array.length_writable { return Ok(false); }
+            if let CellKind::Array(array) = &self.slots[receiver]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
+                if array_index >= array.length && !array.length_writable {
+                    return Ok(false);
+                }
             }
         }
-        reserve_vec(&mut self.budget, &mut self.object_data_mut(receiver)?.properties, 1)?;
+        reserve_vec(
+            &mut self.budget,
+            &mut self.object_data_mut(receiver)?.properties,
+            1,
+        )?;
         self.add_value_edge(receiver, value)?;
-        self.object_data_mut(receiver)?.properties.push(OwnProperty {
-            key: key as u32,
-            descriptor: PropertyDescriptorData { value, writable: true, enumerable: true, configurable: true },
-        });
+        self.object_data_mut(receiver)?
+            .properties
+            .push(OwnProperty {
+                key: key as u32,
+                descriptor: PropertyDescriptorData {
+                    value,
+                    writable: true,
+                    enumerable: true,
+                    configurable: true,
+                },
+            });
         if let Some(array_index) = self.array_index_from_atom(key) {
-            if let CellKind::Array(array) = &mut self.slots[receiver].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &mut self.slots[receiver]
+                .cell
+                .as_mut()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 array.length = array.length.max(array_index + 1);
             }
         }
         Ok(true)
     }
 
-    fn define_array_length(&mut self, index: usize, descriptor: PropertyDescriptor) -> Result<bool, HeapError> {
-        let (old_length, old_writable) = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+    fn define_array_length(
+        &mut self,
+        index: usize,
+        descriptor: PropertyDescriptor,
+    ) -> Result<bool, HeapError> {
+        let (old_length, old_writable) = match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Array(array) => (array.length, array.length_writable),
             _ => return Err(HeapError::InvalidObjectKind),
         };
-        if descriptor.configurable == Some(true) || descriptor.enumerable == Some(true)
-            || (!old_writable && descriptor.writable == Some(true)) {
+        if descriptor.configurable == Some(true)
+            || descriptor.enumerable == Some(true)
+            || (!old_writable && descriptor.writable == Some(true))
+        {
             return Ok(false);
         }
         let new_length = if let Some(value) = descriptor.value {
             let number = self.to_number(value)?;
-            if !number.is_finite() || number < 0.0 || number.fract() != 0.0 || number > f64::from(u32::MAX) {
+            if !number.is_finite()
+                || number < 0.0
+                || number.fract() != 0.0
+                || number > f64::from(u32::MAX)
+            {
                 return Err(HeapError::InvalidArrayLength);
             }
             Some(number as u32)
-        } else { None };
+        } else {
+            None
+        };
         if let Some(new_length) = new_length {
-            if !old_writable && new_length != old_length { return Ok(false); }
+            if !old_writable && new_length != old_length {
+                return Ok(false);
+            }
             if new_length < old_length {
                 loop {
-                    let candidate = self.object_data(index)?.properties.iter().enumerate()
-                        .filter_map(|(position, property)| self.array_index_from_atom(property.key as usize)
-                            .filter(|array_index| *array_index >= new_length)
-                            .map(|array_index| (position, array_index, property.descriptor)))
+                    let candidate = self
+                        .object_data(index)?
+                        .properties
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(position, property)| {
+                            self.array_index_from_atom(property.key as usize)
+                                .filter(|array_index| *array_index >= new_length)
+                                .map(|array_index| (position, array_index, property.descriptor))
+                        })
                         .max_by_key(|entry| entry.1);
-                    let Some((position, array_index, property)) = candidate else { break };
+                    let Some((position, array_index, property)) = candidate else {
+                        break;
+                    };
                     if !property.configurable {
-                        if let CellKind::Array(array) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+                        if let CellKind::Array(array) = &mut self.slots[index]
+                            .cell
+                            .as_mut()
+                            .ok_or(HeapError::StaleReference)?
+                            .kind
+                        {
                             array.length = array_index + 1;
                             if descriptor.writable == Some(false) {
                                 array.length_writable = false;
@@ -1241,48 +1729,86 @@ impl Heap {
                     self.remove_value_edge(index, property.value)?;
                 }
             }
-            if let CellKind::Array(array) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &mut self.slots[index]
+                .cell
+                .as_mut()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 array.length = new_length;
             }
         }
         if descriptor.writable == Some(false) {
-            if let CellKind::Array(array) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
+            if let CellKind::Array(array) = &mut self.slots[index]
+                .cell
+                .as_mut()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 array.length_writable = false;
             }
         }
         Ok(true)
     }
 
-    fn resolve_binding_storage(&self, mut environment: GcRef, binding: BindingId) -> Result<BindingStorage, HeapError> {
+    fn resolve_binding_storage(
+        &self,
+        mut environment: GcRef,
+        binding: BindingId,
+    ) -> Result<BindingStorage, HeapError> {
         for _ in 0..=self.slots.len() {
             let index = self.validate_ref(environment)?;
-            let data = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+            let data = match &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 CellKind::Environment(data) => data,
                 _ => return Err(HeapError::InvalidObjectKind),
             };
-            if let Some(found) = data.bindings.iter().find(|entry| entry.id == binding) { return Ok(found.storage); }
-            let Some(parent) = data.parent else { return Err(HeapError::MissingBinding) };
+            if let Some(found) = data.bindings.iter().find(|entry| entry.id == binding) {
+                return Ok(found.storage);
+            }
+            let Some(parent) = data.parent else {
+                return Err(HeapError::MissingBinding);
+            };
             environment = parent;
         }
         Err(HeapError::PrototypeCycle)
     }
 
-    fn find_environment_binding(&self, mut environment: GcRef, binding: BindingId) -> Result<(usize, usize), HeapError> {
+    fn find_environment_binding(
+        &self,
+        mut environment: GcRef,
+        binding: BindingId,
+    ) -> Result<(usize, usize), HeapError> {
         for _ in 0..=self.slots.len() {
             let index = self.validate_ref(environment)?;
-            let data = match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+            let data = match &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind
+            {
                 CellKind::Environment(data) => data,
                 _ => return Err(HeapError::InvalidObjectKind),
             };
-            if let Some(position) = data.bindings.iter().position(|entry| entry.id == binding) { return Ok((index, position)); }
-            let Some(parent) = data.parent else { return Err(HeapError::MissingBinding) };
+            if let Some(position) = data.bindings.iter().position(|entry| entry.id == binding) {
+                return Ok((index, position));
+            }
+            let Some(parent) = data.parent else {
+                return Err(HeapError::MissingBinding);
+            };
             environment = parent;
         }
         Err(HeapError::PrototypeCycle)
     }
 
     fn allocate_cell_with_retry<F>(&mut self, make: F) -> Result<GcRef, HeapError>
-    where F: Fn() -> CellKind {
+    where
+        F: Fn() -> CellKind,
+    {
         match self.try_allocate_cell(make()) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
@@ -1292,19 +1818,35 @@ impl Heap {
         }
     }
 
-    fn scope_root_reference(&mut self, scope: super::ScopeToken, reference: GcRef) -> Result<(), HeapError> {
+    fn scope_root_reference(
+        &mut self,
+        scope: super::ScopeToken,
+        reference: GcRef,
+    ) -> Result<(), HeapError> {
         self.check_scope(scope)?;
         self.validate_ref(reference)?;
-        let index = self.scopes.len().checked_sub(1).ok_or(HeapError::InvalidScope)?;
+        let index = self
+            .scopes
+            .len()
+            .checked_sub(1)
+            .ok_or(HeapError::InvalidScope)?;
         reserve_vec(&mut self.budget, &mut self.scopes[index].roots, 1)?;
         self.scopes[index].roots.push(reference);
         Ok(())
     }
 
-    fn frame_root_reference(&mut self, frame: super::FrameToken, reference: GcRef) -> Result<(), HeapError> {
+    fn frame_root_reference(
+        &mut self,
+        frame: super::FrameToken,
+        reference: GcRef,
+    ) -> Result<(), HeapError> {
         self.check_frame(frame)?;
         self.validate_ref(reference)?;
-        let index = self.frames.len().checked_sub(1).ok_or(HeapError::InvalidFrame)?;
+        let index = self
+            .frames
+            .len()
+            .checked_sub(1)
+            .ok_or(HeapError::InvalidFrame)?;
         reserve_vec(&mut self.budget, &mut self.frames[index].roots, 1)?;
         self.frames[index].roots.push(reference);
         Ok(())
@@ -1313,7 +1855,10 @@ impl Heap {
     fn add_edge_ref(&mut self, parent: GcRef, child: GcRef) -> Result<(), HeapError> {
         let parent_index = self.validate_ref(parent)?;
         self.validate_ref(child)?;
-        let cell = self.slots[parent_index].cell.as_mut().ok_or(HeapError::StaleReference)?;
+        let cell = self.slots[parent_index]
+            .cell
+            .as_mut()
+            .ok_or(HeapError::StaleReference)?;
         reserve_vec(&mut self.budget, &mut cell.edges, 1)?;
         cell.edges.push(child);
         Ok(())
@@ -1321,22 +1866,40 @@ impl Heap {
 
     fn remove_edge_ref(&mut self, parent: GcRef, child: GcRef) -> Result<(), HeapError> {
         let index = self.validate_ref(parent)?;
-        let cell = self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?;
-        let position = cell.edges.iter().position(|candidate| *candidate == child).ok_or(HeapError::AccountingInvariant)?;
+        let cell = self.slots[index]
+            .cell
+            .as_mut()
+            .ok_or(HeapError::StaleReference)?;
+        let position = cell
+            .edges
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or(HeapError::AccountingInvariant)?;
         cell.edges.remove(position);
         Ok(())
     }
 
     fn replace_cell_value(&mut self, cell: GcRef, old: Value, new: Value) -> Result<(), HeapError> {
-        if old.gc_ref() == new.gc_ref() { return Ok(()); }
-        if let Some(reference) = new.gc_ref() { self.add_edge_ref(cell, reference)?; }
-        if let Some(reference) = old.gc_ref() { self.remove_edge_ref(cell, reference)?; }
+        if old.gc_ref() == new.gc_ref() {
+            return Ok(());
+        }
+        if let Some(reference) = new.gc_ref() {
+            self.add_edge_ref(cell, reference)?;
+        }
+        if let Some(reference) = old.gc_ref() {
+            self.remove_edge_ref(cell, reference)?;
+        }
         Ok(())
     }
 
     fn value_for_object_ref(&self, reference: GcRef) -> Result<Value, HeapError> {
         let index = self.validate_ref(reference)?;
-        match &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind {
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
             CellKind::Function(_) => Ok(Value::from_function(reference)),
             CellKind::Object(_) | CellKind::Array(_) => Ok(Value::from_object(reference)),
             _ => Err(HeapError::NotObject),
@@ -1345,10 +1908,18 @@ impl Heap {
 }
 
 fn number_to_property_string(number: f64) -> String {
-    if number.is_nan() { return "NaN".to_owned(); }
-    if number == f64::INFINITY { return "Infinity".to_owned(); }
-    if number == f64::NEG_INFINITY { return "-Infinity".to_owned(); }
-    if number == 0.0 { return "0".to_owned(); }
+    if number.is_nan() {
+        return "NaN".to_owned();
+    }
+    if number == f64::INFINITY {
+        return "Infinity".to_owned();
+    }
+    if number == f64::NEG_INFINITY {
+        return "-Infinity".to_owned();
+    }
+    if number == 0.0 {
+        return "0".to_owned();
+    }
     let absolute = number.abs();
     if !(1e-6..1e21).contains(&absolute) {
         let scientific = format!("{number:e}");
@@ -1381,14 +1952,32 @@ mod tests {
         let object = heap.allocate_object().unwrap();
         let receiver = heap.allocate_object().unwrap();
         let roots = heap.open_scope().unwrap();
-        for value in [prototype, object, receiver] { heap.scope_root(roots, value).unwrap(); }
+        for value in [prototype, object, receiver] {
+            heap.scope_root(roots, value).unwrap();
+        }
         let x = key(&mut heap, "x");
-        assert!(heap.define_own_property(prototype, x, PropertyDescriptor::data(Value::number(1.0), true, true, false)).unwrap());
+        assert!(
+            heap.define_own_property(
+                prototype,
+                x,
+                PropertyDescriptor::data(Value::number(1.0), true, true, false)
+            )
+            .unwrap()
+        );
         assert!(heap.set_prototype_of(object, Some(prototype)).unwrap());
         assert_eq!(heap.get_property(object, x).unwrap().as_number(), Some(1.0));
-        assert!(heap.set_property_with_receiver(object, x, Value::number(2.0), receiver).unwrap());
-        assert_eq!(heap.get_property(prototype, x).unwrap().as_number(), Some(1.0));
-        assert_eq!(heap.get_property(receiver, x).unwrap().as_number(), Some(2.0));
+        assert!(
+            heap.set_property_with_receiver(object, x, Value::number(2.0), receiver)
+                .unwrap()
+        );
+        assert_eq!(
+            heap.get_property(prototype, x).unwrap().as_number(),
+            Some(1.0)
+        );
+        assert_eq!(
+            heap.get_property(receiver, x).unwrap().as_number(),
+            Some(2.0)
+        );
         assert!(!heap.delete_property(prototype, x).unwrap());
         assert!(!heap.set_prototype_of(prototype, Some(object)).unwrap());
         heap.close_scope(roots).unwrap();
@@ -1401,13 +1990,32 @@ mod tests {
         let roots = heap.open_scope().unwrap();
         heap.scope_root(roots, object).unwrap();
         let fixed = key(&mut heap, "fixed");
-        assert!(heap.define_own_property(object, fixed, PropertyDescriptor::data(Value::number(3.0), false, false, false)).unwrap());
-        assert!(!heap.define_own_property(object, fixed, PropertyDescriptor::value(Value::number(4.0))).unwrap());
-        assert!(!heap.set_property(object, fixed, Value::number(4.0)).unwrap());
+        assert!(
+            heap.define_own_property(
+                object,
+                fixed,
+                PropertyDescriptor::data(Value::number(3.0), false, false, false)
+            )
+            .unwrap()
+        );
+        assert!(
+            !heap
+                .define_own_property(object, fixed, PropertyDescriptor::value(Value::number(4.0)))
+                .unwrap()
+        );
+        assert!(
+            !heap
+                .set_property(object, fixed, Value::number(4.0))
+                .unwrap()
+        );
         assert!(!heap.delete_property(object, fixed).unwrap());
         heap.prevent_extensions(object).unwrap();
         let other = key(&mut heap, "other");
-        assert!(!heap.define_own_property(object, other, PropertyDescriptor::value(Value::number(1.0))).unwrap());
+        assert!(
+            !heap
+                .define_own_property(object, other, PropertyDescriptor::value(Value::number(1.0)))
+                .unwrap()
+        );
         heap.close_scope(roots).unwrap();
     }
 
@@ -1426,12 +2034,28 @@ mod tests {
         assert!(heap.delete_property(array, zero).unwrap());
         assert_eq!(heap.array_length(array).unwrap(), 3);
         assert!(!heap.has_own_property(array, zero).unwrap());
-        assert_eq!(heap.get_property(array, zero).unwrap().value_type(), ValueType::Undefined);
-        assert_eq!(heap.get_property(array, length).unwrap().as_number(), Some(3.0));
-        assert!(heap.define_own_property(array, length, PropertyDescriptor::value(Value::number(1.0))).unwrap());
+        assert_eq!(
+            heap.get_property(array, zero).unwrap().value_type(),
+            ValueType::Undefined
+        );
+        assert_eq!(
+            heap.get_property(array, length).unwrap().as_number(),
+            Some(3.0)
+        );
+        assert!(
+            heap.define_own_property(array, length, PropertyDescriptor::value(Value::number(1.0)))
+                .unwrap()
+        );
         assert_eq!(heap.array_length(array).unwrap(), 1);
         assert!(!heap.has_own_property(array, two).unwrap());
-        assert_eq!(heap.define_own_property(array, length, PropertyDescriptor::value(Value::number(-1.0))), Err(HeapError::InvalidArrayLength));
+        assert_eq!(
+            heap.define_own_property(
+                array,
+                length,
+                PropertyDescriptor::value(Value::number(-1.0))
+            ),
+            Err(HeapError::InvalidArrayLength)
+        );
         heap.close_scope(roots).unwrap();
     }
 
@@ -1443,27 +2067,41 @@ mod tests {
         heap.scope_root(roots, array).unwrap();
         let index = key(&mut heap, "3");
         let length = key(&mut heap, "length");
-        assert!(heap.define_own_property(
-            array,
-            index,
-            PropertyDescriptor::data(Value::number(3.0), true, true, false),
-        ).unwrap());
+        assert!(
+            heap.define_own_property(
+                array,
+                index,
+                PropertyDescriptor::data(Value::number(3.0), true, true, false),
+            )
+            .unwrap()
+        );
         assert_eq!(heap.array_length(array).unwrap(), 4);
 
-        assert!(!heap.define_own_property(
-            array,
-            length,
-            PropertyDescriptor {
-                value: Some(Value::number(1.0)),
-                writable: Some(false),
-                enumerable: None,
-                configurable: None,
-            },
-        ).unwrap());
+        assert!(
+            !heap
+                .define_own_property(
+                    array,
+                    length,
+                    PropertyDescriptor {
+                        value: Some(Value::number(1.0)),
+                        writable: Some(false),
+                        enumerable: None,
+                        configurable: None,
+                    },
+                )
+                .unwrap()
+        );
         assert_eq!(heap.array_length(array).unwrap(), 4);
-        let descriptor = heap.get_own_property_descriptor(array, length).unwrap().unwrap();
+        let descriptor = heap
+            .get_own_property_descriptor(array, length)
+            .unwrap()
+            .unwrap();
         assert!(!descriptor.writable);
-        assert!(!heap.set_property(array, length, Value::number(2.0)).unwrap());
+        assert!(
+            !heap
+                .set_property(array, length, Value::number(2.0))
+                .unwrap()
+        );
         heap.close_scope(roots).unwrap();
     }
 
@@ -1499,16 +2137,24 @@ mod tests {
         assert_eq!(key, duplicate);
         assert_eq!(first.property_key_utf16(key).unwrap(), &[0x0061, 0xD800]);
         let object = second.allocate_object().unwrap();
-        assert!(matches!(second.get_property(object, key), Err(HeapError::WrongHeap)));
+        assert!(matches!(
+            second.get_property(object, key),
+            Err(HeapError::WrongHeap)
+        ));
     }
 
     #[test]
     fn closure_cell_captures_share_mutations_and_value_captures_copy() {
         let mut heap = heap();
-        let outer = heap.create_environment(None, &[
-            BindingDefinition::mutable(BindingId(1), Value::number(1.0)),
-            BindingDefinition::immutable(BindingId(2), Value::number(5.0)),
-        ]).unwrap();
+        let outer = heap
+            .create_environment(
+                None,
+                &[
+                    BindingDefinition::mutable(BindingId(1), Value::number(1.0)),
+                    BindingDefinition::immutable(BindingId(2), Value::number(5.0)),
+                ],
+            )
+            .unwrap();
         let roots = heap.open_scope().unwrap();
         heap.scope_root_environment(roots, outer).unwrap();
         let definition = FunctionDefinition {
@@ -1516,19 +2162,51 @@ mod tests {
             parameters: vec![BindingDefinition::mutable(BindingId(3), Value::undefined())],
             locals: Vec::new(),
             captures: vec![
-                CaptureDefinition { source: BindingId(1), alias: BindingId(11), mode: CaptureMode::Cell },
-                CaptureDefinition { source: BindingId(2), alias: BindingId(12), mode: CaptureMode::Value },
+                CaptureDefinition {
+                    source: BindingId(1),
+                    alias: BindingId(11),
+                    mode: CaptureMode::Cell,
+                },
+                CaptureDefinition {
+                    source: BindingId(2),
+                    alias: BindingId(12),
+                    mode: CaptureMode::Value,
+                },
             ],
             kind: FunctionKind::Ordinary,
             strict: true,
         };
-        let closure = heap.create_closure(&definition, outer, Value::undefined()).unwrap();
+        let closure = heap
+            .create_closure(&definition, outer, Value::undefined())
+            .unwrap();
         heap.scope_root(roots, closure).unwrap();
-        let activation = heap.enter_function_call(closure, &definition, Value::undefined(), &[Value::number(9.0)], Value::undefined()).unwrap();
-        assert_eq!(heap.load_binding(activation.environment(), BindingId(3)).unwrap().as_number(), Some(9.0));
-        heap.store_binding(activation.environment(), BindingId(11), Value::number(2.0)).unwrap();
-        assert_eq!(heap.load_binding(outer, BindingId(1)).unwrap().as_number(), Some(2.0));
-        assert_eq!(heap.load_binding(activation.environment(), BindingId(12)).unwrap().as_number(), Some(5.0));
+        let activation = heap
+            .enter_function_call(
+                closure,
+                &definition,
+                Value::undefined(),
+                &[Value::number(9.0)],
+                Value::undefined(),
+            )
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(activation.environment(), BindingId(3))
+                .unwrap()
+                .as_number(),
+            Some(9.0)
+        );
+        heap.store_binding(activation.environment(), BindingId(11), Value::number(2.0))
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(outer, BindingId(1)).unwrap().as_number(),
+            Some(2.0)
+        );
+        assert_eq!(
+            heap.load_binding(activation.environment(), BindingId(12))
+                .unwrap()
+                .as_number(),
+            Some(5.0)
+        );
         assert!(heap.collect().unwrap().marked_objects >= 4);
         heap.leave_function_call(activation).unwrap();
         heap.close_scope(roots).unwrap();
@@ -1537,10 +2215,12 @@ mod tests {
     #[test]
     fn lexical_store_rejects_tdz_and_initialization_is_one_shot() {
         let mut heap = heap();
-        let environment = heap.create_environment(
-            None,
-            &[BindingDefinition::uninitialized(BindingId(1), true)],
-        ).unwrap();
+        let environment = heap
+            .create_environment(
+                None,
+                &[BindingDefinition::uninitialized(BindingId(1), true)],
+            )
+            .unwrap();
         let roots = heap.open_scope().unwrap();
         heap.scope_root_environment(roots, environment).unwrap();
 
@@ -1549,7 +2229,9 @@ mod tests {
             Err(HeapError::UninitializedBinding)
         ));
         assert_eq!(
-            heap.initialize_binding(environment, BindingId(1), Value::number(1.0)).unwrap().as_number(),
+            heap.initialize_binding(environment, BindingId(1), Value::number(1.0))
+                .unwrap()
+                .as_number(),
             Some(1.0)
         );
         assert!(matches!(
@@ -1557,7 +2239,9 @@ mod tests {
             Err(HeapError::AlreadyInitialized)
         ));
         assert_eq!(
-            heap.store_binding(environment, BindingId(1), Value::number(3.0)).unwrap().as_number(),
+            heap.store_binding(environment, BindingId(1), Value::number(3.0))
+                .unwrap()
+                .as_number(),
             Some(3.0)
         );
         heap.close_scope(roots).unwrap();
@@ -1579,13 +2263,26 @@ mod tests {
             kind: FunctionKind::Ordinary,
             strict: true,
         };
-        let function = heap.create_closure(&definition, outer, Value::undefined()).unwrap();
+        let function = heap
+            .create_closure(&definition, outer, Value::undefined())
+            .unwrap();
         heap.scope_root(roots, function).unwrap();
-        let call = heap.enter_function_call(function, &definition, global, &[Value::number(4.0)], global).unwrap();
+        let call = heap
+            .enter_function_call(function, &definition, global, &[Value::number(4.0)], global)
+            .unwrap();
         assert!(heap.strict_equal(call.this_value(), global).unwrap());
-        assert_eq!(heap.load_binding(call.environment(), BindingId(1)).unwrap().as_number(), Some(4.0));
-        assert!(matches!(heap.load_binding(call.environment(), BindingId(2)), Err(HeapError::UninitializedBinding)));
-        heap.initialize_binding(call.environment(), BindingId(2), Value::number(6.0)).unwrap();
+        assert_eq!(
+            heap.load_binding(call.environment(), BindingId(1))
+                .unwrap()
+                .as_number(),
+            Some(4.0)
+        );
+        assert!(matches!(
+            heap.load_binding(call.environment(), BindingId(2)),
+            Err(HeapError::UninitializedBinding)
+        ));
+        heap.initialize_binding(call.environment(), BindingId(2), Value::number(6.0))
+            .unwrap();
         heap.leave_function_call(call).unwrap();
         heap.close_scope(roots).unwrap();
         assert!(heap.collect().unwrap().reclaimed_objects > 0);
