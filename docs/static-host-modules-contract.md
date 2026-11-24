@@ -10,6 +10,14 @@ This proof adds declarative module metadata on top of the existing OGM-19 ABI an
 
 The proof establishes the metadata and linking contract needed by a future engine implementation. It is not evidence that Ogma currently executes ECMAScript modules: the repository still has no production parser, Runtime, interpreter, or module loader.
 
+### 1.1. Native requirement semantics
+
+The descriptor's `nativeDependencies` contains stable **logical Native requirement IDs**, not Cargo crate names or concrete provider IDs. For example, a future host module may require `native.crypto.digest` or `native.crypto.random`; the current `physics-kernel` test identifier is an opaque M0 proof value. Production Native requirement IDs use the reserved `native.` namespace so they remain distinct from Capability IDs such as `crypto.digest`; existing OGM-25 fixture IDs are not retroactively renamed. The v1 proof's permissive string schema is retained for those historical fixtures; production registration/provider validation must enforce the reserved prefix for production requirement IDs. The profile's `enabledNativeDependencies` is an allow-list/availability declaration for those logical requirements. OGM-25 validates their presence and closure, but it does not resolve provider implementations, inspect Cargo metadata or compile native dependencies.
+
+The production Native Provider architecture extends this proof: a provider declares which logical requirements it implements, which requirements it consumes, its OGM ABI compatibility and supported targets. A versioned provider registry resolves each requirement to exactly one compatible provider. When multiple providers can satisfy a requirement, the host/build profile must select one explicitly; missing or ambiguous mappings fail closed. See [Native Provider Architecture](native-provider-architecture.md).
+
+Do not put Cargo package names, crate versions or Cargo feature names into the Host Module descriptor. Cargo remains the source of truth for actual Rust dependency resolution. Provider selection is performed against the Rust providers already compiled/registered by the host; it does not download or resolve crates.
+
 ## 2. Descriptor v1
 
 The normative machine-readable descriptor shape is [contracts/host-modules/v1/descriptor.schema.json](../contracts/host-modules/v1/descriptor.schema.json). The Rust representation is HostModuleDescriptor / HostModuleExport; an example is [ogma-math.module.json](../benchmarks/typed-host-dispatch/tests/fixtures/ogma-math.module.json).
@@ -19,7 +27,7 @@ A module descriptor records:
 - descriptor schema version and required OGM ABI major/minor;
 - stable module specifier and semantic version;
 - module-level capability requirements and feature requirements;
-- host-module dependencies and native-library/adapter dependencies;
+- host-module dependencies and logical Native requirement IDs (`nativeDependencies`), which may be satisfied by a native adapter but are not Cargo package or Provider identifiers;
 - exported names, typed/generic signatures, effect metadata, per-export capabilities/features, and export binding semantics.
 
 Capability names map to fixed bit positions (0..63). One name cannot be assigned to multiple bits and one bit cannot identify different names. A module-level capability is merged into every registered export descriptor, so the existing OGM-21 dispatch path continues checking it on every invocation. Export-specific capabilities are enforced by profile resolution and the existing slot invocation guard.
@@ -74,9 +82,9 @@ The [profile schema](../contracts/host-modules/v1/profile.schema.json) and Rust 
 - literal runtime module imports;
 - modules referenced directly by native adapters.
 
-build_profile computes a deterministic transitive closure of declared module dependencies. It rejects unknown or missing dependencies, dependency cycles, missing required module features, denied module-level capabilities, and unavailable native dependencies. Export-level feature/capability requirements are checked when a concrete static import is resolved; unavailable exports return deterministic diagnostics rather than an unsafe slot.
+build_profile computes a deterministic transitive closure of declared module dependencies. It rejects unknown or missing dependencies, dependency cycles, missing required module features, denied module-level capabilities, and unavailable native requirement IDs. Export-level feature/capability requirements are checked when a concrete static import is resolved; unavailable exports return deterministic diagnostics rather than an unsafe slot. The M0 proof stops at logical native-requirement availability; production provider selection and Cargo-graph validation are separate M3 responsibilities defined in [Native Provider Architecture](native-provider-architecture.md) and owned by the Native Provider/packaging tasks.
 
-Unused registered modules appear in ModuleBuildPlan::stripped_modules. A module referenced by a runtime import or native-module dependency must be present in the validated closure. Removing it from the profile yields RuntimeImportModuleStripped or NativeModuleDependencyStripped; it is never silently dropped. A module's declared native libraries/adapters must also be present in enabledNativeDependencies.
+Unused registered modules appear in ModuleBuildPlan::stripped_modules. A module referenced by a runtime import or native-module dependency must be present in the validated closure. Removing it from the profile yields RuntimeImportModuleStripped or NativeModuleDependencyStripped; it is never silently dropped. A module's declared `nativeDependencies` requirement IDs must also be present in `enabledNativeDependencies`. This checks logical availability only; it does not prove that a concrete Provider is selected or that a Cargo package is linked.
 
 Diagnostics are stable values with machine-readable codes and are sorted by (code, module, subject, detail). They can be rendered without depending on hash-map iteration order.
 
@@ -90,7 +98,7 @@ A build plan is an immutable, registry-bound snapshot. Successful module registr
 | TypeScript declarations match Rust exports | generate_typescript_declarations; byte-for-byte .d.ts fixture test |
 | Static resolution only where semantics permit | resolve_import; immutable ESM binding gets slot; dynamic/mutable/namespace/CommonJS/property paths use generic fallback |
 | Capability and feature diagnostics are deterministic | stable ModuleDiagnostic; repeatability, feature-denial and capability-denial tests |
-| Runtime/native references cannot be stripped | build_profile; runtime import, native module dependency and native-library closure tests |
+| Runtime imports and native-module references cannot be stripped | build_profile; runtime import, native-module dependency and logical Native requirement availability/closure tests |
 
 Run from the repository root:
 
