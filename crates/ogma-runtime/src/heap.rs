@@ -1668,8 +1668,10 @@ mod tests {
         let mut allocation_counter_heap = heap(4096, 2048);
         allocation_counter_heap.allocations = u64::MAX;
         assert_eq!(
-            allocation_counter_heap.allocate_string_utf16(&[0x0061; 4]),
-            Err(HeapError::SizeOverflow)
+            allocation_counter_heap
+                .allocate_string_utf16(&[0x0061; 4])
+                .unwrap_err(),
+            HeapError::SizeOverflow
         );
         assert_eq!(allocation_counter_heap.stats().used_bytes, 0);
         assert_eq!(allocation_counter_heap.slots.capacity(), 0);
@@ -1677,8 +1679,10 @@ mod tests {
         let mut live_counter_heap = heap(4096, 2048);
         live_counter_heap.live_objects = u64::MAX;
         assert_eq!(
-            live_counter_heap.allocate_string_utf16(&[0x0061; 4]),
-            Err(HeapError::SizeOverflow)
+            live_counter_heap
+                .allocate_string_utf16(&[0x0061; 4])
+                .unwrap_err(),
+            HeapError::SizeOverflow
         );
         assert_eq!(live_counter_heap.stats().used_bytes, 0);
         assert_eq!(live_counter_heap.slots.capacity(), 0);
