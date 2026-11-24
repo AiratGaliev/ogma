@@ -927,8 +927,20 @@ impl Heap {
             ValueRepr::Boolean(boolean) => Ok(if boolean { 1.0 } else { 0.0 }),
             ValueRepr::Number(number) => Ok(number),
             ValueRepr::String(reference) => {
-                let units = self.string_utf16(Value::from_string(reference))?;
-                string_to_number(units, &mut self.budget)
+                let index = self.validate_ref(reference)?;
+                let Self { budget, slots, .. } = self;
+                let units = match &slots[index]
+                    .cell
+                    .as_ref()
+                    .ok_or(HeapError::StaleReference)?
+                    .kind
+                {
+                    CellKind::String(units) => units,
+                    CellKind::Object | CellKind::Function => {
+                        return Err(HeapError::InvalidObjectKind);
+                    }
+                };
+                string_to_number(units, budget)
             }
             ValueRepr::Object(_) | ValueRepr::Function(_) => Err(HeapError::UnsupportedCoercion),
         }
