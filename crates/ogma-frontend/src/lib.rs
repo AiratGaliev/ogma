@@ -1556,9 +1556,12 @@ mod semantic_snapshot_tests {
             "const value = function inner() { return inner; };",
         )
         .expect("valid source file");
-        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("valid JavaScript");
-        let inner = parsed.semantic.bindings.iter()
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
+        let inner = parsed
+            .semantic
+            .bindings
+            .iter()
             .find(|binding| binding.name == "inner")
             .expect("named function expression binding");
         assert_eq!(inner.kind, ResolvedBindingKind::Const);
