@@ -72,7 +72,7 @@ External memory charges have generation-checked tokens and must be released exac
 
 When an object, function or string allocation encounters aggregate quota pressure, the heap attempts one collection and retries. A single request above the configured maximum is rejected before a cell is published. Registry/edge growth and external charges fail closed when the quota is exhausted; they never publish a partially registered root or edge.
 
-The byte counters describe Runtime-requested `Vec` capacities and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
+The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters describe Runtime-requested `Vec` capacities and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
 
 ## 6. Verification and boundaries
 
