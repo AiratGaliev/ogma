@@ -325,10 +325,8 @@ fn collect_reentered_lexical_scopes(
     for statement in statements {
         match statement {
             SyntaxStatement::Block { scope, body, .. } => {
-                if inside_loop_body {
-                    if let Some(scope) = scope {
-                        output.insert(scope.clone());
-                    }
+                if inside_loop_body && let Some(scope) = scope {
+                    output.insert(scope.clone());
                 }
                 collect_reentered_lexical_scopes(body, inside_loop_body, output);
             }
@@ -354,10 +352,8 @@ fn collect_reentered_lexical_scopes(
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
             SyntaxStatement::For { scope, body, .. } => {
-                if inside_loop_body {
-                    if let Some(scope) = scope {
-                        output.insert(scope.clone());
-                    }
+                if inside_loop_body && let Some(scope) = scope {
+                    output.insert(scope.clone());
                 }
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
