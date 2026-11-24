@@ -417,7 +417,8 @@ impl Heap {
 
     /// Allocates an array with length zero, writable length and sparse elements.
     pub fn allocate_array(&mut self) -> Result<Value, HeapError> {
-        let reference = self.allocate_cell_with_retry(|| CellKind::Array(Box::new(ArrayData::new())))?;
+        let reference =
+            self.allocate_cell_with_retry(|| CellKind::Array(Box::new(ArrayData::new())))?;
         Ok(Value::from_object(reference))
     }
 
