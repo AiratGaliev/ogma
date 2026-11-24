@@ -1,8 +1,10 @@
 //! Owned Rust representation and validation for canonical function-level Core IR v1.
 #![deny(missing_docs)]
 
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt;
 
 /// Identifier of the canonical Core IR v1 contract.
 pub const CONTRACT_ID: &str = "ogma.core-ir/1.0.0";
@@ -551,9 +553,128 @@ impl Diagnostic {
     }
 }
 
+/// JSON value whose object visitors reject repeated keys at every nesting level.
+#[derive(Debug)]
+struct UniqueJsonValue(JsonValue);
+
+impl<'de> Deserialize<'de> for UniqueJsonValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct UniqueValueVisitor;
+
+        impl<'de> Visitor<'de> for UniqueValueVisitor {
+            type Value = UniqueJsonValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value without duplicate object keys")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::Null))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::Null))
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let number = serde_json::Number::from_f64(value)
+                    .ok_or_else(|| E::custom("non-finite JSON number"))?;
+                Ok(UniqueJsonValue(JsonValue::Number(number)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::String(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(UniqueJsonValue(JsonValue::String(value)))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(UniqueJsonValue(value)) = sequence.next_element()? {
+                    values.push(value);
+                }
+                Ok(UniqueJsonValue(JsonValue::Array(values)))
+            }
+
+            fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut values = serde_json::Map::new();
+                let mut seen = HashSet::new();
+                while let Some(key) = object.next_key::<String>()? {
+                    if !seen.insert(key.clone()) {
+                        return Err(de::Error::custom(format!(
+                            "duplicate JSON object key {key:?}"
+                        )));
+                    }
+                    let UniqueJsonValue(value) = object.next_value()?;
+                    values.insert(key, value);
+                }
+                Ok(UniqueJsonValue(JsonValue::Object(values)))
+            }
+        }
+
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
 /// Parse and verify a canonical Core IR JSON document.
+///
+/// Repeated object keys are rejected before typed decoding, matching the
+/// canonical Python verifier's strict JSON input boundary.
 pub fn parse_and_verify(input: &str) -> Result<FunctionDocument, Vec<Diagnostic>> {
-    let document = serde_json::from_str::<FunctionDocument>(input)
+    let mut deserializer = serde_json::Deserializer::from_str(input);
+    let UniqueJsonValue(value) = UniqueJsonValue::deserialize(&mut deserializer)
+        .map_err(|error| vec![Diagnostic::new("schema.decode", "$", error.to_string())])?;
+    deserializer
+        .end()
+        .map_err(|error| vec![Diagnostic::new("schema.decode", "$", error.to_string())])?;
+    let document = serde_json::from_value::<FunctionDocument>(value)
         .map_err(|error| vec![Diagnostic::new("schema.decode", "$", error.to_string())])?;
     let diagnostics = verify_document(&document);
     if diagnostics.is_empty() {
@@ -2249,6 +2370,32 @@ mod tests {
                 other => panic!("unknown fixture expectation {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_json_object_keys_at_any_nesting_level() {
+        let input = r#"{"outer":{"duplicate":1,"duplicate":2}}"#;
+        let error = serde_json::from_str::<UniqueJsonValue>(input)
+            .expect_err("duplicate keys must not be silently overwritten");
+        assert!(error.to_string().contains("duplicate JSON object key"));
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/core-ir/fixtures/positive-ssa-branch.json");
+        let document = parse_and_verify(
+            &fs::read_to_string(path).expect("positive fixture exists"),
+        )
+        .expect("positive fixture verifies");
+        let encoded = serde_json::to_string(&document).expect("typed model serializes");
+        let duplicated = encoded.replacen(
+            r#""contract":"ogma.core-ir""#,
+            r#""contract":"ogma.core-ir","contract":"ogma.core-ir""#,
+            1,
+        );
+        let diagnostics =
+            parse_and_verify(&duplicated).expect_err("duplicate envelope key must be rejected");
+        assert!(diagnostics.iter().any(|item| {
+            item.code == "schema.decode" && item.message.contains("duplicate JSON object key")
+        }));
     }
 
     #[test]
