@@ -21,6 +21,14 @@ use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_span::SourceType;
 use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 
+mod syntax;
+pub use syntax::{
+    ResolvedSyntaxFunction, ResolvedSyntaxProgram, SyntaxAssignmentTarget,
+    SyntaxBinaryOperator, SyntaxDeclarator, SyntaxExpression, SyntaxForInitializer,
+    SyntaxLiteral, SyntaxMemberKey, SyntaxStatement, SyntaxUnaryOperator,
+    SyntaxUpdateOperator, SyntaxVariableKind,
+};
+
 /// Stable identity for one source file within a compilation/debugging session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SourceId(Arc<str>);
@@ -297,6 +305,8 @@ pub struct ParsedProgram<'a> {
     pub diagnostics: Vec<ParseDiagnostic>,
     /// Oxc-resolved lexical scopes, bindings, references and closure captures.
     pub semantic: SemanticSnapshot,
+    /// Owned source-spanned syntax projection for the compiler lowering boundary.
+    pub syntax: ResolvedSyntaxProgram,
 }
 
 /// Options for parsing the M1 JavaScript frontend subset.
@@ -424,6 +434,7 @@ pub fn parse<'a>(
         build_semantic_snapshot(&program, source, &semantic_result.semantic)
     };
 
+    let syntax = syntax::build_syntax_program(&program, source, &semantic);
     let source_has_strict_directive = program
         .directives
         .iter()
@@ -437,6 +448,7 @@ pub fn parse<'a>(
             || source_has_strict_directive,
         diagnostics,
         semantic,
+        syntax,
     })
 }
 
@@ -1640,5 +1652,65 @@ mod semantic_snapshot_tests {
             .find(|reference| reference.name == "local")
             .expect("local reference");
         assert!(local.binding.is_some());
+    }
+}
+
+
+#[cfg(test)]
+mod syntax_projection_tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+
+    fn parse_syntax(code: &str) -> (SourceFile, ParsedProgram<'static>) {
+        let allocator = Box::leak(Box::new(Allocator::default()));
+        let source = Box::leak(Box::new(
+            SourceFile::new("syntax-test", "memory:///syntax.js", None, code)
+                .expect("source is valid"),
+        ));
+        let parsed = parse(allocator, source, ParseRequestOptions::default())
+            .expect("JavaScript syntax should parse");
+        (source.clone(), parsed)
+    }
+
+    #[test]
+    fn projects_shadowed_declarations_and_control_flow_with_original_spans() {
+        let code = "let value = 1; { let value = 2; value; } if (value < 3) value = value + 1;";
+        let (_source, parsed) = parse_syntax(code);
+        let program = &parsed.syntax.functions[0];
+        let values: Vec<_> = parsed.semantic.bindings.iter()
+            .filter(|binding| binding.name == "value")
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert_ne!(values[0].id, values[1].id);
+        assert!(program.body.iter().any(|statement| matches!(statement, SyntaxStatement::Block { .. })));
+        assert!(program.body.iter().any(|statement| matches!(statement, SyntaxStatement::If { .. })));
+        assert!(program.span.end_byte as usize <= code.len());
+    }
+
+    #[test]
+    fn projects_function_parameters_calls_and_arrow_captures() {
+        let code = "function outer(seed) { const callback = () => call(seed); return callback; }";
+        let (_source, parsed) = parse_syntax(code);
+        let outer = parsed.syntax.functions.iter().find(|function| function.name == "outer").unwrap();
+        let arrow = parsed.syntax.functions.iter().find(|function| function.is_arrow).unwrap();
+        assert_eq!(outer.parameters.len(), 1);
+        assert_eq!(arrow.captures.len(), 1);
+        assert!(outer.body.iter().any(|statement| matches!(statement, SyntaxStatement::Variable { .. })));
+        assert!(arrow.body.iter().any(|statement| matches!(statement, SyntaxStatement::Return {
+            value: Some(SyntaxExpression::Call { .. }), ..
+        })));
+    }
+
+    #[test]
+    fn unsupported_spread_arguments_are_explicit_not_silently_dropped() {
+        let (_source, parsed) = parse_syntax("function invoke(fn, args) { return fn(...args); }");
+        let function = parsed.syntax.functions.iter().find(|function| function.name == "invoke").unwrap();
+        assert!(matches!(
+            function.body.first(),
+            Some(SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Unsupported { syntax, .. }),
+                ..
+            }) if syntax == "spread_call_argument"
+        ));
     }
 }
