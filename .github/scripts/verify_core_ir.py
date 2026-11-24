@@ -403,7 +403,10 @@ class Verifier:
                             self.err("environment.immutable_store",ip+".attributes.binding","cannot store to immutable or by-value captured binding")
                         source_type=value_type(ins["operands"][0]) if ins["operands"] else None
                         expected_type=(target["semantic_type"],target["representation"])
-                        if source_type is not None and source_type!=expected_type:
+                        # A dynamic lexical slot stores the full JavaScript value domain.
+                        # The runtime performs the representation boxing at this semantic boundary.
+                        if (source_type is not None and source_type!=expected_type
+                                and expected_type != ("dynamic", "boxed")):
                             self.err("environment.store_type",ip+".operands[0]","stored value type differs from lexical binding")
                 if op=="closure.create":
                     if not self.valid_id(ins["attributes"].get("function")):

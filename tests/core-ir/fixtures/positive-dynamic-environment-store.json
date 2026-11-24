@@ -1,0 +1,154 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn_dynamic_store",
+    "name": "dynamicStore",
+    "parameters": [],
+    "return": null,
+    "source_files": [
+      {
+        "id": "src_dynamic_store",
+        "path": "fixtures/dynamic-store.js",
+        "language": "javascript",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "environment": {
+      "id": "env_dynamic_store",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "binding_value",
+          "name": "value",
+          "kind": "let",
+          "mutable": true,
+          "semantic_type": "dynamic",
+          "representation": "boxed"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": "effect_entry",
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [
+          {
+            "id": "effect_entry",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "constant_number",
+            "op": "js.constant",
+            "operands": [],
+            "result": {
+              "id": "number_value",
+              "kind": "value",
+              "semantic_type": "number",
+              "representation": "f64"
+            },
+            "attributes": {
+              "literal": "number",
+              "value": 1
+            },
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": false,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src_dynamic_store",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 9
+              },
+              "scope": "env_dynamic_store",
+              "bindings": [
+                "binding_value"
+              ],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": null,
+            "effect_out": null,
+            "exception": null
+          },
+          {
+            "id": "store_dynamic",
+            "op": "env.store",
+            "operands": [
+              "number_value"
+            ],
+            "result": {
+              "id": "stored_value",
+              "kind": "value",
+              "semantic_type": "number",
+              "representation": "f64"
+            },
+            "attributes": {
+              "binding": "binding_value"
+            },
+            "effects": {
+              "may_allocate": false,
+              "may_gc": false,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": false,
+              "may_reenter": false,
+              "may_mutate_shape": false
+            },
+            "source": {
+              "origin": "user",
+              "file": "src_dynamic_store",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 9
+              },
+              "scope": "env_dynamic_store",
+              "bindings": [
+                "binding_value"
+              ],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "effect_entry",
+            "effect_out": "effect_after_store",
+            "exception": {
+              "kind": "propagate"
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "return",
+          "value": null,
+          "source": {
+            "origin": "generated",
+            "reason": "implicit function return",
+            "scope": "env_dynamic_store",
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}

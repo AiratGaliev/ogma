@@ -1510,16 +1510,40 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     }
                     if let (Some(operand), Some(result)) =
                         (instruction.operands.first(), instruction.result.as_ref())
-                        && definitions.get(operand).is_some_and(|definition| {
-                            (definition.ty, definition.rep)
-                                != (Some(result.semantic_type), Some(result.representation))
-                        })
                     {
-                        errors.push(Diagnostic::new(
-                            "operation.result_type",
-                            format!("{instruction_path}.result"),
-                            "env.store result must preserve its operand type",
-                        ));
+                        let operand_type = definitions
+                            .get(operand)
+                            .map(|definition| (definition.ty, definition.rep));
+                        if operand_type.is_some_and(|operand_type| {
+                            operand_type
+                                != (Some(result.semantic_type), Some(result.representation))
+                        }) {
+                            errors.push(Diagnostic::new(
+                                "operation.result_type",
+                                format!("{instruction_path}.result"),
+                                "env.store result must preserve its operand type",
+                            ));
+                        }
+                        let binding_type = local
+                            .map(|binding| (binding.semantic_type, binding.representation))
+                            .or_else(|| {
+                                capture.map(|capture| {
+                                    (capture.semantic_type, capture.representation)
+                                })
+                            });
+                        if binding_type.is_some_and(|binding_type| {
+                            binding_type != (SemanticType::Dynamic, Representation::Boxed)
+                                && operand_type.is_some_and(|operand_type| {
+                                    operand_type
+                                        != (Some(binding_type.0), Some(binding_type.1))
+                                })
+                        }) {
+                            errors.push(Diagnostic::new(
+                                "environment.store_type",
+                                format!("{instruction_path}.operands[0]"),
+                                "stored value type differs from a statically represented lexical binding",
+                            ));
+                        }
                     }
                 } else if let Some(result) = instruction.result.as_ref() {
                     let expected = local

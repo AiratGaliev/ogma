@@ -24,7 +24,7 @@ def codes(doc):
 class CoreIRVerifierTests(unittest.TestCase):
     def test_positive_and_negative_fixture_corpus(self):
         report = run_corpus(ROOT, MANIFEST, ROOT / "contracts/core-ir/v1/schema.json")
-        self.assertEqual(report["summary"], {"total": 28, "passed": 28, "failed": 0, "accepted": 7, "rejected": 21})
+        self.assertEqual(report["summary"], {"total": 29, "passed": 29, "failed": 0, "accepted": 8, "rejected": 21})
 
     def test_all_positive_fixtures_are_accepted(self):
         manifest = load(MANIFEST)
@@ -157,7 +157,7 @@ class CoreIRVerifierTests(unittest.TestCase):
         self.assertEqual(json.dumps(a,sort_keys=True),json.dumps(b,sort_keys=True))
 
     def test_manifest_has_expected_coverage(self):
-        m=load(MANIFEST); self.assertEqual(sum(x["expect"]=="accepted" for x in m["fixtures"]),7)
+        m=load(MANIFEST); self.assertEqual(sum(x["expect"]=="accepted" for x in m["fixtures"]),8)
         self.assertEqual(sum(x["expect"]=="rejected" for x in m["fixtures"]),21)
 
     def test_environment_store_requires_matching_value_type(self):
