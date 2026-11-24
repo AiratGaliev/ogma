@@ -1297,6 +1297,24 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 }
                 SyntaxUnaryOperator::Typeof => {
+                    // ECMAScript's typeof operator is the sole operation that
+                    // may inspect an unresolved identifier without throwing.
+                    // Do not route this case through ordinary identifier
+                    // lowering, which correctly rejects ambient globals.
+                    if let SyntaxExpression::Identifier {
+                        name,
+                        binding: None,
+                        ..
+                    } = argument.as_ref()
+                        && name != "undefined"
+                    {
+                        return self.emit_constant(
+                            "string",
+                            JsonValue::String("undefined".to_owned()),
+                            ValueType::STRING,
+                            Some(*span),
+                        );
+                    }
                     let value = self.emit_expression(argument)?;
                     self.emit_instruction(
                         "js.typeof",
@@ -3408,6 +3426,45 @@ mod tests {
         );
         assert!(verify_document(&documents[0]).is_empty());
         assert!(verify_document(&documents[1]).is_empty());
+    }
+
+    #[test]
+    fn typeof_unresolvable_identifier_returns_undefined_without_global_lookup() {
+        let source = source("function run() { return typeof missing; }");
+        let span = whole_span(&source);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Unary {
+                    operator: SyntaxUnaryOperator::Typeof,
+                    argument: Box::new(SyntaxExpression::Identifier {
+                        name: "missing".to_owned(),
+                        binding: None,
+                        span,
+                    }),
+                    span,
+                }),
+                span,
+            }],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("typeof unresolved identifier is valid JavaScript");
+        let instructions = &documents[0].function.blocks[0].instructions;
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].op, "js.constant");
+        assert_eq!(
+            instructions[0].attributes.get("value").and_then(JsonValue::as_str),
+            Some("undefined")
+        );
+        assert!(verify_document(&documents[0]).is_empty());
     }
 
     #[test]
