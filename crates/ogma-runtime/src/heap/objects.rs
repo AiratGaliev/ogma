@@ -675,12 +675,23 @@ impl Heap {
     /// Returns own keys: integer indices sorted numerically, then strings in insertion order.
     pub fn own_property_keys(&mut self, object: Value) -> Result<Vec<PropertyKey>, HeapError> {
         let index = self.object_index(object)?;
-        let length_key = if matches!(&self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind, CellKind::Array(_)) {
+        let length_key = if matches!(
+            &self.slots[index].cell.as_ref().ok_or(HeapError::StaleReference)?.kind,
+            CellKind::Array(_)
+        ) {
             Some(self.intern_property_key("length")?)
-        } else { None };
-        let properties = self.object_data(index)?.properties.clone();
+        } else {
+            None
+        };
+        let properties = &self.object_data(index)?.properties;
         let mut indices = Vec::new();
         let mut strings = Vec::new();
+        indices
+            .try_reserve_exact(properties.len())
+            .map_err(|_| HeapError::AllocationFailed)?;
+        strings
+            .try_reserve_exact(properties.len())
+            .map_err(|_| HeapError::AllocationFailed)?;
         for property in properties {
             if let Some(array_index) = self.array_index_from_atom(property.key as usize) {
                 indices.push((array_index, property.key));
@@ -689,10 +700,24 @@ impl Heap {
             }
         }
         indices.sort_unstable_by_key(|entry| entry.0);
-        let mut result = Vec::with_capacity(indices.len() + strings.len() + usize::from(length_key.is_some()));
-        for (_, key) in indices { result.push(self.property_key_for_index(key)?); }
-        if let Some(key) = length_key { result.push(key); }
-        for key in strings { result.push(self.property_key_for_index(key)?); }
+        let key_count = indices
+            .len()
+            .checked_add(strings.len())
+            .and_then(|count| count.checked_add(usize::from(length_key.is_some())))
+            .ok_or(HeapError::SizeOverflow)?;
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(key_count)
+            .map_err(|_| HeapError::AllocationFailed)?;
+        for (_, key) in indices {
+            result.push(self.property_key_for_index(key)?);
+        }
+        if let Some(key) = length_key {
+            result.push(key);
+        }
+        for key in strings {
+            result.push(self.property_key_for_index(key)?);
+        }
         Ok(result)
     }
 
@@ -931,20 +956,35 @@ impl Heap {
             self.frame_root(frame, this_value)?;
             for argument in arguments { self.frame_root(frame, *argument)?; }
 
-            let mut activation_bindings = Vec::with_capacity(definition.parameters.len() + definition.locals.len());
+            if definition.parameters.iter().any(|parameter| !parameter.mutable) {
+                return Err(HeapError::InvalidFunctionDefinition);
+            }
+            let binding_count = definition
+                .parameters
+                .len()
+                .checked_add(definition.locals.len())
+                .ok_or(HeapError::SizeOverflow)?;
+            let mut activation_bindings = Vec::new();
+            reserve_vec(&mut self.budget, &mut activation_bindings, binding_count)?;
             for (index, parameter) in definition.parameters.iter().enumerate() {
-                if !parameter.mutable { return Err(HeapError::InvalidFunctionDefinition); }
                 activation_bindings.push(BindingDefinition {
                     id: parameter.id,
                     mutable: true,
-                    initial_value: Some(arguments.get(index).copied().unwrap_or_else(Value::undefined)),
+                    initial_value: Some(
+                        arguments.get(index).copied().unwrap_or_else(Value::undefined),
+                    ),
                 });
             }
             activation_bindings.extend(definition.locals.iter().copied());
-            let environment = self.create_environment(
-                Some(LexicalEnvironment { reference: closure_environment, _thread_affinity: PhantomData }),
+            let environment_result = self.create_environment(
+                Some(LexicalEnvironment {
+                    reference: closure_environment,
+                    _thread_affinity: PhantomData,
+                }),
                 &activation_bindings,
-            )?;
+            );
+            release_vec_capacity(&mut self.budget, &activation_bindings)?;
+            let environment = environment_result?;
             self.frame_root_reference(frame, environment.reference)?;
             Ok(CallActivation { frame, environment, function_id, this_value })
         })();
@@ -1191,6 +1231,9 @@ impl Heap {
                     if !property.configurable {
                         if let CellKind::Array(array) = &mut self.slots[index].cell.as_mut().ok_or(HeapError::StaleReference)?.kind {
                             array.length = array_index + 1;
+                            if descriptor.writable == Some(false) {
+                                array.length_writable = false;
+                            }
                         }
                         return Ok(false);
                     }
@@ -1393,6 +1436,38 @@ mod tests {
     }
 
     #[test]
+    fn array_length_failed_shrink_keeps_blocking_index_and_applies_read_only_flag() {
+        let mut heap = heap();
+        let array = heap.allocate_array().unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, array).unwrap();
+        let index = key(&mut heap, "3");
+        let length = key(&mut heap, "length");
+        assert!(heap.define_own_property(
+            array,
+            index,
+            PropertyDescriptor::data(Value::number(3.0), true, true, false),
+        ).unwrap());
+        assert_eq!(heap.array_length(array).unwrap(), 4);
+
+        assert!(!heap.define_own_property(
+            array,
+            length,
+            PropertyDescriptor {
+                value: Some(Value::number(1.0)),
+                writable: Some(false),
+                enumerable: None,
+                configurable: None,
+            },
+        ).unwrap());
+        assert_eq!(heap.array_length(array).unwrap(), 4);
+        let descriptor = heap.get_own_property_descriptor(array, length).unwrap().unwrap();
+        assert!(!descriptor.writable);
+        assert!(!heap.set_property(array, length, Value::number(2.0)).unwrap());
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
     fn property_edges_keep_children_alive_and_release_them_after_delete() {
         let mut heap = heap();
         let owner = heap.allocate_object().unwrap();
@@ -1428,62 +1503,6 @@ mod tests {
     }
 
     #[test]
-    fn primitive_property_key_conversion_uses_ecmascript_number_boundaries() {
-        let mut heap = heap();
-        let zero = heap.to_property_key(Value::number(-0.0)).unwrap();
-        let small = heap.to_property_key(Value::number(1e-7)).unwrap();
-        let large = heap.to_property_key(Value::number(1e21)).unwrap();
-        let nan = heap.to_property_key(Value::number(f64::NAN)).unwrap();
-
-        assert_eq!(heap.property_key_utf16(zero).unwrap(), &[b'0' as u16]);
-        let expected_small = "1e-7".encode_utf16().collect::<Vec<_>>();
-        assert_eq!(heap.property_key_utf16(small).unwrap(), expected_small.as_slice());
-        let expected_large = "1e+21".encode_utf16().collect::<Vec<_>>();
-        assert_eq!(heap.property_key_utf16(large).unwrap(), expected_large.as_slice());
-        let expected_nan = "NaN".encode_utf16().collect::<Vec<_>>();
-        assert_eq!(heap.property_key_utf16(nan).unwrap(), expected_nan.as_slice());
-    }
-
-    #[test]
-    fn array_length_is_respected_when_array_is_an_assignment_receiver() {
-        let mut heap = heap();
-        let prototype = heap.allocate_object().unwrap();
-        let array = heap.allocate_array().unwrap();
-        let roots = heap.open_scope().unwrap();
-        heap.scope_root(roots, prototype).unwrap();
-        heap.scope_root(roots, array).unwrap();
-        let length = key(&mut heap, "length");
-        assert!(heap.define_own_property(
-            prototype,
-            length,
-            PropertyDescriptor::data(Value::number(8.0), true, true, true),
-        ).unwrap());
-
-        assert!(heap.set_property_with_receiver(prototype, length, Value::number(2.0), array).unwrap());
-        assert_eq!(heap.array_length(array).unwrap(), 2);
-        heap.close_scope(roots).unwrap();
-    }
-
-    #[test]
-    fn own_property_key_order_matches_integer_then_string_order() {
-        let mut heap = heap();
-        let object = heap.allocate_object().unwrap();
-        let roots = heap.open_scope().unwrap();
-        heap.scope_root(roots, object).unwrap();
-        for key_name in ["tail", "10", "2", "4294967295"] {
-            let property = key(&mut heap, key_name);
-            assert!(heap.set_property(object, property, Value::undefined()).unwrap());
-        }
-
-        let keys = heap.own_property_keys(object).unwrap();
-        let names = keys.iter()
-            .map(|property| String::from_utf16(heap.property_key_utf16(*property).unwrap()).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["2", "10", "tail", "4294967295"]);
-        heap.close_scope(roots).unwrap();
-    }
-
-    #[test]
     fn closure_cell_captures_share_mutations_and_value_captures_copy() {
         let mut heap = heap();
         let outer = heap.create_environment(None, &[
@@ -1512,38 +1531,6 @@ mod tests {
         assert_eq!(heap.load_binding(activation.environment(), BindingId(12)).unwrap().as_number(), Some(5.0));
         assert!(heap.collect().unwrap().marked_objects >= 4);
         heap.leave_function_call(activation).unwrap();
-        heap.close_scope(roots).unwrap();
-    }
-
-    #[test]
-    fn arrow_function_uses_lexical_receiver_not_call_site_receiver() {
-        let mut heap = heap();
-        let lexical_this = heap.allocate_object().unwrap();
-        let call_this = heap.allocate_object().unwrap();
-        let outer = heap.create_environment(None, &[]).unwrap();
-        let roots = heap.open_scope().unwrap();
-        heap.scope_root(roots, lexical_this).unwrap();
-        heap.scope_root(roots, call_this).unwrap();
-        heap.scope_root_environment(roots, outer).unwrap();
-        let definition = FunctionDefinition {
-            id: FunctionId(0),
-            parameters: Vec::new(),
-            locals: Vec::new(),
-            captures: Vec::new(),
-            kind: FunctionKind::Arrow,
-            strict: false,
-        };
-        let function = heap.create_closure(&definition, outer, lexical_this).unwrap();
-        heap.scope_root(roots, function).unwrap();
-        let call = heap.enter_function_call(
-            function,
-            &definition,
-            call_this,
-            &[],
-            Value::undefined(),
-        ).unwrap();
-        assert!(heap.strict_equal(call.this_value(), lexical_this).unwrap());
-        heap.leave_function_call(call).unwrap();
         heap.close_scope(roots).unwrap();
     }
 

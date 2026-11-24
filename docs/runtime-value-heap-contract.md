@@ -84,7 +84,7 @@ interpreter must consume these APIs rather than introduce parallel semantics.
 The Runtime contract does not claim that OGM-46 interpreter execution or
 ECMAScript conformance has been completed.
 
-## 6. Verification and boundaries
+## 7. Verification and boundaries
 
 The Runtime unit corpus covers number edge cases, strict/SameValue/SameValueZero semantics, UTF-16 surrogate preservation, primitive coercion, mark-sweep cycle reclamation, physical cell-address stability across slot-directory growth, all implemented root providers, LIFO violations, cross-Runtime identity, stale generation reuse, allocation limits, quota-triggered collection/retry, failed cell initialization cleanup, external charges and recovery after memory release.
 
