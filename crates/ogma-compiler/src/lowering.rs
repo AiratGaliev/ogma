@@ -845,7 +845,6 @@ impl<'a> FunctionCompiler<'a> {
         )
     }
 
-
     fn emit_to_boolean(
         &mut self,
         value: ValueRef,
@@ -3695,7 +3694,6 @@ mod tests {
         assert!(verify_document(&documents[1]).is_empty());
     }
 
-
     #[test]
     fn preserves_const_binding_identity_on_the_ssa_definition() {
         let source = source("function run() { const value = 1; return value; }");
@@ -3746,5 +3744,4 @@ mod tests {
         assert!(bindings.contains(&value.id));
         assert!(verify_document(&documents[0]).is_empty());
     }
-
 }
