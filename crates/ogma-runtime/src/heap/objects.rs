@@ -2136,17 +2136,19 @@ mod tests {
         heap.scope_root(roots, prototype).unwrap();
         heap.scope_root(roots, array).unwrap();
         let length = key(&mut heap, "length");
-        assert!(heap
-            .define_own_property(
+        assert!(
+            heap.define_own_property(
                 prototype,
                 length,
                 PropertyDescriptor::data(Value::number(8.0), true, true, true),
             )
-            .unwrap());
+            .unwrap()
+        );
 
-        assert!(heap
-            .set_property_with_receiver(prototype, length, Value::number(2.0), array)
-            .unwrap());
+        assert!(
+            heap.set_property_with_receiver(prototype, length, Value::number(2.0), array)
+                .unwrap()
+        );
         assert_eq!(heap.array_length(array).unwrap(), 2);
         heap.close_scope(roots).unwrap();
     }
@@ -2613,7 +2615,10 @@ mod tests {
 
         let report = heap.collect().unwrap();
         assert!(report.reclaimed_objects >= 1);
-        assert!(heap.strict_equal(activation.this_value(), lexical_this).unwrap());
+        assert!(
+            heap.strict_equal(activation.this_value(), lexical_this)
+                .unwrap()
+        );
         heap.leave_function_call(activation).unwrap();
         heap.close_scope(roots).unwrap();
     }
@@ -2677,15 +2682,12 @@ mod tests {
         heap.scope_root(roots, function).unwrap();
 
         let activation = heap
-            .enter_function_call(
-                function,
-                &definition,
-                Value::undefined(),
-                &[],
-                global_this,
-            )
+            .enter_function_call(function, &definition, Value::undefined(), &[], global_this)
             .unwrap();
-        assert!(heap.strict_equal(activation.this_value(), global_this).unwrap());
+        assert!(
+            heap.strict_equal(activation.this_value(), global_this)
+                .unwrap()
+        );
         heap.leave_function_call(activation).unwrap();
         heap.close_scope(roots).unwrap();
     }
