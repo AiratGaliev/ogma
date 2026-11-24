@@ -795,11 +795,11 @@ impl Heap {
             }
         }
         for host_index in 0..self.host_slots.len() {
-            if let Some(value) = self.host_slots[host_index].value {
-                if let Some(reference) = value.gc_ref() {
-                    self.push_mark(reference)?;
-                    roots_scanned = roots_scanned.saturating_add(1);
-                }
+            if let Some(value) = self.host_slots[host_index].value
+                && let Some(reference) = value.gc_ref()
+            {
+                self.push_mark(reference)?;
+                roots_scanned = roots_scanned.saturating_add(1);
             }
         }
 
