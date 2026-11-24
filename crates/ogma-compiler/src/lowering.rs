@@ -305,6 +305,19 @@ enum EvaluatedAssignmentTarget {
         key: EvaluatedMemberKey,
     },
 }
+/// A member expression remains a Reference when wrapped in parentheses, so
+/// calls through `(object.method)()` must retain the original receiver.
+fn member_call_reference(
+    expression: &SyntaxExpression,
+) -> Option<(&SyntaxExpression, &SyntaxMemberKey, SourceSpan)> {
+    match expression {
+        SyntaxExpression::Member { object, key, span } => Some((object, key, *span)),
+        SyntaxExpression::Parenthesized { expression, .. } => {
+            member_call_reference(expression)
+        }
+        _ => None,
+    }
+}
 
 struct FunctionCompiler<'a> {
     source_file: &'a CoreSourceFile,
@@ -1379,24 +1392,18 @@ impl<'a> FunctionCompiler<'a> {
                 arguments,
                 span,
             } => {
-                let (callee_value, this_value) = match callee.as_ref() {
-                    SyntaxExpression::Member {
-                        object,
-                        key,
-                        span: member_span,
-                    } => {
+                let (callee_value, this_value) =
+                    if let Some((object, key, member_span)) = member_call_reference(callee) {
                         let object_value = self.emit_expression(object)?;
                         let callee_value =
-                            self.emit_member_get(object_value.clone(), key, *member_span)?;
+                            self.emit_member_get(object_value.clone(), key, member_span)?;
                         (callee_value, object_value)
-                    }
-                    _ => {
+                    } else {
                         let callee_value = self.emit_expression(callee)?;
                         let this_value =
                             self.emit_undefined("materialize undefined call receiver")?;
                         (callee_value, this_value)
-                    }
-                };
+                    };
                 let mut operands = vec![callee_value.id, this_value.id];
                 for argument in arguments {
                     operands.push(self.emit_expression(argument)?.id);

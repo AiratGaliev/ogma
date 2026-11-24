@@ -293,4 +293,66 @@ mod tests {
             Some("value")
         );
     }
+    #[test]
+    fn preserves_method_receiver_through_parenthesized_member_callees() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "parenthesized-method-call-test",
+            "memory:///parenthesized-method-call-test.js",
+            None,
+            "function invoke(receiver, key) { (receiver.method)(); return ((receiver[key]))(); }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("parenthesized member calls are valid JavaScript");
+        let compiled = compile(&parsed).expect("member calls lower to verified Core IR");
+
+        let invoke = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "invoke")
+            .expect("invoke function Core IR document");
+        let instructions: Vec<_> = invoke
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .collect();
+        let property_get = instructions
+            .iter()
+            .find(|instruction| instruction.op == "js.get_property")
+            .expect("static member lookup");
+        let element_get = instructions
+            .iter()
+            .find(|instruction| instruction.op == "js.get_element")
+            .expect("computed member lookup");
+        let calls: Vec<_> = instructions
+            .iter()
+            .filter(|instruction| instruction.op == "js.call")
+            .collect();
+        assert_eq!(calls.len(), 2, "both parenthesized calls must be lowered");
+
+        assert_eq!(
+            calls[0].operands[0],
+            property_get.result.as_ref().unwrap().id,
+            "static method call must use the fetched method"
+        );
+        assert_eq!(
+            calls[0].operands[1],
+            property_get.operands[0],
+            "parentheses must not replace a static member receiver with undefined"
+        );
+        assert_eq!(
+            calls[1].operands[0],
+            element_get.result.as_ref().unwrap().id,
+            "computed method call must use the fetched method"
+        );
+        assert_eq!(
+            calls[1].operands[1],
+            element_get.operands[0],
+            "nested parentheses must preserve a computed member receiver"
+        );
+        assert!(verify_document(invoke).is_empty());
+    }
+
 }
