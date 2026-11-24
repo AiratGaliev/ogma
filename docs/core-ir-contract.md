@@ -34,43 +34,7 @@ A function document has exactly this top-level shape:
 
 The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
 
-All identifiers use the stable ASCII grammar `^[A-Za-z_][A-Za-z0-9_.:-]{0,127}# Ogma Core IR Contract v1
-
-- **Contract ID:** `ogma.core-ir`
-- **Contract version:** `1.0.0`
-- **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
-- **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
-- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
-- **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
-
-## 1. Purpose and boundaries
-
-Core IR is Ogma's backend-neutral, function-level semantic boundary between frontend analysis and execution backends. The same verified function representation is the input contract for:
-
-1. **Portable path:** Core IR → bytecode lowering → verifier → portable `.ogmb` → interpreter.
-2. **Native path:** Core IR → native lowering → selected code generator → target object → linker.
-
-Both paths must preserve the same ECMAScript-visible values, exceptions, side effects, host calls and source-level provenance, and use the shared Ogma Runtime/ABI contracts. The IR producer and verifier must not depend on Cranelift, LLVM, a register VM, a stack VM, target pointer width, native calling conventions or a particular object layout.
-
-Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
-
-The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
-
-## 2. Document envelope and versioning
-
-A function document has exactly this top-level shape:
-
-```json
-{
-  "contract": "ogma.core-ir",
-  "version": "1.0.0",
-  "function": {}
-}
-```
-
-The schema rejects unknown envelope fields. The contract version is independent of bytecode, ABI and native-artifact versions. A consumer must reject an unsupported major contract version and must not silently reinterpret unknown mandatory semantics. A compatible additive evolution may be released as a minor version only when older consumers can safely ignore the addition; otherwise use a new major version. The schema `$id` is stable for v1 and is not an implementation-specific backend URL.
-
-. SSA value IDs and effect-token IDs are unique across a function; block IDs and instruction IDs are unique in their own function-wide namespaces. Lexical binding IDs are unique in the environment, capture IDs and imported binding IDs are individually unique, and capture aliases may not collide with local lexical binding IDs or one another. Nullable references (`parent`, `scope`, `suspension`, `effect_entry`, `effect_in` and `effect_out`) use the same grammar when non-null.
+All identifiers use the stable ASCII grammar `^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$`. SSA value IDs and effect-token IDs are unique across a function; block IDs and instruction IDs are unique in their own function-wide namespaces. Lexical binding IDs are unique in the environment, capture IDs and imported binding IDs are individually unique, and capture aliases may not collide with local lexical binding IDs or one another. Nullable references (`parent`, `scope`, `suspension`, `effect_entry`, `effect_in` and `effect_out`) use the same grammar when non-null.
 
 ## 3. Function and control-flow model
 
