@@ -1879,18 +1879,22 @@ mod tests {
     #[test]
     fn primitive_host_handles_are_persistent_but_not_gc_roots() {
         let mut runtime_heap = heap(4096, 1024);
-        let handle = runtime_heap
-            .retain_host_value(Value::number(42.0))
-            .unwrap();
+        let handle = runtime_heap.retain_host_value(Value::number(42.0)).unwrap();
 
         assert_eq!(runtime_heap.root_snapshot().persistent_host_roots, 0);
         assert_eq!(
-            runtime_heap.resolve_host_handle(handle).unwrap().as_number(),
+            runtime_heap
+                .resolve_host_handle(handle)
+                .unwrap()
+                .as_number(),
             Some(42.0)
         );
         assert_eq!(runtime_heap.collect().unwrap().marked_objects, 0);
         runtime_heap.release_host_handle(handle).unwrap();
-        assert_eq!(runtime_heap.resolve_host_handle(handle).unwrap_err(), HeapError::StaleHostHandle);
+        assert_eq!(
+            runtime_heap.resolve_host_handle(handle).unwrap_err(),
+            HeapError::StaleHostHandle
+        );
     }
 
     #[test]
