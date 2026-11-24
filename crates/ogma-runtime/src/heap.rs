@@ -1580,12 +1580,7 @@ mod tests {
         let halfway_down = runtime_heap.allocate_string("0x20000000000001").unwrap();
         let halfway_up = runtime_heap.allocate_string("0x20000000000003").unwrap();
 
-        assert!(
-            runtime_heap
-                .to_number(lowercase_infinity)
-                .unwrap()
-                .is_nan()
-        );
+        assert!(runtime_heap.to_number(lowercase_infinity).unwrap().is_nan());
         assert!(runtime_heap.to_number(mixed_infinity).unwrap().is_nan());
         assert_eq!(
             runtime_heap.to_number(halfway_down).unwrap(),
