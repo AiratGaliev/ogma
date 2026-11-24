@@ -317,28 +317,41 @@ fn member_call_reference(
     }
 }
 
-fn collect_for_loop_scopes(statements: &[SyntaxStatement], output: &mut HashSet<String>) {
+fn collect_reentered_block_scopes(
+    statements: &[SyntaxStatement],
+    inside_loop_body: bool,
+    output: &mut HashSet<String>,
+) {
     for statement in statements {
         match statement {
-            SyntaxStatement::Block { body, .. } => collect_for_loop_scopes(body, output),
+            SyntaxStatement::Block { scope, body, .. } => {
+                if inside_loop_body {
+                    if let Some(scope) = scope {
+                        output.insert(scope.clone());
+                    }
+                }
+                collect_reentered_block_scopes(body, inside_loop_body, output);
+            }
             SyntaxStatement::If {
                 consequent,
                 alternate,
                 ..
             } => {
-                collect_for_loop_scopes(std::slice::from_ref(consequent), output);
+                collect_reentered_block_scopes(
+                    std::slice::from_ref(consequent),
+                    inside_loop_body,
+                    output,
+                );
                 if let Some(alternate) = alternate {
-                    collect_for_loop_scopes(std::slice::from_ref(alternate), output);
+                    collect_reentered_block_scopes(
+                        std::slice::from_ref(alternate),
+                        inside_loop_body,
+                        output,
+                    );
                 }
             }
-            SyntaxStatement::While { body, .. } => {
-                collect_for_loop_scopes(std::slice::from_ref(body), output);
-            }
-            SyntaxStatement::For { scope, body, .. } => {
-                if let Some(scope) = scope {
-                    output.insert(scope.clone());
-                }
-                collect_for_loop_scopes(std::slice::from_ref(body), output);
+            SyntaxStatement::While { body, .. } | SyntaxStatement::For { body, .. } => {
+                collect_reentered_block_scopes(std::slice::from_ref(body), true, output);
             }
             _ => {}
         }
@@ -398,14 +411,16 @@ impl<'a> FunctionCompiler<'a> {
             .collect();
 
         // Core IR v1 exposes a function environment but has no operation for
-        // entering/resetting a nested lexical environment. Flattening mutable
-        // block bindings into it would retain stale TDZ state when a block is
-        // re-entered (for example, from a loop). Only a for-header binding has
-        // a lifetime that this subset can safely represent without closures.
-        let mut for_scopes = HashSet::new();
-        collect_for_loop_scopes(&syntax.body, &mut for_scopes);
+        // entering/resetting a nested lexical environment. A mutable binding
+        // in a loop-reentered block would retain stale initialized state and
+        // could bypass TDZ on the next entry. Single-entry block bindings can
+        // be flattened when they are not captured; captured block bindings
+        // are rejected separately because their environment must outlive the
+        // block. For-header bindings are represented by their loop binding ID.
+        let mut reentered_block_scopes = HashSet::new();
+        collect_reentered_block_scopes(&syntax.body, false, &mut reentered_block_scopes);
         for binding in &semantic.environment.bindings {
-            if !matches!(binding.kind, BindingKind::Let | BindingKind::Catch) {
+            if binding.kind != BindingKind::Let {
                 continue;
             }
             let Some(source_binding) = semantic_module
@@ -420,15 +435,13 @@ impl<'a> FunctionCompiler<'a> {
                     format!("binding {:?} has no source lexical scope", binding.id),
                 ));
             };
-            if source_binding.lexical_scope != semantic.environment.id
-                && !for_scopes.contains(&source_binding.lexical_scope)
-            {
+            if reentered_block_scopes.contains(&source_binding.lexical_scope) {
                 return Err(diag(
                     syntax,
                     "lowering.block_environment_lifetime",
                     Some(source_binding.declaration),
                     format!(
-                        "mutable block-scoped binding {:?} requires a fresh lexical environment on block entry; Core IR v1 lowering only represents function environments and for-header bindings",
+                        "mutable block-scoped binding {:?} is declared in a loop-reentered block; Core IR v1 lowering cannot reset a fresh lexical environment on each entry",
                         binding.name
                     ),
                 ));
