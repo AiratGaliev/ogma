@@ -344,7 +344,12 @@ impl<'a> FunctionCompiler<'a> {
             .iter()
             .filter(|binding| binding.kind != BindingKind::Const)
             .map(|binding| binding.id.clone())
-            .chain(semantic.captures.iter().map(|capture| capture.binding.clone()))
+            .chain(
+                semantic
+                    .captures
+                    .iter()
+                    .map(|capture| capture.binding.clone()),
+            )
             .collect();
         let effect_enabled = !effectful_bindings.is_empty()
             || statements_need_effects(&syntax.body, &effectful_bindings);
@@ -2106,17 +2111,15 @@ fn statement_needs_effects(
     effectful_bindings: &HashSet<String>,
 ) -> bool {
     match statement {
-        SyntaxStatement::Block { body, .. } => {
-            statements_need_effects(body, effectful_bindings)
-        }
+        SyntaxStatement::Block { body, .. } => statements_need_effects(body, effectful_bindings),
         SyntaxStatement::Variable {
             kind, declarations, ..
         } => {
             *kind != SyntaxVariableKind::Const
                 || declarations.iter().any(|item| {
-                    item.initializer
-                        .as_ref()
-                        .is_some_and(|expression| expression_needs_effects(expression, effectful_bindings))
+                    item.initializer.as_ref().is_some_and(|expression| {
+                        expression_needs_effects(expression, effectful_bindings)
+                    })
                 })
         }
         SyntaxStatement::FunctionDeclaration { .. } => true,
@@ -2131,9 +2134,9 @@ fn statement_needs_effects(
         } => {
             expression_needs_effects(test, effectful_bindings)
                 || statement_needs_effects(consequent, effectful_bindings)
-                || alternate.as_ref().is_some_and(|item| {
-                    statement_needs_effects(item, effectful_bindings)
-                })
+                || alternate
+                    .as_ref()
+                    .is_some_and(|item| statement_needs_effects(item, effectful_bindings))
         }
         SyntaxStatement::While { test, body, .. } => {
             expression_needs_effects(test, effectful_bindings)
@@ -2171,11 +2174,9 @@ fn statement_needs_effects(
                 })
                 || statement_needs_effects(body, effectful_bindings)
         }
-        SyntaxStatement::Return { value, .. } => {
-            value.as_ref().is_some_and(|expression| {
-                expression_needs_effects(expression, effectful_bindings)
-            })
-        }
+        SyntaxStatement::Return { value, .. } => value
+            .as_ref()
+            .is_some_and(|expression| expression_needs_effects(expression, effectful_bindings)),
         SyntaxStatement::Throw { .. } => true,
         SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => false,
     }
