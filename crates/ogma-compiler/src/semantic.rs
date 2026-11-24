@@ -472,6 +472,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn function(
         id: &str,
         scope: &str,
