@@ -226,6 +226,7 @@ pub struct SourceFile {
     /// Source language.
     pub language: SourceLanguage,
     /// Optional SHA-256 digest of exact source bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
 }
 
@@ -1582,52 +1583,86 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     .attributes
                     .get("captures")
                     .and_then(serde_json::Value::as_array);
-                if descriptors.is_none() {
+                if let Some(descriptors) = descriptors {
+                    let mut seen = HashSet::new();
+                    for (capture_index, descriptor) in descriptors.iter().enumerate() {
+                        let descriptor_path =
+                            format!("{instruction_path}.attributes.captures[{capture_index}]");
+                        let binding = descriptor
+                            .get("binding")
+                            .and_then(serde_json::Value::as_str);
+                        let mode = descriptor.get("mode").and_then(serde_json::Value::as_str);
+                        if descriptor
+                            .as_object()
+                            .is_none_or(|object| object.len() != 2)
+                            || !matches!(mode, Some("cell" | "value"))
+                        {
+                            errors.push(Diagnostic::new(
+                                "closure.capture_descriptor",
+                                descriptor_path,
+                                "capture descriptor must contain only binding and mode",
+                            ));
+                            continue;
+                        }
+                        let Some(binding) = binding else {
+                            errors.push(Diagnostic::new(
+                                "closure.capture_descriptor",
+                                descriptor_path,
+                                "capture descriptor must contain a binding identity",
+                            ));
+                            continue;
+                        };
+                        let capture_alias = captures.get(binding).copied();
+                        let canonical_binding = capture_alias
+                            .map(|capture| capture.id.as_str())
+                            .unwrap_or(binding);
+                        if !seen.insert(canonical_binding) {
+                            errors.push(Diagnostic::new(
+                                "closure.duplicate_capture",
+                                descriptor_path,
+                                "duplicate captured binding",
+                            ));
+                            continue;
+                        }
+                        let required_mode = if let Some(capture) = capture_alias {
+                            if capture.mutable || capture.mode == CaptureMode::Cell {
+                                CaptureMode::Cell
+                            } else {
+                                CaptureMode::Value
+                            }
+                        } else if let Some(binding_info) = bindings.get(binding) {
+                            if binding_info.mutable {
+                                CaptureMode::Cell
+                            } else {
+                                CaptureMode::Value
+                            }
+                        } else {
+                            errors.push(Diagnostic::new(
+                                "closure.capture_binding",
+                                format!("{descriptor_path}.binding"),
+                                "closure references an unknown local or captured binding",
+                            ));
+                            continue;
+                        };
+                        let actual_mode = if mode == Some("cell") {
+                            CaptureMode::Cell
+                        } else {
+                            CaptureMode::Value
+                        };
+                        if actual_mode != required_mode {
+                            errors.push(Diagnostic::new(
+                                "closure.capture_mode",
+                                format!("{descriptor_path}.mode"),
+                                format!("capture mode must be {required_mode:?} for this binding"),
+                            ));
+                        }
+                    }
+                } else {
                     errors.push(Diagnostic::new(
                         "closure.capture_list",
                         format!("{instruction_path}.attributes.captures"),
                         "closure capture descriptors must be an array",
                     ));
-                } else {
-                    let mut seen = HashSet::new();
-                    for (capture_index, descriptor) in descriptors.unwrap().iter().enumerate() {
-                        let binding = descriptor
-                            .get("binding")
-                            .and_then(serde_json::Value::as_str);
-                        let mode = descriptor.get("mode").and_then(serde_json::Value::as_str);
-                        if binding.is_none()
-                            || !matches!(mode, Some("cell" | "value"))
-                            || descriptor
-                                .as_object()
-                                .is_none_or(|object| object.len() != 2)
-                        {
-                            errors.push(Diagnostic::new(
-                                "closure.capture_descriptor",
-                                format!("{instruction_path}.attributes.captures[{capture_index}]"),
-                                "capture descriptor must contain only binding and mode",
-                            ));
-                        } else if !seen.insert(binding.unwrap()) {
-                            errors.push(Diagnostic::new(
-                                "closure.duplicate_capture",
-                                format!("{instruction_path}.attributes.captures[{capture_index}]"),
-                                "duplicate captured binding",
-                            ));
-                        } else if let Some(capture) = captures.get(binding.unwrap()) {
-                            if (mode == Some("cell") && !capture.mutable)
-                                || (mode == Some("value") && capture.mutable)
-                            {
-                                errors.push(Diagnostic::new("closure.capture_mode", format!("{instruction_path}.attributes.captures[{capture_index}].mode"), "capture mode does not match binding mutability"));
-                            }
-                        } else if let Some(binding_info) = bindings.get(binding.unwrap()) {
-                            if (mode == Some("cell") && !binding_info.mutable)
-                                || (mode == Some("value") && binding_info.mutable)
-                            {
-                                errors.push(Diagnostic::new("closure.capture_mode", format!("{instruction_path}.attributes.captures[{capture_index}].mode"), "capture mode does not match binding mutability"));
-                            }
-                        } else {
-                            errors.push(Diagnostic::new("closure.capture_binding", format!("{instruction_path}.attributes.captures[{capture_index}].binding"), "closure references an unknown local or captured binding"));
-                        }
-                    }
                 }
             }
             if instruction.op == "host.call"
