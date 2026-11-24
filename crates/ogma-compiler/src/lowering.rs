@@ -1091,7 +1091,10 @@ impl<'a> FunctionCompiler<'a> {
                         return self.fail(
                             "lowering.const_capture_mode",
                             Some(span),
-                            format!("immutable const binding {:?} requires by-value capture", binding.name),
+                            format!(
+                                "immutable const binding {:?} requires by-value capture",
+                                binding.name
+                            ),
                         );
                     }
                     if !self.const_values.contains_key(&capture.binding) {
@@ -1117,7 +1120,10 @@ impl<'a> FunctionCompiler<'a> {
                         return self.fail(
                             "lowering.mutable_capture_mode",
                             Some(source_binding.declaration),
-                            format!("mutable binding {:?} must be captured by shared cell", binding.name),
+                            format!(
+                                "mutable binding {:?} must be captured by shared cell",
+                                binding.name
+                            ),
                         );
                     }
                     binding.id.clone()
@@ -3013,9 +3019,7 @@ mod tests {
 
     #[test]
     fn lowers_initialized_const_closure_capture_by_value() {
-        let source = source(
-            "function run() { { const value = 1; return () => value; } }",
-        );
+        let source = source("function run() { { const value = 1; return () => value; } }");
         let span = whole_span(&source);
         let binding = binding("binding_const_capture", "value", BindingKind::Const);
         let parent = function_syntax(
@@ -3131,7 +3135,11 @@ mod tests {
             .iter()
             .find(|instruction| instruction.op == "closure.create")
             .expect("closure creation exists");
-        let descriptors = closure.attributes.get("captures").and_then(JsonValue::as_array).unwrap();
+        let descriptors = closure
+            .attributes
+            .get("captures")
+            .and_then(JsonValue::as_array)
+            .unwrap();
         assert_eq!(descriptors.len(), 1);
         assert_eq!(
             descriptors[0].get("binding").and_then(JsonValue::as_str),
@@ -3147,9 +3155,8 @@ mod tests {
 
     #[test]
     fn rejects_hoisted_closure_capture_of_uninitialized_const() {
-        let source = source(
-            "function run() { function child() { return value; } const value = 1; }",
-        );
+        let source =
+            source("function run() { function child() { return value; } const value = 1; }");
         let span = whole_span(&source);
         let value_binding = binding("binding_hoisted_const", "value", BindingKind::Const);
         let parent = function_syntax(
