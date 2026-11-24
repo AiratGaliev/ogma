@@ -61,7 +61,7 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ogma_core_ir::verify_document;
+    use ogma_core_ir::{Source, verify_document};
     use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
     use oxc_allocator::Allocator;
 
@@ -138,6 +138,35 @@ mod tests {
                 .all(|document| verify_document(document).is_empty())
         );
 
+        let const_binding = compiled
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.ir.name == "value")
+            .expect("const binding in semantic model")
+            .ir
+            .id
+            .as_str();
+        let run_document = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "run")
+            .expect("run Core IR document");
+        let initializer = run_document
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instruction| instruction.op == "js.add")
+            .expect("const initializer SSA operation");
+        let initializer_bindings = match &initializer.source {
+            Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings,
+        };
+        assert!(
+            initializer_bindings.iter().any(|binding| binding == const_binding),
+            "const binding identity must be attached to its SSA initializer definition"
+        );
+
         let capture_modes: Vec<_> = compiled
             .functions
             .iter()
@@ -152,5 +181,23 @@ mod tests {
             .collect();
         assert!(capture_modes.contains(&"cell"));
         assert!(capture_modes.contains(&"value"));
+        let captured_const = compiled
+            .functions
+            .iter()
+            .flat_map(|document| document.function.blocks.iter())
+            .flat_map(|block| block.instructions.iter())
+            .filter(|instruction| instruction.op == "closure.create")
+            .filter_map(|instruction| instruction.attributes.get("captures"))
+            .filter_map(serde_json::Value::as_array)
+            .flatten()
+            .find(|capture| {
+                capture.get("binding").and_then(serde_json::Value::as_str)
+                    == Some(const_binding)
+            })
+            .expect("closure captures the exact const binding identity");
+        assert_eq!(
+            captured_const.get("mode").and_then(serde_json::Value::as_str),
+            Some("value")
+        );
     }
 }
