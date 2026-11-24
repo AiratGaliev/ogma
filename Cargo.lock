@@ -252,6 +252,7 @@ dependencies = [
  "ogma-bytecode",
  "ogma-core-ir",
  "ogma-frontend",
+ "serde_json",
 ]
 
 [[package]]
