@@ -45,15 +45,33 @@ pub fn lower(
     semantic: &SemanticModule,
     syntax: &ResolvedSyntaxProgram,
 ) -> Result<Vec<FunctionDocument>, Vec<LoweringDiagnostic>> {
+    if semantic.source_id != source.id().as_str()
+        || semantic.source_sha256 != source.content_sha256()
+    {
+        return Err(vec![LoweringDiagnostic {
+            code: "lowering.source_identity_mismatch",
+            function: "<module>".to_owned(),
+            span: None,
+            message: "semantic analysis was produced for a different source identity or content revision".to_owned(),
+        }]);
+    }
+
+    let mut semantic_by_id = HashMap::with_capacity(semantic.functions.len());
+    for function in &semantic.functions {
+        if semantic_by_id.insert(function.id.as_str(), function).is_some() {
+            return Err(vec![LoweringDiagnostic {
+                code: "lowering.duplicate_semantic_function",
+                function: function.id.clone(),
+                span: Some(function.span),
+                message: "semantic module contains duplicate function identities".to_owned(),
+            }]);
+        }
+    }
+
     let source_file = match core_source_file(source) {
         Ok(file) => file,
         Err(diagnostic) => return Err(vec![diagnostic]),
     };
-    let semantic_by_id: HashMap<_, _> = semantic
-        .functions
-        .iter()
-        .map(|function| (function.id.as_str(), function))
-        .collect();
     let syntax_by_id: HashMap<_, _> = syntax
         .functions
         .iter()
@@ -244,12 +262,28 @@ struct Cursor {
     effect: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+enum EvaluatedMemberKey {
+    Static(String),
+    Computed(ValueRef),
+}
+
+#[derive(Clone, Debug)]
+enum EvaluatedAssignmentTarget {
+    Binding(String),
+    Member {
+        object: ValueRef,
+        key: EvaluatedMemberKey,
+    },
+}
+
 struct FunctionCompiler<'a> {
     source_file: &'a CoreSourceFile,
     semantic_module: &'a SemanticModule,
     syntax_registry: &'a HashMap<&'a str, &'a ResolvedSyntaxFunction>,
     semantic: &'a FunctionSemantics,
     syntax: &'a ResolvedSyntaxFunction,
+    current_scope: String,
     local_bindings: HashMap<String, Binding>,
     captures_by_binding: HashMap<String, Capture>,
     const_initializers: HashMap<String, SyntaxExpression>,
@@ -360,6 +394,7 @@ impl<'a> FunctionCompiler<'a> {
             syntax_registry,
             semantic,
             syntax,
+            current_scope: syntax.scope.clone(),
             local_bindings,
             captures_by_binding,
             const_initializers,
@@ -517,7 +552,7 @@ impl<'a> FunctionCompiler<'a> {
                 line: span.end.line,
                 column: span.end.column_utf16,
             },
-            scope: Some(self.semantic.environment.id.clone()),
+            scope: Some(self.current_scope.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -527,7 +562,7 @@ impl<'a> FunctionCompiler<'a> {
     fn generated_source(&self, reason: &str, bindings: Vec<String>) -> Source {
         Source::Generated {
             reason: reason.to_owned(),
-            scope: Some(self.semantic.environment.id.clone()),
+            scope: Some(self.current_scope.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -874,12 +909,12 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_member_set(
         &mut self,
         object: ValueRef,
-        key: &SyntaxMemberKey,
+        key: EvaluatedMemberKey,
         value: ValueRef,
         span: SourceSpan,
     ) -> Result<ValueRef, LoweringDiagnostic> {
         match key {
-            SyntaxMemberKey::Static(key) => {
+            EvaluatedMemberKey::Static(key) => {
                 let mut attributes = BTreeMap::new();
                 attributes.insert("key".to_owned(), JsonValue::String(key.clone()));
                 self.emit_instruction(
@@ -899,8 +934,7 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })
             }
-            SyntaxMemberKey::Computed(key) => {
-                let key = self.emit_expression(key)?;
+            EvaluatedMemberKey::Computed(key) => {
                 self.emit_instruction(
                     "js.set_element",
                     vec![object.id, key.id, value.id.clone()],
@@ -1236,6 +1270,7 @@ impl<'a> FunctionCompiler<'a> {
                 value,
                 span,
             } => {
+                let target = self.evaluate_assignment_target(target, *span)?;
                 let value = self.emit_expression(value)?;
                 self.emit_assignment_target(target, value, *span)
             }
@@ -1295,17 +1330,16 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_assignment_target(
+    fn evaluate_assignment_target(
         &mut self,
         target: &SyntaxAssignmentTarget,
-        value: ValueRef,
         span: SourceSpan,
-    ) -> Result<ValueRef, LoweringDiagnostic> {
+    ) -> Result<EvaluatedAssignmentTarget, LoweringDiagnostic> {
         match target {
             SyntaxAssignmentTarget::Identifier {
                 binding: Some(binding),
                 ..
-            } => self.emit_env_store(binding, value, Some(span), None),
+            } => Ok(EvaluatedAssignmentTarget::Binding(binding.clone())),
             SyntaxAssignmentTarget::Identifier {
                 name,
                 binding: None,
@@ -1317,13 +1351,35 @@ impl<'a> FunctionCompiler<'a> {
             ),
             SyntaxAssignmentTarget::Member { object, key, .. } => {
                 let object = self.emit_expression(object)?;
-                self.emit_member_set(object, key, value, span)
+                let key = match key {
+                    SyntaxMemberKey::Static(key) => EvaluatedMemberKey::Static(key.clone()),
+                    SyntaxMemberKey::Computed(expression) => {
+                        EvaluatedMemberKey::Computed(self.emit_expression(expression)?)
+                    }
+                };
+                Ok(EvaluatedAssignmentTarget::Member { object, key })
             }
             SyntaxAssignmentTarget::Unsupported { syntax, span } => self.fail(
                 "lowering.unsupported_assignment_target",
                 Some(*span),
                 format!("assignment target {syntax:?} is unsupported"),
             ),
+        }
+    }
+
+    fn emit_assignment_target(
+        &mut self,
+        target: EvaluatedAssignmentTarget,
+        value: ValueRef,
+        span: SourceSpan,
+    ) -> Result<ValueRef, LoweringDiagnostic> {
+        match target {
+            EvaluatedAssignmentTarget::Binding(binding) => {
+                self.emit_env_store(&binding, value, Some(span), None)
+            }
+            EvaluatedAssignmentTarget::Member { object, key } => {
+                self.emit_member_set(object, key, value, span)
+            }
         }
     }
 
@@ -1363,7 +1419,15 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_statement(&mut self, statement: &SyntaxStatement) -> Result<(), LoweringDiagnostic> {
         match statement {
-            SyntaxStatement::Block { body, .. } => self.compile_sequence(body),
+            SyntaxStatement::Block { scope, body, .. } => {
+                let previous_scope = self.current_scope.clone();
+                if let Some(scope) = scope {
+                    self.current_scope = scope.clone();
+                }
+                let result = self.compile_sequence(body);
+                self.current_scope = previous_scope;
+                result
+            }
             SyntaxStatement::Variable {
                 kind,
                 declarations,
@@ -1455,13 +1519,14 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_if(test, consequent, alternate.as_deref(), *span),
             SyntaxStatement::While { test, body, span } => self.compile_while(test, body, *span),
             SyntaxStatement::For {
+                scope,
                 initializer,
                 test,
                 update,
                 body,
                 span,
-                ..
             } => self.compile_for(
+                scope.as_deref(),
                 initializer.as_ref(),
                 test.as_ref(),
                 update.as_ref(),
@@ -1637,6 +1702,24 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_for(
+        &mut self,
+        scope: Option<&str>,
+        initializer: Option<&SyntaxForInitializer>,
+        test: Option<&SyntaxExpression>,
+        update: Option<&SyntaxExpression>,
+        body: &SyntaxStatement,
+        span: SourceSpan,
+    ) -> Result<(), LoweringDiagnostic> {
+        let previous_scope = self.current_scope.clone();
+        if let Some(scope) = scope {
+            self.current_scope = scope.to_owned();
+        }
+        let result = self.compile_for_scoped(initializer, test, update, body, span);
+        self.current_scope = previous_scope;
+        result
+    }
+
+    fn compile_for_scoped(
         &mut self,
         initializer: Option<&SyntaxForInitializer>,
         test: Option<&SyntaxExpression>,
@@ -2011,6 +2094,370 @@ impl<'a> FunctionCompiler<'a> {
         };
         visiting.remove(binding);
         result
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ogma_frontend::{SourceFile, SyntaxDeclarator, SyntaxMemberKey};
+
+    fn source(text: &str) -> SourceFile {
+        SourceFile::new(
+            "lowering-tests",
+            "memory:///lowering-tests.js",
+            None,
+            text,
+        )
+        .expect("source is valid")
+    }
+
+    fn whole_span(source: &SourceFile) -> SourceSpan {
+        source.span(0, source.text().len())
+    }
+
+    fn function_syntax(
+        source: &SourceFile,
+        body: Vec<SyntaxStatement>,
+        parameters: Vec<String>,
+    ) -> ResolvedSyntaxFunction {
+        ResolvedSyntaxFunction {
+            id: "fn_run".to_owned(),
+            name: "run".to_owned(),
+            scope: "scope_1".to_owned(),
+            parent_function_scope: Some("scope_0".to_owned()),
+            parameters,
+            captures: Vec::new(),
+            body,
+            span: whole_span(source),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        }
+    }
+
+    fn binding(id: &str, name: &str, kind: BindingKind) -> Binding {
+        Binding {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            kind,
+            mutable: matches!(
+                kind,
+                BindingKind::Var | BindingKind::Let | BindingKind::Parameter | BindingKind::Catch
+            ),
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+        }
+    }
+
+    fn parameter(id: &str, name: &str, binding: &str) -> FunctionParameter {
+        FunctionParameter {
+            id: id.to_owned(),
+            kind: "value".to_owned(),
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+            name: name.to_owned(),
+            binding: binding.to_owned(),
+        }
+    }
+
+    fn semantic_module(
+        source: &SourceFile,
+        syntax: &ResolvedSyntaxFunction,
+        bindings: Vec<Binding>,
+        parameters: Vec<FunctionParameter>,
+    ) -> SemanticModule {
+        let semantic_bindings = bindings
+            .iter()
+            .cloned()
+            .map(|ir| SemanticBinding {
+                ir,
+                lexical_scope: syntax.scope.clone(),
+                declaration: syntax.span,
+            })
+            .collect();
+        SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![FunctionSemantics {
+                id: syntax.id.clone(),
+                name: syntax.name.clone(),
+                environment: Environment {
+                    id: syntax.scope.clone(),
+                    parent: syntax.parent_function_scope.clone(),
+                    bindings,
+                },
+                parameters,
+                captures: Vec::new(),
+                span: syntax.span,
+                parent_function_scope: syntax.parent_function_scope.clone(),
+                is_arrow: syntax.is_arrow,
+                is_async: syntax.is_async,
+                is_generator: syntax.is_generator,
+            }],
+            bindings: semantic_bindings,
+        }
+    }
+
+    fn identifier(name: &str, binding: &str, span: SourceSpan) -> SyntaxExpression {
+        SyntaxExpression::Identifier {
+            name: name.to_owned(),
+            binding: Some(binding.to_owned()),
+            span,
+        }
+    }
+
+    fn source_scope(source: &Source) -> Option<&str> {
+        match source {
+            Source::User { scope, .. } | Source::Generated { scope, .. } => scope.as_deref(),
+        }
+    }
+
+    #[test]
+    fn lowers_literal_return_to_verified_core_ir() {
+        let source = source("function run() { return 42; }");
+        let span = whole_span(&source);
+        let literal_start = source.text().find("42").expect("literal exists");
+        let literal_span = source.span(literal_start, literal_start + 2);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(42.0),
+                    span: literal_span,
+                }),
+                span,
+            }],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("literal return lowers");
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].function.blocks[0].instructions[0].op, "js.constant");
+        assert_eq!(
+            documents[0].function.return_signature.as_ref().map(|result| result.semantic_type),
+            Some(SemanticType::Number)
+        );
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_if_branches_with_effect_token_merge_and_preserves_lexical_scope() {
+        let source = source(
+            "function run() { let value = 1; if (true) { value = 2; } else { value = 3; } return value; }",
+        );
+        let whole = whole_span(&source);
+        let binding = binding("binding_value", "value", BindingKind::Let);
+        let declaration = SyntaxStatement::Variable {
+            kind: SyntaxVariableKind::Let,
+            declarations: vec![SyntaxDeclarator {
+                binding: Some(binding.id.clone()),
+                name: binding.name.clone(),
+                initializer: Some(SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(1.0),
+                    span: whole,
+                }),
+                span: whole,
+            }],
+            span: whole,
+        };
+        let assignment = |number: f64, scope: &str| {
+            SyntaxStatement::Block {
+                scope: Some(scope.to_owned()),
+                body: vec![SyntaxStatement::Expression {
+                    expression: SyntaxExpression::Assign {
+                        target: SyntaxAssignmentTarget::Identifier {
+                            name: "value".to_owned(),
+                            binding: Some(binding.id.clone()),
+                            span: whole,
+                        },
+                        value: Box::new(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(number),
+                            span: whole,
+                        }),
+                        span: whole,
+                    },
+                    span: whole,
+                }],
+                span: whole,
+            }
+        };
+        let syntax = function_syntax(
+            &source,
+            vec![
+                declaration,
+                SyntaxStatement::If {
+                    test: SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Boolean(true),
+                        span: whole,
+                    },
+                    consequent: Box::new(assignment(2.0, "scope_2")),
+                    alternate: Some(Box::new(assignment(3.0, "scope_3"))),
+                    span: whole,
+                },
+                SyntaxStatement::Return {
+                    value: Some(identifier("value", &binding.id, whole)),
+                    span: whole,
+                },
+            ],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, vec![binding.clone()], Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("branching mutable binding lowers");
+        let function = &documents[0].function;
+        assert!(function.effect_entry.is_some());
+        assert!(verify_document(&documents[0]).is_empty());
+
+        let store_scopes: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(binding.id.as_str())
+            })
+            .filter_map(|instruction| source_scope(&instruction.source))
+            .collect();
+        assert!(store_scopes.contains(&"scope_1"));
+        assert!(store_scopes.contains(&"scope_2"));
+        assert!(store_scopes.contains(&"scope_3"));
+
+        let merge = function
+            .blocks
+            .iter()
+            .find(|block| block.id.starts_with("bb") && !block.instructions.is_empty() == false)
+            .expect("merge or exit block exists");
+        assert!(merge.parameters.iter().any(|parameter| matches!(parameter, BlockParameter::Effect(_))));
+    }
+
+    #[test]
+    fn evaluates_computed_assignment_reference_before_right_hand_side() {
+        let source = source("function run(obj, key, rhs) { obj[key] = rhs; }");
+        let whole = whole_span(&source);
+        let assignment_start = source.text().rfind("obj[key]").expect("assignment target exists");
+        let obj_span = source.span(assignment_start, assignment_start + 3);
+        let key_span = source.span(assignment_start + 4, assignment_start + 7);
+        let rhs_start = source.text().rfind("rhs").expect("rhs reference exists");
+        let rhs_span = source.span(rhs_start, rhs_start + 3);
+        let assignment_span = source.span(assignment_start, rhs_start + 3);
+        let parameter_bindings = vec![
+            binding("binding_obj", "obj", BindingKind::Parameter),
+            binding("binding_key", "key", BindingKind::Parameter),
+            binding("binding_rhs", "rhs", BindingKind::Parameter),
+        ];
+        let parameters = vec![
+            parameter("param_run_0", "obj", "binding_obj"),
+            parameter("param_run_1", "key", "binding_key"),
+            parameter("param_run_2", "rhs", "binding_rhs"),
+        ];
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Expression {
+                expression: SyntaxExpression::Assign {
+                    target: SyntaxAssignmentTarget::Member {
+                        object: Box::new(identifier("obj", "binding_obj", obj_span)),
+                        key: SyntaxMemberKey::Computed(Box::new(identifier(
+                            "key",
+                            "binding_key",
+                            key_span,
+                        ))),
+                        span: source.span(assignment_start, assignment_start + 7),
+                    },
+                    value: Box::new(identifier("rhs", "binding_rhs", rhs_span)),
+                    span: assignment_span,
+                },
+                span: assignment_span,
+            }],
+            vec![
+                "binding_obj".to_owned(),
+                "binding_key".to_owned(),
+                "binding_rhs".to_owned(),
+            ],
+        );
+        let module = semantic_module(&source, &syntax, parameter_bindings, parameters);
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("computed member assignment lowers");
+        let function = &documents[0].function;
+        let loads: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .filter(|instruction| instruction.op == "env.load")
+            .filter_map(|instruction| {
+                instruction
+                    .attributes
+                    .get("binding")
+                    .and_then(JsonValue::as_str)
+            })
+            .collect();
+        assert_eq!(
+            loads,
+            vec!["binding_obj", "binding_key", "binding_rhs"],
+            "LHS object and key must be evaluated before the RHS"
+        );
+        assert!(function.blocks[0].instructions.iter().any(|instruction| {
+            instruction.op == "js.set_element"
+        }));
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn rejects_stale_semantic_source_and_unsupported_syntax() {
+        let source = source("function run() {}");
+        let span = whole_span(&source);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Unsupported {
+                syntax: "try_statement".to_owned(),
+                span,
+            }],
+            Vec::new(),
+        );
+        let mut module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        module.source_sha256 = "0".repeat(64);
+        let stale = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax.clone()],
+            },
+        )
+        .expect_err("mismatched semantic revision must be rejected");
+        assert_eq!(stale[0].code, "lowering.source_identity_mismatch");
+
+        let module = semantic_module(&source, &syntax, Vec::new(), Vec::new());
+        let unsupported = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect_err("unsupported statement must fail closed");
+        assert_eq!(unsupported[0].code, "lowering.unsupported_statement");
     }
 }
 
