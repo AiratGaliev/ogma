@@ -96,7 +96,7 @@ mod tests {
             .expect("top-level function semantic descriptor exists");
         assert_eq!(
             increment.parent_function_scope.as_deref(),
-            Some(compiled.semantic.root_scope.as_str())
+            Some(parsed.semantic.root_scope.as_str())
         );
         assert_eq!(increment.captures.len(), 1);
         let arrow = compiled
