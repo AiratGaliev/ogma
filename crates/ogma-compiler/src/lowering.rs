@@ -312,9 +312,7 @@ fn member_call_reference(
 ) -> Option<(&SyntaxExpression, &SyntaxMemberKey, SourceSpan)> {
     match expression {
         SyntaxExpression::Member { object, key, span } => Some((object, key, *span)),
-        SyntaxExpression::Parenthesized { expression, .. } => {
-            member_call_reference(expression)
-        }
+        SyntaxExpression::Parenthesized { expression, .. } => member_call_reference(expression),
         _ => None,
     }
 }
@@ -323,7 +321,11 @@ fn collect_for_loop_scopes(statements: &[SyntaxStatement], output: &mut HashSet<
     for statement in statements {
         match statement {
             SyntaxStatement::Block { body, .. } => collect_for_loop_scopes(body, output),
-            SyntaxStatement::If { consequent, alternate, .. } => {
+            SyntaxStatement::If {
+                consequent,
+                alternate,
+                ..
+            } => {
                 collect_for_loop_scopes(std::slice::from_ref(consequent), output);
                 if let Some(alternate) = alternate {
                     collect_for_loop_scopes(std::slice::from_ref(alternate), output);
@@ -342,7 +344,6 @@ fn collect_for_loop_scopes(statements: &[SyntaxStatement], output: &mut HashSet<
         }
     }
 }
-
 
 struct FunctionCompiler<'a> {
     source_file: &'a CoreSourceFile,
@@ -1455,18 +1456,18 @@ impl<'a> FunctionCompiler<'a> {
                 arguments,
                 span,
             } => {
-                let (callee_value, this_value) =
-                    if let Some((object, key, member_span)) = member_call_reference(callee) {
-                        let object_value = self.emit_expression(object)?;
-                        let callee_value =
-                            self.emit_member_get(object_value.clone(), key, member_span)?;
-                        (callee_value, object_value)
-                    } else {
-                        let callee_value = self.emit_expression(callee)?;
-                        let this_value =
-                            self.emit_undefined("materialize undefined call receiver")?;
-                        (callee_value, this_value)
-                    };
+                let (callee_value, this_value) = if let Some((object, key, member_span)) =
+                    member_call_reference(callee)
+                {
+                    let object_value = self.emit_expression(object)?;
+                    let callee_value =
+                        self.emit_member_get(object_value.clone(), key, member_span)?;
+                    (callee_value, object_value)
+                } else {
+                    let callee_value = self.emit_expression(callee)?;
+                    let this_value = self.emit_undefined("materialize undefined call receiver")?;
+                    (callee_value, this_value)
+                };
                 let mut operands = vec![callee_value.id, this_value.id];
                 for argument in arguments {
                     operands.push(self.emit_expression(argument)?.id);

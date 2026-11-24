@@ -338,8 +338,7 @@ mod tests {
             "static method call must use the fetched method"
         );
         assert_eq!(
-            calls[0].operands[1],
-            property_get.operands[0],
+            calls[0].operands[1], property_get.operands[0],
             "parentheses must not replace a static member receiver with undefined"
         );
         assert_eq!(
@@ -348,8 +347,7 @@ mod tests {
             "computed method call must use the fetched method"
         );
         assert_eq!(
-            calls[1].operands[1],
-            element_get.operands[0],
+            calls[1].operands[1], element_get.operands[0],
             "nested parentheses must preserve a computed member receiver"
         );
         assert!(verify_document(invoke).is_empty());
@@ -380,5 +378,4 @@ mod tests {
         assert!(diagnostic.span.is_some());
         assert!(diagnostic.message.contains("fresh lexical environment"));
     }
-
 }
