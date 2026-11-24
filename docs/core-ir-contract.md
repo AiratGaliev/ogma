@@ -130,6 +130,7 @@ The operation name identifies language/runtime semantics, never a backend opcode
 |---|---|---|---|
 | `js.constant` | no operands; attributes `literal`, `value` | type follows literal kind | none |
 | `js.add` | `[left, right]`; full ECMAScript `+` semantics | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.less_than` | `[left, right]`; ECMAScript Abstract Relational Comparison with left-to-right coercion | boolean | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_property` | `[object]`; string `attributes.key` (including the empty string) | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.set_property` | `[object, value]`; string `attributes.key` (including the empty string) | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_element` | `[object, key]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
@@ -148,7 +149,7 @@ The operation name identifies language/runtime semantics, never a backend opcode
 | `async.await` | `[awaitable]` | `dynamic/boxed` | allocate, GC, throw, suspend |
 | `js.throw` | `[exceptionValue]` | no result | throw |
 
-The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` can invoke `ToPrimitive`, call user code and allocate a string. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
+The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` and `<`/`>` comparisons can invoke `ToPrimitive`, call user code and allocate strings. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
 
 `js.call` explicitly carries the receiver (`thisArg`) and `js.construct` explicitly carries `newTarget`; backends must not reconstruct these from syntax or guess them from the callee. Computed property keys use `js.get_element`/`js.set_element`; named property operations carry an explicit string key. `host.call` names a capability-bound host symbol, not an arbitrary native address.
 
