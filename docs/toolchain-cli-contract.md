@@ -3,7 +3,7 @@
 **Status:** Target command ownership contract; the M1 CLI remains intentionally minimal.
 
 **Architecture authority:** Notion Ogma architecture specification, sections 12–14 and 20.9.
-**Related implementation issues:** OGM-93 (M1 CLI), OGM-106 (M2 Rust embedding emission), OGM-72 (`ogma test`), OGM-94 (M3 packaging), Native Provider integration task.
+**Related implementation issues:** OGM-93 (M1 CLI), OGM-106 (M2 Rust embedding emission), OGM-72 (`ogma test`), OGM-94 (M3 packaging), OGM-107 (M3 Native Provider registry).
 
 ## 1. Decision
 
@@ -92,5 +92,8 @@ The application build planner composes their results. A Node builtin import may 
 
 - [Native Provider Architecture](native-provider-architecture.md)
 - [OGM-93 — Initial CLI](https://linear.app/ogma-engine/issue/OGM-93/add-the-minimal-ogma-cli-for-compiling-inspecting-and-running-portable)
+- [OGM-106 — Rust embedding source generation](https://linear.app/ogma-engine/issue/OGM-106/generate-rust-embedding-modules-from-portable-ogmb-artifacts)
+- [OGM-72 — Conformance test command](https://linear.app/ogma-engine/issue/OGM-72/integrate-production-ogma-adapters-into-the-full-test262-promotion)
 - [OGM-94 — Application Packaging](https://linear.app/ogma-engine/issue/OGM-94/implement-ogma-application-packaging-and-the-native-build-pipeline)
+- [OGM-107 — Native Provider registry](https://linear.app/ogma-engine/issue/OGM-107/resolve-logical-native-requirements-through-registered-rust-providers)
 - [OGM-59 — Node resolver and CommonJS host](https://linear.app/ogma-engine/issue/OGM-59/implement-the-initial-ogma-node-compat-resolver-and-commonjs-host)
