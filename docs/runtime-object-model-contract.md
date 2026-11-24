@@ -109,11 +109,15 @@ environment and capture edges are traced by the common collector.
 
 ## 6. Heap accounting and roots
 
-Property arrays, lexical binding arrays, property-key atom storage and object
-graph edges are reserved through the existing Runtime quota budget. The
-collector releases each managed cell's property/binding/edge capacity when
-sweeping it. Property-key atoms are interned for the lifetime of the heap and
-their capacity remains charged until the heap is dropped.
+Each object, array, function, lexical environment and binding cell has a
+separately allocated fixed payload behind the compact managed-cell header.
+The fixed payload size is charged before the cell is published and released
+when that cell is swept. Property arrays, lexical binding arrays,
+property-key atom storage and object graph edges are reserved through the
+existing Runtime quota budget. The collector releases each managed cell's
+property/binding/edge capacity when sweeping it. Property-key atoms are
+interned for the lifetime of the heap and their capacity remains charged until
+the heap is dropped.
 
 New environments and returned closures are not implicit host roots. Callers
 must publish an environment using `scope_root_environment` or
