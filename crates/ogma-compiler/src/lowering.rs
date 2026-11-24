@@ -2123,9 +2123,7 @@ impl<'a> FunctionCompiler<'a> {
             .into_iter()
             .map(|value| value.unwrap_or(undefined))
             .collect();
-        let Some(ty) = returns.first().copied().or(Some(undefined)) else {
-            unreachable!("an absent return list has the JavaScript undefined completion type");
-        };
+        let ty = returns.first().copied().unwrap_or(undefined);
         if returns.iter().any(|item| *item != ty) {
             return self.fail(
                 "lowering.mixed_return_types",
