@@ -1199,6 +1199,15 @@ fn reserve_vec<T>(
     let current_capacity = vector.capacity();
     let doubled = current_capacity.checked_mul(2).unwrap_or(required);
     let target_capacity = required.max(if current_capacity == 0 { 1 } else { doubled });
+    let backing_bytes = target_capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(HeapError::SizeOverflow)?;
+    if backing_bytes > budget.max_allocation_bytes {
+        return Err(HeapError::AllocationTooLarge {
+            requested_bytes: backing_bytes,
+            maximum_bytes: budget.max_allocation_bytes,
+        });
+    }
     let growth = target_capacity
         .checked_sub(current_capacity)
         .ok_or(HeapError::SizeOverflow)?;
@@ -1562,6 +1571,14 @@ mod tests {
         assert_eq!(stats.live_objects, 0);
         assert_eq!(stats.allocations, 0);
         assert_eq!(stats.used_bytes, 0);
+
+        let mut tiny = heap(4096, 1);
+        assert!(matches!(
+            tiny.allocate_object(),
+            Err(HeapError::AllocationTooLarge { .. })
+        ));
+        assert_eq!(tiny.stats().used_bytes, 0);
+        assert_eq!(tiny.stats().live_objects, 0);
     }
 
     #[test]
