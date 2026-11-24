@@ -165,7 +165,9 @@ mod tests {
             Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings,
         };
         assert!(
-            initializer_bindings.iter().any(|binding| binding == const_binding),
+            initializer_bindings
+                .iter()
+                .any(|binding| binding == const_binding),
             "const binding identity must be attached to its SSA initializer definition"
         );
 
@@ -193,12 +195,13 @@ mod tests {
             .filter_map(serde_json::Value::as_array)
             .flatten()
             .find(|capture| {
-                capture.get("binding").and_then(serde_json::Value::as_str)
-                    == Some(const_binding)
+                capture.get("binding").and_then(serde_json::Value::as_str) == Some(const_binding)
             })
             .expect("closure captures the exact const binding identity");
         assert_eq!(
-            captured_const.get("mode").and_then(serde_json::Value::as_str),
+            captured_const
+                .get("mode")
+                .and_then(serde_json::Value::as_str),
             Some("value")
         );
     }
