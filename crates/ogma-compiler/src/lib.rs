@@ -99,6 +99,44 @@ mod tests {
     }
 
     #[test]
+    fn compiles_typeof_unresolvable_identifier_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "typeof-test",
+            "memory:///typeof-test.js",
+            None,
+            "typeof missing;",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("typeof unresolved identifier is valid JavaScript");
+        let compiled = compile(&parsed)
+            .expect("frontend semantic resolution and Core IR lowering succeed");
+        let program = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "<program>")
+            .expect("Program Core IR document");
+        let instructions: Vec<_> = program
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .collect();
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].op, "js.constant");
+        assert_eq!(
+            instructions[0]
+                .attributes
+                .get("value")
+                .and_then(serde_json::Value::as_str),
+            Some("undefined")
+        );
+        assert!(program.function.effect_entry.is_none());
+        assert!(verify_document(program).is_empty());
+    }
+
+    #[test]
     fn compiles_real_oxc_syntax_through_semantics_and_verified_core_ir() {
         let allocator = Allocator::default();
         let source = SourceFile::new(
