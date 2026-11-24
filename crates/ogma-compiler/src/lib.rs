@@ -99,6 +99,56 @@ mod tests {
     }
 
     #[test]
+    fn rejects_const_tdz_read_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "const-tdz-test",
+            "memory:///const-tdz-test.js",
+            None,
+            "function run() { const value = value; return value; }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("valid const TDZ reference parses");
+
+        let failure = compile(&parsed).expect_err("const TDZ read must fail closed");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach the const TDZ lowering diagnostic");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lowering.const_tdz")
+            .expect("const TDZ diagnostic");
+        assert!(diagnostic.span.is_some());
+        assert!(!diagnostic.message.is_empty());
+    }
+
+    #[test]
+    fn rejects_hoisted_closure_capture_before_const_init_through_real_frontend_pipeline() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "const-capture-tdz-test",
+            "memory:///const-capture-tdz-test.js",
+            None,
+            "function run() { function read() { return value; } const value = 1; return read(); }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("valid hoisted closure capture parses");
+
+        let failure = compile(&parsed).expect_err("uninitialized const capture must fail closed");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach the const capture lowering diagnostic");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lowering.const_capture_tdz")
+            .expect("const capture TDZ diagnostic");
+        assert!(diagnostic.span.is_some());
+        assert!(!diagnostic.message.is_empty());
+    }
+
+    #[test]
     fn compiles_typeof_unresolvable_identifier_through_real_frontend_pipeline() {
         let allocator = Allocator::default();
         let source = SourceFile::new(
