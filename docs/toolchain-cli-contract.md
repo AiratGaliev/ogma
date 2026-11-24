@@ -47,6 +47,8 @@ The CLI grows the application-level commands:
 
 The exact flags for M3 packaging commands and the project-manifest schema are owned by OGM-94 and must be versioned there. The M2 Rust-emission flags/output contract remains owned by OGM-106. This document defines command responsibilities, not an unversioned `ogma.toml` schema.
 
+OGM-94 consumes canonical `.ogmb` outputs from the existing compiler pipeline and may consume an OGM-106-generated Rust wrapper where a Rust host integration requires compile-time embedding. OGM-94 owns multi-artifact graph composition, linking and application packaging; it must not implement a second `.ogmb`-to-Rust emitter or treat the wrapper as a Native Provider.
+
 ### Optional package-manager convenience commands
 
 A later CLI may expose transparent convenience wrappers such as:
