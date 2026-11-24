@@ -1890,7 +1890,7 @@ mod tests {
         );
         assert_eq!(runtime_heap.collect().unwrap().marked_objects, 0);
         runtime_heap.release_host_handle(handle).unwrap();
-        assert_eq!(runtime_heap.resolve_host_handle(handle), Err(HeapError::StaleHostHandle));
+        assert_eq!(runtime_heap.resolve_host_handle(handle).unwrap_err(), HeapError::StaleHostHandle);
     }
 
     #[test]
