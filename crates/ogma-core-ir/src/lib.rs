@@ -606,7 +606,7 @@ fn operation_effects(op: &str) -> Option<Effects> {
         "js.add" | "js.less_than" | "js.get_property" | "js.set_property" | "js.get_element"
         | "js.set_element" | "js.call" | "js.construct" | "js.to_number" | "js.to_string" => {
             Some(dynamic)
-        };
+        },
         "env.load" | "env.store" => Some(E {
             may_throw: true,
             ..E::default()
