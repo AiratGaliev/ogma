@@ -416,7 +416,10 @@ mod tests {
             .iter()
             .position(|instruction| {
                 instruction.op == "env.load"
-                    && instruction.attributes.get("binding").and_then(serde_json::Value::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(serde_json::Value::as_str)
                         == Some(binding.ir.id.as_str())
             })
             .expect("self-reference must retain a runtime TDZ load");
@@ -424,13 +427,20 @@ mod tests {
             .iter()
             .position(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(serde_json::Value::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(serde_json::Value::as_str)
                         == Some(binding.ir.id.as_str())
             })
             .expect("for-header initializer store");
-        assert!(load_index < store_index, "TDZ load must precede the first initialization store");
+        assert!(
+            load_index < store_index,
+            "TDZ load must precede the first initialization store"
+        );
         assert!(verify_document(run).is_empty());
     }
+
     #[test]
     fn rejects_reentered_block_let_without_a_fresh_lexical_environment() {
         let allocator = Allocator::default();
