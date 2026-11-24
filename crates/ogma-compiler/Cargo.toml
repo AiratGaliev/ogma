@@ -12,5 +12,8 @@ ogma-core-ir.workspace = true
 ogma-frontend.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+oxc_allocator = "=0.158.0"
+
 [lints]
 workspace = true
