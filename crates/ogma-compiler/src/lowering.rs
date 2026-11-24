@@ -371,6 +371,31 @@ impl<'a> FunctionCompiler<'a> {
                     format!("capture {:?} has no source binding", capture.binding),
                 ));
             };
+            if binding.ir.kind == BindingKind::Import {
+                return Err(diag(
+                    syntax,
+                    "lowering.live_import_capture_unsupported",
+                    Some(binding.declaration),
+                    format!(
+                        "capture of live import binding {:?} cannot be represented by Core IR v1 value captures",
+                        binding.ir.name
+                    ),
+                ));
+            }
+            if binding.ir.kind == BindingKind::Const {
+                if capture.mode != CaptureMode::Value || binding.ir.mutable {
+                    return Err(diag(
+                        syntax,
+                        "lowering.const_capture_mode",
+                        Some(binding.declaration),
+                        format!(
+                            "immutable binding {:?} must use a by-value closure capture",
+                            binding.ir.name
+                        ),
+                    ));
+                }
+                continue;
+            }
             let function_scope = semantic_module
                 .functions
                 .iter()
@@ -381,18 +406,7 @@ impl<'a> FunctionCompiler<'a> {
                     "lowering.block_capture_lifetime",
                     Some(binding.declaration),
                     format!(
-                        "capture of block-scoped binding {:?} requires per-block/per-iteration environment materialization",
-                        binding.ir.name
-                    ),
-                ));
-            }
-            if binding.ir.kind == BindingKind::Const {
-                return Err(diag(
-                    syntax,
-                    "lowering.const_capture_lifetime",
-                    Some(binding.declaration),
-                    format!(
-                        "capture of immutable binding {:?} requires a materialized value environment slot",
+                        "capture of mutable block-scoped binding {:?} requires per-block/per-iteration environment materialization",
                         binding.ir.name
                     ),
                 ));
@@ -1050,11 +1064,14 @@ impl<'a> FunctionCompiler<'a> {
         let mut source_bindings = Vec::with_capacity(child.captures.len());
         for capture in &child.captures {
             let alias = if let Some(binding) = self.local_bindings.get(&capture.binding) {
-                if binding.kind == BindingKind::Const {
+                if binding.kind == BindingKind::Import {
                     return self.fail(
-                        "lowering.const_capture_lifetime",
+                        "lowering.live_import_capture_unsupported",
                         Some(span),
-                        format!("closure captures const binding {:?}, whose SSA value is not materialized as an environment slot", binding.name),
+                        format!(
+                            "capturing live import binding {:?} would freeze its value at closure creation",
+                            binding.name
+                        ),
                     );
                 }
                 let Some(source_binding) = self
@@ -1069,14 +1086,42 @@ impl<'a> FunctionCompiler<'a> {
                         format!("no source metadata for captured binding {:?}", binding.id),
                     );
                 };
-                if source_binding.lexical_scope != self.semantic.environment.id {
-                    return self.fail(
-                        "lowering.block_capture_lifetime",
-                        Some(source_binding.declaration),
-                        format!("captured binding {:?} is not owned by the enclosing function environment", binding.name),
-                    );
+                if binding.kind == BindingKind::Const {
+                    if capture.mode != CaptureMode::Value {
+                        return self.fail(
+                            "lowering.const_capture_mode",
+                            Some(span),
+                            format!("immutable const binding {:?} requires by-value capture", binding.name),
+                        );
+                    }
+                    if !self.const_values.contains_key(&capture.binding) {
+                        return self.fail(
+                            "lowering.const_capture_tdz",
+                            Some(source_binding.declaration),
+                            format!(
+                                "const binding {:?} is not initialized when the closure is created; by-value capture would violate TDZ semantics",
+                                binding.name
+                            ),
+                        );
+                    }
+                    binding.id.clone()
+                } else {
+                    if source_binding.lexical_scope != self.semantic.environment.id {
+                        return self.fail(
+                            "lowering.block_capture_lifetime",
+                            Some(source_binding.declaration),
+                            format!("captured mutable binding {:?} is not owned by the enclosing function environment", binding.name),
+                        );
+                    }
+                    if capture.mode != CaptureMode::Cell {
+                        return self.fail(
+                            "lowering.mutable_capture_mode",
+                            Some(source_binding.declaration),
+                            format!("mutable binding {:?} must be captured by shared cell", binding.name),
+                        );
+                    }
+                    binding.id.clone()
                 }
-                binding.id.clone()
             } else if let Some(parent_capture) = self.captures_by_binding.get(&capture.binding) {
                 parent_capture.id.clone()
             } else {
@@ -2964,6 +3009,262 @@ mod tests {
             }
         ));
         assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_initialized_const_closure_capture_by_value() {
+        let source = source(
+            "function run() { { const value = 1; return () => value; } }",
+        );
+        let span = whole_span(&source);
+        let binding = binding("binding_const_capture", "value", BindingKind::Const);
+        let parent = function_syntax(
+            &source,
+            vec![SyntaxStatement::Block {
+                scope: Some("scope_const_block".to_owned()),
+                body: vec![
+                    SyntaxStatement::Variable {
+                        kind: SyntaxVariableKind::Const,
+                        declarations: vec![SyntaxDeclarator {
+                            binding: Some(binding.id.clone()),
+                            name: binding.name.clone(),
+                            initializer: Some(SyntaxExpression::Literal {
+                                value: SyntaxLiteral::Number(1.0),
+                                span,
+                            }),
+                            span,
+                        }],
+                        span,
+                    },
+                    SyntaxStatement::Return {
+                        value: Some(SyntaxExpression::Function {
+                            function: "fn_const_child".to_owned(),
+                            captures: vec![binding.id.clone()],
+                            span,
+                        }),
+                        span,
+                    },
+                ],
+                span,
+            }],
+            Vec::new(),
+        );
+        let child = ResolvedSyntaxFunction {
+            id: "fn_const_child".to_owned(),
+            name: "<const-arrow>".to_owned(),
+            scope: "scope_const_child".to_owned(),
+            parent_function_scope: Some(parent.scope.clone()),
+            parameters: Vec::new(),
+            captures: vec![binding.id.clone()],
+            body: vec![SyntaxStatement::Return {
+                value: Some(identifier("value", &binding.id, span)),
+                span,
+            }],
+            span,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        };
+        let capture = Capture {
+            id: "capture_const_value".to_owned(),
+            source_environment: parent.scope.clone(),
+            binding: binding.id.clone(),
+            name: binding.name.clone(),
+            mutable: false,
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Value,
+        };
+        let parent_semantics = FunctionSemantics {
+            id: parent.id.clone(),
+            name: parent.name.clone(),
+            environment: Environment {
+                id: parent.scope.clone(),
+                parent: parent.parent_function_scope.clone(),
+                bindings: vec![binding.clone()],
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: parent.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let child_semantics = FunctionSemantics {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            environment: Environment {
+                id: child.scope.clone(),
+                parent: child.parent_function_scope.clone(),
+                bindings: Vec::new(),
+            },
+            parameters: Vec::new(),
+            captures: vec![capture],
+            span,
+            parent_function_scope: child.parent_function_scope.clone(),
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+        };
+        let module = SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![parent_semantics, child_semantics],
+            bindings: vec![SemanticBinding {
+                ir: binding.clone(),
+                lexical_scope: "scope_const_block".to_owned(),
+                declaration: span,
+            }],
+        };
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![parent, child],
+            },
+        )
+        .expect("initialized const value can be captured without a block environment");
+        let closure = documents[0].function.blocks[0]
+            .instructions
+            .iter()
+            .find(|instruction| instruction.op == "closure.create")
+            .expect("closure creation exists");
+        let descriptors = closure.attributes.get("captures").and_then(JsonValue::as_array).unwrap();
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(
+            descriptors[0].get("binding").and_then(JsonValue::as_str),
+            Some(binding.id.as_str())
+        );
+        assert_eq!(
+            descriptors[0].get("mode").and_then(JsonValue::as_str),
+            Some("value")
+        );
+        assert!(verify_document(&documents[0]).is_empty());
+        assert!(verify_document(&documents[1]).is_empty());
+    }
+
+    #[test]
+    fn rejects_hoisted_closure_capture_of_uninitialized_const() {
+        let source = source(
+            "function run() { function child() { return value; } const value = 1; }",
+        );
+        let span = whole_span(&source);
+        let value_binding = binding("binding_hoisted_const", "value", BindingKind::Const);
+        let parent = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::FunctionDeclaration {
+                    function: "fn_hoisted_child".to_owned(),
+                    binding: Some("binding_child".to_owned()),
+                    name: "child".to_owned(),
+                    span,
+                },
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Const,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(value_binding.id.clone()),
+                        name: value_binding.name.clone(),
+                        initializer: Some(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(1.0),
+                            span,
+                        }),
+                        span,
+                    }],
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let child = ResolvedSyntaxFunction {
+            id: "fn_hoisted_child".to_owned(),
+            name: "child".to_owned(),
+            scope: "scope_hoisted_child".to_owned(),
+            parent_function_scope: Some(parent.scope.clone()),
+            parameters: Vec::new(),
+            captures: vec![value_binding.id.clone()],
+            body: vec![SyntaxStatement::Return {
+                value: Some(identifier("value", &value_binding.id, span)),
+                span,
+            }],
+            span,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        };
+        let capture = Capture {
+            id: "capture_hoisted_const".to_owned(),
+            source_environment: parent.scope.clone(),
+            binding: value_binding.id.clone(),
+            name: value_binding.name.clone(),
+            mutable: false,
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Value,
+        };
+        let parent_semantics = FunctionSemantics {
+            id: parent.id.clone(),
+            name: parent.name.clone(),
+            environment: Environment {
+                id: parent.scope.clone(),
+                parent: parent.parent_function_scope.clone(),
+                bindings: vec![
+                    value_binding.clone(),
+                    binding("binding_child", "child", BindingKind::Var),
+                ],
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: parent.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let child_semantics = FunctionSemantics {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            environment: Environment {
+                id: child.scope.clone(),
+                parent: child.parent_function_scope.clone(),
+                bindings: Vec::new(),
+            },
+            parameters: Vec::new(),
+            captures: vec![capture],
+            span,
+            parent_function_scope: child.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let module = SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![parent_semantics, child_semantics],
+            bindings: vec![
+                SemanticBinding {
+                    ir: value_binding,
+                    lexical_scope: parent.scope.clone(),
+                    declaration: span,
+                },
+                SemanticBinding {
+                    ir: binding("binding_child", "child", BindingKind::Var),
+                    lexical_scope: parent.scope.clone(),
+                    declaration: span,
+                },
+            ],
+        };
+        let errors = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![parent, child],
+            },
+        )
+        .expect_err("hoisted closure cannot snapshot a const still in its TDZ");
+        assert_eq!(errors[0].code, "lowering.const_capture_tdz");
     }
 
     #[test]
