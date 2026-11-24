@@ -3,7 +3,7 @@
 **Status:** Target architecture contract; not a production implementation claim.
 
 **Architecture authority:** Ogma Notion specification, sections 7.4, 8.9.6, 11 and 20.9.
-**Related contracts:** [Static Host Modules](static-host-modules-contract.md), [Runtime Feature Profiles](runtime-feature-profiles.md), [Compatibility Profile](compatibility-profile.md), [Rust Workspace](rust-workspace.md).
+**Related contracts:** [Static Host Modules](static-host-modules-contract.md), [Rust Embedding Code Generation](rust-embedding-codegen-contract.md), [Runtime Feature Profiles](runtime-feature-profiles.md), [Compatibility Profile](compatibility-profile.md), [Rust Workspace](rust-workspace.md).
 
 ## 1. Decision
 
@@ -20,7 +20,7 @@ The responsibility split is:
 - **Ogma Packaging** combines the resolved JavaScript, module, provider and Cargo build graphs into one deterministic application plan.
 - **pnpm and Cargo** remain the authoritative tools for resolving their respective package ecosystems.
 
-A provider is an implementation choice, not a new JavaScript module format or a new ABI.
+A provider is an implementation choice, not a new JavaScript module format or a new ABI. The M2 Rust embedding source generator (OGM-106) is a separate build-time adapter that wraps canonical portable `.ogmb` bytes for compile-time inclusion in a Rust host. Its generated module is not a Native Provider or Native Service: it does not satisfy a `native.*` requirement, register/select an implementation, add a Cargo dependency, or generate native machine code.
 
 ## 2. Terminology and stable identifiers
 
@@ -119,6 +119,7 @@ The `ogma` executable is the single user-facing **toolchain orchestrator**, not 
 |---|---|---|
 | `ogma compile`, `ogma run`, `ogma inspect` | Compile, verify/execute and inspect portable artifacts through production libraries | OGM-93, M1 |
 | TypeScript inputs to `ogma compile` | Route through the approved TS frontend into the same compiler/runtime path | M2 frontend work |
+| Rust embedding emission from `ogma compile` (for example, `--emit rust`) | Emit a deterministic per-artifact Rust wrapper around the unchanged canonical `.ogmb`; no transpilation, provider resolution or native code generation | OGM-106, M2 |
 | `ogma check` | Validate project configuration, selected profiles, module imports, capability grants and dependency/provider availability without silently changing dependencies | Toolchain evolution; packaging contract |
 | `ogma deps plan` / `ogma deps why` | Show the composed dependency/build plan and explain why a module, requirement, provider or Rust artifact is included | Native provider and packaging work |
 | `ogma providers list` / `ogma providers inspect` | Report providers registered/compiled for the current host and the services they implement | Native provider work |
