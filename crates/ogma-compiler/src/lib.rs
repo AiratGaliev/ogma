@@ -425,7 +425,7 @@ mod tests {
             "for-header-tdz-test",
             "memory:///for-header-tdz-test.js",
             None,
-            "function run() { let outer = 0; while (outer < 2) { for (let index = index; index < 1; index = index + 1) {} outer = outer + 1; } }",
+            "function run() { for (let index = index; index < 1; index = index + 1) {} }",
         )
         .expect("source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
@@ -479,6 +479,31 @@ mod tests {
         assert!(verify_document(run).is_empty());
     }
 
+    #[test]
+    fn rejects_for_header_let_when_the_for_statement_is_reentered_by_an_outer_loop() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "nested-for-header-lifetime-test",
+            "memory:///nested-for-header-lifetime-test.js",
+            None,
+            "function run() { let outer = 0; while (outer < 2) { for (let index = outer === 0 ? 0 : index; index < 1; index = index + 1) {} outer = outer + 1; } }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("conditional for initializer is valid JavaScript syntax");
+
+        let failure = compile(&parsed)
+            .expect_err("a re-entered for-header scope needs a fresh lexical environment");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach lexical environment lifetime validation");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lowering.block_environment_lifetime")
+            .expect("re-entered for-header lifetime diagnostic");
+        assert!(diagnostic.span.is_some());
+        assert!(diagnostic.message.contains("loop-reentered"));
+    }
     #[test]
     fn rejects_reentered_block_let_without_a_fresh_lexical_environment() {
         let allocator = Allocator::default();

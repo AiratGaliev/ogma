@@ -351,7 +351,10 @@ fn collect_reentered_lexical_scopes(
             SyntaxStatement::While { body, .. } => {
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
-            SyntaxStatement::For { body, .. } => {
+            SyntaxStatement::For { scope, body, .. } => {
+                if inside_loop_body && let Some(scope) = scope {
+                    output.insert(scope.clone());
+                }
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
             _ => {}
@@ -417,7 +420,9 @@ impl<'a> FunctionCompiler<'a> {
         // could bypass TDZ on the next entry. Single-entry block bindings can
         // be flattened when they are not captured; captured block bindings
         // are rejected separately because their environment must outlive the
-        // block. For-header bindings are represented by their loop binding ID.
+        // block. A for-header scope nested inside a re-entered loop body must
+        // also be rejected; only a non-re-entered for-header lifetime is safe
+        // to flatten without allocating a fresh environment.
         let mut reentered_block_scopes = HashSet::new();
         collect_reentered_lexical_scopes(&syntax.body, false, &mut reentered_block_scopes);
         for binding in &semantic.environment.bindings {
