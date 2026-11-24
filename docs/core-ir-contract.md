@@ -4,7 +4,7 @@
 - **Contract version:** `1.0.0`
 - **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
 - **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
-- **Status:** canonical backend-neutral v1 contract. The JSON Schema and Python verifier remain authoritative; OGM-42 is implementing the owned Rust representation, semantic validation boundary and compiler-side lowering against this contract. This contract is not a bytecode format, native ABI or Runtime API.
+- **Status:** canonical backend-neutral v1 contract. The JSON Schema and Python verifier remain the cross-language reference; `ogma-core-ir::verify_document` is the Rust implementation-level validation boundary used by `ogma-compiler`, and must remain consistent with those references. OGM-42 currently lowers its supported synchronous subset into verified function documents. This contract is not a bytecode format, native ABI or Runtime API.
 - **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
 
 ## 1. Purpose and boundaries
@@ -208,7 +208,7 @@ The corpus manifest defines expected acceptance/rejection and, for negative case
 
 The verifier checks JSON Schema structure plus semantic invariants: stable ID references, declaration-kind/mutability consistency, canonical literal payload encodings, unique capture/suspension identities, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/instruction-level dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. It rejects duplicate JSON object keys, non-finite JSON numbers and malformed attribute payloads without crashing.
 
-The fixture corpus contains 25 cases (4 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
+The fixture corpus contains 29 cases (8 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
 
 ## 10. Compatibility and change policy
 

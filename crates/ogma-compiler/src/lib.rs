@@ -72,6 +72,30 @@ mod tests {
     }
 
     #[test]
+    fn compile_fails_closed_for_unsupported_try_catch_with_a_source_diagnostic() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "compile-test",
+            "memory:///compile-test.js",
+            None,
+            "try { throw 1; } catch (error) { error; }",
+        )
+        .expect("source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("valid try/catch syntax parses");
+        let failure = compile(&parsed).expect_err("unsupported handler lowering must fail closed");
+        let CompileFailure::Lowering(diagnostics) = failure else {
+            panic!("valid syntax should reach the lowering diagnostic boundary");
+        };
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "lowering.unsupported_statement")
+            .expect("unsupported try statement diagnostic");
+        assert!(diagnostic.span.is_some());
+        assert!(diagnostic.message.contains("try_statement"));
+    }
+
+    #[test]
     fn compiles_real_oxc_syntax_through_semantics_and_verified_core_ir() {
         let allocator = Allocator::default();
         let source = SourceFile::new(

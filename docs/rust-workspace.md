@@ -1,6 +1,6 @@
 # Rust workspace and M1 crate boundaries
 
-**Status:** M1 implementation is in progress. OGM-41 delivers the pinned Oxc parser and source diagnostics. OGM-42 is adding the owned Rust Core IR v1 model/verifier and Oxc-backed semantic snapshot at the frontend boundary; canonical AST-to-Core-IR lowering belongs to `ogma-compiler` and remains part of OGM-42. Runtime, OGMB execution, interpreter and embedding remain owned by their respective issues.
+**Status:** M1 implementation is in progress. OGM-41 delivers the pinned Oxc parser and source diagnostics. OGM-42 currently provides the owned Rust Core IR v1 model/verifier, Oxc-backed semantic/syntax projection and compiler-owned AST-to-Core-IR lowering for the supported synchronous subset. `ogma-compiler::compile()` composes semantic analysis and verified function-document emission; Core IR-to-OGMB compilation, Runtime, interpreter and embedding remain owned by their respective issues.
 
 ## Workspace baseline
 
@@ -16,7 +16,7 @@ The root `Cargo.lock` covers the seven production workspace members. The complet
 | `ogma-core-ir` | Canonical backend-neutral Core IR v1 owned representation, semantic verifier and fixture cross-checks (OGM-42) | `serde`, `serde_json` |
 | `ogma-runtime` | Runtime Values, heap, objects/functions, explicit roots and shared language operations (OGM-43/44) | None |
 | `ogma-bytecode` | Portable OGMB container, decoding/encoding and verifier boundary (OGM-45) | None |
-| `ogma-compiler` | Compile-time orchestration from frontend/Core IR to portable bytecode (OGM-42/45) | `ogma-frontend`, `ogma-core-ir`, `ogma-bytecode` |
+| `ogma-compiler` | Compiler-owned semantic analysis and lowering of frontend syntax into verified Core IR v1 documents (OGM-42); later Core IR-to-OGMB compilation (OGM-45) | `ogma-frontend`, `ogma-core-ir`, `ogma-bytecode` |
 | `ogma-interpreter` | Execution of verified portable bytecode using the shared Runtime (OGM-46) | `ogma-bytecode`, `ogma-runtime` |
 | `ogma-embedding` | Consumer-facing Rust Runtime/Context and host-call API (OGM-47) | `ogma-interpreter`, `ogma-runtime` |
 
