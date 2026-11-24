@@ -606,7 +606,7 @@ fn operation_effects(op: &str) -> Option<Effects> {
         "js.add" | "js.less_than" | "js.get_property" | "js.set_property" | "js.get_element"
         | "js.set_element" | "js.call" | "js.construct" | "js.to_number" | "js.to_string" => {
             Some(dynamic)
-        },
+        }
         "env.load" | "env.store" => Some(E {
             may_throw: true,
             ..E::default()
@@ -1364,7 +1364,7 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     | "js.construct" | "host.call" | "async.await" => Some(SemanticType::Dynamic),
                     "js.to_boolean" | "js.strict_equal" | "js.less_than" => {
                         Some(SemanticType::Boolean)
-                    },
+                    }
                     "js.to_number" => Some(SemanticType::Number),
                     "js.to_string" | "js.typeof" => Some(SemanticType::String),
                     "closure.create" => Some(SemanticType::Function),
