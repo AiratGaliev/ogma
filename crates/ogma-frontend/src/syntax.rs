@@ -248,6 +248,7 @@ pub enum SyntaxForInitializer {
 
 /// Statement projection retaining lexical scope identities.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum SyntaxStatement {
     /// Lexical block.
     Block {
@@ -388,10 +389,10 @@ fn scope_id(scope: ScopeId) -> String {
     format!("scope_{}", scope.index())
 }
 
-fn resolved_function<'a>(
+fn resolved_function(
     scope: ScopeId,
-    semantic: &'a SemanticSnapshot,
-) -> Option<&'a ResolvedFunction> {
+    semantic: &SemanticSnapshot,
+) -> Option<&ResolvedFunction> {
     let id = scope_id(scope);
     semantic
         .functions
