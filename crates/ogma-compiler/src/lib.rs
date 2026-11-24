@@ -91,7 +91,9 @@ mod tests {
             .iter()
             .find(|diagnostic| diagnostic.code == "lowering.unsupported_statement")
             .expect("unsupported try statement diagnostic");
-        let span = diagnostic.span.expect("unsupported syntax retains its source span");
+        let span = diagnostic
+            .span
+            .expect("unsupported syntax retains its source span");
         assert!(span.end_byte > span.start_byte);
         assert!(!diagnostic.message.is_empty());
     }
