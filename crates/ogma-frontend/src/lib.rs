@@ -23,10 +23,9 @@ use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 
 mod syntax;
 pub use syntax::{
-    ResolvedSyntaxFunction, ResolvedSyntaxProgram, SyntaxAssignmentTarget,
-    SyntaxBinaryOperator, SyntaxDeclarator, SyntaxExpression, SyntaxForInitializer,
-    SyntaxLiteral, SyntaxMemberKey, SyntaxStatement, SyntaxUnaryOperator,
-    SyntaxUpdateOperator, SyntaxVariableKind,
+    ResolvedSyntaxFunction, ResolvedSyntaxProgram, SyntaxAssignmentTarget, SyntaxBinaryOperator,
+    SyntaxDeclarator, SyntaxExpression, SyntaxForInitializer, SyntaxLiteral, SyntaxMemberKey,
+    SyntaxStatement, SyntaxUnaryOperator, SyntaxUpdateOperator, SyntaxVariableKind,
 };
 
 /// Stable identity for one source file within a compilation/debugging session.
@@ -1655,7 +1654,6 @@ mod semantic_snapshot_tests {
     }
 }
 
-
 #[cfg(test)]
 mod syntax_projection_tests {
     use super::*;
@@ -1677,13 +1675,26 @@ mod syntax_projection_tests {
         let code = "let value = 1; { let value = 2; value; } if (value < 3) value = value + 1;";
         let (_source, parsed) = parse_syntax(code);
         let program = &parsed.syntax.functions[0];
-        let values: Vec<_> = parsed.semantic.bindings.iter()
+        let values: Vec<_> = parsed
+            .semantic
+            .bindings
+            .iter()
             .filter(|binding| binding.name == "value")
             .collect();
         assert_eq!(values.len(), 2);
         assert_ne!(values[0].id, values[1].id);
-        assert!(program.body.iter().any(|statement| matches!(statement, SyntaxStatement::Block { .. })));
-        assert!(program.body.iter().any(|statement| matches!(statement, SyntaxStatement::If { .. })));
+        assert!(
+            program
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::Block { .. }))
+        );
+        assert!(
+            program
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::If { .. }))
+        );
         assert!(program.span.end_byte as usize <= code.len());
     }
 
@@ -1691,20 +1702,44 @@ mod syntax_projection_tests {
     fn projects_function_parameters_calls_and_arrow_captures() {
         let code = "function outer(seed) { const callback = () => call(seed); return callback; }";
         let (_source, parsed) = parse_syntax(code);
-        let outer = parsed.syntax.functions.iter().find(|function| function.name == "outer").unwrap();
-        let arrow = parsed.syntax.functions.iter().find(|function| function.is_arrow).unwrap();
+        let outer = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.name == "outer")
+            .unwrap();
+        let arrow = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .unwrap();
         assert_eq!(outer.parameters.len(), 1);
         assert_eq!(arrow.captures.len(), 1);
-        assert!(outer.body.iter().any(|statement| matches!(statement, SyntaxStatement::Variable { .. })));
-        assert!(arrow.body.iter().any(|statement| matches!(statement, SyntaxStatement::Return {
-            value: Some(SyntaxExpression::Call { .. }), ..
-        })));
+        assert!(
+            outer
+                .body
+                .iter()
+                .any(|statement| matches!(statement, SyntaxStatement::Variable { .. }))
+        );
+        assert!(arrow.body.iter().any(|statement| matches!(
+            statement,
+            SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Call { .. }),
+                ..
+            }
+        )));
     }
 
     #[test]
     fn unsupported_spread_arguments_are_explicit_not_silently_dropped() {
         let (_source, parsed) = parse_syntax("function invoke(fn, args) { return fn(...args); }");
-        let function = parsed.syntax.functions.iter().find(|function| function.name == "invoke").unwrap();
+        let function = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.name == "invoke")
+            .unwrap();
         assert!(matches!(
             function.body.first(),
             Some(SyntaxStatement::Return {

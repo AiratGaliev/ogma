@@ -393,7 +393,10 @@ fn resolved_function<'a>(
     semantic: &'a SemanticSnapshot,
 ) -> Option<&'a ResolvedFunction> {
     let id = scope_id(scope);
-    semantic.functions.iter().find(|function| function.scope == id)
+    semantic
+        .functions
+        .iter()
+        .find(|function| function.scope == id)
 }
 
 fn binding_id(symbol: Option<oxc_syntax::symbol::SymbolId>) -> Option<String> {
@@ -406,9 +409,13 @@ fn resolved_reference(
     source: &SourceFile,
 ) -> SyntaxExpression {
     let span = source.span(identifier.span.start as usize, identifier.span.end as usize);
-    let binding = semantic.references.iter().find(|reference| {
-        reference.span.start_byte == span.start_byte && reference.span.end_byte == span.end_byte
-    }).and_then(|reference| reference.binding.clone());
+    let binding = semantic
+        .references
+        .iter()
+        .find(|reference| {
+            reference.span.start_byte == span.start_byte && reference.span.end_byte == span.end_byte
+        })
+        .and_then(|reference| reference.binding.clone());
     SyntaxExpression::Identifier {
         name: identifier.name.as_str().to_owned(),
         binding,
@@ -425,7 +432,10 @@ fn expression(
     let node_span = node.span();
     let span = source.span(node_span.start as usize, node_span.end as usize);
     match node {
-        E::NullLiteral(_) => SyntaxExpression::Literal { value: SyntaxLiteral::Null, span },
+        E::NullLiteral(_) => SyntaxExpression::Literal {
+            value: SyntaxLiteral::Null,
+            span,
+        },
         E::BooleanLiteral(literal) => SyntaxExpression::Literal {
             value: SyntaxLiteral::Boolean(literal.value),
             span,
@@ -451,14 +461,28 @@ fn expression(
             use oxc_syntax::operator::BinaryOperator as B;
             let (operator, left, right) = match binary.operator {
                 B::Addition => (SyntaxBinaryOperator::Add, &binary.left, &binary.right),
-                B::StrictEquality => (SyntaxBinaryOperator::StrictEqual, &binary.left, &binary.right),
-                B::StrictInequality => (SyntaxBinaryOperator::StrictNotEqual, &binary.left, &binary.right),
+                B::StrictEquality => (
+                    SyntaxBinaryOperator::StrictEqual,
+                    &binary.left,
+                    &binary.right,
+                ),
+                B::StrictInequality => (
+                    SyntaxBinaryOperator::StrictNotEqual,
+                    &binary.left,
+                    &binary.right,
+                ),
                 B::LessThan => (SyntaxBinaryOperator::LessThan, &binary.left, &binary.right),
-                B::GreaterThan => (SyntaxBinaryOperator::GreaterThan, &binary.left, &binary.right),
-                _ => return SyntaxExpression::Unsupported {
-                    syntax: format!("binary_operator:{}", binary.operator.as_str()),
-                    span,
-                },
+                B::GreaterThan => (
+                    SyntaxBinaryOperator::GreaterThan,
+                    &binary.left,
+                    &binary.right,
+                ),
+                _ => {
+                    return SyntaxExpression::Unsupported {
+                        syntax: format!("binary_operator:{}", binary.operator.as_str()),
+                        span,
+                    };
+                }
             };
             SyntaxExpression::Binary {
                 operator,
@@ -474,10 +498,12 @@ fn expression(
                 U::Typeof => SyntaxUnaryOperator::Typeof,
                 U::UnaryNegation => SyntaxUnaryOperator::Negate,
                 U::UnaryPlus => SyntaxUnaryOperator::Positive,
-                _ => return SyntaxExpression::Unsupported {
-                    syntax: format!("unary_operator:{:?}", unary.operator),
-                    span,
-                },
+                _ => {
+                    return SyntaxExpression::Unsupported {
+                        syntax: format!("unary_operator:{:?}", unary.operator),
+                        span,
+                    };
+                }
             };
             SyntaxExpression::Unary {
                 operator,
@@ -509,11 +535,18 @@ fn expression(
         },
         E::ComputedMemberExpression(member) if !member.optional => SyntaxExpression::Member {
             object: Box::new(expression(&member.object, semantic, source)),
-            key: SyntaxMemberKey::Computed(Box::new(expression(&member.expression, semantic, source))),
+            key: SyntaxMemberKey::Computed(Box::new(expression(
+                &member.expression,
+                semantic,
+                source,
+            ))),
             span,
         },
         E::AssignmentExpression(assignment)
-            if matches!(assignment.operator, oxc_syntax::operator::AssignmentOperator::Assign) =>
+            if matches!(
+                assignment.operator,
+                oxc_syntax::operator::AssignmentOperator::Assign
+            ) =>
         {
             SyntaxExpression::Assign {
                 target: assignment_target(&assignment.left, semantic, source),
@@ -604,14 +637,16 @@ fn simple_assignment_target(
     let span = source.span(ast_span.start as usize, ast_span.end as usize);
     match node {
         ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-            let identifier_span = source.span(
-                identifier.span.start as usize,
-                identifier.span.end as usize,
-            );
-            let binding = semantic.references.iter().find(|reference| {
-                reference.span.start_byte == identifier_span.start_byte
-                    && reference.span.end_byte == identifier_span.end_byte
-            }).and_then(|reference| reference.binding.clone());
+            let identifier_span =
+                source.span(identifier.span.start as usize, identifier.span.end as usize);
+            let binding = semantic
+                .references
+                .iter()
+                .find(|reference| {
+                    reference.span.start_byte == identifier_span.start_byte
+                        && reference.span.end_byte == identifier_span.end_byte
+                })
+                .and_then(|reference| reference.binding.clone());
             SyntaxAssignmentTarget::Identifier {
                 name: identifier.name.as_str().to_owned(),
                 binding,
@@ -628,7 +663,11 @@ fn simple_assignment_target(
         ast::SimpleAssignmentTarget::ComputedMemberExpression(member) if !member.optional => {
             SyntaxAssignmentTarget::Member {
                 object: Box::new(expression(&member.object, semantic, source)),
-                key: SyntaxMemberKey::Computed(Box::new(expression(&member.expression, semantic, source))),
+                key: SyntaxMemberKey::Computed(Box::new(expression(
+                    &member.expression,
+                    semantic,
+                    source,
+                ))),
                 span,
             }
         }
@@ -657,28 +696,34 @@ fn variable_declaration(
 ) -> (SyntaxVariableKind, Vec<SyntaxDeclarator>, SourceSpan) {
     let ast_span = node.span();
     let span = source.span(ast_span.start as usize, ast_span.end as usize);
-    let declarations = node.declarations.iter().map(|declarator| {
-        let decl_span = source.span(
-            declarator.span.start as usize,
-            declarator.span.end as usize,
-        );
-        match &declarator.id {
-            ast::BindingPattern::BindingIdentifier(identifier) => {
-                SyntaxDeclarator {
+    let declarations = node
+        .declarations
+        .iter()
+        .map(|declarator| {
+            let decl_span =
+                source.span(declarator.span.start as usize, declarator.span.end as usize);
+            match &declarator.id {
+                ast::BindingPattern::BindingIdentifier(identifier) => SyntaxDeclarator {
                     binding: binding_id(identifier.symbol_id.get()),
                     name: identifier.name.as_str().to_owned(),
-                    initializer: declarator.init.as_ref().map(|init| expression(init, semantic, source)),
+                    initializer: declarator
+                        .init
+                        .as_ref()
+                        .map(|init| expression(init, semantic, source)),
                     span: decl_span,
-                }
+                },
+                _ => SyntaxDeclarator {
+                    binding: None,
+                    name: "<destructuring>".to_owned(),
+                    initializer: declarator
+                        .init
+                        .as_ref()
+                        .map(|init| expression(init, semantic, source)),
+                    span: decl_span,
+                },
             }
-            _ => SyntaxDeclarator {
-                binding: None,
-                name: "<destructuring>".to_owned(),
-                initializer: declarator.init.as_ref().map(|init| expression(init, semantic, source)),
-                span: decl_span,
-            },
-        }
-    }).collect();
+        })
+        .collect();
     (declaration_kind(node.kind), declarations, span)
 }
 
@@ -694,12 +739,20 @@ fn syntax_statement(
         S::EmptyStatement(_) => SyntaxStatement::Empty { span },
         S::BlockStatement(block) => SyntaxStatement::Block {
             scope: block.scope_id.get().map(scope_id),
-            body: block.body.iter().map(|item| syntax_statement(item, semantic, source)).collect(),
+            body: block
+                .body
+                .iter()
+                .map(|item| syntax_statement(item, semantic, source))
+                .collect(),
             span,
         },
         S::VariableDeclaration(declaration) => {
             let (kind, declarations, span) = variable_declaration(declaration, semantic, source);
-            SyntaxStatement::Variable { kind, declarations, span }
+            SyntaxStatement::Variable {
+                kind,
+                declarations,
+                span,
+            }
         }
         S::FunctionDeclaration(function) => function_declaration(function, semantic, source),
         S::ExpressionStatement(expression_statement) => SyntaxStatement::Expression {
@@ -709,7 +762,9 @@ fn syntax_statement(
         S::IfStatement(if_statement) => SyntaxStatement::If {
             test: expression(&if_statement.test, semantic, source),
             consequent: Box::new(syntax_statement(&if_statement.consequent, semantic, source)),
-            alternate: if_statement.alternate.as_ref()
+            alternate: if_statement
+                .alternate
+                .as_ref()
                 .map(|alternate| Box::new(syntax_statement(alternate, semantic, source))),
             span,
         },
@@ -721,26 +776,50 @@ fn syntax_statement(
         S::ForStatement(loop_statement) => {
             let initializer = loop_statement.init.as_ref().map(|init| match init {
                 ast::ForStatementInit::VariableDeclaration(declaration) => {
-                    let (kind, declarations, span) = variable_declaration(declaration, semantic, source);
-                    SyntaxForInitializer::Variable { kind, declarations, span }
+                    let (kind, declarations, span) =
+                        variable_declaration(declaration, semantic, source);
+                    SyntaxForInitializer::Variable {
+                        kind,
+                        declarations,
+                        span,
+                    }
                 }
-                _ => init.as_expression()
-                    .map(|expression_node| SyntaxForInitializer::Expression(expression(expression_node, semantic, source)))
-                    .unwrap_or_else(|| SyntaxForInitializer::Expression(SyntaxExpression::Unsupported {
-                        syntax: "for_initializer".to_owned(), span,
-                    })),
+                _ => init
+                    .as_expression()
+                    .map(|expression_node| {
+                        SyntaxForInitializer::Expression(expression(
+                            expression_node,
+                            semantic,
+                            source,
+                        ))
+                    })
+                    .unwrap_or_else(|| {
+                        SyntaxForInitializer::Expression(SyntaxExpression::Unsupported {
+                            syntax: "for_initializer".to_owned(),
+                            span,
+                        })
+                    }),
             });
             SyntaxStatement::For {
                 scope: loop_statement.scope_id.get().map(scope_id),
                 initializer,
-                test: loop_statement.test.as_ref().map(|test| expression(test, semantic, source)),
-                update: loop_statement.update.as_ref().map(|update| expression(update, semantic, source)),
+                test: loop_statement
+                    .test
+                    .as_ref()
+                    .map(|test| expression(test, semantic, source)),
+                update: loop_statement
+                    .update
+                    .as_ref()
+                    .map(|update| expression(update, semantic, source)),
                 body: Box::new(syntax_statement(&loop_statement.body, semantic, source)),
                 span,
             }
         }
         S::ReturnStatement(return_statement) => SyntaxStatement::Return {
-            value: return_statement.argument.as_ref().map(|value| expression(value, semantic, source)),
+            value: return_statement
+                .argument
+                .as_ref()
+                .map(|value| expression(value, semantic, source)),
             span,
         },
         S::ThrowStatement(throw_statement) => SyntaxStatement::Throw {
@@ -777,7 +856,9 @@ fn function_declaration(
     SyntaxStatement::FunctionDeclaration {
         function: function.id.clone(),
         binding: id.and_then(|identifier| binding_id(identifier.symbol_id.get())),
-        name: id.map(|identifier| identifier.name.as_str().to_owned()).unwrap_or_default(),
+        name: id
+            .map(|identifier| identifier.name.as_str().to_owned())
+            .unwrap_or_default(),
         span,
     }
 }
@@ -790,18 +871,27 @@ struct FunctionCollector<'s> {
 
 impl<'a> Visit<'a> for FunctionCollector<'_> {
     fn visit_function(&mut self, node: &ast::Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
-        let span = self.source.span(node.span.start as usize, node.span.end as usize);
+        let span = self
+            .source
+            .span(node.span.start as usize, node.span.end as usize);
         if let Some(scope) = node.scope_id.get()
             && let Some(resolved) = resolved_function(scope, self.semantic)
         {
-            let body = node.body.as_ref().map(|body| {
-                body.statements.iter()
-                    .map(|statement| syntax_statement(statement, self.semantic, self.source))
-                    .collect()
-            }).unwrap_or_else(|| vec![SyntaxStatement::Unsupported {
-                syntax: "function_without_body".to_owned(),
-                span,
-            }]);
+            let body = node
+                .body
+                .as_ref()
+                .map(|body| {
+                    body.statements
+                        .iter()
+                        .map(|statement| syntax_statement(statement, self.semantic, self.source))
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    vec![SyntaxStatement::Unsupported {
+                        syntax: "function_without_body".to_owned(),
+                        span,
+                    }]
+                });
             self.functions.push(ResolvedSyntaxFunction {
                 id: resolved.id.clone(),
                 name: resolved.name.clone(),
@@ -814,7 +904,8 @@ impl<'a> Visit<'a> for FunctionCollector<'_> {
                 is_arrow: false,
                 is_async: resolved.is_async,
                 is_generator: resolved.is_generator,
-                has_private_self_name: node.r#type == ast::FunctionType::FunctionExpression && node.id.is_some(),
+                has_private_self_name: node.r#type == ast::FunctionType::FunctionExpression
+                    && node.id.is_some(),
             });
         }
         walk::walk_function(self, node, flags);
@@ -825,18 +916,31 @@ impl<'a> Visit<'a> for FunctionCollector<'_> {
             && let Some(resolved) = resolved_function(scope, self.semantic)
         {
             let body = match &node.body {
-                ast::ArrowFunctionBody::FunctionBody(body) => body.statements.iter()
+                ast::ArrowFunctionBody::FunctionBody(body) => body
+                    .statements
+                    .iter()
                     .map(|statement| syntax_statement(statement, self.semantic, self.source))
                     .collect(),
-                _ => node.body.as_expression()
-                    .map(|value| vec![SyntaxStatement::Return {
-                        value: Some(expression(value, self.semantic, self.source)),
-                        span: self.source.span(node.body.span().start as usize, node.body.span().end as usize),
-                    }])
-                    .unwrap_or_else(|| vec![SyntaxStatement::Unsupported {
-                        syntax: "arrow_expression_body".to_owned(),
-                        span: self.source.span(node.span.start as usize, node.span.end as usize),
-                    }]),
+                _ => node
+                    .body
+                    .as_expression()
+                    .map(|value| {
+                        vec![SyntaxStatement::Return {
+                            value: Some(expression(value, self.semantic, self.source)),
+                            span: self.source.span(
+                                node.body.span().start as usize,
+                                node.body.span().end as usize,
+                            ),
+                        }]
+                    })
+                    .unwrap_or_else(|| {
+                        vec![SyntaxStatement::Unsupported {
+                            syntax: "arrow_expression_body".to_owned(),
+                            span: self
+                                .source
+                                .span(node.span.start as usize, node.span.end as usize),
+                        }]
+                    }),
             };
             self.functions.push(ResolvedSyntaxFunction {
                 id: resolved.id.clone(),
@@ -863,9 +967,14 @@ pub(crate) fn build_syntax_program(
     source: &SourceFile,
     semantic: &SemanticSnapshot,
 ) -> ResolvedSyntaxProgram {
-    let program_function = semantic.functions.iter().find(|function| function.id == "fn_program");
+    let program_function = semantic
+        .functions
+        .iter()
+        .find(|function| function.id == "fn_program");
     let program_span = source.span(0, source.text().len());
-    let program_body = program.body.iter()
+    let program_body = program
+        .body
+        .iter()
         .map(|statement| syntax_statement(statement, semantic, source))
         .collect();
     let mut functions = vec![ResolvedSyntaxFunction {
@@ -876,7 +985,9 @@ pub(crate) fn build_syntax_program(
         parameters: Vec::new(),
         captures: Vec::new(),
         body: program_body,
-        span: program_function.map(|function| function.span).unwrap_or(program_span),
+        span: program_function
+            .map(|function| function.span)
+            .unwrap_or(program_span),
         is_arrow: false,
         is_async: false,
         is_generator: false,
@@ -889,7 +1000,11 @@ pub(crate) fn build_syntax_program(
     };
     collector.visit_program(program);
     collector.functions.sort_by_key(|function| {
-        (function.span.start_byte, function.span.end_byte, function.id.clone())
+        (
+            function.span.start_byte,
+            function.span.end_byte,
+            function.id.clone(),
+        )
     });
     functions.extend(collector.functions);
     ResolvedSyntaxProgram { functions }
