@@ -1683,7 +1683,7 @@ impl<'a> FunctionCompiler<'a> {
                 "for header terminated during condition evaluation",
             );
         };
-        let effect_args = header_cursor.effect.into_iter().collect();
+        let effect_args: Vec<String> = header_cursor.effect.into_iter().collect();
         let body_id = self.block_id(body_block);
         let exit_id = self.block_id(exit_block);
         let branch_source = self.user_source(span, Vec::new());
