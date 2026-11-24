@@ -1055,7 +1055,9 @@ impl Heap {
     }
 
     fn try_allocate_cell(&mut self, kind: CellKind) -> Result<GcRef, HeapError> {
+        self.check_cell_counters()?;
         self.ensure_slot_capacity()?;
+        self.check_publish_slot()?;
         self.publish_cell(kind)
     }
 
@@ -1686,6 +1688,24 @@ mod tests {
         );
         assert_eq!(live_counter_heap.stats().used_bytes, 0);
         assert_eq!(live_counter_heap.slots.capacity(), 0);
+
+        let mut object_counter_heap = heap(4096, 2048);
+        object_counter_heap.allocations = u64::MAX;
+        assert_eq!(
+            object_counter_heap.allocate_object().unwrap_err(),
+            HeapError::SizeOverflow
+        );
+        assert_eq!(object_counter_heap.stats().used_bytes, 0);
+        assert_eq!(object_counter_heap.slots.capacity(), 0);
+
+        let mut object_live_counter_heap = heap(4096, 2048);
+        object_live_counter_heap.live_objects = u64::MAX;
+        assert_eq!(
+            object_live_counter_heap.allocate_object().unwrap_err(),
+            HeapError::SizeOverflow
+        );
+        assert_eq!(object_live_counter_heap.stats().used_bytes, 0);
+        assert_eq!(object_live_counter_heap.slots.capacity(), 0);
     }
 
     #[test]
