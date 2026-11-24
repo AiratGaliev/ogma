@@ -1510,17 +1510,16 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     }
                     if let (Some(operand), Some(result)) =
                         (instruction.operands.first(), instruction.result.as_ref())
-                    {
-                        if let Some(definition) = definitions.get(operand)
-                            && (definition.ty, definition.rep)
+                        && definitions.get(operand).is_some_and(|definition| {
+                            (definition.ty, definition.rep)
                                 != (Some(result.semantic_type), Some(result.representation))
-                        {
-                            errors.push(Diagnostic::new(
-                                "operation.result_type",
-                                format!("{instruction_path}.result"),
-                                "env.store result must preserve its operand type",
-                            ));
-                        }
+                        })
+                    {
+                        errors.push(Diagnostic::new(
+                            "operation.result_type",
+                            format!("{instruction_path}.result"),
+                            "env.store result must preserve its operand type",
+                        ));
                     }
                 } else if let Some(result) = instruction.result.as_ref() {
                     let expected = local
