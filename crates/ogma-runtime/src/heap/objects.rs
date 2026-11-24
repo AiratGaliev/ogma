@@ -417,7 +417,7 @@ impl Heap {
 
     /// Allocates an array with length zero, writable length and sparse elements.
     pub fn allocate_array(&mut self) -> Result<Value, HeapError> {
-        let reference = self.allocate_cell_with_retry(|| CellKind::Array(ArrayData::new()))?;
+        let reference = self.allocate_cell_with_retry(|| CellKind::Array(Box::new(ArrayData::new())))?;
         Ok(Value::from_object(reference))
     }
 
@@ -895,10 +895,10 @@ impl Heap {
                 }
             }
             let reference = self.allocate_cell_with_retry(|| {
-                CellKind::Environment(EnvironmentData {
+                CellKind::Environment(Box::new(EnvironmentData {
                     parent: parent.map(|environment| environment.reference),
                     bindings: Vec::new(),
-                })
+                }))
             })?;
             self.scope_root_reference(scope, reference)?;
             let index = self.validate_ref(reference)?;
@@ -910,11 +910,11 @@ impl Heap {
                 let storage = if binding.mutable {
                     let value = binding.initial_value.unwrap_or_else(Value::undefined);
                     let cell = self.allocate_cell_with_retry(|| {
-                        CellKind::BindingCell(BindingCellData {
+                        CellKind::BindingCell(Box::new(BindingCellData {
                             value,
                             mutable: true,
                             initialized: binding.initial_value.is_some(),
-                        })
+                        }))
                     })?;
                     self.scope_root_reference(scope, cell)?;
                     let cell_index = self.validate_ref(cell)?;
@@ -1112,10 +1112,10 @@ impl Heap {
             self.scope_root_reference(scope, outer.reference)?;
             self.scope_root(scope, lexical_this)?;
             let closure_ref = self.allocate_cell_with_retry(|| {
-                CellKind::Environment(EnvironmentData {
+                CellKind::Environment(Box::new(EnvironmentData {
                     parent: None,
                     bindings: Vec::new(),
-                })
+                }))
             })?;
             self.scope_root_reference(scope, closure_ref)?;
             let closure_index = self.validate_ref(closure_ref)?;
@@ -1145,7 +1145,7 @@ impl Heap {
                                 .as_ref()
                                 .ok_or(HeapError::StaleReference)?
                                 .kind,
-                            CellKind::BindingCell(BindingCellData { mutable: true, .. })
+                            CellKind::BindingCell(cell) if cell.mutable
                         ) {
                             return Err(HeapError::InvalidFunctionDefinition);
                         }
@@ -1178,13 +1178,13 @@ impl Heap {
             }
 
             let function = self.allocate_cell_with_retry(|| {
-                CellKind::Function(FunctionData::closure(
+                CellKind::Function(Box::new(FunctionData::closure(
                     definition.id,
                     closure_ref,
                     definition.kind,
                     definition.strict,
                     lexical_this,
-                ))
+                )))
             })?;
             self.scope_root_reference(scope, function)?;
             self.add_edge_ref(function, closure_ref)?;
