@@ -389,10 +389,7 @@ fn scope_id(scope: ScopeId) -> String {
     format!("scope_{}", scope.index())
 }
 
-fn resolved_function(
-    scope: ScopeId,
-    semantic: &SemanticSnapshot,
-) -> Option<&ResolvedFunction> {
+fn resolved_function(scope: ScopeId, semantic: &SemanticSnapshot) -> Option<&ResolvedFunction> {
     let id = scope_id(scope);
     semantic
         .functions

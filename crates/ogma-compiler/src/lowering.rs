@@ -7,11 +7,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ogma_core_ir::{
-    BasicBlock, Binding, BindingKind, BlockParameter, Capture, CaptureMode, Edge, Effects,
-    EffectDefinition, ExceptionFlow, Function, FunctionDocument, Instruction, Representation,
-    ReturnSignature, SemanticType, Source, SourceFile as CoreSourceFile,
-    SourceLanguage, SourcePosition as CoreSourcePosition, Terminator, UnreachableReason,
-    ValueDefinition, verify_document,
+    BasicBlock, Binding, BindingKind, BlockParameter, Capture, CaptureMode, Edge, EffectDefinition,
+    Effects, ExceptionFlow, Function, FunctionDocument, Instruction, Representation,
+    ReturnSignature, SemanticType, Source, SourceFile as CoreSourceFile, SourceLanguage,
+    SourcePosition as CoreSourcePosition, Terminator, UnreachableReason, ValueDefinition,
+    verify_document,
 };
 use ogma_frontend::{
     ResolvedSyntaxFunction, ResolvedSyntaxProgram, SourceFile, SourceSpan, SyntaxAssignmentTarget,
@@ -344,10 +344,7 @@ impl<'a> FunctionCompiler<'a> {
         let effect_enabled = semantic.environment.bindings.iter().any(|binding| {
             matches!(
                 binding.kind,
-                BindingKind::Var
-                    | BindingKind::Let
-                    | BindingKind::Parameter
-                    | BindingKind::Catch
+                BindingKind::Var | BindingKind::Let | BindingKind::Parameter | BindingKind::Catch
             )
         }) || !semantic.captures.is_empty()
             || statements_need_effects(&syntax.body);
@@ -435,7 +432,8 @@ impl<'a> FunctionCompiler<'a> {
             instructions: Vec::new(),
             terminator: Terminator::Unreachable {
                 reason: UnreachableReason::ProvenUnreachable,
-                source: self.generated_source("entry block is finalized during lowering", Vec::new()),
+                source: self
+                    .generated_source("entry block is finalized during lowering", Vec::new()),
             },
         });
         self.current = Some(0);
@@ -461,7 +459,10 @@ impl<'a> FunctionCompiler<'a> {
             instructions: Vec::new(),
             terminator: Terminator::Unreachable {
                 reason: UnreachableReason::ProvenUnreachable,
-                source: self.generated_source("basic block terminator is finalized during lowering", Vec::new()),
+                source: self.generated_source(
+                    "basic block terminator is finalized during lowering",
+                    Vec::new(),
+                ),
             },
         });
         self.blocks.len() - 1
@@ -486,10 +487,13 @@ impl<'a> FunctionCompiler<'a> {
     fn select_block(&mut self, block: usize) {
         self.current = Some(block);
         self.current_effect = if self.effect_enabled {
-            self.blocks[block].parameters.last().and_then(|parameter| match parameter {
-                BlockParameter::Effect(effect) => Some(effect.id.clone()),
-                BlockParameter::Value(_) => None,
-            })
+            self.blocks[block]
+                .parameters
+                .last()
+                .and_then(|parameter| match parameter {
+                    BlockParameter::Effect(effect) => Some(effect.id.clone()),
+                    BlockParameter::Value(_) => None,
+                })
         } else {
             None
         };
@@ -611,7 +615,9 @@ impl<'a> FunctionCompiler<'a> {
         attributes.insert("value".to_owned(), value);
         let source = span
             .map(|span| self.user_source(span, Vec::new()))
-            .unwrap_or_else(|| self.generated_source("materialize JavaScript constant", Vec::new()));
+            .unwrap_or_else(|| {
+                self.generated_source("materialize JavaScript constant", Vec::new())
+            });
         self.emit_instruction(
             "js.constant",
             Vec::new(),
@@ -620,7 +626,14 @@ impl<'a> FunctionCompiler<'a> {
             Effects::default(),
             source,
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.constant_result", span, "js.constant produced no value"))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.constant_result",
+                span,
+                "js.constant produced no value",
+            )
+        })
     }
 
     fn emit_undefined(&mut self, reason: &str) -> Result<ValueRef, LoweringDiagnostic> {
@@ -680,7 +693,14 @@ impl<'a> FunctionCompiler<'a> {
             },
             self.user_source(span, [binding_id.to_owned()]),
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.env_load_result", Some(span), "env.load produced no value"))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.env_load_result",
+                Some(span),
+                "env.load produced no value",
+            )
+        })
     }
 
     fn emit_env_store(
@@ -718,7 +738,9 @@ impl<'a> FunctionCompiler<'a> {
         let source = match (span, generated_reason) {
             (Some(span), _) => self.user_source(span, [binding_id.to_owned()]),
             (None, Some(reason)) => self.generated_source(reason, vec![binding_id.to_owned()]),
-            (None, None) => self.generated_source("initialize lexical binding", vec![binding_id.to_owned()]),
+            (None, None) => {
+                self.generated_source("initialize lexical binding", vec![binding_id.to_owned()])
+            }
         };
         self.emit_instruction(
             "env.store",
@@ -731,7 +753,14 @@ impl<'a> FunctionCompiler<'a> {
             },
             source,
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.env_store_result", span, "env.store produced no assigned value"))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.env_store_result",
+                span,
+                "env.store produced no assigned value",
+            )
+        })
     }
 
     fn emit_to_boolean(
@@ -750,7 +779,14 @@ impl<'a> FunctionCompiler<'a> {
             Effects::default(),
             self.user_source(span, Vec::new()),
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.to_boolean_result", Some(span), "js.to_boolean produced no value"))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.to_boolean_result",
+                Some(span),
+                "js.to_boolean produced no value",
+            )
+        })
     }
 
     fn emit_binary(
@@ -770,7 +806,14 @@ impl<'a> FunctionCompiler<'a> {
             effects,
             self.user_source(span, Vec::new()),
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.binary_result", Some(span), format!("{op} produced no value")))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.binary_result",
+                Some(span),
+                format!("{op} produced no value"),
+            )
+        })
     }
 
     fn emit_member_get(
@@ -791,7 +834,14 @@ impl<'a> FunctionCompiler<'a> {
                     dynamic_effects(),
                     self.user_source(span, Vec::new()),
                 )?
-                .ok_or_else(|| diag(self.syntax, "lowering.property_result", Some(span), "js.get_property produced no value"))
+                .ok_or_else(|| {
+                    diag(
+                        self.syntax,
+                        "lowering.property_result",
+                        Some(span),
+                        "js.get_property produced no value",
+                    )
+                })
             }
             SyntaxMemberKey::Computed(key) => {
                 let key = self.emit_expression(key)?;
@@ -803,7 +853,14 @@ impl<'a> FunctionCompiler<'a> {
                     dynamic_effects(),
                     self.user_source(span, Vec::new()),
                 )?
-                .ok_or_else(|| diag(self.syntax, "lowering.element_result", Some(span), "js.get_element produced no value"))
+                .ok_or_else(|| {
+                    diag(
+                        self.syntax,
+                        "lowering.element_result",
+                        Some(span),
+                        "js.get_element produced no value",
+                    )
+                })
             }
         }
     }
@@ -827,7 +884,14 @@ impl<'a> FunctionCompiler<'a> {
                     dynamic_effects(),
                     self.user_source(span, Vec::new()),
                 )?
-                .ok_or_else(|| diag(self.syntax, "lowering.set_property_result", Some(span), "js.set_property produced no value"))
+                .ok_or_else(|| {
+                    diag(
+                        self.syntax,
+                        "lowering.set_property_result",
+                        Some(span),
+                        "js.set_property produced no value",
+                    )
+                })
             }
             SyntaxMemberKey::Computed(key) => {
                 let key = self.emit_expression(key)?;
@@ -839,7 +903,14 @@ impl<'a> FunctionCompiler<'a> {
                     dynamic_effects(),
                     self.user_source(span, Vec::new()),
                 )?
-                .ok_or_else(|| diag(self.syntax, "lowering.set_element_result", Some(span), "js.set_element produced no value"))
+                .ok_or_else(|| {
+                    diag(
+                        self.syntax,
+                        "lowering.set_element_result",
+                        Some(span),
+                        "js.set_element produced no value",
+                    )
+                })
             }
         }
     }
@@ -887,7 +958,10 @@ impl<'a> FunctionCompiler<'a> {
                         format!("closure captures const binding {:?}, whose SSA value is not materialized as an environment slot", binding.name),
                     );
                 }
-                let Some(source_binding) = self.semantic_module.bindings.iter()
+                let Some(source_binding) = self
+                    .semantic_module
+                    .bindings
+                    .iter()
                     .find(|item| item.ir.id == binding.id)
                 else {
                     return self.fail(
@@ -910,7 +984,10 @@ impl<'a> FunctionCompiler<'a> {
                 return self.fail(
                     "lowering.capture_unavailable",
                     Some(span),
-                    format!("enclosing function cannot provide captured binding {:?}", capture.binding),
+                    format!(
+                        "enclosing function cannot provide captured binding {:?}",
+                        capture.binding
+                    ),
                 );
             };
             let mode = match capture.mode {
@@ -921,7 +998,10 @@ impl<'a> FunctionCompiler<'a> {
             source_bindings.push(capture.binding.clone());
         }
         let mut attributes = BTreeMap::new();
-        attributes.insert("function".to_owned(), JsonValue::String(child_id.to_owned()));
+        attributes.insert(
+            "function".to_owned(),
+            JsonValue::String(child_id.to_owned()),
+        );
         attributes.insert("captures".to_owned(), JsonValue::Array(capture_descriptors));
         self.emit_instruction(
             "closure.create",
@@ -935,18 +1015,36 @@ impl<'a> FunctionCompiler<'a> {
             },
             self.user_source(span, source_bindings),
         )?
-        .ok_or_else(|| diag(self.syntax, "lowering.closure_result", Some(span), "closure.create produced no function value"))
+        .ok_or_else(|| {
+            diag(
+                self.syntax,
+                "lowering.closure_result",
+                Some(span),
+                "closure.create produced no function value",
+            )
+        })
     }
 
-    fn emit_expression(&mut self, expression: &SyntaxExpression) -> Result<ValueRef, LoweringDiagnostic> {
+    fn emit_expression(
+        &mut self,
+        expression: &SyntaxExpression,
+    ) -> Result<ValueRef, LoweringDiagnostic> {
         match expression {
             SyntaxExpression::Literal { value, span } => self.emit_literal(value, *span),
-            SyntaxExpression::Identifier { name, binding, span } => {
+            SyntaxExpression::Identifier {
+                name,
+                binding,
+                span,
+            } => {
                 if let Some(binding) = binding {
                     if let Some(value) = self.const_values.get(binding) {
                         return Ok(value.clone());
                     }
-                    if self.local_bindings.get(binding).is_some_and(|item| item.kind == BindingKind::Const) {
+                    if self
+                        .local_bindings
+                        .get(binding)
+                        .is_some_and(|item| item.kind == BindingKind::Const)
+                    {
                         return self.fail(
                             "lowering.const_tdz",
                             Some(*span),
@@ -961,11 +1059,18 @@ impl<'a> FunctionCompiler<'a> {
                 self.fail(
                     "lowering.unresolved_global",
                     Some(*span),
-                    format!("unresolved global {name:?} has no Core IR host/global binding contract"),
+                    format!(
+                        "unresolved global {name:?} has no Core IR host/global binding contract"
+                    ),
                 )
             }
             SyntaxExpression::Parenthesized { expression, .. } => self.emit_expression(expression),
-            SyntaxExpression::Binary { operator, left, right, span } => {
+            SyntaxExpression::Binary {
+                operator,
+                left,
+                right,
+                span,
+            } => {
                 let left = self.emit_expression(left)?;
                 let right = self.emit_expression(right)?;
                 match operator {
@@ -994,13 +1099,22 @@ impl<'a> FunctionCompiler<'a> {
                     ),
                 }
             }
-            SyntaxExpression::Unary { operator, argument, span } => match operator {
+            SyntaxExpression::Unary {
+                operator,
+                argument,
+                span,
+            } => match operator {
                 SyntaxUnaryOperator::LogicalNot => {
                     let value = self.emit_expression(argument)?;
                     let boolean = self.emit_to_boolean(value, *span)?;
                     let false_value = self.emit_literal(&SyntaxLiteral::Boolean(false), *span)?;
                     self.emit_binary(
-                        "js.strict_equal", boolean, false_value, ValueType::BOOLEAN, Effects::default(), *span,
+                        "js.strict_equal",
+                        boolean,
+                        false_value,
+                        ValueType::BOOLEAN,
+                        Effects::default(),
+                        *span,
                     )
                 }
                 SyntaxUnaryOperator::Typeof => {
@@ -1013,10 +1127,21 @@ impl<'a> FunctionCompiler<'a> {
                         Effects::default(),
                         self.user_source(*span, Vec::new()),
                     )?
-                    .ok_or_else(|| diag(self.syntax, "lowering.typeof_result", Some(*span), "js.typeof produced no value"))
+                    .ok_or_else(|| {
+                        diag(
+                            self.syntax,
+                            "lowering.typeof_result",
+                            Some(*span),
+                            "js.typeof produced no value",
+                        )
+                    })
                 }
                 SyntaxUnaryOperator::Positive => {
-                    if let SyntaxExpression::Literal { value: SyntaxLiteral::Number(number), .. } = argument.as_ref() {
+                    if let SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Number(number),
+                        ..
+                    } = argument.as_ref()
+                    {
                         return self.emit_literal(&SyntaxLiteral::Number(*number), *span);
                     }
                     let value = self.emit_expression(argument)?;
@@ -1028,10 +1153,21 @@ impl<'a> FunctionCompiler<'a> {
                         dynamic_effects(),
                         self.user_source(*span, Vec::new()),
                     )?
-                    .ok_or_else(|| diag(self.syntax, "lowering.to_number_result", Some(*span), "js.to_number produced no value"))
+                    .ok_or_else(|| {
+                        diag(
+                            self.syntax,
+                            "lowering.to_number_result",
+                            Some(*span),
+                            "js.to_number produced no value",
+                        )
+                    })
                 }
                 SyntaxUnaryOperator::Negate => {
-                    if let SyntaxExpression::Literal { value: SyntaxLiteral::Number(number), .. } = argument.as_ref() {
+                    if let SyntaxExpression::Literal {
+                        value: SyntaxLiteral::Number(number),
+                        ..
+                    } = argument.as_ref()
+                    {
                         return self.emit_literal(&SyntaxLiteral::Number(-*number), *span);
                     }
                     self.fail(
@@ -1041,16 +1177,26 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 }
             },
-            SyntaxExpression::Call { callee, arguments, span } => {
+            SyntaxExpression::Call {
+                callee,
+                arguments,
+                span,
+            } => {
                 let (callee_value, this_value) = match callee.as_ref() {
-                    SyntaxExpression::Member { object, key, span: member_span } => {
+                    SyntaxExpression::Member {
+                        object,
+                        key,
+                        span: member_span,
+                    } => {
                         let object_value = self.emit_expression(object)?;
-                        let callee_value = self.emit_member_get(object_value.clone(), key, *member_span)?;
+                        let callee_value =
+                            self.emit_member_get(object_value.clone(), key, *member_span)?;
                         (callee_value, object_value)
                     }
                     _ => {
                         let callee_value = self.emit_expression(callee)?;
-                        let this_value = self.emit_undefined("materialize undefined call receiver")?;
+                        let this_value =
+                            self.emit_undefined("materialize undefined call receiver")?;
                         (callee_value, this_value)
                     }
                 };
@@ -1066,13 +1212,24 @@ impl<'a> FunctionCompiler<'a> {
                     dynamic_effects(),
                     self.user_source(*span, Vec::new()),
                 )?
-                .ok_or_else(|| diag(self.syntax, "lowering.call_result", Some(*span), "js.call produced no value"))
+                .ok_or_else(|| {
+                    diag(
+                        self.syntax,
+                        "lowering.call_result",
+                        Some(*span),
+                        "js.call produced no value",
+                    )
+                })
             }
             SyntaxExpression::Member { object, key, span } => {
                 let object = self.emit_expression(object)?;
                 self.emit_member_get(object, key, *span)
             }
-            SyntaxExpression::Assign { target, value, span } => {
+            SyntaxExpression::Assign {
+                target,
+                value,
+                span,
+            } => {
                 let value = self.emit_expression(value)?;
                 self.emit_assignment_target(target, value, *span)
             }
@@ -1090,19 +1247,43 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_literal(&mut self, literal: &SyntaxLiteral, span: SourceSpan) -> Result<ValueRef, LoweringDiagnostic> {
+    fn emit_literal(
+        &mut self,
+        literal: &SyntaxLiteral,
+        span: SourceSpan,
+    ) -> Result<ValueRef, LoweringDiagnostic> {
         match literal {
             SyntaxLiteral::Null => self.emit_constant(
-                "null", JsonValue::Null,
-                ValueType { semantic: SemanticType::Null, representation: Representation::Boxed },
+                "null",
+                JsonValue::Null,
+                ValueType {
+                    semantic: SemanticType::Null,
+                    representation: Representation::Boxed,
+                },
                 Some(span),
             ),
-            SyntaxLiteral::Boolean(value) => self.emit_constant("boolean", json!(value), ValueType::BOOLEAN, Some(span)),
-            SyntaxLiteral::Number(value) => self.emit_constant("number", number_literal_json(*value), ValueType::NUMBER, Some(span)),
-            SyntaxLiteral::String(value) => self.emit_constant("string", JsonValue::String(value.clone()), ValueType::STRING, Some(span)),
+            SyntaxLiteral::Boolean(value) => {
+                self.emit_constant("boolean", json!(value), ValueType::BOOLEAN, Some(span))
+            }
+            SyntaxLiteral::Number(value) => self.emit_constant(
+                "number",
+                number_literal_json(*value),
+                ValueType::NUMBER,
+                Some(span),
+            ),
+            SyntaxLiteral::String(value) => self.emit_constant(
+                "string",
+                JsonValue::String(value.clone()),
+                ValueType::STRING,
+                Some(span),
+            ),
             SyntaxLiteral::Bigint(value) => self.emit_constant(
-                "bigint", JsonValue::String(value.clone()),
-                ValueType { semantic: SemanticType::Bigint, representation: Representation::BigintRef },
+                "bigint",
+                JsonValue::String(value.clone()),
+                ValueType {
+                    semantic: SemanticType::Bigint,
+                    representation: Representation::BigintRef,
+                },
                 Some(span),
             ),
         }
@@ -1115,10 +1296,15 @@ impl<'a> FunctionCompiler<'a> {
         span: SourceSpan,
     ) -> Result<ValueRef, LoweringDiagnostic> {
         match target {
-            SyntaxAssignmentTarget::Identifier { binding: Some(binding), .. } => {
-                self.emit_env_store(binding, value, Some(span), None)
-            }
-            SyntaxAssignmentTarget::Identifier { name, binding: None, .. } => self.fail(
+            SyntaxAssignmentTarget::Identifier {
+                binding: Some(binding),
+                ..
+            } => self.emit_env_store(binding, value, Some(span), None),
+            SyntaxAssignmentTarget::Identifier {
+                name,
+                binding: None,
+                ..
+            } => self.fail(
                 "lowering.unresolved_assignment_target",
                 Some(span),
                 format!("assignment to unresolved global {name:?} is unsupported"),
@@ -1135,7 +1321,10 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_sequence(&mut self, statements: &[SyntaxStatement]) -> Result<(), LoweringDiagnostic> {
+    fn compile_sequence(
+        &mut self,
+        statements: &[SyntaxStatement],
+    ) -> Result<(), LoweringDiagnostic> {
         self.emit_hoisted_functions(statements)?;
         for statement in statements {
             if self.current.is_none() {
@@ -1146,9 +1335,18 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn emit_hoisted_functions(&mut self, statements: &[SyntaxStatement]) -> Result<(), LoweringDiagnostic> {
+    fn emit_hoisted_functions(
+        &mut self,
+        statements: &[SyntaxStatement],
+    ) -> Result<(), LoweringDiagnostic> {
         for statement in statements {
-            if let SyntaxStatement::FunctionDeclaration { function, binding: Some(binding), span, .. } = statement {
+            if let SyntaxStatement::FunctionDeclaration {
+                function,
+                binding: Some(binding),
+                span,
+                ..
+            } = statement
+            {
                 if self.hoisted_functions.insert(binding.clone()) {
                     let closure = self.emit_closure(function, *span)?;
                     self.emit_env_store(binding, closure, Some(*span), None)?;
@@ -1161,7 +1359,11 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_statement(&mut self, statement: &SyntaxStatement) -> Result<(), LoweringDiagnostic> {
         match statement {
             SyntaxStatement::Block { body, .. } => self.compile_sequence(body),
-            SyntaxStatement::Variable { kind, declarations, span } => {
+            SyntaxStatement::Variable {
+                kind,
+                declarations,
+                span,
+            } => {
                 if *kind == SyntaxVariableKind::Unsupported {
                     return self.fail(
                         "lowering.unsupported_declaration_kind",
@@ -1181,7 +1383,12 @@ impl<'a> FunctionCompiler<'a> {
                         SyntaxVariableKind::Var => {
                             if let Some(initializer) = &declaration.initializer {
                                 let value = self.emit_expression(initializer)?;
-                                self.emit_env_store(binding_id, value, Some(declaration.span), None)?;
+                                self.emit_env_store(
+                                    binding_id,
+                                    value,
+                                    Some(declaration.span),
+                                    None,
+                                )?;
                             }
                         }
                         SyntaxVariableKind::Let => {
@@ -1208,7 +1415,10 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 Ok(())
             }
-            SyntaxStatement::FunctionDeclaration { binding: Some(binding), .. } => {
+            SyntaxStatement::FunctionDeclaration {
+                binding: Some(binding),
+                ..
+            } => {
                 if self.hoisted_functions.contains(binding) {
                     Ok(())
                 } else {
@@ -1219,7 +1429,11 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 }
             }
-            SyntaxStatement::FunctionDeclaration { binding: None, span, .. } => self.fail(
+            SyntaxStatement::FunctionDeclaration {
+                binding: None,
+                span,
+                ..
+            } => self.fail(
                 "lowering.function_declaration_binding_missing",
                 Some(*span),
                 "function declaration has no resolved lexical binding",
@@ -1228,16 +1442,36 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_expression(expression)?;
                 Ok(())
             }
-            SyntaxStatement::If { test, consequent, alternate, span } => {
-                self.compile_if(test, consequent, alternate.as_deref(), *span)
-            }
+            SyntaxStatement::If {
+                test,
+                consequent,
+                alternate,
+                span,
+            } => self.compile_if(test, consequent, alternate.as_deref(), *span),
             SyntaxStatement::While { test, body, span } => self.compile_while(test, body, *span),
-            SyntaxStatement::For { initializer, test, update, body, span, .. } => {
-                self.compile_for(initializer.as_ref(), test.as_ref(), update.as_ref(), body, *span)
-            }
+            SyntaxStatement::For {
+                initializer,
+                test,
+                update,
+                body,
+                span,
+                ..
+            } => self.compile_for(
+                initializer.as_ref(),
+                test.as_ref(),
+                update.as_ref(),
+                body,
+                *span,
+            ),
             SyntaxStatement::Return { value, span } => {
-                let value = value.as_ref().map(|value| self.emit_expression(value)).transpose()?;
-                self.terminate_return(value.as_ref().map(|value| value.id.clone()), self.user_source(*span, Vec::new()))
+                let value = value
+                    .as_ref()
+                    .map(|value| self.emit_expression(value))
+                    .transpose()?;
+                self.terminate_return(
+                    value.as_ref().map(|value| value.id.clone()),
+                    self.user_source(*span, Vec::new()),
+                )
             }
             SyntaxStatement::Throw { value, span } => {
                 let value = self.emit_expression(value)?;
@@ -1246,11 +1480,18 @@ impl<'a> FunctionCompiler<'a> {
                     vec![value.id],
                     None,
                     BTreeMap::new(),
-                    Effects { may_throw: true, ..Effects::default() },
+                    Effects {
+                        may_throw: true,
+                        ..Effects::default()
+                    },
                     self.user_source(*span, Vec::new()),
                 )?;
                 let Some(block) = self.current else {
-                    return self.fail("lowering.throw_block", Some(*span), "throw instruction has no current block");
+                    return self.fail(
+                        "lowering.throw_block",
+                        Some(*span),
+                        "throw instruction has no current block",
+                    );
                 };
                 self.blocks[block].terminator = Terminator::Unreachable {
                     reason: UnreachableReason::AfterThrow,
@@ -1279,15 +1520,25 @@ impl<'a> FunctionCompiler<'a> {
         let condition = self.emit_expression(test)?;
         let condition = self.emit_to_boolean(condition, span)?;
         let Some(predecessor) = self.cursor() else {
-            return self.fail("lowering.if_without_block", Some(span), "if statement has no active predecessor");
+            return self.fail(
+                "lowering.if_without_block",
+                Some(span),
+                "if statement has no active predecessor",
+            );
         };
         let then_block = self.create_block();
         let else_block = self.create_block();
         let arguments = predecessor.effect.clone().into_iter().collect();
         self.blocks[predecessor.block].terminator = Terminator::Branch {
             condition: condition.id,
-            then_edge: Edge { target: self.block_id(then_block), arguments: arguments.clone() },
-            else_edge: Edge { target: self.block_id(else_block), arguments },
+            then_edge: Edge {
+                target: self.block_id(then_block),
+                arguments: arguments.clone(),
+            },
+            else_edge: Edge {
+                target: self.block_id(else_block),
+                arguments,
+            },
             source: self.user_source(span, Vec::new()),
         };
 
@@ -1327,7 +1578,11 @@ impl<'a> FunctionCompiler<'a> {
         span: SourceSpan,
     ) -> Result<(), LoweringDiagnostic> {
         let Some(preheader) = self.cursor() else {
-            return self.fail("lowering.while_without_block", Some(span), "while loop has no active predecessor");
+            return self.fail(
+                "lowering.while_without_block",
+                Some(span),
+                "while loop has no active predecessor",
+            );
         };
         let header = self.create_block();
         let body_block = self.create_block();
@@ -1340,13 +1595,23 @@ impl<'a> FunctionCompiler<'a> {
         let condition = self.emit_expression(test)?;
         let condition = self.emit_to_boolean(condition, span)?;
         let Some(header_cursor) = self.cursor() else {
-            return self.fail("lowering.while_header", Some(span), "while header terminated during test evaluation");
+            return self.fail(
+                "lowering.while_header",
+                Some(span),
+                "while header terminated during test evaluation",
+            );
         };
         let effect_args = header_cursor.effect.into_iter().collect();
         self.blocks[header_cursor.block].terminator = Terminator::Branch {
             condition: condition.id,
-            then_edge: Edge { target: self.block_id(body_block), arguments: effect_args.clone() },
-            else_edge: Edge { target: self.block_id(exit_block), arguments: effect_args },
+            then_edge: Edge {
+                target: self.block_id(body_block),
+                arguments: effect_args.clone(),
+            },
+            else_edge: Edge {
+                target: self.block_id(exit_block),
+                arguments: effect_args,
+            },
             source: self.user_source(span, Vec::new()),
         };
 
@@ -1370,7 +1635,11 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<(), LoweringDiagnostic> {
         if let Some(initializer) = initializer {
             match initializer {
-                SyntaxForInitializer::Variable { kind, declarations, span } => {
+                SyntaxForInitializer::Variable {
+                    kind,
+                    declarations,
+                    span,
+                } => {
                     self.compile_statement(&SyntaxStatement::Variable {
                         kind: *kind,
                         declarations: declarations.clone(),
@@ -1383,7 +1652,11 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let Some(preheader) = self.cursor() else {
-            return self.fail("lowering.for_without_block", Some(span), "for loop has no active predecessor");
+            return self.fail(
+                "lowering.for_without_block",
+                Some(span),
+                "for loop has no active predecessor",
+            );
         };
         let header = self.create_block();
         let body_block = self.create_block();
@@ -1400,13 +1673,23 @@ impl<'a> FunctionCompiler<'a> {
             self.emit_literal(&SyntaxLiteral::Boolean(true), span)?
         };
         let Some(header_cursor) = self.cursor() else {
-            return self.fail("lowering.for_header", Some(span), "for header terminated during condition evaluation");
+            return self.fail(
+                "lowering.for_header",
+                Some(span),
+                "for header terminated during condition evaluation",
+            );
         };
         let effect_args = header_cursor.effect.into_iter().collect();
         self.blocks[header_cursor.block].terminator = Terminator::Branch {
             condition: condition.id,
-            then_edge: Edge { target: self.block_id(body_block), arguments: effect_args.clone() },
-            else_edge: Edge { target: self.block_id(exit_block), arguments: effect_args },
+            then_edge: Edge {
+                target: self.block_id(body_block),
+                arguments: effect_args.clone(),
+            },
+            else_edge: Edge {
+                target: self.block_id(exit_block),
+                arguments: effect_args,
+            },
             source: self.user_source(span, Vec::new()),
         };
 
@@ -1429,7 +1712,11 @@ impl<'a> FunctionCompiler<'a> {
 
     fn terminate_jump(&mut self, target: &str, span: SourceSpan) -> Result<(), LoweringDiagnostic> {
         let Some(block) = self.current else {
-            return self.fail("lowering.jump_without_block", Some(span), "jump has no active source block");
+            return self.fail(
+                "lowering.jump_without_block",
+                Some(span),
+                "jump has no active source block",
+            );
         };
         self.blocks[block].terminator = Terminator::Jump {
             target: target.to_owned(),
@@ -1441,9 +1728,17 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn terminate_return(&mut self, value: Option<String>, source: Source) -> Result<(), LoweringDiagnostic> {
+    fn terminate_return(
+        &mut self,
+        value: Option<String>,
+        source: Source,
+    ) -> Result<(), LoweringDiagnostic> {
         let Some(block) = self.current else {
-            return self.fail("lowering.return_without_block", None, "return has no active source block");
+            return self.fail(
+                "lowering.return_without_block",
+                None,
+                "return has no active source block",
+            );
         };
         self.blocks[block].terminator = Terminator::Return { value, source };
         self.current = None;
@@ -1457,7 +1752,10 @@ impl<'a> FunctionCompiler<'a> {
                 &parameter.binding,
                 ValueRef {
                     id: parameter.id,
-                    ty: ValueType { semantic: parameter.semantic_type, representation: parameter.representation },
+                    ty: ValueType {
+                        semantic: parameter.semantic_type,
+                        representation: parameter.representation,
+                    },
                 },
                 None,
                 Some("initialize function parameter environment binding"),
@@ -1467,7 +1765,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn emit_var_initializers(&mut self) -> Result<(), LoweringDiagnostic> {
-        let var_ids: Vec<_> = self.local_bindings.values()
+        let var_ids: Vec<_> = self
+            .local_bindings
+            .values()
             .filter(|binding| binding.kind == BindingKind::Var)
             .map(|binding| binding.id.clone())
             .collect();
@@ -1507,7 +1807,10 @@ impl<'a> FunctionCompiler<'a> {
                 "function has a value-returning path and a reachable fallthrough path",
             );
         }
-        Ok(Some(ReturnSignature { semantic_type: ty.semantic, representation: ty.representation }))
+        Ok(Some(ReturnSignature {
+            semantic_type: ty.semantic,
+            representation: ty.representation,
+        }))
     }
 
     fn collect_return_types(
@@ -1518,10 +1821,19 @@ impl<'a> FunctionCompiler<'a> {
         for statement in statements {
             match statement {
                 SyntaxStatement::Return { value, .. } => {
-                    output.push(value.as_ref().map(|value| self.infer_expression_type(value)).transpose()?);
+                    output.push(
+                        value
+                            .as_ref()
+                            .map(|value| self.infer_expression_type(value))
+                            .transpose()?,
+                    );
                 }
                 SyntaxStatement::Block { body, .. } => self.collect_return_types(body, output)?,
-                SyntaxStatement::If { consequent, alternate, .. } => {
+                SyntaxStatement::If {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
                     self.collect_return_types(std::slice::from_ref(consequent), output)?;
                     if let Some(alternate) = alternate {
                         self.collect_return_types(std::slice::from_ref(alternate), output)?;
@@ -1536,52 +1848,113 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn infer_expression_type(&self, expression: &SyntaxExpression) -> Result<ValueType, LoweringDiagnostic> {
+    fn infer_expression_type(
+        &self,
+        expression: &SyntaxExpression,
+    ) -> Result<ValueType, LoweringDiagnostic> {
         match expression {
             SyntaxExpression::Literal { value, .. } => Ok(literal_type(value)),
-            SyntaxExpression::Identifier { name, binding, span } => {
+            SyntaxExpression::Identifier {
+                name,
+                binding,
+                span,
+            } => {
                 let Some(binding) = binding else {
                     if name == "undefined" {
-                        return Ok(ValueType { semantic: SemanticType::Undefined, representation: Representation::Boxed });
+                        return Ok(ValueType {
+                            semantic: SemanticType::Undefined,
+                            representation: Representation::Boxed,
+                        });
                     }
-                    return self.fail("lowering.unresolved_global", Some(*span), format!("unresolved global {name:?} has no Core IR contract"));
+                    return self.fail(
+                        "lowering.unresolved_global",
+                        Some(*span),
+                        format!("unresolved global {name:?} has no Core IR contract"),
+                    );
                 };
                 if let Some(local) = self.local_bindings.get(binding) {
                     if local.kind == BindingKind::Const {
-                        let initializer = self.const_initializers.get(binding).ok_or_else(|| {
-                            diag(self.syntax, "lowering.const_initializer_missing", Some(*span), "const initializer missing")
-                        })?;
-                        return self.infer_const_type(binding, initializer, &mut HashSet::new(), *span);
+                        let initializer =
+                            self.const_initializers.get(binding).ok_or_else(|| {
+                                diag(
+                                    self.syntax,
+                                    "lowering.const_initializer_missing",
+                                    Some(*span),
+                                    "const initializer missing",
+                                )
+                            })?;
+                        return self.infer_const_type(
+                            binding,
+                            initializer,
+                            &mut HashSet::new(),
+                            *span,
+                        );
                     }
                     return Ok(ValueType::DYNAMIC);
                 }
                 if self.captures_by_binding.contains_key(binding) {
                     return Ok(ValueType::DYNAMIC);
                 }
-                self.fail("lowering.binding_not_in_environment", Some(*span), format!("unknown binding {binding:?}"))
+                self.fail(
+                    "lowering.binding_not_in_environment",
+                    Some(*span),
+                    format!("unknown binding {binding:?}"),
+                )
             }
-            SyntaxExpression::Parenthesized { expression, .. } => self.infer_expression_type(expression),
+            SyntaxExpression::Parenthesized { expression, .. } => {
+                self.infer_expression_type(expression)
+            }
             SyntaxExpression::Binary { operator, .. } => match operator {
                 SyntaxBinaryOperator::Add => Ok(ValueType::DYNAMIC),
-                SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual | SyntaxBinaryOperator::LessThan => Ok(ValueType::BOOLEAN),
-                SyntaxBinaryOperator::GreaterThan => self.fail("lowering.greater_than_not_in_core_ir", None, "greater-than requires its own Core IR operation"),
+                SyntaxBinaryOperator::StrictEqual
+                | SyntaxBinaryOperator::StrictNotEqual
+                | SyntaxBinaryOperator::LessThan => Ok(ValueType::BOOLEAN),
+                SyntaxBinaryOperator::GreaterThan => self.fail(
+                    "lowering.greater_than_not_in_core_ir",
+                    None,
+                    "greater-than requires its own Core IR operation",
+                ),
             },
-            SyntaxExpression::Unary { operator, argument, span } => match operator {
+            SyntaxExpression::Unary {
+                operator,
+                argument,
+                span,
+            } => match operator {
                 SyntaxUnaryOperator::LogicalNot => Ok(ValueType::BOOLEAN),
                 SyntaxUnaryOperator::Typeof => Ok(ValueType::STRING),
                 SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate => {
-                    if matches!(argument.as_ref(), SyntaxExpression::Literal { value: SyntaxLiteral::Number(_), .. }) {
+                    if matches!(
+                        argument.as_ref(),
+                        SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(_),
+                            ..
+                        }
+                    ) {
                         Ok(ValueType::NUMBER)
                     } else {
-                        self.fail("lowering.dynamic_unary_numeric", Some(*span), "dynamic unary numeric operation is unsupported")
+                        self.fail(
+                            "lowering.dynamic_unary_numeric",
+                            Some(*span),
+                            "dynamic unary numeric operation is unsupported",
+                        )
                     }
                 }
             },
-            SyntaxExpression::Call { .. } | SyntaxExpression::Member { .. } => Ok(ValueType::DYNAMIC),
+            SyntaxExpression::Call { .. } | SyntaxExpression::Member { .. } => {
+                Ok(ValueType::DYNAMIC)
+            }
             SyntaxExpression::Assign { value, .. } => self.infer_expression_type(value),
-            SyntaxExpression::Update { span, .. } => self.fail("lowering.update_expression_unsupported", Some(*span), "update expression unsupported"),
+            SyntaxExpression::Update { span, .. } => self.fail(
+                "lowering.update_expression_unsupported",
+                Some(*span),
+                "update expression unsupported",
+            ),
             SyntaxExpression::Function { .. } => Ok(ValueType::FUNCTION),
-            SyntaxExpression::Unsupported { syntax, span } => self.fail("lowering.unsupported_expression", Some(*span), format!("syntax {syntax:?} unsupported")),
+            SyntaxExpression::Unsupported { syntax, span } => self.fail(
+                "lowering.unsupported_expression",
+                Some(*span),
+                format!("syntax {syntax:?} unsupported"),
+            ),
         }
     }
 
@@ -1593,14 +1966,28 @@ impl<'a> FunctionCompiler<'a> {
         span: SourceSpan,
     ) -> Result<ValueType, LoweringDiagnostic> {
         if !visiting.insert(binding.to_owned()) {
-            return self.fail("lowering.const_initializer_cycle", Some(span), format!("cyclic const initializer for {binding:?}"));
+            return self.fail(
+                "lowering.const_initializer_cycle",
+                Some(span),
+                format!("cyclic const initializer for {binding:?}"),
+            );
         }
         let result = match expression {
-            SyntaxExpression::Identifier { binding: Some(other), .. }
-                if self.local_bindings.get(other).is_some_and(|item| item.kind == BindingKind::Const) =>
+            SyntaxExpression::Identifier {
+                binding: Some(other),
+                ..
+            } if self
+                .local_bindings
+                .get(other)
+                .is_some_and(|item| item.kind == BindingKind::Const) =>
             {
                 let initializer = self.const_initializers.get(other).ok_or_else(|| {
-                    diag(self.syntax, "lowering.const_initializer_missing", Some(span), "const initializer missing")
+                    diag(
+                        self.syntax,
+                        "lowering.const_initializer_missing",
+                        Some(span),
+                        "const initializer missing",
+                    )
                 })?;
                 self.infer_const_type(other, initializer, visiting, span)
             }
@@ -1625,11 +2012,17 @@ fn dynamic_effects() -> Effects {
 
 fn literal_type(literal: &SyntaxLiteral) -> ValueType {
     match literal {
-        SyntaxLiteral::Null => ValueType { semantic: SemanticType::Null, representation: Representation::Boxed },
+        SyntaxLiteral::Null => ValueType {
+            semantic: SemanticType::Null,
+            representation: Representation::Boxed,
+        },
         SyntaxLiteral::Boolean(_) => ValueType::BOOLEAN,
         SyntaxLiteral::Number(_) => ValueType::NUMBER,
         SyntaxLiteral::String(_) => ValueType::STRING,
-        SyntaxLiteral::Bigint(_) => ValueType { semantic: SemanticType::Bigint, representation: Representation::BigintRef },
+        SyntaxLiteral::Bigint(_) => ValueType {
+            semantic: SemanticType::Bigint,
+            representation: Representation::BigintRef,
+        },
     }
 }
 
@@ -1651,15 +2044,25 @@ fn collect_const_initializers(statements: &[SyntaxStatement]) -> HashMap<String,
     fn visit(statements: &[SyntaxStatement], output: &mut HashMap<String, SyntaxExpression>) {
         for statement in statements {
             match statement {
-                SyntaxStatement::Variable { kind: SyntaxVariableKind::Const, declarations, .. } => {
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Const,
+                    declarations,
+                    ..
+                } => {
                     for declaration in declarations {
-                        if let (Some(binding), Some(initializer)) = (&declaration.binding, &declaration.initializer) {
+                        if let (Some(binding), Some(initializer)) =
+                            (&declaration.binding, &declaration.initializer)
+                        {
                             output.insert(binding.clone(), initializer.clone());
                         }
                     }
                 }
                 SyntaxStatement::Block { body, .. } => visit(body, output),
-                SyntaxStatement::If { consequent, alternate, .. } => {
+                SyntaxStatement::If {
+                    consequent,
+                    alternate,
+                    ..
+                } => {
                     visit(std::slice::from_ref(consequent), output);
                     if let Some(alternate) = alternate {
                         visit(std::slice::from_ref(alternate), output);
@@ -1684,28 +2087,64 @@ fn statements_need_effects(statements: &[SyntaxStatement]) -> bool {
 fn statement_needs_effects(statement: &SyntaxStatement) -> bool {
     match statement {
         SyntaxStatement::Block { body, .. } => statements_need_effects(body),
-        SyntaxStatement::Variable { kind, declarations, .. } => {
-            *kind != SyntaxVariableKind::Const || declarations.iter().any(|item| item.initializer.as_ref().is_some_and(expression_needs_effects))
+        SyntaxStatement::Variable {
+            kind, declarations, ..
+        } => {
+            *kind != SyntaxVariableKind::Const
+                || declarations.iter().any(|item| {
+                    item.initializer
+                        .as_ref()
+                        .is_some_and(expression_needs_effects)
+                })
         }
         SyntaxStatement::FunctionDeclaration { .. } => true,
         SyntaxStatement::Expression { expression, .. } => expression_needs_effects(expression),
-        SyntaxStatement::If { test, consequent, alternate, .. } => {
+        SyntaxStatement::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
             expression_needs_effects(test)
                 || statement_needs_effects(consequent)
-                || alternate.as_ref().is_some_and(|item| statement_needs_effects(item))
+                || alternate
+                    .as_ref()
+                    .is_some_and(|item| statement_needs_effects(item))
         }
-        SyntaxStatement::While { test, body, .. } => expression_needs_effects(test) || statement_needs_effects(body),
-        SyntaxStatement::For { initializer, test, update, body, .. } => {
-            initializer.as_ref().is_some_and(|initializer| match initializer {
-                SyntaxForInitializer::Variable { kind, declarations, .. } => {
-                    *kind != SyntaxVariableKind::Const || declarations.iter().any(|item| item.initializer.as_ref().is_some_and(expression_needs_effects))
-                }
-                SyntaxForInitializer::Expression(expression) => expression_needs_effects(expression),
-            }) || test.as_ref().is_some_and(expression_needs_effects)
+        SyntaxStatement::While { test, body, .. } => {
+            expression_needs_effects(test) || statement_needs_effects(body)
+        }
+        SyntaxStatement::For {
+            initializer,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            initializer
+                .as_ref()
+                .is_some_and(|initializer| match initializer {
+                    SyntaxForInitializer::Variable {
+                        kind, declarations, ..
+                    } => {
+                        *kind != SyntaxVariableKind::Const
+                            || declarations.iter().any(|item| {
+                                item.initializer
+                                    .as_ref()
+                                    .is_some_and(expression_needs_effects)
+                            })
+                    }
+                    SyntaxForInitializer::Expression(expression) => {
+                        expression_needs_effects(expression)
+                    }
+                })
+                || test.as_ref().is_some_and(expression_needs_effects)
                 || update.as_ref().is_some_and(expression_needs_effects)
                 || statement_needs_effects(body)
         }
-        SyntaxStatement::Return { value, .. } => value.as_ref().is_some_and(expression_needs_effects),
+        SyntaxStatement::Return { value, .. } => {
+            value.as_ref().is_some_and(expression_needs_effects)
+        }
         SyntaxStatement::Throw { .. } => true,
         SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => false,
     }
@@ -1714,16 +2153,33 @@ fn statement_needs_effects(statement: &SyntaxStatement) -> bool {
 fn expression_needs_effects(expression: &SyntaxExpression) -> bool {
     match expression {
         SyntaxExpression::Literal { .. } => false,
-        SyntaxExpression::Identifier { binding: None, name, .. } => name != "undefined",
-        SyntaxExpression::Identifier { binding: Some(_), .. } => true,
-        SyntaxExpression::Binary { operator, left, right, .. } => {
-            !matches!(operator, SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual)
-                || expression_needs_effects(left)
+        SyntaxExpression::Identifier {
+            binding: None,
+            name,
+            ..
+        } => name != "undefined",
+        SyntaxExpression::Identifier {
+            binding: Some(_), ..
+        } => true,
+        SyntaxExpression::Binary {
+            operator,
+            left,
+            right,
+            ..
+        } => {
+            !matches!(
+                operator,
+                SyntaxBinaryOperator::StrictEqual | SyntaxBinaryOperator::StrictNotEqual
+            ) || expression_needs_effects(left)
                 || expression_needs_effects(right)
         }
-        SyntaxExpression::Unary { operator, argument, .. } => {
-            matches!(operator, SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate)
-                && expression_needs_effects(argument)
+        SyntaxExpression::Unary {
+            operator, argument, ..
+        } => {
+            matches!(
+                operator,
+                SyntaxUnaryOperator::Positive | SyntaxUnaryOperator::Negate
+            ) && expression_needs_effects(argument)
         }
         SyntaxExpression::Call { .. }
         | SyntaxExpression::Member { .. }
@@ -1750,9 +2206,15 @@ fn statement_can_fallthrough(statement: &SyntaxStatement) -> bool {
     match statement {
         SyntaxStatement::Return { .. } | SyntaxStatement::Throw { .. } => false,
         SyntaxStatement::Block { body, .. } => sequence_can_fallthrough(body),
-        SyntaxStatement::If { consequent, alternate, .. } => {
+        SyntaxStatement::If {
+            consequent,
+            alternate,
+            ..
+        } => {
             statement_can_fallthrough(consequent)
-                || alternate.as_ref().is_none_or(|item| statement_can_fallthrough(item))
+                || alternate
+                    .as_ref()
+                    .is_none_or(|item| statement_can_fallthrough(item))
         }
         SyntaxStatement::While { .. } | SyntaxStatement::For { .. } => true,
         _ => true,
