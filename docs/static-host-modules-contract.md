@@ -32,6 +32,8 @@ The module descriptor is Rust-side metadata. It does not append fields to OGM-19
 
 HostModuleRegistry::generate_typescript_declarations generates an ambient declaration from the same registered export records that own the function slots. The generator orders exports by name, uses stable formatting, and includes module version plus capability/feature annotations where relevant.
 
+This M0 proof covers the **Rust exports → TypeScript declarations** direction only. It is separate from the planned M2 **portable `.ogmb` → Rust embedding module** generator (OGM-106), which emits Rust source that embeds bytecode for a Rust consumer; see [Rust Embedding Code Generation Contract](rust-embedding-codegen-contract.md).
+
 Current v1 mappings are intentionally narrow:
 
 | OGM host signature | TypeScript declaration |
