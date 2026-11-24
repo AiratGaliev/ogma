@@ -444,9 +444,17 @@ fn expression(
             value: SyntaxLiteral::Number(literal.value),
             span,
         },
-        E::StringLiteral(literal) => SyntaxExpression::Literal {
-            value: SyntaxLiteral::String(literal.value.to_string()),
-            span,
+        E::StringLiteral(literal) => {
+            let Some(value) = literal.value.as_str() else {
+                return SyntaxExpression::Unsupported {
+                    syntax: "string_literal_with_lone_surrogate".to_owned(),
+                    span,
+                };
+            };
+            SyntaxExpression::Literal {
+                value: SyntaxLiteral::String(value.to_owned()),
+                span,
+            }
         },
         E::BigIntLiteral(literal) => SyntaxExpression::Literal {
             value: SyntaxLiteral::Bigint(literal.value.to_string()),
