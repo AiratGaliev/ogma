@@ -1799,7 +1799,9 @@ mod tests {
         let payload_bytes = 8;
         let quota = slot_bytes + cell_bytes + payload_bytes - 1;
         let mut runtime_heap = heap(quota, quota);
-        let _unrooted_object = runtime_heap.allocate_object().unwrap();
+        // An empty string consumes the compact cell header but no payload.
+        // It provides quota pressure without assuming an object has no payload.
+        let _unrooted_string = runtime_heap.allocate_string_utf16(&[]).unwrap();
         assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + cell_bytes);
 
         assert!(matches!(

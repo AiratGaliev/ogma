@@ -2225,6 +2225,227 @@ mod tests {
     }
 
     #[test]
+    fn returned_closure_keeps_captures_alive_after_outer_environment_collection() {
+        let mut heap = heap();
+        let outer = heap
+            .create_environment(
+                None,
+                &[
+                    BindingDefinition::mutable(BindingId(1), Value::number(1.0)),
+                    BindingDefinition::immutable(BindingId(2), Value::number(5.0)),
+                ],
+            )
+            .unwrap();
+        let outer_roots = heap.open_scope().unwrap();
+        heap.scope_root_environment(outer_roots, outer).unwrap();
+        let definition = FunctionDefinition {
+            id: FunctionId(10),
+            parameters: vec![BindingDefinition::mutable(
+                BindingId(3),
+                Value::undefined(),
+            )],
+            locals: Vec::new(),
+            captures: vec![
+                CaptureDefinition {
+                    source: BindingId(1),
+                    alias: BindingId(11),
+                    mode: CaptureMode::Cell,
+                },
+                CaptureDefinition {
+                    source: BindingId(2),
+                    alias: BindingId(12),
+                    mode: CaptureMode::Value,
+                },
+            ],
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let closure = heap
+            .create_closure(&definition, outer, Value::undefined())
+            .unwrap();
+
+        // Model returning the closure: the enclosing function's environment
+        // ceases to be rooted, while the returned function remains reachable.
+        heap.close_scope(outer_roots).unwrap();
+        let closure_roots = heap.open_scope().unwrap();
+        heap.scope_root(closure_roots, closure).unwrap();
+        let collection = heap.collect().unwrap();
+        assert!(collection.reclaimed_objects >= 1);
+
+        let first_call = heap
+            .enter_function_call(
+                closure,
+                &definition,
+                Value::undefined(),
+                &[Value::number(9.0)],
+                Value::undefined(),
+            )
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(first_call.environment(), BindingId(3))
+                .unwrap()
+                .as_number(),
+            Some(9.0)
+        );
+        assert_eq!(
+            heap.load_binding(first_call.environment(), BindingId(11))
+                .unwrap()
+                .as_number(),
+            Some(1.0)
+        );
+        heap.store_binding(
+            first_call.environment(),
+            BindingId(11),
+            Value::number(2.0),
+        )
+        .unwrap();
+        heap.leave_function_call(first_call).unwrap();
+        heap.collect().unwrap();
+
+        // A later invocation observes the same captured mutable cell even
+        // after the previous activation and original environment were swept.
+        let second_call = heap
+            .enter_function_call(
+                closure,
+                &definition,
+                Value::undefined(),
+                &[Value::number(10.0)],
+                Value::undefined(),
+            )
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(second_call.environment(), BindingId(3))
+                .unwrap()
+                .as_number(),
+            Some(10.0)
+        );
+        assert_eq!(
+            heap.load_binding(second_call.environment(), BindingId(11))
+                .unwrap()
+                .as_number(),
+            Some(2.0)
+        );
+        assert_eq!(
+            heap.load_binding(second_call.environment(), BindingId(12))
+                .unwrap()
+                .as_number(),
+            Some(5.0)
+        );
+        heap.leave_function_call(second_call).unwrap();
+        heap.close_scope(closure_roots).unwrap();
+    }
+
+    #[test]
+    fn nested_function_activations_keep_parent_frames_rooted_during_collection() {
+        let mut heap = heap();
+        let outer_environment = heap.create_environment(None, &[]).unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root_environment(roots, outer_environment).unwrap();
+
+        let outer_definition = FunctionDefinition {
+            id: FunctionId(20),
+            parameters: vec![BindingDefinition::mutable(
+                BindingId(1),
+                Value::undefined(),
+            )],
+            locals: Vec::new(),
+            captures: Vec::new(),
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let outer_function = heap
+            .create_closure(&outer_definition, outer_environment, Value::undefined())
+            .unwrap();
+        heap.scope_root(roots, outer_function).unwrap();
+        let outer_call = heap
+            .enter_function_call(
+                outer_function,
+                &outer_definition,
+                Value::undefined(),
+                &[Value::number(42.0)],
+                Value::undefined(),
+            )
+            .unwrap();
+
+        let inner_definition = FunctionDefinition {
+            id: FunctionId(21),
+            parameters: vec![BindingDefinition::mutable(
+                BindingId(2),
+                Value::undefined(),
+            )],
+            locals: Vec::new(),
+            captures: vec![CaptureDefinition {
+                source: BindingId(1),
+                alias: BindingId(11),
+                mode: CaptureMode::Cell,
+            }],
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let inner_function = heap
+            .create_closure(
+                &inner_definition,
+                outer_call.environment(),
+                Value::undefined(),
+            )
+            .unwrap();
+        heap.scope_root(roots, inner_function).unwrap();
+        let inner_call = heap
+            .enter_function_call(
+                inner_function,
+                &inner_definition,
+                Value::undefined(),
+                &[Value::number(7.0)],
+                Value::undefined(),
+            )
+            .unwrap();
+
+        let report = heap.collect().unwrap();
+        assert!(report.marked_objects >= 6);
+        assert_eq!(
+            heap.load_binding(outer_call.environment(), BindingId(1))
+                .unwrap()
+                .as_number(),
+            Some(42.0)
+        );
+        assert_eq!(
+            heap.load_binding(inner_call.environment(), BindingId(2))
+                .unwrap()
+                .as_number(),
+            Some(7.0)
+        );
+        assert_eq!(
+            heap.load_binding(inner_call.environment(), BindingId(11))
+                .unwrap()
+                .as_number(),
+            Some(42.0)
+        );
+        heap.store_binding(
+            inner_call.environment(),
+            BindingId(11),
+            Value::number(99.0),
+        )
+        .unwrap();
+        assert_eq!(
+            heap.load_binding(outer_call.environment(), BindingId(1))
+                .unwrap()
+                .as_number(),
+            Some(99.0)
+        );
+
+        heap.leave_function_call(inner_call).unwrap();
+        heap.collect().unwrap();
+        assert_eq!(
+            heap.load_binding(outer_call.environment(), BindingId(1))
+                .unwrap()
+                .as_number(),
+            Some(99.0)
+        );
+        heap.leave_function_call(outer_call).unwrap();
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
     fn lexical_store_rejects_tdz_and_initialization_is_one_shot() {
         let mut heap = heap();
         let environment = heap
