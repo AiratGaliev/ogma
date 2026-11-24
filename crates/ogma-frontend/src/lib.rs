@@ -1302,7 +1302,9 @@ fn build_semantic_snapshot(
             ResolvedBindingKind::Catch
         } else if flags.is_import() {
             ResolvedBindingKind::Import
-        } else if flags.is_const_variable() {
+        } else if flags.contains(oxc_syntax::symbol::SymbolFlags::FunctionExpression)
+            || flags.is_const_variable()
+        {
             ResolvedBindingKind::Const
         } else if flags.contains(oxc_syntax::symbol::SymbolFlags::BlockScopedVariable) {
             ResolvedBindingKind::Let
@@ -1446,7 +1448,7 @@ fn build_semantic_snapshot(
             .scope_parent_id(function.scope)
             .and_then(|mut parent| {
                 loop {
-                    if scoping.scope_flags(parent).is_function() {
+                    if parent == root_scope_id || scoping.scope_flags(parent).is_function() {
                         return Some(parent);
                     }
                     parent = scoping.scope_parent_id(parent)?;
@@ -1542,6 +1544,25 @@ mod semantic_snapshot_tests {
                 .iter()
                 .all(|reference| reference.binding.is_some())
         );
+    }
+
+    #[test]
+    fn treats_named_function_expression_name_as_immutable_lexical_binding() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "named-function",
+            "memory://named-function.js",
+            None,
+            "const value = function inner() { return inner; };",
+        )
+        .expect("valid source file");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("valid JavaScript");
+        let inner = parsed.semantic.bindings.iter()
+            .find(|binding| binding.name == "inner")
+            .expect("named function expression binding");
+        assert_eq!(inner.kind, ResolvedBindingKind::Const);
+        assert!(!inner.mutable);
     }
 
     #[test]

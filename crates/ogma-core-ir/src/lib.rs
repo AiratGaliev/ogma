@@ -643,12 +643,12 @@ fn operation_arity(op: &str) -> Option<(usize, Option<usize>)> {
         "js.constant" | "env.load" | "closure.create" => Some((0, Some(0))),
         "js.add" | "js.strict_equal" => Some((2, Some(2))),
         "js.get_property" | "js.to_boolean" | "js.to_number" | "js.to_string" | "js.typeof"
-        | "async.await" | "js.throw" => Some((1, Some(1))),
+        | "async.await" => Some((1, Some(1))),
+        "js.throw" => Some((1, Some(1))),
         "js.set_property" | "js.get_element" => Some((2, Some(2))),
         "js.set_element" => Some((3, Some(3))),
         "js.call" | "js.construct" => Some((2, None)),
         "host.call" => Some((0, None)),
-        "js.throw" => Some((1, Some(1))),
         "env.store" => Some((1, Some(1))),
         _ => None,
     }
@@ -724,6 +724,7 @@ fn check_dominance(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_edge(
     edge: &Edge,
     source_block: &str,
@@ -863,14 +864,14 @@ fn verify_source(
             ));
         }
     }
-    if let Some(suspension) = suspension {
-        if !valid_id(suspension) {
-            errors.push(Diagnostic::new(
-                "source.suspension_id",
-                format!("{path}.suspension"),
-                "invalid suspension identity",
-            ));
-        }
+    if let Some(suspension) = suspension
+        && !valid_id(suspension)
+    {
+        errors.push(Diagnostic::new(
+            "source.suspension_id",
+            format!("{path}.suspension"),
+            "invalid suspension identity",
+        ));
     }
     for (index, frame) in inline_chain.iter().enumerate() {
         if !valid_id(&frame.function)
@@ -966,18 +967,17 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 "source path must be normalized repository-relative POSIX",
             ));
         }
-        if let Some(digest) = &file.sha256 {
-            if digest.len() != 64
+        if let Some(digest) = &file.sha256
+            && (digest.len() != 64
                 || !digest
                     .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            {
-                errors.push(Diagnostic::new(
-                    "source.sha256",
-                    format!("{path}.sha256"),
-                    "SHA-256 must be 64 lowercase hexadecimal characters",
-                ));
-            }
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+        {
+            errors.push(Diagnostic::new(
+                "source.sha256",
+                format!("{path}.sha256"),
+                "SHA-256 must be 64 lowercase hexadecimal characters",
+            ));
         }
     }
 
@@ -1129,14 +1129,14 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
             "parameter bindings and function parameter list must match exactly",
         ));
     }
-    if let Some(signature) = &function.return_signature {
-        if !valid_representation(signature.semantic_type, signature.representation) {
-            errors.push(Diagnostic::new(
-                "representation.unsupported",
-                format!("{root}.return"),
-                "invalid return representation",
-            ));
-        }
+    if let Some(signature) = &function.return_signature
+        && !valid_representation(signature.semantic_type, signature.representation)
+    {
+        errors.push(Diagnostic::new(
+            "representation.unsupported",
+            format!("{root}.return"),
+            "invalid return representation",
+        ));
     }
 
     let allowed_bindings: HashSet<String> =
@@ -1297,14 +1297,14 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 format!("{instruction_path}.source"),
                 &mut errors,
             );
-            if let Some(suspension) = source_bindings(&instruction.source).2 {
-                if !suspension_ids.insert(suspension.clone()) {
-                    errors.push(Diagnostic::new(
-                        "source.suspension_duplicate",
-                        format!("{instruction_path}.source.suspension"),
-                        "suspension identity is duplicated within the function",
-                    ));
-                }
+            if let Some(suspension) = source_bindings(&instruction.source).2
+                && !suspension_ids.insert(suspension.clone())
+            {
+                errors.push(Diagnostic::new(
+                    "source.suspension_duplicate",
+                    format!("{instruction_path}.source.suspension"),
+                    "suspension identity is duplicated within the function",
+                ));
             }
             let Some(required_effects) = operation_effects(&instruction.op) else {
                 errors.push(Diagnostic::new(
@@ -1322,16 +1322,15 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 ));
             }
             any_effectful |= instruction.effects.is_effectful();
-            if let Some((minimum, maximum)) = operation_arity(&instruction.op) {
-                if instruction.operands.len() < minimum
-                    || maximum.is_some_and(|max| instruction.operands.len() > max)
-                {
-                    errors.push(Diagnostic::new(
-                        "operation.arity",
-                        format!("{instruction_path}.operands"),
-                        "invalid operand count",
-                    ));
-                }
+            if let Some((minimum, maximum)) = operation_arity(&instruction.op)
+                && (instruction.operands.len() < minimum
+                    || maximum.is_some_and(|max| instruction.operands.len() > max))
+            {
+                errors.push(Diagnostic::new(
+                    "operation.arity",
+                    format!("{instruction_path}.operands"),
+                    "invalid operand count",
+                ));
             }
             let must_have_result = !matches!(instruction.op.as_str(), "js.throw");
             if must_have_result && instruction.result.is_none() {
@@ -1512,16 +1511,15 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     if let (Some(operand), Some(result)) =
                         (instruction.operands.first(), instruction.result.as_ref())
                     {
-                        if let Some(definition) = definitions.get(operand) {
-                            if (definition.ty, definition.rep)
+                        if let Some(definition) = definitions.get(operand)
+                            && (definition.ty, definition.rep)
                                 != (Some(result.semantic_type), Some(result.representation))
-                            {
-                                errors.push(Diagnostic::new(
-                                    "operation.result_type",
-                                    format!("{instruction_path}.result"),
-                                    "env.store result must preserve its operand type",
-                                ));
-                            }
+                        {
+                            errors.push(Diagnostic::new(
+                                "operation.result_type",
+                                format!("{instruction_path}.result"),
+                                "env.store result must preserve its operand type",
+                            ));
                         }
                     }
                 } else if let Some(result) = instruction.result.as_ref() {
@@ -1553,17 +1551,15 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 if let (Some(operand), Some(result)) = (
                     instruction.operands.get(value_index),
                     instruction.result.as_ref(),
-                ) {
-                    if definitions.get(operand).is_some_and(|definition| {
-                        (definition.ty, definition.rep)
-                            != (Some(result.semantic_type), Some(result.representation))
-                    }) {
-                        errors.push(Diagnostic::new(
-                            "operation.result_type",
-                            format!("{instruction_path}.result"),
-                            "property setter result must preserve the assigned value type",
-                        ));
-                    }
+                ) && definitions.get(operand).is_some_and(|definition| {
+                    (definition.ty, definition.rep)
+                        != (Some(result.semantic_type), Some(result.representation))
+                }) {
+                    errors.push(Diagnostic::new(
+                        "operation.result_type",
+                        format!("{instruction_path}.result"),
+                        "property setter result must preserve the assigned value type",
+                    ));
                 }
             }
             if instruction.op == "closure.create" {
@@ -1720,22 +1716,21 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                     ));
                 }
             }
-            if instruction.op == "js.throw" {
-                if instruction_index + 1 != block.instructions.len()
+            if instruction.op == "js.throw"
+                && (instruction_index + 1 != block.instructions.len()
                     || !matches!(
                         block.terminator,
                         Terminator::Unreachable {
                             reason: UnreachableReason::AfterThrow,
                             ..
                         }
-                    )
-                {
-                    errors.push(Diagnostic::new(
-                        "exception.throw_shape",
-                        instruction_path.clone(),
-                        "js.throw must be final and terminate with unreachable/after_throw",
-                    ));
-                }
+                    ))
+            {
+                errors.push(Diagnostic::new(
+                    "exception.throw_shape",
+                    instruction_path.clone(),
+                    "js.throw must be final and terminate with unreachable/after_throw",
+                ));
             }
         }
 
@@ -2125,14 +2120,14 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                         }
                         current = next;
                     }
-                    if let Some(ExceptionFlow::Edge { arguments, .. }) = &instruction.exception {
-                        if arguments.last().map(String::as_str) != Some(current) {
-                            errors.push(Diagnostic::new(
-                                "effect.exception_edge",
-                                format!("{instruction_path}.exception.arguments"),
-                                "exception edge must forward effect_out as its final argument",
-                            ));
-                        }
+                    if let Some(ExceptionFlow::Edge { arguments, .. }) = &instruction.exception
+                        && arguments.last().map(String::as_str) != Some(current)
+                    {
+                        errors.push(Diagnostic::new(
+                            "effect.exception_edge",
+                            format!("{instruction_path}.exception.arguments"),
+                            "exception edge must forward effect_out as its final argument",
+                        ));
                     }
                 } else if instruction.effect_in.is_some() || instruction.effect_out.is_some() {
                     errors.push(Diagnostic::new(

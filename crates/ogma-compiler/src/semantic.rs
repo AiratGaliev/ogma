@@ -161,7 +161,15 @@ pub fn analyze(
     }
 
     let mut function_by_scope: HashMap<&str, &ResolvedFunction> = HashMap::new();
+    let mut function_ids = HashSet::new();
     for function in &snapshot.functions {
+        if !function_ids.insert(function.id.as_str()) {
+            diagnostics.push(SemanticDiagnostic {
+                code: "semantic.duplicate_function_id",
+                span: Some(function.span),
+                message: format!("duplicate function identity {:?}", function.id),
+            });
+        }
         if function_by_scope
             .insert(function.scope.as_str(), function)
             .is_some()
@@ -181,7 +189,7 @@ pub fn analyze(
         let mut current = Some(scope_id);
         while let Some(id) = current {
             let scope = scopes.get(id)?;
-            if scope.is_function {
+            if scope.is_function || id == snapshot.root_scope.as_str() {
                 return Some(scope.id.as_str());
             }
             current = scope.parent.as_deref();
@@ -189,11 +197,44 @@ pub fn analyze(
         None
     };
 
+    for function in &snapshot.functions {
+        if function.scope != snapshot.root_scope {
+            if let Some(parent_scope) = &function.parent_function_scope {
+                if !function_by_scope.contains_key(parent_scope.as_str()) {
+                    diagnostics.push(SemanticDiagnostic {
+                        code: "semantic.unknown_parent_function",
+                        span: Some(function.span),
+                        message: format!(
+                            "function {:?} references unknown parent function scope {:?}",
+                            function.id, parent_scope
+                        ),
+                    });
+                }
+            } else {
+                diagnostics.push(SemanticDiagnostic {
+                    code: "semantic.missing_parent_function",
+                    span: Some(function.span),
+                    message: format!(
+                        "nested function {:?} must identify its enclosing Program/function scope",
+                        function.id
+                    ),
+                });
+            }
+        } else if function.parent_function_scope.is_some() {
+            diagnostics.push(SemanticDiagnostic {
+                code: "semantic.program_has_parent",
+                span: Some(function.span),
+                message: "the Program environment cannot have a parent function scope".to_owned(),
+            });
+        }
+    }
+
     let mut functions = Vec::with_capacity(snapshot.functions.len());
     for function in &snapshot.functions {
+        let is_program = function.scope == snapshot.root_scope;
         if scopes
             .get(function.scope.as_str())
-            .is_none_or(|scope| !scope.is_function)
+            .is_none_or(|scope| !scope.is_function && !is_program)
         {
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.invalid_function_scope",
@@ -460,7 +501,7 @@ mod tests {
         SemanticSnapshot {
             root_scope: "scope_0".to_owned(),
             scopes: vec![
-                scope("scope_0", None, true, true),
+                scope("scope_0", None, false, true),
                 scope("scope_1", Some("scope_0"), true, true),
                 scope("scope_2", Some("scope_1"), true, true),
                 scope("scope_3", Some("scope_1"), false, false),
