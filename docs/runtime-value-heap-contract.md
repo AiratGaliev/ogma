@@ -37,7 +37,7 @@ ECMAScript strings are represented as UTF-16 code units. The heap preserves unpa
 
 ## 3. Heap and identities
 
-Each Runtime owns a thread-affine `Heap` and receives a unique heap identity. Internal `GcRef` identifies a non-moving slot by heap identity, slot index and generation. Every internal access validates all three; slot reuse increments the generation.
+Each Runtime owns a thread-affine `Heap` and receives a unique heap identity. Internal `GcRef` identifies a non-moving cell by heap identity, slot index and generation. The slot directory stores a separately allocated, pointer-stable cell block; growing the directory moves slot metadata/pointers but never moves an existing managed cell. Every internal access validates all three identity fields; slot reuse increments the generation.
 
 `HostHandle` is a separate opaque persistent token with its own generation-checked registry. It may retain a primitive or a managed value; only managed values contribute a GC root. Releasing a handle invalidates the token before a slot can be reused. Ordinary object graph operations use `GcRef` directly and never resolve a host handle.
 
@@ -62,7 +62,7 @@ Callers must publish a managed value into an appropriate frame or scope before a
 
 `HeapConfig` provides an aggregate heap byte quota and a maximum single-allocation limit. Allocation accounting covers the actual capacities reserved by the Runtime for:
 
-- object-slot, persistent-handle, external-charge, frame and scope registries;
+- object-slot, per-cell header, persistent-handle, external-charge, frame and scope registries;
 - UTF-16 string payloads;
 - object/function reference-edge arrays;
 - each root frame/scope reference array;
@@ -72,11 +72,11 @@ External memory charges have generation-checked tokens and must be released exac
 
 When an object, function or string allocation encounters aggregate quota pressure, the heap attempts one collection and retries. A single request above the configured maximum is rejected before a cell is published. Registry/edge growth and external charges fail closed when the quota is exhausted; they never publish a partially registered root or edge.
 
-The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters describe Runtime-requested `Vec` capacities and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
+The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters include slot-directory capacity, one separately allocated cell header for each live managed cell, UTF-16 payload capacity, edge/root/handle/frame registries, transient conversion buffers and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
 
 ## 6. Verification and boundaries
 
-The Runtime unit corpus covers number edge cases, strict/SameValue/SameValueZero semantics, UTF-16 surrogate preservation, primitive coercion, mark-sweep cycle reclamation, non-moving live objects, all implemented root providers, LIFO violations, cross-Runtime identity, stale generation reuse, allocation limits, quota-triggered collection/retry, external charges and recovery after memory release.
+The Runtime unit corpus covers number edge cases, strict/SameValue/SameValueZero semantics, UTF-16 surrogate preservation, primitive coercion, mark-sweep cycle reclamation, physical cell-address stability across slot-directory growth, all implemented root providers, LIFO violations, cross-Runtime identity, stale generation reuse, allocation limits, quota-triggered collection/retry, failed cell initialization cleanup, external charges and recovery after memory release.
 
 OGM-26 remains evidence for the initial collector direction, not a permanent production performance claim. Re-evaluate collector pause time, throughput, heap overhead and realistic graph shapes once the interpreter and consumer workloads exist.
 
