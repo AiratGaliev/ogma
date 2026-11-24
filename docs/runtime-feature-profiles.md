@@ -109,14 +109,16 @@ A referenced component cannot be removed merely because its implementation is op
 
 ### Existing host-module graph remains authoritative
 
-OGM-25 already owns concrete host-module selection. HostModuleRegistry::build_profile computes transitive host-module dependencies and validates declared native dependencies, runtime imports and native module references. It fails with deterministic diagnostics when a runtime import or native-module dependency points to a stripped module, and when a required native dependency is unavailable.
+OGM-25 already owns concrete host-module selection. HostModuleRegistry::build_profile computes transitive host-module dependencies and validates declared native requirement IDs, runtime imports and native module references. It fails with deterministic diagnostics when a runtime import or native-module dependency points to a stripped module, and when a required logical native requirement is unavailable. This M0 proof does not select a concrete Rust provider or inspect Cargo's resolved graph.
 
-OGM-28 does not reimplement or replace that registry. A future build planner must validate both graphs and combine their resolved closures before linking:
+OGM-28 does not reimplement or replace that registry. A future build planner must validate and compose these distinct graphs before linking:
 
 - runtime-component graph from this contract;
-- concrete host-module/native-dependency graph from [Static Host Modules](static-host-modules-contract.md).
+- concrete Host Module and logical Native requirement graph from [Static Host Modules](static-host-modules-contract.md);
+- Native Provider graph mapping each required logical Native requirement to one compatible, explicitly selected provider (see [Native Provider Architecture](native-provider-architecture.md));
+- Cargo's resolved Rust package/build graph, which remains owned by Cargo and is consumed as build metadata rather than reimplemented by Ogma.
 
-The OGM-25 ModuleBuildPlan remains a registry-bound snapshot; a stale plan must not be reused after a registry mutation.
+The combined closure belongs to the application build plan; no graph becomes a replacement resolver for another. Profiles are logical build composition and must not be mapped mechanically to one Cargo crate or one Cargo feature each. The OGM-25 ModuleBuildPlan remains a registry-bound snapshot; a stale plan must not be reused after a registry mutation.
 
 ## 5. Debug metadata, hooks and symbol lifecycle
 
