@@ -567,8 +567,8 @@ impl Heap {
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
         match &cell.kind {
-            _ => {}
             CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
+            _ => {}
         }
         reserve_vec(budget, &mut cell.edges, 1)?;
         cell.edges.push(child_ref);
@@ -586,8 +586,8 @@ impl Heap {
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
         match &cell.kind {
-            _ => {}
             CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
+            _ => {}
         }
         let position = cell
             .edges
