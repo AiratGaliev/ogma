@@ -811,6 +811,40 @@ impl<'a> FunctionCompiler<'a> {
             )
         })
     }
+    fn attach_binding_to_value_source(
+        &mut self,
+        value_id: &str,
+        binding_id: &str,
+        span: SourceSpan,
+    ) -> Result<(), LoweringDiagnostic> {
+        for block in &mut self.blocks {
+            for instruction in &mut block.instructions {
+                if instruction
+                    .result
+                    .as_ref()
+                    .is_some_and(|result| result.id == value_id)
+                {
+                    let bindings = match &mut instruction.source {
+                        Source::User { bindings, .. } | Source::Generated { bindings, .. } => {
+                            bindings
+                        }
+                    };
+                    bindings.push(binding_id.to_owned());
+                    bindings.sort();
+                    bindings.dedup();
+                    return Ok(());
+                }
+            }
+        }
+        self.fail(
+            "lowering.const_definition_missing",
+            Some(span),
+            format!(
+                "const binding {binding_id:?} has no SSA definition {value_id:?} to carry its source provenance"
+            ),
+        )
+    }
+
 
     fn emit_to_boolean(
         &mut self,
@@ -1505,6 +1539,11 @@ impl<'a> FunctionCompiler<'a> {
                                 );
                             };
                             let value = self.emit_expression(initializer)?;
+                            self.attach_binding_to_value_source(
+                                &value.id,
+                                binding_id,
+                                declaration.span,
+                            )?;
                             self.const_values.insert(binding_id.to_owned(), value);
                         }
                         SyntaxVariableKind::Unsupported => unreachable!(),
@@ -3645,6 +3684,58 @@ mod tests {
         assert!(closure < store && store < load);
         assert!(verify_document(&documents[0]).is_empty());
         assert!(verify_document(&documents[1]).is_empty());
+    }
+
+
+    #[test]
+    fn preserves_const_binding_identity_on_the_ssa_definition() {
+        let source = source("function run() { const value = 1; return value; }");
+        let span = whole_span(&source);
+        let value = binding("binding_const_value", "value", BindingKind::Const);
+        let syntax = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Const,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(value.id.clone()),
+                        name: value.name.clone(),
+                        initializer: Some(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(1.0),
+                            span,
+                        }),
+                        span,
+                    }],
+                    span,
+                },
+                SyntaxStatement::Return {
+                    value: Some(identifier("value", &value.id, span)),
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, vec![value.clone()], Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("const initializer lowers to an SSA value");
+        let definition = documents[0]
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instruction| instruction.op == "js.constant")
+            .expect("const literal SSA definition exists");
+        let bindings = match &definition.source {
+            Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings,
+        };
+        assert!(bindings.contains(&value.id));
+        assert!(verify_document(&documents[0]).is_empty());
     }
 
 }
