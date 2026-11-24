@@ -1379,6 +1379,9 @@ fn parse_ascii_string_number(text: &str) -> f64 {
     if text.eq_ignore_ascii_case("inf")
         || text.eq_ignore_ascii_case("+inf")
         || text.eq_ignore_ascii_case("-inf")
+        || text.eq_ignore_ascii_case("infinity")
+        || text.eq_ignore_ascii_case("+infinity")
+        || text.eq_ignore_ascii_case("-infinity")
     {
         return f64::NAN;
     }
@@ -1386,15 +1389,64 @@ fn parse_ascii_string_number(text: &str) -> f64 {
 }
 
 fn parse_radix_number(digits: &str, radix: u32) -> Option<f64> {
+    let bits_per_digit = match radix {
+        2 => 1,
+        8 => 3,
+        16 => 4,
+        _ => return None,
+    };
     if digits.is_empty() {
         return None;
     }
-    let mut result = 0.0_f64;
+
+    // Binary/octal/hexadecimal integers are powers of two. Keep the leading
+    // 53 significand bits plus guard/sticky bits to round exactly to binary64.
+    let mut started = false;
+    let mut bit_length = 0_usize;
+    let mut significand = 0_u64;
+    let mut guard_bit = false;
+    let mut sticky_bit = false;
+
     for character in digits.chars() {
         let digit = character.to_digit(radix)?;
-        result = result * f64::from(radix) + f64::from(digit);
+        for shift in (0..bits_per_digit).rev() {
+            let bit = (digit >> shift) & 1 != 0;
+            if !started {
+                if !bit {
+                    continue;
+                }
+                started = true;
+            }
+
+            match bit_length {
+                0..=52 => significand = (significand << 1) | u64::from(bit),
+                53 => guard_bit = bit,
+                _ => sticky_bit |= bit,
+            }
+            bit_length = bit_length.checked_add(1)?;
+        }
     }
-    Some(result)
+
+    if !started {
+        return Some(0.0);
+    }
+    if bit_length <= 53 {
+        return Some(significand as f64);
+    }
+
+    if guard_bit && (sticky_bit || significand & 1 != 0) {
+        significand += 1;
+    }
+    let mut binary_exponent = bit_length.checked_sub(53)?;
+    if significand == (1_u64 << 53) {
+        significand >>= 1;
+        binary_exponent = binary_exponent.checked_add(1)?;
+    }
+    if binary_exponent > 971 {
+        return Some(f64::INFINITY);
+    }
+
+    Some((significand as f64) * 2.0_f64.powi(binary_exponent as i32))
 }
 
 fn is_ecmascript_whitespace(unit: u16) -> bool {
@@ -1518,6 +1570,31 @@ mod tests {
         assert!(heap.to_number(invalid).unwrap().is_nan());
         let object = heap.allocate_object().unwrap();
         assert_eq!(heap.to_number(object), Err(HeapError::UnsupportedCoercion));
+    }
+
+    #[test]
+    fn string_to_number_rejects_noncanonical_infinity_and_rounds_radix_values() {
+        let mut runtime_heap = heap(4096, 2048);
+        let lowercase_infinity = runtime_heap.allocate_string("infinity").unwrap();
+        let mixed_infinity = runtime_heap.allocate_string("+InFiNiTy").unwrap();
+        let halfway_down = runtime_heap.allocate_string("0x20000000000001").unwrap();
+        let halfway_up = runtime_heap.allocate_string("0x20000000000003").unwrap();
+
+        assert!(
+            runtime_heap
+                .to_number(lowercase_infinity)
+                .unwrap()
+                .is_nan()
+        );
+        assert!(runtime_heap.to_number(mixed_infinity).unwrap().is_nan());
+        assert_eq!(
+            runtime_heap.to_number(halfway_down).unwrap(),
+            9_007_199_254_740_992.0
+        );
+        assert_eq!(
+            runtime_heap.to_number(halfway_up).unwrap(),
+            9_007_199_254_740_996.0
+        );
     }
 
     #[test]
