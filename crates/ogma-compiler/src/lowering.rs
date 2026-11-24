@@ -2322,7 +2322,6 @@ fn statement_can_fallthrough(statement: &SyntaxStatement) -> bool {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
