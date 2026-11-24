@@ -110,8 +110,8 @@ mod tests {
         .expect("source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
             .expect("typeof unresolved identifier is valid JavaScript");
-        let compiled = compile(&parsed)
-            .expect("frontend semantic resolution and Core IR lowering succeed");
+        let compiled =
+            compile(&parsed).expect("frontend semantic resolution and Core IR lowering succeed");
         let program = compiled
             .functions
             .iter()
