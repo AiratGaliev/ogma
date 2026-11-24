@@ -74,6 +74,16 @@ When an object, function or string allocation encounters aggregate quota pressur
 
 The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters include slot-directory capacity, one separately allocated cell header for each live managed cell, UTF-16 payload capacity, edge/root/handle/frame registries, transient conversion buffers and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
 
+## 6. Object-model extension
+
+OGM-44 adds the backend-neutral object, array, function and lexical-environment
+surface on top of this heap. Its descriptor, prototype, sparse-array, closure,
+call-root and accounting rules are defined in
+[runtime-object-model-contract.md](runtime-object-model-contract.md). The
+interpreter must consume these APIs rather than introduce parallel semantics.
+The Runtime contract does not claim that OGM-46 interpreter execution or
+ECMAScript conformance has been completed.
+
 ## 6. Verification and boundaries
 
 The Runtime unit corpus covers number edge cases, strict/SameValue/SameValueZero semantics, UTF-16 surrogate preservation, primitive coercion, mark-sweep cycle reclamation, physical cell-address stability across slot-directory growth, all implemented root providers, LIFO violations, cross-Runtime identity, stale generation reuse, allocation limits, quota-triggered collection/retry, failed cell initialization cleanup, external charges and recovery after memory release.
