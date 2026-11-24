@@ -177,6 +177,16 @@ fn diag(
     }
 }
 
+fn valid_core_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    id.len() <= 128
+        && (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | ':' | '-'))
+}
+
 fn core_source_file(source: &SourceFile) -> Result<CoreSourceFile, LoweringDiagnostic> {
     let uri = source.uri();
     let mut path = if let Some(rest) = uri.strip_prefix("memory://") {
@@ -205,6 +215,15 @@ fn core_source_file(source: &SourceFile) -> Result<CoreSourceFile, LoweringDiagn
             .split('/')
             .any(|segment| segment.is_empty() || segment == "." || segment == "..");
     let digest = source.content_sha256();
+    let source_id = source.id().as_str();
+    if !valid_core_id(source_id) {
+        return Err(LoweringDiagnostic {
+            code: "lowering.source_identity",
+            function: "<module>".to_owned(),
+            span: None,
+            message: format!("source identity {source_id:?} is not a valid Core IR identity"),
+        });
+    }
     if invalid {
         return Err(LoweringDiagnostic {
             code: "lowering.source_path",
@@ -224,7 +243,7 @@ fn core_source_file(source: &SourceFile) -> Result<CoreSourceFile, LoweringDiagn
         });
     }
     Ok(CoreSourceFile {
-        id: format!("src_{}", &digest[..16]),
+        id: source_id.to_owned(),
         path,
         language: SourceLanguage::Javascript,
         sha256: Some(digest.to_owned()),
@@ -301,6 +320,7 @@ struct FunctionCompiler<'a> {
     blocks: Vec<BasicBlock>,
     current: Option<usize>,
     current_effect: Option<String>,
+    current_scope: String,
     effect_enabled: bool,
     next_value: u64,
     next_instruction: u64,
@@ -411,6 +431,7 @@ impl<'a> FunctionCompiler<'a> {
             blocks: Vec::new(),
             current: None,
             current_effect: None,
+            current_scope: semantic.environment.id.clone(),
             effect_enabled,
             next_value: 0,
             next_instruction: 0,
@@ -560,7 +581,7 @@ impl<'a> FunctionCompiler<'a> {
                 line: span.end.line,
                 column: span.end.column_utf16,
             },
-            scope: Some(self.semantic.environment.id.clone()),
+            scope: Some(self.current_scope.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -570,7 +591,7 @@ impl<'a> FunctionCompiler<'a> {
     fn generated_source(&self, reason: &str, bindings: Vec<String>) -> Source {
         Source::Generated {
             reason: reason.to_owned(),
-            scope: Some(self.semantic.environment.id.clone()),
+            scope: Some(self.current_scope.clone()),
             bindings,
             suspension: None,
             inline_chain: Vec::new(),
@@ -1488,7 +1509,15 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_statement(&mut self, statement: &SyntaxStatement) -> Result<(), LoweringDiagnostic> {
         match statement {
-            SyntaxStatement::Block { body, .. } => self.compile_sequence(body),
+            SyntaxStatement::Block { scope, body, .. } => {
+                let previous_scope = self.current_scope.clone();
+                if let Some(scope) = scope {
+                    self.current_scope.clone_from(scope);
+                }
+                let result = self.compile_sequence(body);
+                self.current_scope = previous_scope;
+                result
+            }
             SyntaxStatement::Variable {
                 kind,
                 declarations,
@@ -1585,19 +1614,27 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_if(test, consequent, alternate.as_deref(), *span),
             SyntaxStatement::While { test, body, span } => self.compile_while(test, body, *span),
             SyntaxStatement::For {
+                scope,
                 initializer,
                 test,
                 update,
                 body,
                 span,
-                ..
-            } => self.compile_for(
-                initializer.as_ref(),
-                test.as_ref(),
-                update.as_ref(),
-                body,
-                *span,
-            ),
+            } => {
+                let previous_scope = self.current_scope.clone();
+                if let Some(scope) = scope {
+                    self.current_scope.clone_from(scope);
+                }
+                let result = self.compile_for(
+                    initializer.as_ref(),
+                    test.as_ref(),
+                    update.as_ref(),
+                    body,
+                    *span,
+                );
+                self.current_scope = previous_scope;
+                result
+            }
             SyntaxStatement::Return { value, span } => {
                 let value = value
                     .as_ref()
@@ -3312,6 +3349,62 @@ mod tests {
     }
 
     #[test]
+    fn preserves_frontend_source_identity_in_core_ir_source_table() {
+        let source = source("const value = 1;");
+        let file = core_source_file(&source).expect("relative memory URI lowers");
+        assert_eq!(file.id, source.id().as_str());
+        assert_eq!(file.sha256.as_deref(), Some(source.content_sha256()));
+    }
+
+    #[test]
+    fn preserves_nested_lexical_scope_identity_in_instruction_metadata() {
+        let source = source("function run() { { let inner = 1; } }");
+        let span = whole_span(&source);
+        let inner = binding("binding_inner", "inner", BindingKind::Let);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Block {
+                scope: Some("scope_inner_block".to_owned()),
+                body: vec![SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Let,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(inner.id.clone()),
+                        name: inner.name.clone(),
+                        initializer: Some(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(1.0),
+                            span,
+                        }),
+                        span,
+                    }],
+                    span,
+                }],
+                span,
+            }],
+            Vec::new(),
+        );
+        let mut module = semantic_module(&source, &syntax, vec![inner.clone()], Vec::new());
+        module.bindings[0].lexical_scope = "scope_inner_block".to_owned();
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram { functions: vec![syntax] },
+        )
+        .expect("block-scoped declaration lowers");
+        let store = documents[0].function.blocks[0].instructions.iter()
+            .find(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(inner.id.as_str())
+            })
+            .expect("block binding initializer store exists");
+        let scope = match &store.source {
+            Source::User { scope, .. } | Source::Generated { scope, .. } => scope.as_deref(),
+        };
+        assert_eq!(scope, Some("scope_inner_block"));
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
     fn preserves_memory_uri_paths_and_rejects_absolute_file_uris() {
         let memory = SourceFile::new(
             "memory-source",
@@ -3530,6 +3623,19 @@ mod tests {
         .expect("C-style for loop lowers to verified CFG");
         let function = &documents[0].function;
         assert_eq!(function.blocks.len(), 5);
+        let initializer_store = function.blocks[0]
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(index.id.as_str())
+            })
+            .expect("for-loop binding initialized in its lexical scope");
+        let initializer_scope = match &initializer_store.source {
+            Source::User { scope, .. } | Source::Generated { scope, .. } => scope.as_deref(),
+        };
+        assert_eq!(initializer_scope, Some("scope_for"));
         let header = function
             .blocks
             .iter()
