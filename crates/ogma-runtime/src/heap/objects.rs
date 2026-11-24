@@ -10,7 +10,9 @@ use std::rc::Rc;
 
 use crate::value::{Value, ValueRepr, ValueType};
 
-use super::{CellKind, GcRef, Heap, HeapError};
+use super::{
+    release_vec_capacity, reserve_vec, CellKind, GcRef, Heap, HeapError,
+};
 
 /// Stable function-table identity. It is metadata, never a code pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -858,13 +860,13 @@ impl Heap {
             .try_reserve_exact(key_count)
             .map_err(|_| HeapError::AllocationFailed)?;
         for (_, key) in indices {
-            result.push(self.property_key_for_index(key)?);
+            result.push(self.property_key_for_index(key));
         }
         if let Some(key) = length_key {
             result.push(key);
         }
         for key in strings {
-            result.push(self.property_key_for_index(key)?);
+            result.push(self.property_key_for_index(key));
         }
         Ok(result)
     }
