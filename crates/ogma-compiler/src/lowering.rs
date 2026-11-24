@@ -84,7 +84,6 @@ pub fn lower(
             continue;
         };
         let mut compiler = match FunctionCompiler::new(
-            source,
             &source_file,
             semantic,
             &syntax_by_id,
@@ -246,7 +245,6 @@ struct Cursor {
 }
 
 struct FunctionCompiler<'a> {
-    source: &'a SourceFile,
     source_file: &'a CoreSourceFile,
     semantic_module: &'a SemanticModule,
     syntax_registry: &'a HashMap<&'a str, &'a ResolvedSyntaxFunction>,
@@ -269,7 +267,6 @@ struct FunctionCompiler<'a> {
 
 impl<'a> FunctionCompiler<'a> {
     fn new(
-        source: &'a SourceFile,
         source_file: &'a CoreSourceFile,
         semantic_module: &'a SemanticModule,
         syntax_registry: &'a HashMap<&'a str, &'a ResolvedSyntaxFunction>,
@@ -350,7 +347,6 @@ impl<'a> FunctionCompiler<'a> {
             || statements_need_effects(&syntax.body);
 
         Ok(Self {
-            source,
             source_file,
             semantic_module,
             syntax_registry,
@@ -580,8 +576,9 @@ impl<'a> FunctionCompiler<'a> {
             id: self.next_value_id(),
             ty,
         });
-        self.blocks[block].instructions.push(Instruction {
-            id: self.next_instruction_id(),
+        let instruction_id = self.next_instruction_id();
+        let instruction = Instruction {
+            id: instruction_id,
             op: op.to_owned(),
             operands,
             result: result.as_ref().map(|value| ValueDefinition {
@@ -596,7 +593,8 @@ impl<'a> FunctionCompiler<'a> {
             effect_in,
             effect_out: effect_out.clone(),
             exception: effects.may_throw.then_some(ExceptionFlow::Propagate),
-        });
+        };
+        self.blocks[block].instructions.push(instruction);
         if let Some(next) = effect_out {
             self.current_effect = Some(next);
         }
@@ -1233,7 +1231,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.emit_expression(value)?;
                 self.emit_assignment_target(target, value, *span)
             }
-            SyntaxExpression::Update { target, span, .. } => self.fail(
+            SyntaxExpression::Update { span, .. } => self.fail(
                 "lowering.update_expression_unsupported",
                 Some(*span),
                 "increment/decrement requires ECMAScript ToNumeric semantics, including BigInt",
@@ -1528,18 +1526,21 @@ impl<'a> FunctionCompiler<'a> {
         };
         let then_block = self.create_block();
         let else_block = self.create_block();
-        let arguments = predecessor.effect.clone().into_iter().collect();
+        let arguments: Vec<String> = predecessor.effect.clone().into_iter().collect();
+        let then_id = self.block_id(then_block);
+        let else_id = self.block_id(else_block);
+        let branch_source = self.user_source(span, Vec::new());
         self.blocks[predecessor.block].terminator = Terminator::Branch {
             condition: condition.id,
             then_edge: Edge {
-                target: self.block_id(then_block),
+                target: then_id,
                 arguments: arguments.clone(),
             },
             else_edge: Edge {
-                target: self.block_id(else_block),
+                target: else_id,
                 arguments,
             },
-            source: self.user_source(span, Vec::new()),
+            source: branch_source,
         };
 
         self.select_block(then_block);
@@ -1601,18 +1602,21 @@ impl<'a> FunctionCompiler<'a> {
                 "while header terminated during test evaluation",
             );
         };
-        let effect_args = header_cursor.effect.into_iter().collect();
+        let effect_args: Vec<String> = header_cursor.effect.into_iter().collect();
+        let body_id = self.block_id(body_block);
+        let exit_id = self.block_id(exit_block);
+        let branch_source = self.user_source(span, Vec::new());
         self.blocks[header_cursor.block].terminator = Terminator::Branch {
             condition: condition.id,
             then_edge: Edge {
-                target: self.block_id(body_block),
+                target: body_id,
                 arguments: effect_args.clone(),
             },
             else_edge: Edge {
-                target: self.block_id(exit_block),
+                target: exit_id,
                 arguments: effect_args,
             },
-            source: self.user_source(span, Vec::new()),
+            source: branch_source,
         };
 
         self.select_block(body_block);
@@ -1680,17 +1684,20 @@ impl<'a> FunctionCompiler<'a> {
             );
         };
         let effect_args = header_cursor.effect.into_iter().collect();
+        let body_id = self.block_id(body_block);
+        let exit_id = self.block_id(exit_block);
+        let branch_source = self.user_source(span, Vec::new());
         self.blocks[header_cursor.block].terminator = Terminator::Branch {
             condition: condition.id,
             then_edge: Edge {
-                target: self.block_id(body_block),
+                target: body_id,
                 arguments: effect_args.clone(),
             },
             else_edge: Edge {
-                target: self.block_id(exit_block),
+                target: exit_id,
                 arguments: effect_args,
             },
-            source: self.user_source(span, Vec::new()),
+            source: branch_source,
         };
 
         self.select_block(body_block);
@@ -1718,10 +1725,12 @@ impl<'a> FunctionCompiler<'a> {
                 "jump has no active source block",
             );
         };
+        let arguments: Vec<String> = self.current_effect.clone().into_iter().collect();
+        let source = self.user_source(span, Vec::new());
         self.blocks[block].terminator = Terminator::Jump {
             target: target.to_owned(),
-            arguments: self.current_effect.clone().into_iter().collect(),
-            source: self.user_source(span, Vec::new()),
+            arguments,
+            source,
         };
         self.current = None;
         self.current_effect = None;
