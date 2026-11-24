@@ -443,20 +443,19 @@ impl Heap {
     ) -> Result<Option<CompletePropertyDescriptor>, HeapError> {
         let key_index = self.validate_property_key(key)?;
         let object_index = self.object_index(object)?;
-        if self.is_array_length_key(key_index) {
-            if let CellKind::Array(array) = &self.slots[object_index]
+        if self.is_array_length_key(key_index)
+            && let CellKind::Array(array) = &self.slots[object_index]
                 .cell
                 .as_ref()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                return Ok(Some(CompletePropertyDescriptor {
-                    value: Value::number(f64::from(array.length)),
-                    writable: array.length_writable,
-                    enumerable: false,
-                    configurable: false,
-                }));
-            }
+        {
+            return Ok(Some(CompletePropertyDescriptor {
+                value: Value::number(f64::from(array.length)),
+                writable: array.length_writable,
+                enumerable: false,
+                configurable: false,
+            }));
         }
         let Some(position) = self.find_own_property(object_index, key_index)? else {
             return Ok(None);
@@ -476,15 +475,14 @@ impl Heap {
         let mut current = self.object_reference(object)?;
         for _ in 0..=self.slots.len() {
             let index = self.validate_ref(current)?;
-            if self.is_array_length_key(key_index) {
-                if let CellKind::Array(array) = &self.slots[index]
+            if self.is_array_length_key(key_index)
+                && let CellKind::Array(array) = &self.slots[index]
                     .cell
                     .as_ref()
                     .ok_or(HeapError::StaleReference)?
                     .kind
-                {
-                    return Ok(Value::number(f64::from(array.length)));
-                }
+            {
+                return Ok(Value::number(f64::from(array.length)));
             }
             if let Some(position) = self.find_own_property(index, key_index)? {
                 return Ok(self.object_data(index)?.properties[position]
@@ -589,10 +587,10 @@ impl Heap {
                     if descriptor.writable == Some(true) {
                         return Ok(false);
                     }
-                    if let Some(value) = descriptor.value {
-                        if !self.same_value(current.value, value)? {
-                            return Ok(false);
-                        }
+                    if let Some(value) = descriptor.value
+                        && !self.same_value(current.value, value)?
+                    {
+                        return Ok(false);
                     }
                 }
             }
@@ -610,17 +608,16 @@ impl Heap {
         if !self.object_data(object_index)?.extensible {
             return Ok(false);
         }
-        if let Some(array_index) = self.array_index_from_atom(key_index) {
-            if let CellKind::Array(array) = &self.slots[object_index]
+        if let Some(array_index) = self.array_index_from_atom(key_index)
+            && let CellKind::Array(array) = &self.slots[object_index]
                 .cell
                 .as_ref()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                if array_index >= array.length && !array.length_writable {
-                    return Ok(false);
-                }
-            }
+            && array_index >= array.length
+            && !array.length_writable
+        {
+            return Ok(false);
         }
         let next = PropertyDescriptorData {
             value: descriptor.value.unwrap_or_else(Value::undefined),
@@ -636,17 +633,15 @@ impl Heap {
                 key: key_index as u32,
                 descriptor: next,
             });
-        if let Some(array_index) = self.array_index_from_atom(key_index) {
-            if let CellKind::Array(array) = &mut self.slots[object_index]
+        if let Some(array_index) = self.array_index_from_atom(key_index)
+            && let CellKind::Array(array) = &mut self.slots[object_index]
                 .cell
                 .as_mut()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                if array_index >= array.length {
-                    array.length = array_index + 1;
-                }
-            }
+            && array_index >= array.length
+        {
+            array.length = array_index + 1;
         }
         Ok(true)
     }
@@ -669,21 +664,20 @@ impl Heap {
                 return self.define_assignment_property(receiver_index, key_index, value);
             };
             let index = self.validate_ref(reference)?;
-            if self.is_array_length_key(key_index) {
-                if let CellKind::Array(array) = &self.slots[index]
+            if self.is_array_length_key(key_index)
+                && let CellKind::Array(array) = &self.slots[index]
                     .cell
                     .as_ref()
                     .ok_or(HeapError::StaleReference)?
                     .kind
-                {
-                    if !array.length_writable {
-                        return Ok(false);
-                    }
-                    if receiver_index != index {
-                        return self.define_assignment_property(receiver_index, key_index, value);
-                    }
-                    return self.define_array_length(index, PropertyDescriptor::value(value));
+            {
+                if !array.length_writable {
+                    return Ok(false);
                 }
+                if receiver_index != index {
+                    return self.define_assignment_property(receiver_index, key_index, value);
+                }
+                return self.define_array_length(index, PropertyDescriptor::value(value));
             }
             if let Some(position) = self.find_own_property(index, key_index)? {
                 if !self.object_data(index)?.properties[position]
@@ -1640,17 +1634,16 @@ impl Heap {
         if !self.object_data(receiver)?.extensible {
             return Ok(false);
         }
-        if let Some(array_index) = self.array_index_from_atom(key) {
-            if let CellKind::Array(array) = &self.slots[receiver]
+        if let Some(array_index) = self.array_index_from_atom(key)
+            && let CellKind::Array(array) = &self.slots[receiver]
                 .cell
                 .as_ref()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                if array_index >= array.length && !array.length_writable {
-                    return Ok(false);
-                }
-            }
+            && array_index >= array.length
+            && !array.length_writable
+        {
+            return Ok(false);
         }
         self.reserve_object_properties(receiver, 1)?;
         self.add_value_edge(receiver, value)?;
@@ -1665,15 +1658,14 @@ impl Heap {
                     configurable: true,
                 },
             });
-        if let Some(array_index) = self.array_index_from_atom(key) {
-            if let CellKind::Array(array) = &mut self.slots[receiver]
+        if let Some(array_index) = self.array_index_from_atom(key)
+            && let CellKind::Array(array) = &mut self.slots[receiver]
                 .cell
                 .as_mut()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                array.length = array.length.max(array_index + 1);
-            }
+        {
+            array.length = array.length.max(array_index + 1);
         }
         Ok(true)
     }
@@ -1758,15 +1750,14 @@ impl Heap {
                 array.length = new_length;
             }
         }
-        if descriptor.writable == Some(false) {
-            if let CellKind::Array(array) = &mut self.slots[index]
+        if descriptor.writable == Some(false)
+            && let CellKind::Array(array) = &mut self.slots[index]
                 .cell
                 .as_mut()
                 .ok_or(HeapError::StaleReference)?
                 .kind
-            {
-                array.length_writable = false;
-            }
+        {
+            array.length_writable = false;
         }
         Ok(true)
     }

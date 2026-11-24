@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::value::{Value, ValueRepr};
 
 mod objects;
+pub use objects::{
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
+    CompletePropertyDescriptor, FunctionDefinition, FunctionId, FunctionKind,
+    LexicalEnvironment, PropertyDescriptor, PropertyKey,
+};
 use objects::{
     ArrayData, BindingCellData, EnvironmentBinding, EnvironmentData, FunctionData, ObjectData,
     OwnProperty,
-};
-pub use objects::{
-    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    CompletePropertyDescriptor, FunctionDefinition, FunctionId, FunctionKind, LexicalEnvironment,
-    PropertyDescriptor, PropertyKey,
 };
 
 static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
@@ -566,9 +566,8 @@ impl Heap {
             .cell
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
-        match &cell.kind {
-            CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
-            _ => {}
+        if let CellKind::String(_) = &cell.kind {
+            return Err(HeapError::InvalidObjectKind);
         }
         reserve_vec(budget, &mut cell.edges, 1)?;
         cell.edges.push(child_ref);
@@ -585,9 +584,8 @@ impl Heap {
             .cell
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
-        match &cell.kind {
-            CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
-            _ => {}
+        if let CellKind::String(_) = &cell.kind {
+            return Err(HeapError::InvalidObjectKind);
         }
         let position = cell
             .edges
@@ -920,30 +918,19 @@ impl Heap {
                 .ok_or(HeapError::SizeOverflow)?;
             let cell_bytes = std::mem::size_of::<HeapCell>();
             let payload_bytes = match &cell.kind {
-                CellKind::String(units) => units
-                    .capacity()
+                CellKind::String(units) => units.capacity()
                     .checked_mul(std::mem::size_of::<u16>())
                     .ok_or(HeapError::SizeOverflow)?,
-                CellKind::Object(data) => data
-                    .properties
-                    .capacity()
+                CellKind::Object(data) => data.properties.capacity()
                     .checked_mul(std::mem::size_of::<OwnProperty>())
                     .ok_or(HeapError::SizeOverflow)?,
-                CellKind::Array(data) => data
-                    .object
-                    .properties
-                    .capacity()
+                CellKind::Array(data) => data.object.properties.capacity()
                     .checked_mul(std::mem::size_of::<OwnProperty>())
                     .ok_or(HeapError::SizeOverflow)?,
-                CellKind::Function(data) => data
-                    .object
-                    .properties
-                    .capacity()
+                CellKind::Function(data) => data.object.properties.capacity()
                     .checked_mul(std::mem::size_of::<OwnProperty>())
                     .ok_or(HeapError::SizeOverflow)?,
-                CellKind::Environment(data) => data
-                    .bindings
-                    .capacity()
+                CellKind::Environment(data) => data.bindings.capacity()
                     .checked_mul(std::mem::size_of::<EnvironmentBinding>())
                     .ok_or(HeapError::SizeOverflow)?,
                 CellKind::BindingCell(_) => 0,
