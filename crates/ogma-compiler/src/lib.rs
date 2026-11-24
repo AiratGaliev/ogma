@@ -381,27 +381,55 @@ mod tests {
     }
 
     #[test]
-    fn rejects_for_header_binding_when_its_lexical_scope_is_reentered_by_an_outer_loop() {
+    fn preserves_for_header_tdz_load_before_initialization_through_real_frontend_pipeline() {
         let allocator = Allocator::default();
         let source = SourceFile::new(
-            "nested-for-header-tdz-test",
-            "memory:///nested-for-header-tdz-test.js",
+            "for-header-tdz-test",
+            "memory:///for-header-tdz-test.js",
             None,
-            "function run() { let outer = 0; while (outer < 2) { for (let index = outer === 0 ? 0 : index; index < 1; index = index + 1) {} outer = outer + 1; } }",
+            "function run() { let outer = 0; while (outer < 2) { for (let index = index; index < 1; index = index + 1) {} outer = outer + 1; } }",
         )
         .expect("source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("conditional for initializer is valid JavaScript");
+            .expect("self-referential for initializer is valid JavaScript syntax");
+        let compiled = compile(&parsed)
+            .expect("for-header TDZ reads are represented by runtime environment loads");
 
-        let failure = compile(&parsed)
-            .expect_err("a nested for-header lexical environment is re-entered by the outer loop");
-        let CompileFailure::Lowering(diagnostics) = failure else {
-            panic!("valid syntax should reach lexical environment lowering validation");
-        };
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "lowering.block_environment_lifetime"
-                && diagnostic.message.contains("loop-reentered lexical scope")
-        }));
+        let binding = compiled
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.ir.name == "index")
+            .expect("for-header lexical binding");
+        let run = compiled
+            .functions
+            .iter()
+            .find(|document| document.function.name == "run")
+            .expect("run function Core IR document");
+        let instructions: Vec<_> = run
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .collect();
+        let load_index = instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.load"
+                    && instruction.attributes.get("binding").and_then(serde_json::Value::as_str)
+                        == Some(binding.ir.id.as_str())
+            })
+            .expect("self-reference must retain a runtime TDZ load");
+        let store_index = instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(serde_json::Value::as_str)
+                        == Some(binding.ir.id.as_str())
+            })
+            .expect("for-header initializer store");
+        assert!(load_index < store_index, "TDZ load must precede the first initialization store");
+        assert!(verify_document(run).is_empty());
     }
     #[test]
     fn rejects_reentered_block_let_without_a_fresh_lexical_environment() {

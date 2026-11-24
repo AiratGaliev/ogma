@@ -351,10 +351,7 @@ fn collect_reentered_lexical_scopes(
             SyntaxStatement::While { body, .. } => {
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
-            SyntaxStatement::For { scope, body, .. } => {
-                if inside_loop_body && let Some(scope) = scope {
-                    output.insert(scope.clone());
-                }
+            SyntaxStatement::For { body, .. } => {
                 collect_reentered_lexical_scopes(std::slice::from_ref(body), true, output);
             }
             _ => {}
