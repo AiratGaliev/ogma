@@ -454,7 +454,8 @@ impl Heap {
         match self.try_allocate_cell(CellKind::Object) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Object).map(Value::from_object)
+                self.try_allocate_cell(CellKind::Object)
+                    .map(Value::from_object)
             }
             result => result.map(Value::from_object),
         }
@@ -465,7 +466,8 @@ impl Heap {
         match self.try_allocate_cell(CellKind::Function) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Function).map(Value::from_function)
+                self.try_allocate_cell(CellKind::Function)
+                    .map(Value::from_function)
             }
             result => result.map(Value::from_function),
         }
