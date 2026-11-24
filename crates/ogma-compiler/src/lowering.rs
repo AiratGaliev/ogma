@@ -1117,22 +1117,48 @@ impl<'a> FunctionCompiler<'a> {
                 let right = self.emit_expression(right)?;
                 match operator {
                     SyntaxBinaryOperator::Add => self.emit_binary(
-                        "js.add", left, right, ValueType::DYNAMIC, dynamic_effects(), *span,
+                        "js.add",
+                        left,
+                        right,
+                        ValueType::DYNAMIC,
+                        dynamic_effects(),
+                        *span,
                     ),
                     SyntaxBinaryOperator::StrictEqual => self.emit_binary(
-                        "js.strict_equal", left, right, ValueType::BOOLEAN, Effects::default(), *span,
+                        "js.strict_equal",
+                        left,
+                        right,
+                        ValueType::BOOLEAN,
+                        Effects::default(),
+                        *span,
                     ),
                     SyntaxBinaryOperator::StrictNotEqual => {
                         let equal = self.emit_binary(
-                            "js.strict_equal", left, right, ValueType::BOOLEAN, Effects::default(), *span,
+                            "js.strict_equal",
+                            left,
+                            right,
+                            ValueType::BOOLEAN,
+                            Effects::default(),
+                            *span,
                         )?;
-                        let false_value = self.emit_literal(&SyntaxLiteral::Boolean(false), *span)?;
+                        let false_value =
+                            self.emit_literal(&SyntaxLiteral::Boolean(false), *span)?;
                         self.emit_binary(
-                            "js.strict_equal", equal, false_value, ValueType::BOOLEAN, Effects::default(), *span,
+                            "js.strict_equal",
+                            equal,
+                            false_value,
+                            ValueType::BOOLEAN,
+                            Effects::default(),
+                            *span,
                         )
                     }
                     SyntaxBinaryOperator::LessThan => self.emit_binary(
-                        "js.less_than", left, right, ValueType::BOOLEAN, dynamic_effects(), *span,
+                        "js.less_than",
+                        left,
+                        right,
+                        ValueType::BOOLEAN,
+                        dynamic_effects(),
+                        *span,
                     ),
                     SyntaxBinaryOperator::GreaterThan => self.emit_binary(
                         "js.greater_than",
@@ -2834,7 +2860,10 @@ mod tests {
         assert!(call.effect_in.is_some());
         assert!(call.effect_out.is_some());
         assert_eq!(
-            function.return_signature.as_ref().map(|result| result.semantic_type),
+            function
+                .return_signature
+                .as_ref()
+                .map(|result| result.semantic_type),
             Some(SemanticType::Dynamic)
         );
         assert!(verify_document(&documents[0]).is_empty());
@@ -2866,7 +2895,10 @@ mod tests {
         .expect("throw completion lowers");
         let function = &documents[0].function;
         let block = &function.blocks[0];
-        assert_eq!(block.instructions.last().map(|item| item.op.as_str()), Some("js.throw"));
+        assert_eq!(
+            block.instructions.last().map(|item| item.op.as_str()),
+            Some("js.throw")
+        );
         assert!(matches!(
             block.terminator,
             Terminator::Unreachable {
@@ -2879,9 +2911,8 @@ mod tests {
 
     #[test]
     fn lowers_mutable_closure_capture_as_shared_environment_cell() {
-        let source = source(
-            "function run() { let value = 1; return function child() { return value; }; }",
-        );
+        let source =
+            source("function run() { let value = 1; return function child() { return value; }; }");
         let span = whole_span(&source);
         let binding = binding("binding_value", "value", BindingKind::Let);
         let parent = function_syntax(
@@ -3014,7 +3045,6 @@ mod tests {
         assert!(verify_document(&documents[1]).is_empty());
     }
 
-
     #[test]
     fn lowers_greater_than_with_dynamic_relational_effects() {
         let source = source("function run(left, right) { return left > right; }");
@@ -3063,7 +3093,10 @@ mod tests {
         assert!(operation.effect_in.is_some());
         assert!(operation.effect_out.is_some());
         assert_eq!(
-            function.return_signature.as_ref().map(|signature| signature.semantic_type),
+            function
+                .return_signature
+                .as_ref()
+                .map(|signature| signature.semantic_type),
             Some(SemanticType::Boolean)
         );
         assert!(verify_document(&documents[0]).is_empty());
@@ -3111,17 +3144,26 @@ mod tests {
             .collect();
         assert!(instructions.iter().any(|instruction| {
             instruction.op == "js.constant"
-                && instruction.attributes.get("literal").and_then(JsonValue::as_str)
+                && instruction
+                    .attributes
+                    .get("literal")
+                    .and_then(JsonValue::as_str)
                     == Some("undefined")
         }));
         assert!(instructions.iter().any(|instruction| {
             instruction.op == "env.store"
-                && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                && instruction
+                    .attributes
+                    .get("binding")
+                    .and_then(JsonValue::as_str)
                     == Some(local.id.as_str())
         }));
         assert!(instructions.iter().any(|instruction| {
             instruction.op == "env.load"
-                && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                && instruction
+                    .attributes
+                    .get("binding")
+                    .and_then(JsonValue::as_str)
                     == Some(local.id.as_str())
         }));
         assert!(verify_document(&documents[0]).is_empty());
@@ -3169,7 +3211,10 @@ mod tests {
             .iter()
             .position(|instruction| {
                 instruction.op == "env.store"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(hoisted.id.as_str())
             })
             .expect("hoisted var initialized at function entry");
@@ -3177,7 +3222,10 @@ mod tests {
             .iter()
             .position(|instruction| {
                 instruction.op == "env.load"
-                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    && instruction
+                        .attributes
+                        .get("binding")
+                        .and_then(JsonValue::as_str)
                         == Some(hoisted.id.as_str())
             })
             .expect("hoisted var read is lowered");
@@ -3224,5 +3272,4 @@ mod tests {
         .expect_err("read before const initialization is a TDZ error");
         assert_eq!(errors[0].code, "lowering.const_tdz");
     }
-
 }
