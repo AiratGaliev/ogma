@@ -1616,7 +1616,14 @@ mod semantic_snapshot_tests {
             .find(|function| function.is_arrow)
             .expect("arrow function");
         assert_eq!(arrow.captures, vec![local.id.clone()]);
-        assert!(arrow.parent_function_scope.is_some());
+        assert_eq!(
+            local.scope,
+            arrow
+                .parent_function_scope
+                .as_deref()
+                .expect("nested arrow has an enclosing function environment"),
+            "function-body lexical bindings must share the owning activation environment"
+        );
         assert!(parsed.semantic.references.iter().any(|reference| {
             reference.name == "local"
                 && reference.binding.as_deref() == Some(local.id.as_str())
