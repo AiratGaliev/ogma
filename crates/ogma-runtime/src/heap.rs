@@ -870,6 +870,7 @@ impl Heap {
                 .capacity()
                 .checked_mul(std::mem::size_of::<GcRef>())
                 .ok_or(HeapError::SizeOverflow)?;
+            let cell_bytes = std::mem::size_of::<HeapCell>();
             let string_bytes = match &cell.kind {
                 CellKind::String(units) => units
                     .capacity()
@@ -878,7 +879,8 @@ impl Heap {
                 CellKind::Object | CellKind::Function => 0,
             };
             reclaimed_bytes = reclaimed_bytes
-                .checked_add(edge_bytes)
+                .checked_add(cell_bytes)
+                .and_then(|total| total.checked_add(edge_bytes))
                 .and_then(|total| total.checked_add(string_bytes))
                 .ok_or(HeapError::SizeOverflow)?;
             let slot = &mut self.slots[slot_index];
