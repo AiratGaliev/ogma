@@ -95,6 +95,7 @@ The operation name identifies language/runtime semantics, never a backend opcode
 | `js.constant` | no operands; attributes `literal`, `value` | type follows literal kind | none |
 | `js.add` | `[left, right]`; full ECMAScript `+` semantics | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.less_than` | `[left, right]`; ECMAScript Abstract Relational Comparison with left-to-right coercion | boolean | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.greater_than` | `[left, right]`; ECMAScript greater-than comparison with left-to-right evaluation and relational coercion semantics | boolean | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_property` | `[object]`; string `attributes.key` (including the empty string) | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.set_property` | `[object, value]`; string `attributes.key` (including the empty string) | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.get_element` | `[object, key]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
@@ -218,6 +219,10 @@ The fixture corpus contains 25 cases (4 accepted and 21 rejected). It includes p
 - A backend-specific encoding decision belongs in its own contract and must not leak into Core IR.
 - Production Rust crate boundaries remain deferred until real compile/runtime API boundaries require them; this proof does not create empty `ogma-ir` crates or start M1.
 
-## 11. Current proof limits
+## 11. Current implementation limits
 
-Verified in this change: the v1 schema/semantic verifier and checked-in fixture corpus. Not yet verified because the repository has no corresponding implementation: real frontend-to-Core-IR production, interpreter consumption, AOT consumption, optimizer transformation preservation, Test262/runtime behavior, and cross-backend equivalence. The latter is owned by OGM-31 after this foundational contract is delivered. Full Test262, differential, fuzz and promotion suites remain outside topic PR Fast CI as required by the repository workflow.
+OGM-42 now provides an Oxc-backed owned frontend semantic snapshot and syntax projection, a Rust-owned Core IR v1 model/verifier, and a compiler lowering subset that verifies each emitted function before returning it. Fast CI cross-checks the canonical Python fixture verifier, Rust workspace tests, the parser adapter and a bounded pinned parser-corpus smoke.
+
+This is not full ECMAScript lowering. Unsupported syntax and function forms fail closed with source-positioned diagnostics. The initial synchronous subset does not lower async/generator suspension, destructuring, `try`/`catch` handler regions, `break`/`continue`, optional calls/members, update expressions, dynamic unary negation, unresolved globals or Node-specific module semantics. Per-block/per-iteration closure environments are not materialized; captures whose lifetime cannot be represented by the v1 function environment are rejected. The current IR uses function-environment `source.scope` plus stable `source.bindings`; it does not serialize Oxc block-scope IDs into Core IR v1.
+
+This task does not implement Core IR consumers, portable bytecode execution, native AOT, optimization preservation, Test262 conformance or cross-backend equivalence. Those remain owned by downstream issues. Full Test262, differential, fuzz and promotion suites stay outside topic PR Fast CI as required by the repository workflow.

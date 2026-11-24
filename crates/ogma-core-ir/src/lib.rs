@@ -603,7 +603,7 @@ fn operation_effects(op: &str) -> Option<Effects> {
     };
     match op {
         "js.constant" | "js.to_boolean" | "js.strict_equal" | "js.typeof" => Some(E::default()),
-        "js.add" | "js.less_than" | "js.get_property" | "js.set_property" | "js.get_element"
+        "js.add" | "js.less_than" | "js.greater_than" | "js.get_property" | "js.set_property" | "js.get_element"
         | "js.set_element" | "js.call" | "js.construct" | "js.to_number" | "js.to_string" => {
             Some(dynamic)
         }
@@ -643,7 +643,7 @@ fn operation_effects(op: &str) -> Option<Effects> {
 fn operation_arity(op: &str) -> Option<(usize, Option<usize>)> {
     match op {
         "js.constant" | "env.load" | "closure.create" => Some((0, Some(0))),
-        "js.add" | "js.less_than" | "js.strict_equal" => Some((2, Some(2))),
+        "js.add" | "js.less_than" | "js.greater_than" | "js.strict_equal" => Some((2, Some(2))),
         "js.get_property" | "js.to_boolean" | "js.to_number" | "js.to_string" | "js.typeof"
         | "async.await" => Some((1, Some(1))),
         "js.throw" => Some((1, Some(1))),
@@ -1362,7 +1362,7 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 let expected_type = match instruction.op.as_str() {
                     "js.add" | "js.get_property" | "js.get_element" | "js.call"
                     | "js.construct" | "host.call" | "async.await" => Some(SemanticType::Dynamic),
-                    "js.to_boolean" | "js.strict_equal" | "js.less_than" => {
+                    "js.to_boolean" | "js.strict_equal" | "js.less_than" | "js.greater_than" => {
                         Some(SemanticType::Boolean)
                     }
                     "js.to_number" => Some(SemanticType::Number),

@@ -27,6 +27,7 @@ OPS = {
     "js.constant": (0, 0, "literal", {"literal", "value"}, set()),
     "js.add": (2, 2, "dynamic", set(), DYNAMIC),
     "js.less_than": (2, 2, "boolean", set(), DYNAMIC),
+    "js.greater_than": (2, 2, "boolean", set(), DYNAMIC),
     "js.get_property": (1, 1, "dynamic", {"key"}, DYNAMIC),
     "js.set_property": (2, 2, "operand:1", {"key"}, DYNAMIC),
     "js.get_element": (2, 2, "dynamic", set(), DYNAMIC),

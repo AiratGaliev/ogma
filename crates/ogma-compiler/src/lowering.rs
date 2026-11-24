@@ -1134,10 +1134,13 @@ impl<'a> FunctionCompiler<'a> {
                     SyntaxBinaryOperator::LessThan => self.emit_binary(
                         "js.less_than", left, right, ValueType::BOOLEAN, dynamic_effects(), *span,
                     ),
-                    SyntaxBinaryOperator::GreaterThan => self.fail(
-                        "lowering.greater_than_not_in_core_ir",
-                        Some(*span),
-                        "greater-than requires its own Core IR operation to preserve ECMAScript coercion order",
+                    SyntaxBinaryOperator::GreaterThan => self.emit_binary(
+                        "js.greater_than",
+                        left,
+                        right,
+                        ValueType::BOOLEAN,
+                        dynamic_effects(),
+                        *span,
                     ),
                 }
             }
@@ -1845,6 +1848,8 @@ impl<'a> FunctionCompiler<'a> {
             .filter(|binding| binding.kind == BindingKind::Var)
             .map(|binding| binding.id.clone())
             .collect();
+        let mut var_ids = var_ids;
+        var_ids.sort();
         for binding_id in var_ids {
             let value = self.emit_undefined("initialize hoisted var binding")?;
             self.emit_env_store(
@@ -1982,7 +1987,8 @@ impl<'a> FunctionCompiler<'a> {
                 SyntaxBinaryOperator::Add => Ok(ValueType::DYNAMIC),
                 SyntaxBinaryOperator::StrictEqual
                 | SyntaxBinaryOperator::StrictNotEqual
-                | SyntaxBinaryOperator::LessThan => Ok(ValueType::BOOLEAN),
+                | SyntaxBinaryOperator::LessThan
+                | SyntaxBinaryOperator::GreaterThan => Ok(ValueType::BOOLEAN),
                 SyntaxBinaryOperator::GreaterThan => self.fail(
                     "lowering.greater_than_not_in_core_ir",
                     None,
@@ -3006,6 +3012,217 @@ mod tests {
         );
         assert!(verify_document(&documents[0]).is_empty());
         assert!(verify_document(&documents[1]).is_empty());
+    }
+
+
+    #[test]
+    fn lowers_greater_than_with_dynamic_relational_effects() {
+        let source = source("function run(left, right) { return left > right; }");
+        let span = whole_span(&source);
+        let left = binding("binding_left", "left", BindingKind::Parameter);
+        let right = binding("binding_right", "right", BindingKind::Parameter);
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Binary {
+                    operator: SyntaxBinaryOperator::GreaterThan,
+                    left: Box::new(identifier("left", &left.id, span)),
+                    right: Box::new(identifier("right", &right.id, span)),
+                    span,
+                }),
+                span,
+            }],
+            vec![left.id.clone(), right.id.clone()],
+        );
+        let module = semantic_module(
+            &source,
+            &syntax,
+            vec![left.clone(), right.clone()],
+            vec![
+                parameter("param_run_0", "left", &left.id),
+                parameter("param_run_1", "right", &right.id),
+            ],
+        );
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("greater-than comparison lowers");
+        let function = &documents[0].function;
+        let operation = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .find(|instruction| instruction.op == "js.greater_than")
+            .expect("greater-than operation emitted");
+        assert!(operation.effects.may_throw);
+        assert!(operation.effects.may_call_host);
+        assert!(operation.effect_in.is_some());
+        assert!(operation.effect_out.is_some());
+        assert_eq!(
+            function.return_signature.as_ref().map(|signature| signature.semantic_type),
+            Some(SemanticType::Boolean)
+        );
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn lowers_uninitialized_let_and_hoisted_var_without_losing_tdz_semantics() {
+        let source = source("function run() { let local; return local; }");
+        let span = whole_span(&source);
+        let local = binding("binding_local", "local", BindingKind::Let);
+        let syntax = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Let,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(local.id.clone()),
+                        name: local.name.clone(),
+                        initializer: None,
+                        span,
+                    }],
+                    span,
+                },
+                SyntaxStatement::Return {
+                    value: Some(identifier("local", &local.id, span)),
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, vec![local.clone()], Vec::new());
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("uninitialized let is initialized to undefined");
+        let instructions: Vec<_> = documents[0]
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .collect();
+        assert!(instructions.iter().any(|instruction| {
+            instruction.op == "js.constant"
+                && instruction.attributes.get("literal").and_then(JsonValue::as_str)
+                    == Some("undefined")
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            instruction.op == "env.store"
+                && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    == Some(local.id.as_str())
+        }));
+        assert!(instructions.iter().any(|instruction| {
+            instruction.op == "env.load"
+                && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                    == Some(local.id.as_str())
+        }));
+        assert!(verify_document(&documents[0]).is_empty());
+
+        let var_source = source("function run() { return hoisted; var hoisted; }");
+        let var_span = whole_span(&var_source);
+        let hoisted = binding("binding_hoisted", "hoisted", BindingKind::Var);
+        let var_syntax = function_syntax(
+            &var_source,
+            vec![
+                SyntaxStatement::Return {
+                    value: Some(identifier("hoisted", &hoisted.id, var_span)),
+                    span: var_span,
+                },
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Var,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(hoisted.id.clone()),
+                        name: hoisted.name.clone(),
+                        initializer: None,
+                        span: var_span,
+                    }],
+                    span: var_span,
+                },
+            ],
+            Vec::new(),
+        );
+        let var_module =
+            semantic_module(&var_source, &var_syntax, vec![hoisted.clone()], Vec::new());
+        let var_documents = lower(
+            &var_source,
+            &var_module,
+            &ResolvedSyntaxProgram {
+                functions: vec![var_syntax],
+            },
+        )
+        .expect("var binding is initialized before user statements");
+        let var_instructions: Vec<_> = var_documents[0]
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter())
+            .collect();
+        let undefined_store = var_instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(hoisted.id.as_str())
+            })
+            .expect("hoisted var initialized at function entry");
+        let load = var_instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.load"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(hoisted.id.as_str())
+            })
+            .expect("hoisted var read is lowered");
+        assert!(undefined_store < load);
+        assert!(verify_document(&var_documents[0]).is_empty());
+    }
+
+    #[test]
+    fn rejects_const_read_before_its_initializer() {
+        let source = source("function run() { return value; const value = 1; }");
+        let span = whole_span(&source);
+        let value = binding("binding_value", "value", BindingKind::Const);
+        let syntax = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::Return {
+                    value: Some(identifier("value", &value.id, span)),
+                    span,
+                },
+                SyntaxStatement::Variable {
+                    kind: SyntaxVariableKind::Const,
+                    declarations: vec![SyntaxDeclarator {
+                        binding: Some(value.id.clone()),
+                        name: value.name.clone(),
+                        initializer: Some(SyntaxExpression::Literal {
+                            value: SyntaxLiteral::Number(1.0),
+                            span,
+                        }),
+                        span,
+                    }],
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let module = semantic_module(&source, &syntax, vec![value], Vec::new());
+        let errors = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect_err("read before const initialization is a TDZ error");
+        assert_eq!(errors[0].code, "lowering.const_tdz");
     }
 
 }
