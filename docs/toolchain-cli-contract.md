@@ -3,7 +3,7 @@
 **Status:** Target command ownership contract; the M1 CLI remains intentionally minimal.
 
 **Architecture authority:** Notion Ogma architecture specification, sections 12–14 and 20.9.
-**Related implementation issues:** OGM-93 (M1 CLI), OGM-72 (`ogma test`), OGM-94 (M3 packaging), Native Provider integration task.
+**Related implementation issues:** OGM-93 (M1 CLI), OGM-106 (M2 Rust embedding emission), OGM-72 (`ogma test`), OGM-94 (M3 packaging), Native Provider integration task.
 
 ## 1. Decision
 
@@ -31,6 +31,8 @@ Do not add package installation, lockfile ingestion, provider selection, AOT lin
 
 The existing compile command may accept supported TypeScript/TSX inputs after the approved frontend lands, routing them through the same compiler pipeline. Node compatibility and package resolution remain in `ogma-node-compat` and OGM-59; M2 package fixtures use the externally installed pnpm tree.
 
+OGM-106 also extends this same `ogma compile` pipeline with a Rust embedding-source emission mode (for example, `--emit rust`) for supported JavaScript and M2 TypeScript inputs. For each canonical `.ogmb` compilation-unit artifact, it emits one deterministic Rust source wrapper and its companion `.ogmb`; the wrapper embeds those exact canonical bytes at Rust compile time, normally with `include_bytes!`. This is a build-time artifact adapter, not JS/TS-to-Rust transpilation, a new execution backend or format, a multi-artifact bundler, a Native Provider, or a separate CLI command. The Runtime still verifies the embedded bytes through the ordinary loader. Exact emission flags and output details belong to OGM-106. A Cargo `build.rs` may invoke the same command; Cargo remains responsible for compiling and linking the Rust host.
+
 The user may continue to call pnpm directly. Ogma does not need an install command to load a materialized package tree.
 
 ### M3 — Application toolchain and native build (OGM-94)
@@ -43,7 +45,7 @@ The CLI grows the application-level commands:
 - `ogma providers list` / `ogma providers inspect <provider-id>` — report providers compiled/registered for the selected host/target, the logical services they implement and their compatibility/provenance;
 - `ogma build` — orchestrate supported lockfile ingestion, validation, compilation, Native AOT/portable artifact generation, Cargo host build/link and deterministic application packaging.
 
-The exact flags and project-manifest schema are owned by OGM-94 and must be versioned there. This document defines command responsibilities, not an unversioned `ogma.toml` schema.
+The exact flags for M3 packaging commands and the project-manifest schema are owned by OGM-94 and must be versioned there. The M2 Rust-emission flags/output contract remains owned by OGM-106. This document defines command responsibilities, not an unversioned `ogma.toml` schema.
 
 ### Optional package-manager convenience commands
 
