@@ -1275,7 +1275,10 @@ fn release_vec_capacity<T>(budget: &mut HeapBudget, vector: &Vec<T>) -> Result<(
 }
 
 fn string_to_number(units: &[u16], budget: &mut HeapBudget) -> Result<f64, HeapError> {
-    let Some(start) = units.iter().position(|unit| !is_ecmascript_whitespace(*unit)) else {
+    let Some(start) = units
+        .iter()
+        .position(|unit| !is_ecmascript_whitespace(*unit))
+    else {
         return Ok(0.0);
     };
     let end = units
