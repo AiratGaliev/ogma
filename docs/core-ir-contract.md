@@ -4,7 +4,7 @@
 - **Contract version:** `1.0.0`
 - **Schema:** [`contracts/core-ir/v1/schema.json`](../contracts/core-ir/v1/schema.json), JSON Schema Draft 2020-12
 - **Verifier:** [`.github/scripts/verify_core_ir.py`](../.github/scripts/verify_core_ir.py)
-- **Status:** versioned M0 compiler contract and verifier proof; not a production compiler or runtime implementation
+- **Status:** canonical backend-neutral v1 contract. The JSON Schema and Python verifier remain authoritative; OGM-42 is implementing the owned Rust representation, semantic validation boundary and compiler-side lowering against this contract. This contract is not a bytecode format, native ABI or Runtime API.
 - **Authority:** this document refines the Core IR requirements in the [Ogma architecture specification](https://app.notion.com/p/Ogma-JS-TypeScript-Execution-Engine-4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 2, 4, 5.2, 9.5, 13, 14 and 19.
 
 ## 1. Purpose and boundaries
@@ -18,7 +18,7 @@ Both paths must preserve the same ECMAScript-visible values, exceptions, side ef
 
 Core IR is not a copy of the JavaScript/TypeScript AST, a bytecode format, a native instruction set, an LLVM-like optimizer, or a production Runtime API. It is deliberately compact: function-level CFG, SSA-style value flow, explicit JS semantic operations, effects/exceptions, closure/environment facts, representation facts and source metadata. TypeScript annotations are not runtime type guarantees. A physical representation is a compiler fact that must be proved/guarded before a backend relies on it.
 
-The repository is still in M0 and has no root Rust workspace or Ogma Runtime. This version supplies a machine-readable contract, dependency-free verifier and fixture proof. It does not claim that a real interpreter or AOT compiler exists. The dual-consumer proof remains the scope of the downstream execution-path task (OGM-31); until those prototypes exist, the same fixtures are backend-neutral contract inputs, not evidence of actual backend consumption.
+The contract was established before the production Rust workspace and remains its sole canonical function-level IR boundary. `ogma-core-ir` owns the Rust model and implementation-level checks; `ogma-compiler` owns AST/semantic lowering into this contract. The Python verifier and fixture corpus remain independent reference checks. This does not claim that the portable interpreter or native AOT consumer is complete; those consumers remain owned by their downstream issues.
 
 ## 2. Document envelope and versioning
 

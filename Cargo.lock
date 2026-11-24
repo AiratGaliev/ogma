@@ -257,6 +257,10 @@ dependencies = [
 [[package]]
 name = "ogma-core-ir"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ogma-embedding"
@@ -272,10 +276,12 @@ version = "0.1.0"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
+ "oxc_ast_visit",
  "oxc_diagnostics",
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
+ "oxc_syntax",
  "serde_json",
 ]
 
