@@ -7,8 +7,8 @@ use ogma_core_ir::{
     SemanticType,
 };
 use ogma_frontend::{
-    ParseDiagnostic, ResolvedBinding, ResolvedBindingKind, ResolvedFunction,
-    SemanticSnapshot, SourceFile, SourceSpan,
+    ParseDiagnostic, ResolvedBinding, ResolvedBindingKind, ResolvedFunction, SemanticSnapshot,
+    SourceFile, SourceSpan,
 };
 
 /// A structured compiler semantic-analysis diagnostic.
@@ -77,10 +77,20 @@ pub struct SemanticModule {
 /// Oxc is deliberately not referenced from this crate. The frontend owns
 /// parsing and ECMAScript name resolution; this function validates that the
 /// resulting facts can be represented by the M1 Core IR binding model.
-pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<SemanticModule, Vec<SemanticDiagnostic>> {
-    let scopes: HashMap<&str, _> = snapshot.scopes.iter().map(|scope| (scope.id.as_str(), scope)).collect();
-    let bindings_by_id: HashMap<&str, &ResolvedBinding> = snapshot.bindings.iter()
-        .map(|binding| (binding.id.as_str(), binding)).collect();
+pub fn analyze(
+    source: &SourceFile,
+    snapshot: &SemanticSnapshot,
+) -> Result<SemanticModule, Vec<SemanticDiagnostic>> {
+    let scopes: HashMap<&str, _> = snapshot
+        .scopes
+        .iter()
+        .map(|scope| (scope.id.as_str(), scope))
+        .collect();
+    let bindings_by_id: HashMap<&str, &ResolvedBinding> = snapshot
+        .bindings
+        .iter()
+        .map(|binding| (binding.id.as_str(), binding))
+        .collect();
 
     let mut diagnostics = Vec::new();
     let mut semantic_bindings = Vec::with_capacity(snapshot.bindings.len());
@@ -91,7 +101,10 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.unknown_binding_scope",
                 span: Some(binding.declaration),
-                message: format!("binding {:?} references missing lexical scope {:?}", binding.name, binding.scope),
+                message: format!(
+                    "binding {:?} references missing lexical scope {:?}",
+                    binding.name, binding.scope
+                ),
             });
             continue;
         };
@@ -108,17 +121,26 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 diagnostics.push(SemanticDiagnostic {
                     code: "semantic.unsupported_binding",
                     span: Some(binding.declaration),
-                    message: format!("binding {:?} is not representable in the M1 Core IR environment contract", binding.name),
+                    message: format!(
+                        "binding {:?} is not representable in the M1 Core IR environment contract",
+                        binding.name
+                    ),
                 });
                 continue;
             }
         };
-        let expected_mutability = matches!(kind, BindingKind::Var | BindingKind::Let | BindingKind::Parameter | BindingKind::Catch);
+        let expected_mutability = matches!(
+            kind,
+            BindingKind::Var | BindingKind::Let | BindingKind::Parameter | BindingKind::Catch
+        );
         if binding.mutable != expected_mutability {
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.binding_mutability",
                 span: Some(binding.declaration),
-                message: format!("frontend mutability for {:?} conflicts with the Core IR binding kind", binding.name),
+                message: format!(
+                    "frontend mutability for {:?} conflicts with the Core IR binding kind",
+                    binding.name
+                ),
             });
             continue;
         }
@@ -140,11 +162,17 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
 
     let mut function_by_scope: HashMap<&str, &ResolvedFunction> = HashMap::new();
     for function in &snapshot.functions {
-        if function_by_scope.insert(function.scope.as_str(), function).is_some() {
+        if function_by_scope
+            .insert(function.scope.as_str(), function)
+            .is_some()
+        {
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.duplicate_function_scope",
                 span: Some(function.span),
-                message: format!("multiple function descriptors own scope {:?}", function.scope),
+                message: format!(
+                    "multiple function descriptors own scope {:?}",
+                    function.scope
+                ),
             });
         }
     }
@@ -163,11 +191,17 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
 
     let mut functions = Vec::with_capacity(snapshot.functions.len());
     for function in &snapshot.functions {
-        if scopes.get(function.scope.as_str()).is_none_or(|scope| !scope.is_function) {
+        if scopes
+            .get(function.scope.as_str())
+            .is_none_or(|scope| !scope.is_function)
+        {
             diagnostics.push(SemanticDiagnostic {
                 code: "semantic.invalid_function_scope",
                 span: Some(function.span),
-                message: format!("function {:?} does not own a function lexical scope", function.id),
+                message: format!(
+                    "function {:?} does not own a function lexical scope",
+                    function.id
+                ),
             });
             continue;
         }
@@ -188,8 +222,11 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
             continue;
         }
 
-        let mut local_bindings: Vec<Binding> = semantic_bindings.iter()
-            .filter(|binding| function_scope_for(&binding.lexical_scope) == Some(function.scope.as_str()))
+        let mut local_bindings: Vec<Binding> = semantic_bindings
+            .iter()
+            .filter(|binding| {
+                function_scope_for(&binding.lexical_scope) == Some(function.scope.as_str())
+            })
             .map(|binding| binding.ir.clone())
             .collect();
         local_bindings.sort_by(|left, right| left.id.cmp(&right.id));
@@ -200,7 +237,9 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 diagnostics.push(SemanticDiagnostic {
                     code: "semantic.parameter_binding_missing",
                     span: Some(function.span),
-                    message: format!("function parameter references missing binding {binding_id:?}"),
+                    message: format!(
+                        "function parameter references missing binding {binding_id:?}"
+                    ),
                 });
                 continue;
             };
@@ -208,7 +247,10 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 diagnostics.push(SemanticDiagnostic {
                     code: "semantic.parameter_binding_kind",
                     span: Some(function.span),
-                    message: format!("parameter {:?} is not represented as a parameter binding", binding.name),
+                    message: format!(
+                        "parameter {:?} is not represented as a parameter binding",
+                        binding.name
+                    ),
                 });
                 continue;
             }
@@ -245,7 +287,10 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 diagnostics.push(SemanticDiagnostic {
                     code: "semantic.capture_unrepresentable",
                     span: Some(binding.declaration),
-                    message: format!("captured binding {:?} cannot be represented in Core IR", binding.name),
+                    message: format!(
+                        "captured binding {:?} cannot be represented in Core IR",
+                        binding.name
+                    ),
                 });
                 continue;
             };
@@ -254,7 +299,10 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 diagnostics.push(SemanticDiagnostic {
                     code: "semantic.capture_not_outer",
                     span: Some(binding.declaration),
-                    message: format!("binding {:?} is declared within the capturing function", binding.name),
+                    message: format!(
+                        "binding {:?} is declared within the capturing function",
+                        binding.name
+                    ),
                 });
                 continue;
             }
@@ -266,7 +314,11 @@ pub fn analyze(source: &SourceFile, snapshot: &SemanticSnapshot) -> Result<Seman
                 mutable: ir_binding.mutable,
                 semantic_type: ir_binding.semantic_type,
                 representation: ir_binding.representation,
-                mode: if ir_binding.mutable { CaptureMode::Cell } else { CaptureMode::Value },
+                mode: if ir_binding.mutable {
+                    CaptureMode::Cell
+                } else {
+                    CaptureMode::Value
+                },
             });
         }
         captures.sort_by(|left, right| left.binding.cmp(&right.binding));
@@ -309,37 +361,65 @@ pub fn from_frontend_diagnostic(diagnostic: &ParseDiagnostic) -> SemanticDiagnos
             ogma_frontend::DiagnosticPhase::Parse => "frontend.parse",
             ogma_frontend::DiagnosticPhase::Early => "frontend.early_error",
         },
-        span: diagnostic.labels.iter().find(|label| label.primary).map(|label| label.span),
+        span: diagnostic
+            .labels
+            .iter()
+            .find(|label| label.primary)
+            .map(|label| label.span),
         message: diagnostic.message.clone(),
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ogma_frontend::{ResolvedScope, ResolvedReference, ResolvedFunction, ResolvedBinding, ResolvedBindingKind, SemanticSnapshot, SourcePosition};
+    use ogma_frontend::{
+        ResolvedBinding, ResolvedBindingKind, ResolvedFunction, ResolvedReference, ResolvedScope,
+        SemanticSnapshot, SourcePosition,
+    };
     use std::sync::Arc;
 
     fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
             start_byte,
             end_byte,
-            start: SourcePosition { line: 1, column_utf16: start_byte },
-            end: SourcePosition { line: 1, column_utf16: end_byte },
+            start: SourcePosition {
+                line: 1,
+                column_utf16: start_byte,
+            },
+            end: SourcePosition {
+                line: 1,
+                column_utf16: end_byte,
+            },
         }
     }
 
     fn source() -> SourceFile {
-        SourceFile::new("unit", "unit.js", None, Arc::<str>::from("function outer(arg) { let local = arg; return () => local; }"))
-            .expect("valid source")
+        SourceFile::new(
+            "unit",
+            "unit.js",
+            None,
+            Arc::<str>::from("function outer(arg) { let local = arg; return () => local; }"),
+        )
+        .expect("valid source")
     }
 
     fn scope(id: &str, parent: Option<&str>, is_function: bool, is_var: bool) -> ResolvedScope {
-        ResolvedScope { id: id.to_owned(), parent: parent.map(str::to_owned), is_function, is_var }
+        ResolvedScope {
+            id: id.to_owned(),
+            parent: parent.map(str::to_owned),
+            is_function,
+            is_var,
+        }
     }
 
-    fn binding(id: &str, name: &str, kind: ResolvedBindingKind, mutable: bool, scope: &str) -> ResolvedBinding {
+    fn binding(
+        id: &str,
+        name: &str,
+        kind: ResolvedBindingKind,
+        mutable: bool,
+        scope: &str,
+    ) -> ResolvedBinding {
         ResolvedBinding {
             id: id.to_owned(),
             name: name.to_owned(),
@@ -351,7 +431,16 @@ mod tests {
         }
     }
 
-    fn function(id: &str, scope: &str, parent: Option<&str>, parameters: Vec<&str>, captures: Vec<&str>, is_arrow: bool, simple_parameters: bool, is_async: bool) -> ResolvedFunction {
+    fn function(
+        id: &str,
+        scope: &str,
+        parent: Option<&str>,
+        parameters: Vec<&str>,
+        captures: Vec<&str>,
+        is_arrow: bool,
+        simple_parameters: bool,
+        is_async: bool,
+    ) -> ResolvedFunction {
         ResolvedFunction {
             id: id.to_owned(),
             name: id.to_owned(),
@@ -379,25 +468,74 @@ mod tests {
                 scope("scope_5", Some("scope_1"), true, true),
             ],
             bindings: vec![
-                binding("binding_0", "arg", ResolvedBindingKind::Parameter, true, "scope_1"),
-                binding("binding_1", "local", ResolvedBindingKind::Let, true, "scope_3"),
-                binding("binding_2", "value", ResolvedBindingKind::Let, true, "scope_0"),
-                binding("binding_3", "value", ResolvedBindingKind::Let, true, "scope_1"),
+                binding(
+                    "binding_0",
+                    "arg",
+                    ResolvedBindingKind::Parameter,
+                    true,
+                    "scope_1",
+                ),
+                binding(
+                    "binding_1",
+                    "local",
+                    ResolvedBindingKind::Let,
+                    true,
+                    "scope_3",
+                ),
+                binding(
+                    "binding_2",
+                    "value",
+                    ResolvedBindingKind::Let,
+                    true,
+                    "scope_0",
+                ),
+                binding(
+                    "binding_3",
+                    "value",
+                    ResolvedBindingKind::Let,
+                    true,
+                    "scope_1",
+                ),
             ],
-            references: vec![
-                ResolvedReference {
-                    name: "local".to_owned(),
-                    span: span(10, 15),
-                    scope: "scope_2".to_owned(),
-                    binding: Some("binding_1".to_owned()),
-                    read: true,
-                    write: false,
-                },
-            ],
+            references: vec![ResolvedReference {
+                name: "local".to_owned(),
+                span: span(10, 15),
+                scope: "scope_2".to_owned(),
+                binding: Some("binding_1".to_owned()),
+                read: true,
+                write: false,
+            }],
             functions: vec![
-                function("fn_program", "scope_0", None, vec![], vec![], false, true, false),
-                function("fn_1", "scope_1", Some("scope_0"), vec!["binding_0"], vec![], false, true, false),
-                function("fn_2", "scope_2", Some("scope_1"), vec![], vec!["binding_1"], true, true, false),
+                function(
+                    "fn_program",
+                    "scope_0",
+                    None,
+                    vec![],
+                    vec![],
+                    false,
+                    true,
+                    false,
+                ),
+                function(
+                    "fn_1",
+                    "scope_1",
+                    Some("scope_0"),
+                    vec!["binding_0"],
+                    vec![],
+                    false,
+                    true,
+                    false,
+                ),
+                function(
+                    "fn_2",
+                    "scope_2",
+                    Some("scope_1"),
+                    vec![],
+                    vec!["binding_1"],
+                    true,
+                    true,
+                    false,
+                ),
             ],
         }
     }
@@ -405,40 +543,101 @@ mod tests {
     #[test]
     fn maps_shadowed_declarations_to_distinct_core_ir_bindings() {
         let module = analyze(&source(), &snapshot()).expect("semantic facts are representable");
-        let values: Vec<_> = module.bindings.iter().filter(|binding| binding.ir.name == "value").collect();
+        let values: Vec<_> = module
+            .bindings
+            .iter()
+            .filter(|binding| binding.ir.name == "value")
+            .collect();
         assert_eq!(values.len(), 2);
         assert_ne!(values[0].ir.id, values[1].ir.id);
         assert_ne!(values[0].lexical_scope, values[1].lexical_scope);
-        let program = module.functions.iter().find(|function| function.id == "fn_program").unwrap();
-        assert!(program.environment.bindings.iter().any(|binding| binding.name == "value"));
+        let program = module
+            .functions
+            .iter()
+            .find(|function| function.id == "fn_program")
+            .unwrap();
+        assert!(
+            program
+                .environment
+                .bindings
+                .iter()
+                .any(|binding| binding.name == "value")
+        );
     }
 
     #[test]
     fn constructs_mutable_cell_capture_for_an_arrow_function() {
         let module = analyze(&source(), &snapshot()).expect("semantic facts are representable");
-        let arrow = module.functions.iter().find(|function| function.is_arrow).unwrap();
+        let arrow = module
+            .functions
+            .iter()
+            .find(|function| function.is_arrow)
+            .unwrap();
         assert_eq!(arrow.captures.len(), 1);
         assert_eq!(arrow.captures[0].name, "local");
         assert_eq!(arrow.captures[0].mode, CaptureMode::Cell);
-        assert!(arrow.environment.bindings.iter().all(|binding| binding.name != "local"));
+        assert!(
+            arrow
+                .environment
+                .bindings
+                .iter()
+                .all(|binding| binding.name != "local")
+        );
     }
 
     #[test]
     fn rejects_async_and_non_simple_parameter_forms_without_fabricating_ir() {
         let source = source();
         let mut input = snapshot();
-        input.functions.push(function("fn_async", "scope_4", Some("scope_1"), vec![], vec![], false, true, true));
-        input.functions.push(function("fn_pattern", "scope_5", Some("scope_1"), vec![], vec![], false, false, false));
+        input.functions.push(function(
+            "fn_async",
+            "scope_4",
+            Some("scope_1"),
+            vec![],
+            vec![],
+            false,
+            true,
+            true,
+        ));
+        input.functions.push(function(
+            "fn_pattern",
+            "scope_5",
+            Some("scope_1"),
+            vec![],
+            vec![],
+            false,
+            false,
+            false,
+        ));
         let diagnostics = analyze(&source, &input).expect_err("unsupported forms fail closed");
-        assert!(diagnostics.iter().any(|item| item.code == "semantic.unsupported_function_kind"));
-        assert!(diagnostics.iter().any(|item| item.code == "semantic.unsupported_parameter_pattern"));
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.code == "semantic.unsupported_function_kind")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.code == "semantic.unsupported_parameter_pattern")
+        );
     }
 
     #[test]
     fn rejects_binding_kinds_outside_the_core_ir_environment_model() {
         let mut input = snapshot();
-        input.bindings.push(binding("binding_4", "type_only", ResolvedBindingKind::Other, false, "scope_0"));
-        let diagnostics = analyze(&source(), &input).expect_err("unsupported declaration cannot be silently lowered");
-        assert!(diagnostics.iter().any(|item| item.code == "semantic.unsupported_binding"));
+        input.bindings.push(binding(
+            "binding_4",
+            "type_only",
+            ResolvedBindingKind::Other,
+            false,
+            "scope_0",
+        ));
+        let diagnostics = analyze(&source(), &input)
+            .expect_err("unsupported declaration cannot be silently lowered");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.code == "semantic.unsupported_binding")
+        );
     }
 }

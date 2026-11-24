@@ -14,12 +14,12 @@ use std::{fmt, sync::Arc};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{self, Program};
-use oxc_ast_visit::{walk, Visit};
+use oxc_ast_visit::{Visit, walk};
 use oxc_diagnostics::{OxcDiagnostic, Severity as OxcSeverity};
 use oxc_parser::{ParseOptions as OxcParseOptions, Parser};
 use oxc_semantic::{Semantic, SemanticBuilder};
-use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 use oxc_span::SourceType;
+use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 
 /// Stable identity for one source file within a compilation/debugging session.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1018,7 +1018,6 @@ mod tests {
     }
 }
 
-
 /// Classification of a resolved ECMAScript lexical binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolvedBindingKind {
@@ -1185,7 +1184,9 @@ impl<'a> Visit<'a> for SemanticCollector {
                     _ => simple_parameters = false,
                 }
             }
-            let name = node.id.as_ref()
+            let name = node
+                .id
+                .as_ref()
                 .map(|identifier| identifier.name.as_str().to_owned())
                 .unwrap_or_else(|| format!("<function@{}>", node.span.start));
             self.functions.push(RawFunction {
@@ -1245,11 +1246,20 @@ fn binding_identity(symbol: SymbolId) -> String {
 
 fn nearest_function_scope(semantic: &Semantic<'_>, from: ScopeId) -> Option<ScopeId> {
     let scoping = semantic.scoping();
-    scoping.scope_ancestors(from).find(|scope| scoping.scope_flags(*scope).is_function())
+    scoping
+        .scope_ancestors(from)
+        .find(|scope| scoping.scope_flags(*scope).is_function())
 }
 
-fn is_owned_by_function(semantic: &Semantic<'_>, binding_scope: ScopeId, function_scope: ScopeId) -> bool {
-    semantic.scoping().scope_ancestors(binding_scope).any(|scope| scope == function_scope)
+fn is_owned_by_function(
+    semantic: &Semantic<'_>,
+    binding_scope: ScopeId,
+    function_scope: ScopeId,
+) -> bool {
+    semantic
+        .scoping()
+        .scope_ancestors(binding_scope)
+        .any(|scope| scope == function_scope)
 }
 
 fn build_semantic_snapshot(
@@ -1264,19 +1274,23 @@ fn build_semantic_snapshot(
     let mut collector = SemanticCollector::default();
     collector.visit_program(program);
 
-    let scopes = scoping.scope_descendants_from_root().map(|scope| {
-        let flags = scoping.scope_flags(scope);
-        ResolvedScope {
-            id: scope_identity(scope),
-            parent: scoping.scope_parent_id(scope).map(scope_identity),
-            is_function: flags.is_function(),
-            is_var: flags.is_var(),
-        }
-    }).collect::<Vec<_>>();
+    let scopes = scoping
+        .scope_descendants_from_root()
+        .map(|scope| {
+            let flags = scoping.scope_flags(scope);
+            ResolvedScope {
+                id: scope_identity(scope),
+                parent: scoping.scope_parent_id(scope).map(scope_identity),
+                is_function: flags.is_function(),
+                is_var: flags.is_var(),
+            }
+        })
+        .collect::<Vec<_>>();
 
     let mut raw_functions = collector.functions;
     raw_functions.sort_by_key(|function| (function.start, function.end, function.scope.index()));
-    let parameter_symbols: std::collections::HashSet<usize> = raw_functions.iter()
+    let parameter_symbols: std::collections::HashSet<usize> = raw_functions
+        .iter()
         .flat_map(|function| function.parameters.iter().map(|symbol| symbol.index()))
         .collect();
 
@@ -1292,7 +1306,9 @@ fn build_semantic_snapshot(
             ResolvedBindingKind::Const
         } else if flags.contains(oxc_syntax::symbol::SymbolFlags::BlockScopedVariable) {
             ResolvedBindingKind::Let
-        } else if flags.is_function_scoped_declaration() && parameter_symbols.contains(&symbol.index()) {
+        } else if flags.is_function_scoped_declaration()
+            && parameter_symbols.contains(&symbol.index())
+        {
             ResolvedBindingKind::Parameter
         } else if flags.is_function_scoped_declaration() {
             ResolvedBindingKind::Var
@@ -1305,7 +1321,10 @@ fn build_semantic_snapshot(
         } else {
             ResolvedBindingKind::Other
         };
-        let mutable = !matches!(kind, ResolvedBindingKind::Const | ResolvedBindingKind::Import | ResolvedBindingKind::Other);
+        let mutable = !matches!(
+            kind,
+            ResolvedBindingKind::Const | ResolvedBindingKind::Import | ResolvedBindingKind::Other
+        );
         let span = scoping.symbol_span(symbol);
         bindings.push(ResolvedBinding {
             id: binding_identity(symbol),
@@ -1319,10 +1338,14 @@ fn build_semantic_snapshot(
     }
 
     let mut references = Vec::with_capacity(collector.references.len());
-    let mut captures_by_function: std::collections::HashMap<usize, std::collections::BTreeSet<String>> =
-        std::collections::HashMap::new();
+    let mut captures_by_function: std::collections::HashMap<
+        usize,
+        std::collections::BTreeSet<String>,
+    > = std::collections::HashMap::new();
     for raw in collector.references {
-        let resolved = raw.id.map(|reference_id| scoping.get_reference(reference_id));
+        let resolved = raw
+            .id
+            .map(|reference_id| scoping.get_reference(reference_id));
         let reference_scope = resolved.map(|reference| reference.scope_id());
         let binding_symbol = resolved.and_then(|reference| reference.symbol_id());
         let function_scope = reference_scope
@@ -1330,15 +1353,21 @@ fn build_semantic_snapshot(
             .unwrap_or(root_scope_id);
         if let Some(symbol) = binding_symbol {
             let binding_scope = scoping.symbol_scope_id(symbol);
-            if function_scope != root_scope_id && !is_owned_by_function(semantic, binding_scope, function_scope) {
-                captures_by_function.entry(function_scope.index()).or_default()
+            if function_scope != root_scope_id
+                && !is_owned_by_function(semantic, binding_scope, function_scope)
+            {
+                captures_by_function
+                    .entry(function_scope.index())
+                    .or_default()
                     .insert(binding_identity(symbol));
             }
         }
         references.push(ResolvedReference {
             name: raw.name,
             span: source.span(raw.start as usize, raw.end as usize),
-            scope: reference_scope.map(scope_identity).unwrap_or_else(|| root_scope.clone()),
+            scope: reference_scope
+                .map(scope_identity)
+                .unwrap_or_else(|| root_scope.clone()),
             binding: binding_symbol.map(binding_identity),
             read: resolved.is_some_and(|reference| reference.is_read()),
             write: resolved.is_some_and(|reference| reference.is_write()),
@@ -1353,7 +1382,10 @@ fn build_semantic_snapshot(
         symbol_scope_by_binding.insert(binding_identity(symbol), scoping.symbol_scope_id(symbol));
     }
     for function in &raw_functions {
-        let captured = captures_by_function.get(&function.scope.index()).cloned().unwrap_or_default();
+        let captured = captures_by_function
+            .get(&function.scope.index())
+            .cloned()
+            .unwrap_or_default();
         if captured.is_empty() {
             continue;
         }
@@ -1370,22 +1402,27 @@ fn build_semantic_snapshot(
             let Some(binding_scope) = symbol_scope_by_binding.get(&binding_id).copied() else {
                 continue;
             };
-            let owner_function = nearest_function_scope(semantic, binding_scope).unwrap_or(root_scope_id);
+            let owner_function =
+                nearest_function_scope(semantic, binding_scope).unwrap_or(root_scope_id);
             let mut ancestor = parent_function;
             while let Some(ancestor_scope) = ancestor {
                 if ancestor_scope == owner_function || ancestor_scope == root_scope_id {
                     break;
                 }
-                captures_by_function.entry(ancestor_scope.index()).or_default()
+                captures_by_function
+                    .entry(ancestor_scope.index())
+                    .or_default()
                     .insert(binding_id.clone());
-                ancestor = scoping.scope_parent_id(ancestor_scope).and_then(|mut scope| {
-                    loop {
-                        if scoping.scope_flags(scope).is_function() {
-                            return Some(scope);
+                ancestor = scoping
+                    .scope_parent_id(ancestor_scope)
+                    .and_then(|mut scope| {
+                        loop {
+                            if scoping.scope_flags(scope).is_function() {
+                                return Some(scope);
+                            }
+                            scope = scoping.scope_parent_id(scope)?;
                         }
-                        scope = scoping.scope_parent_id(scope)?;
-                    }
-                });
+                    });
             }
         }
     }
@@ -1405,23 +1442,32 @@ fn build_semantic_snapshot(
         simple_parameters: true,
     });
     for function in raw_functions {
-        let parent_scope = scoping.scope_parent_id(function.scope).and_then(|mut parent| {
-            loop {
-                if scoping.scope_flags(parent).is_function() {
-                    return Some(parent);
+        let parent_scope = scoping
+            .scope_parent_id(function.scope)
+            .and_then(|mut parent| {
+                loop {
+                    if scoping.scope_flags(parent).is_function() {
+                        return Some(parent);
+                    }
+                    parent = scoping.scope_parent_id(parent)?;
                 }
-                parent = scoping.scope_parent_id(parent)?;
-            }
-        });
-        let captures = captures_by_function.remove(&function.scope.index())
-            .unwrap_or_default().into_iter().collect();
+            });
+        let captures = captures_by_function
+            .remove(&function.scope.index())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         functions.push(ResolvedFunction {
             id: format!("fn_{}", function.scope.index()),
             name: function.name,
             scope: scope_identity(function.scope),
             parent_function_scope: parent_scope.map(scope_identity),
             span: source.span(function.start as usize, function.end as usize),
-            parameters: function.parameters.into_iter().map(binding_identity).collect(),
+            parameters: function
+                .parameters
+                .into_iter()
+                .map(binding_identity)
+                .collect(),
             captures,
             is_arrow: function.is_arrow,
             is_async: function.is_async,
@@ -1429,11 +1475,22 @@ fn build_semantic_snapshot(
             simple_parameters: function.simple_parameters,
         });
     }
-    functions.sort_by_key(|function| (function.span.start_byte, function.span.end_byte, function.id.clone()));
+    functions.sort_by_key(|function| {
+        (
+            function.span.start_byte,
+            function.span.end_byte,
+            function.id.clone(),
+        )
+    });
 
-    SemanticSnapshot { root_scope, scopes, bindings, references, functions }
+    SemanticSnapshot {
+        root_scope,
+        scopes,
+        bindings,
+        references,
+        functions,
+    }
 }
-
 
 #[cfg(test)]
 mod semantic_snapshot_tests {
@@ -1447,25 +1504,44 @@ mod semantic_snapshot_tests {
             "memory://shadowing.js",
             None,
             "let value = 1; { let value = 2; value; } value;",
-        ).expect("valid source file");
-        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("valid JavaScript");
+        )
+        .expect("valid source file");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
 
-        let values: Vec<_> = parsed.semantic.bindings.iter()
+        let values: Vec<_> = parsed
+            .semantic
+            .bindings
+            .iter()
             .filter(|binding| binding.name == "value")
             .collect();
         assert_eq!(values.len(), 2);
         assert_ne!(values[0].id, values[1].id);
         assert_ne!(values[0].scope, values[1].scope);
-        assert!(values.iter().all(|binding| binding.kind == ResolvedBindingKind::Let));
+        assert!(
+            values
+                .iter()
+                .all(|binding| binding.kind == ResolvedBindingKind::Let)
+        );
 
-        let references: Vec<_> = parsed.semantic.references.iter()
+        let references: Vec<_> = parsed
+            .semantic
+            .references
+            .iter()
             .filter(|reference| reference.name == "value")
             .collect();
         assert_eq!(references.len(), 2);
-        assert!(references.iter().all(|reference| reference.read && !reference.write));
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.read && !reference.write)
+        );
         assert_ne!(references[0].binding, references[1].binding);
-        assert!(references.iter().all(|reference| reference.binding.is_some()));
+        assert!(
+            references
+                .iter()
+                .all(|reference| reference.binding.is_some())
+        );
     }
 
     #[test]
@@ -1476,22 +1552,32 @@ mod semantic_snapshot_tests {
             "memory://closures.js",
             None,
             "function outer(arg) { let local = arg; return () => local; }",
-        ).expect("valid source file");
-        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("valid JavaScript");
+        )
+        .expect("valid source file");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("valid JavaScript");
 
-        let parameter = parsed.semantic.bindings.iter()
+        let parameter = parsed
+            .semantic
+            .bindings
+            .iter()
             .find(|binding| binding.name == "arg")
             .expect("parameter binding");
         assert_eq!(parameter.kind, ResolvedBindingKind::Parameter);
         assert!(parameter.mutable);
 
-        let local = parsed.semantic.bindings.iter()
+        let local = parsed
+            .semantic
+            .bindings
+            .iter()
             .find(|binding| binding.name == "local")
             .expect("local binding");
         assert_eq!(local.kind, ResolvedBindingKind::Let);
 
-        let arrow = parsed.semantic.functions.iter()
+        let arrow = parsed
+            .semantic
+            .functions
+            .iter()
             .find(|function| function.is_arrow)
             .expect("arrow function");
         assert_eq!(arrow.captures, vec![local.id.clone()]);
@@ -1511,15 +1597,22 @@ mod semantic_snapshot_tests {
             "memory://globals.js",
             None,
             "const local = 1; console.log(local);",
-        ).expect("valid source file");
+        )
+        .expect("valid source file");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
             .expect("unresolved globals are not parser errors");
 
-        let console = parsed.semantic.references.iter()
+        let console = parsed
+            .semantic
+            .references
+            .iter()
             .find(|reference| reference.name == "console")
             .expect("global console reference");
         assert!(console.binding.is_none());
-        let local = parsed.semantic.references.iter()
+        let local = parsed
+            .semantic
+            .references
+            .iter()
             .find(|reference| reference.name == "local")
             .expect("local reference");
         assert!(local.binding.is_some());
