@@ -3422,4 +3422,229 @@ mod tests {
         .expect_err("block-scoped capture requires a per-block environment");
         assert_eq!(error[0].code, "lowering.block_capture_lifetime");
     }
+
+    #[test]
+    fn lowers_c_style_for_loop_with_effect_backedge() {
+        let source = source("function run() { for (let index = 0; index < 2; index = index + 1) {} }");
+        let span = whole_span(&source);
+        let index = binding("binding_index", "index", BindingKind::Let);
+        let initializer = SyntaxForInitializer::Variable {
+            kind: SyntaxVariableKind::Let,
+            declarations: vec![SyntaxDeclarator {
+                binding: Some(index.id.clone()),
+                name: index.name.clone(),
+                initializer: Some(SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(0.0),
+                    span,
+                }),
+                span,
+            }],
+            span,
+        };
+        let test = SyntaxExpression::Binary {
+            operator: SyntaxBinaryOperator::LessThan,
+            left: Box::new(identifier("index", &index.id, span)),
+            right: Box::new(SyntaxExpression::Literal {
+                value: SyntaxLiteral::Number(2.0),
+                span,
+            }),
+            span,
+        };
+        let update = SyntaxExpression::Assign {
+            target: SyntaxAssignmentTarget::Identifier {
+                name: "index".to_owned(),
+                binding: Some(index.id.clone()),
+                span,
+            },
+            value: Box::new(SyntaxExpression::Binary {
+                operator: SyntaxBinaryOperator::Add,
+                left: Box::new(identifier("index", &index.id, span)),
+                right: Box::new(SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(1.0),
+                    span,
+                }),
+                span,
+            }),
+            span,
+        };
+        let syntax = function_syntax(
+            &source,
+            vec![SyntaxStatement::For {
+                scope: Some("scope_for".to_owned()),
+                initializer: Some(initializer),
+                test: Some(test),
+                update: Some(update),
+                body: Box::new(SyntaxStatement::Empty { span }),
+                span,
+            }],
+            Vec::new(),
+        );
+        let mut module = semantic_module(&source, &syntax, vec![index.clone()], Vec::new());
+        module.bindings[0].lexical_scope = "scope_for".to_owned();
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![syntax],
+            },
+        )
+        .expect("C-style for loop lowers to verified CFG");
+        let function = &documents[0].function;
+        assert_eq!(function.blocks.len(), 5);
+        let header = function
+            .blocks
+            .iter()
+            .find(|block| matches!(block.terminator, Terminator::Branch { .. }))
+            .expect("for loop header branch exists");
+        let body_id = match &header.terminator {
+            Terminator::Branch { then_edge, .. } => then_edge.target.as_str(),
+            _ => unreachable!(),
+        };
+        let body = function
+            .blocks
+            .iter()
+            .find(|block| block.id == body_id)
+            .expect("for loop body exists");
+        let update_id = match &body.terminator {
+            Terminator::Jump { target, .. } => target.as_str(),
+            _ => panic!("for body must jump to update block"),
+        };
+        let update_block = function
+            .blocks
+            .iter()
+            .find(|block| block.id == update_id)
+            .expect("for update block exists");
+        assert!(matches!(
+            update_block.terminator,
+            Terminator::Jump { ref target, .. } if target == &header.id
+        ));
+        assert!(header.parameters.iter().any(|parameter| {
+            matches!(parameter, BlockParameter::Effect(_))
+        }));
+        assert!(verify_document(&documents[0]).is_empty());
+    }
+
+    #[test]
+    fn hoists_function_declarations_before_the_first_read() {
+        let source = source(
+            "function run() { return child; function child() { return 7; } }",
+        );
+        let span = whole_span(&source);
+        let child_binding = binding("binding_child", "child", BindingKind::Var);
+        let parent = function_syntax(
+            &source,
+            vec![
+                SyntaxStatement::Return {
+                    value: Some(identifier("child", &child_binding.id, span)),
+                    span,
+                },
+                SyntaxStatement::FunctionDeclaration {
+                    function: "fn_child".to_owned(),
+                    binding: Some(child_binding.id.clone()),
+                    name: "child".to_owned(),
+                    span,
+                },
+            ],
+            Vec::new(),
+        );
+        let child = ResolvedSyntaxFunction {
+            id: "fn_child".to_owned(),
+            name: "child".to_owned(),
+            scope: "scope_2".to_owned(),
+            parent_function_scope: Some(parent.scope.clone()),
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            body: vec![SyntaxStatement::Return {
+                value: Some(SyntaxExpression::Literal {
+                    value: SyntaxLiteral::Number(7.0),
+                    span,
+                }),
+                span,
+            }],
+            span,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        };
+        let parent_semantics = FunctionSemantics {
+            id: parent.id.clone(),
+            name: parent.name.clone(),
+            environment: Environment {
+                id: parent.scope.clone(),
+                parent: parent.parent_function_scope.clone(),
+                bindings: vec![child_binding.clone()],
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: parent.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let child_semantics = FunctionSemantics {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            environment: Environment {
+                id: child.scope.clone(),
+                parent: child.parent_function_scope.clone(),
+                bindings: Vec::new(),
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: child.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let module = SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![parent_semantics, child_semantics],
+            bindings: vec![SemanticBinding {
+                ir: child_binding.clone(),
+                lexical_scope: parent.scope.clone(),
+                declaration: span,
+            }],
+        };
+        let documents = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![parent, child],
+            },
+        )
+        .expect("hoisted function declaration lowers");
+        assert_eq!(documents.len(), 2);
+        let instructions = &documents[0].function.blocks[0].instructions;
+        let closure = instructions
+            .iter()
+            .position(|instruction| instruction.op == "closure.create")
+            .expect("function closure is created before user statements");
+        let store = instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.store"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(child_binding.id.as_str())
+                    && instruction.result.as_ref().is_some_and(|result| {
+                        result.semantic_type == SemanticType::Function
+                    })
+            })
+            .expect("hoisted function binding receives a closure");
+        let load = instructions
+            .iter()
+            .position(|instruction| {
+                instruction.op == "env.load"
+                    && instruction.attributes.get("binding").and_then(JsonValue::as_str)
+                        == Some(child_binding.id.as_str())
+            })
+            .expect("the earlier source return reads the initialized binding");
+        assert!(closure < store && store < load);
+        assert!(verify_document(&documents[0]).is_empty());
+        assert!(verify_document(&documents[1]).is_empty());
+    }
+
 }
