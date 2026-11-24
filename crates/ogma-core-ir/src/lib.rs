@@ -2381,10 +2381,9 @@ mod tests {
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/core-ir/fixtures/positive-ssa-branch.json");
-        let document = parse_and_verify(
-            &fs::read_to_string(path).expect("positive fixture exists"),
-        )
-        .expect("positive fixture verifies");
+        let document =
+            parse_and_verify(&fs::read_to_string(path).expect("positive fixture exists"))
+                .expect("positive fixture verifies");
         let encoded = serde_json::to_string(&document).expect("typed model serializes");
         let duplicated = encoded.replacen(
             r#""contract":"ogma.core-ir""#,
