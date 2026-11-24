@@ -235,9 +235,26 @@ struct HeapCell {
 }
 
 #[derive(Debug)]
+struct CellStorage(Box<[HeapCell]>);
+
+impl std::ops::Deref for CellStorage {
+    type Target = HeapCell;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[0]
+    }
+}
+
+impl std::ops::DerefMut for CellStorage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0[0]
+    }
+}
+
+#[derive(Debug)]
 struct HeapSlot {
     generation: u32,
-    cell: Option<HeapCell>,
+    cell: Option<CellStorage>,
     free_next: Option<u32>,
 }
 
@@ -1042,37 +1059,37 @@ impl Heap {
         if self.allocations == u64::MAX || self.live_objects == u64::MAX {
             return Err(HeapError::SizeOverflow);
         }
-        let index = if let Some(index) = self.free_slot_head {
+
+        let reusable_index = self.free_slot_head;
+        if let Some(index) = reusable_index {
             let slot = self
                 .slots
-                .get_mut(index as usize)
+                .get(index as usize)
                 .ok_or(HeapError::AccountingInvariant)?;
             if slot.cell.is_some() {
                 return Err(HeapError::AccountingInvariant);
             }
+        } else if self.slots.len() >= self.slots.capacity() {
+            return Err(HeapError::AccountingInvariant);
+        }
+
+        let storage = allocate_cell_storage(&mut self.budget, kind)?;
+        let index = if let Some(index) = reusable_index {
+            let slot = &mut self.slots[index as usize];
             self.free_slot_head = slot.free_next.take();
-            slot.cell = Some(HeapCell {
-                kind,
-                edges: Vec::new(),
-                marked: false,
-                mark_next: None,
-            });
+            slot.cell = Some(storage);
             index
         } else {
             let index =
                 u32::try_from(self.slots.len()).map_err(|_| HeapError::HeapCapacityExceeded)?;
             self.slots.push(HeapSlot {
                 generation: 1,
-                cell: Some(HeapCell {
-                    kind,
-                    edges: Vec::new(),
-                    marked: false,
-                    mark_next: None,
-                }),
+                cell: Some(storage),
                 free_next: None,
             });
             index
         };
+
         let generation = self.slots[index as usize].generation;
         self.allocations = self
             .allocations
@@ -1193,6 +1210,36 @@ impl Heap {
         }
         Ok(())
     }
+}
+
+fn allocate_cell_storage(
+    budget: &mut HeapBudget,
+    kind: CellKind,
+) -> Result<CellStorage, HeapError> {
+    let mut storage = Vec::new();
+    if let Err(error) = reserve_vec(budget, &mut storage, 1) {
+        if let CellKind::String(units) = &kind {
+            release_vec_capacity(budget, units)?;
+        }
+        return Err(error);
+    }
+
+    storage.push(HeapCell {
+        kind,
+        edges: Vec::new(),
+        marked: false,
+        mark_next: None,
+    });
+    let previous_capacity = storage.capacity();
+    let boxed = CellStorage(storage.into_boxed_slice());
+    let retained_bytes = std::mem::size_of::<HeapCell>();
+    let allocated_bytes = previous_capacity
+        .checked_mul(std::mem::size_of::<HeapCell>())
+        .ok_or(HeapError::SizeOverflow)?;
+    if allocated_bytes > retained_bytes {
+        budget.release(allocated_bytes - retained_bytes)?;
+    }
+    Ok(boxed)
 }
 
 fn reserve_vec<T>(
@@ -1474,9 +1521,11 @@ mod tests {
     #[test]
     fn number_conversion_scratch_is_quota_accounted_and_released() {
         let slot_bytes = std::mem::size_of::<HeapSlot>();
-        let mut runtime_heap = heap(slot_bytes + 6, slot_bytes + 6);
+        let cell_bytes = std::mem::size_of::<HeapCell>();
+        let quota = slot_bytes + cell_bytes + 6;
+        let mut runtime_heap = heap(quota, quota);
         let value = runtime_heap.allocate_string("123").unwrap();
-        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + 6);
+        assert_eq!(runtime_heap.stats().used_bytes, quota);
         assert!(matches!(
             runtime_heap.to_number(value),
             Err(HeapError::QuotaExceeded {
@@ -1484,9 +1533,9 @@ mod tests {
                 available_bytes: 0
             })
         ));
-        assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + 6);
+        assert_eq!(runtime_heap.stats().used_bytes, quota);
 
-        let mut roomier_heap = heap(slot_bytes + 9, slot_bytes + 9);
+        let mut roomier_heap = heap(slot_bytes + cell_bytes + 9, slot_bytes + cell_bytes + 9);
         let numeric = roomier_heap.allocate_string("123").unwrap();
         let before = roomier_heap.stats().used_bytes;
         assert_eq!(roomier_heap.to_number(numeric).unwrap(), 123.0);
@@ -1632,7 +1681,8 @@ mod tests {
     #[test]
     fn vector_growth_uses_minimum_capacity_when_quota_or_single_limit_is_tight() {
         let slot_bytes = std::mem::size_of::<HeapSlot>();
-        let limit = slot_bytes * 3;
+        let cell_bytes = std::mem::size_of::<HeapCell>();
+        let limit = slot_bytes * 3 + cell_bytes * 3;
         let mut runtime_heap = heap(limit, limit);
 
         let _first = runtime_heap.allocate_object().unwrap();
