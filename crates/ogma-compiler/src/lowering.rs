@@ -179,12 +179,17 @@ fn diag(
 
 fn core_source_file(source: &SourceFile) -> Result<CoreSourceFile, LoweringDiagnostic> {
     let uri = source.uri();
-    let mut path = if let Some((scheme, rest)) = uri.split_once("://") {
-        if scheme.is_empty() {
-            String::new()
-        } else {
-            rest.trim_start_matches('/').to_owned()
-        }
+    let mut path = if let Some(rest) = uri.strip_prefix("memory://") {
+        rest.trim_start_matches('/').to_owned()
+    } else if uri.contains("://") {
+        return Err(LoweringDiagnostic {
+            code: "lowering.source_path",
+            function: "<module>".to_owned(),
+            span: None,
+            message: format!(
+                "source URI {uri:?} is not a repository-relative path; only memory URIs and plain relative paths can be lowered"
+            ),
+        });
     } else {
         uri.to_owned()
     };
@@ -3267,4 +3272,158 @@ mod tests {
         .expect_err("read before const initialization is a TDZ error");
         assert_eq!(errors[0].code, "lowering.const_tdz");
     }
+
+    #[test]
+    fn preserves_memory_uri_paths_and_rejects_absolute_file_uris() {
+        let memory = SourceFile::new(
+            "memory-source",
+            "memory:///src/game/main.js",
+            None,
+            "const value = 1;",
+        )
+        .expect("memory source is valid");
+        let file = core_source_file(&memory).expect("memory URI maps to a relative path");
+        assert_eq!(file.path, "src/game/main.js");
+
+        let relative = SourceFile::new(
+            "relative-source",
+            "src/game/main.js",
+            None,
+            "const value = 1;",
+        )
+        .expect("relative source is valid");
+        let file = core_source_file(&relative).expect("plain relative path is preserved");
+        assert_eq!(file.path, "src/game/main.js");
+
+        let absolute = SourceFile::new(
+            "absolute-source",
+            "file:///workspace/project/src/game/main.js",
+            None,
+            "const value = 1;",
+        )
+        .expect("source descriptor accepts a URI");
+        let error = core_source_file(&absolute).expect_err(
+            "absolute file URIs cannot be represented as repository-relative paths",
+        );
+        assert_eq!(error.code, "lowering.source_path");
+    }
+
+    #[test]
+    fn rejects_block_scoped_closure_capture_without_environment_materialization() {
+        let source = source(
+            "function run() { { let value = 1; return () => value; } }",
+        );
+        let span = whole_span(&source);
+        let binding = binding("binding_block_value", "value", BindingKind::Let);
+        let parent = function_syntax(
+            &source,
+            vec![SyntaxStatement::Block {
+                scope: Some("scope_2".to_owned()),
+                body: vec![
+                    SyntaxStatement::Variable {
+                        kind: SyntaxVariableKind::Let,
+                        declarations: vec![SyntaxDeclarator {
+                            binding: Some(binding.id.clone()),
+                            name: binding.name.clone(),
+                            initializer: Some(SyntaxExpression::Literal {
+                                value: SyntaxLiteral::Number(1.0),
+                                span,
+                            }),
+                            span,
+                        }],
+                        span,
+                    },
+                    SyntaxStatement::Return {
+                        value: Some(SyntaxExpression::Function {
+                            function: "fn_block_child".to_owned(),
+                            captures: vec![binding.id.clone()],
+                            span,
+                        }),
+                        span,
+                    },
+                ],
+                span,
+            }],
+            Vec::new(),
+        );
+        let child = ResolvedSyntaxFunction {
+            id: "fn_block_child".to_owned(),
+            name: "<block-child>".to_owned(),
+            scope: "scope_3".to_owned(),
+            parent_function_scope: Some(parent.scope.clone()),
+            parameters: Vec::new(),
+            captures: vec![binding.id.clone()],
+            body: vec![SyntaxStatement::Return {
+                value: Some(identifier("value", &binding.id, span)),
+                span,
+            }],
+            span,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            has_private_self_name: false,
+        };
+        let capture = Capture {
+            id: "capture_block_value".to_owned(),
+            source_environment: parent.scope.clone(),
+            binding: binding.id.clone(),
+            name: binding.name.clone(),
+            mutable: true,
+            semantic_type: SemanticType::Dynamic,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Cell,
+        };
+        let parent_semantics = FunctionSemantics {
+            id: parent.id.clone(),
+            name: parent.name.clone(),
+            environment: Environment {
+                id: parent.scope.clone(),
+                parent: parent.parent_function_scope.clone(),
+                bindings: vec![binding.clone()],
+            },
+            parameters: Vec::new(),
+            captures: Vec::new(),
+            span,
+            parent_function_scope: parent.parent_function_scope.clone(),
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+        };
+        let child_semantics = FunctionSemantics {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            environment: Environment {
+                id: child.scope.clone(),
+                parent: child.parent_function_scope.clone(),
+                bindings: Vec::new(),
+            },
+            parameters: Vec::new(),
+            captures: vec![capture],
+            span,
+            parent_function_scope: child.parent_function_scope.clone(),
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+        };
+        let module = SemanticModule {
+            source_id: source.id().as_str().to_owned(),
+            source_sha256: source.content_sha256().to_owned(),
+            functions: vec![parent_semantics, child_semantics],
+            bindings: vec![SemanticBinding {
+                ir: binding,
+                lexical_scope: "scope_2".to_owned(),
+                declaration: span,
+            }],
+        };
+        let error = lower(
+            &source,
+            &module,
+            &ResolvedSyntaxProgram {
+                functions: vec![parent, child],
+            },
+        )
+        .expect_err("block-scoped capture requires a per-block environment");
+        assert_eq!(error[0].code, "lowering.block_capture_lifetime");
+    }
+
 }
