@@ -1807,7 +1807,7 @@ mod tests {
         let slot_bytes = std::mem::size_of::<HeapSlot>();
         let cell_bytes = std::mem::size_of::<HeapCell>();
         let limit = slot_bytes * 3 + cell_bytes * 3;
-        let mut runtime_heap = heap(limit, limit);
+        let mut runtime_heap = heap(limit, slot_bytes * 3);
 
         let _first = runtime_heap.allocate_object().unwrap();
         let _second = runtime_heap.allocate_object().unwrap();
