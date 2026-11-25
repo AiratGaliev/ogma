@@ -144,31 +144,62 @@ fn executes_serialized_decoded_register_bytecode() {
 
 #[test]
 fn executes_nested_function_calls_using_verified_function_table() {
-    let (bindings, captures) = empty_bindings();
+    let parameter_binding = json!({
+        "id": "arg",
+        "name": "arg",
+        "kind": "parameter",
+        "mutable": true,
+        "semantic_type": "number",
+        "representation": "boxed"
+    });
     let callee = artifact(
         "add_one",
         "add_one_env",
         None,
         1,
-        3,
-        2,
+        7,
+        6,
         vec![
             number_constant(1, 0),
             RegisterInstruction {
-                operation: RegisterOperation::Binary {
+                operation: RegisterOperation::Constant {
                     destination: 2,
-                    left: 0,
+                    constant: 1,
+                    kind: ConstantKind::BindingId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 4,
+                    kind: CallKind::StoreBinding,
+                    sources: vec![2, 0],
+                },
+                may_throw: true,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Unary {
+                    destination: 5,
+                    source: 3,
+                    operation: ogma_bytecode::UnaryOperation::LoadBinding,
+                },
+                may_throw: true,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Binary {
+                    destination: 6,
+                    left: 5,
                     right: 1,
                     operation: BinaryOperation::Add,
                 },
                 may_throw: true,
             },
-            return_register(2),
+            return_register(6),
         ],
-        vec![json!(1)],
-        bindings.clone(),
-        captures.clone(),
+        vec![json!(1), json!("arg")],
+        vec![parameter_binding],
         Vec::new(),
+        vec![json!({"binding":"arg","kind":"register","index":3})],
     );
     let caller = artifact(
         "main",
@@ -206,8 +237,8 @@ fn executes_nested_function_calls_using_verified_function_table() {
             return_register(3),
         ],
         vec![json!("add_one"), JsonValue::Null, json!(41)],
-        bindings,
-        captures,
+        Vec::new(),
+        Vec::new(),
         Vec::new(),
     );
 
@@ -382,8 +413,8 @@ fn property_operations_use_the_shared_runtime_object_model() {
         "read_property_env",
         None,
         1,
-        3,
-        2,
+        6,
+        5,
         vec![
             RegisterInstruction {
                 operation: RegisterOperation::Constant {
@@ -394,16 +425,32 @@ fn property_operations_use_the_shared_runtime_object_model() {
                 may_throw: false,
             },
             RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 3,
+                    constant: 1,
+                    kind: ConstantKind::BindingId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
                 operation: RegisterOperation::Call {
-                    destination: 1,
-                    kind: CallKind::GetProperty,
-                    sources: vec![0, 2],
+                    destination: 4,
+                    kind: CallKind::StoreBinding,
+                    sources: vec![3, 0],
                 },
                 may_throw: true,
             },
-            return_register(1),
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 5,
+                    kind: CallKind::GetProperty,
+                    sources: vec![1, 2],
+                },
+                may_throw: true,
+            },
+            return_register(5),
         ],
-        vec![json!("answer")],
+        vec![json!("answer"), json!("object_arg")],
         vec![parameter],
         Vec::new(),
         vec![location],
@@ -640,7 +687,10 @@ fn malformed_serialized_artifact_is_rejected_before_dispatch() {
         Vec::new(),
     );
     bytes[0] ^= 0x01;
-    let error = ExecutableModule::load_one(&bytes).expect_err("corrupt container must fail");
+    let error = match ExecutableModule::load_one(&bytes) {
+        Err(error) => error,
+        Ok(_) => panic!("corrupt container must fail"),
+    };
     assert!(matches!(error, InterpreterError::Bytecode(_)));
 }
 
