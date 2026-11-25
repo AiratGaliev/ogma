@@ -50,7 +50,7 @@ The registered register decoder currently exposes the following operation famili
 | Properties | Runtime-backed property get/set for property-key and element access operations. |
 | Closures | Closure creation, mutable cell capture, immutable value capture, capture load/store and lexical binding initialization/store. |
 
-The VM delegates JavaScript-visible heap objects, identity, property storage, prototype links, lexical environments and closure storage to ogma-runtime. It must not introduce a second object heap or expose raw GC addresses in register state.
+The VM delegates JavaScript-visible heap objects, identity, property storage, prototype links, lexical environments and closure storage to ogma-runtime. It must not introduce a second object heap or expose raw GC addresses in register state. Core IR represents immutable `const` values as SSA definitions; the compiler emits an explicit copy into the corresponding binding register, and the VM initializes the Runtime's immutable lexical slot at that point so a later by-value closure capture observes the same value.
 
 Compiler-produced M1 artifacts are the compatibility target. The independent compiler/Core IR fixtures remain the semantic reference. When an operation cannot be faithfully represented by the current Runtime, metadata or execution profile, the loader or VM must reject it instead of silently dropping its semantics.
 
@@ -80,7 +80,7 @@ ExecutionOptions defines:
 - an optional absolute monotonic deadline or relative time budget;
 - a positive polling interval for ordinary instruction dispatch.
 
-Each dispatched instruction consumes exactly one unit of fuel. Exhaustion is reported before the next instruction is dispatched. The VM checks cancellation/deadline at function entry, call boundaries, loop back-edges and potentially allocating/runtime operations, and polls ordinary operations at the configured interval. The VM does not use wall-clock timestamps for duration accounting.
+Each dispatched instruction consumes exactly one unit of fuel. Exhaustion is reported before the next instruction is dispatched. The VM checks cancellation/deadline at function entry, before and after calls and potentially allocating/runtime operations, at normal/throw function exits and at loop back-edges, and polls ordinary operations at the configured interval. A request made while a synchronous host callback is running is observed immediately after the callback returns; the VM cannot pre-empt the callback itself. The VM does not use wall-clock timestamps for duration accounting.
 
 Fuel, cancellation and deadline are distinct completions. Interruption unwinds child and parent activations and their pending root scopes before returning to the host. The Runtime remains owner-thread-affine: the cancellation token communicates only an atomic request; another thread must not inspect or mutate VM frames or heap state.
 
@@ -110,6 +110,6 @@ These limitations are versioned execution-profile boundaries, not reasons to wea
 
 ## 8. Required verification for changes to this boundary
 
-Changes to loading, decoding, execution, Runtime calls, closures or resource policy should include focused tests for the affected contract. At minimum, the interpreter integration suite exercises serialized .ogmb execution, function calls, lexical binding initialization, closure cells, Runtime property access, propagated throws, host capability traces, malformed-container rejection, fuel exhaustion, pre-cancelled entry and deadline expiration.
+Changes to loading, decoding, execution, Runtime calls, closures or resource policy should include focused tests for the affected contract. The interpreter integration suite executes the canonical OGM-31 Core IR branch, loop-carried-value and host-call fixtures through the Rust compiler, serialized OGMB and verifier; it also exercises ordinary/nested calls, compiler-produced mutable and immutable closure captures, Runtime property access, propagated throws, observable host capability traces, malformed-container rejection, fuel exhaustion, pre-cancelled entry, cancellation after a nested host callback, deadline expiration, call-depth rejection and root cleanup after interruption/resource failure.
 
 The repository Fast CI is the required feature-PR gate and runs Rust formatting, Clippy and workspace tests, as well as the existing bytecode verifier/reference corpora and dependency-boundary check. Do not run or claim full Test262/differential/browser acceptance on a feature PR. Runtime conformance promotion remains a separate follow-up after the runtime adapter exists.
