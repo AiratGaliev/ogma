@@ -2547,6 +2547,7 @@ mod tests {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn c_host_descriptor(
         name: &[u8],
         function_id: u64,
@@ -3125,7 +3126,7 @@ mod tests {
         let mut second = engine.create_runtime().expect("second Runtime");
         assert_ne!(first.id(), second.id());
         let mut first_context = first.create_context().expect("first Context");
-        let mut second_context = second.create_context().expect("second Context");
+        let second_context = second.create_context().expect("second Context");
         let value = first_context
             .create_string("first")
             .expect("String allocation");
