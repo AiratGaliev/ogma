@@ -12,6 +12,7 @@ use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
 use oxc_allocator::Allocator;
 use serde_json::{Value as JsonValue, json};
 
+#[allow(clippy::too_many_arguments)]
 fn artifact(
     function_id: &str,
     environment_id: &str,
