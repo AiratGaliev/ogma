@@ -1271,7 +1271,11 @@ fn decode_executable_register_code(
                         "unknown constant kind",
                     )]
                 })?;
-                RegisterOperation::Constant { destination, constant, kind }
+                RegisterOperation::Constant {
+                    destination,
+                    constant,
+                    kind,
+                }
             }
             OP_UNARY => {
                 let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
@@ -1284,7 +1288,11 @@ fn decode_executable_register_code(
                         "unknown unary operation",
                     )]
                 })?;
-                RegisterOperation::Unary { destination, source, operation }
+                RegisterOperation::Unary {
+                    destination,
+                    source,
+                    operation,
+                }
             }
             OP_BINARY => {
                 let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
@@ -1298,7 +1306,12 @@ fn decode_executable_register_code(
                         "unknown binary operation",
                     )]
                 })?;
-                RegisterOperation::Binary { destination, left, right, operation }
+                RegisterOperation::Binary {
+                    destination,
+                    left,
+                    right,
+                    operation,
+                }
             }
             OP_CALL => {
                 let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
@@ -1315,7 +1328,11 @@ fn decode_executable_register_code(
                 for _ in 0..count {
                     sources.push(read_u16(code, &mut cursor).map_err(|error| vec![error])?);
                 }
-                RegisterOperation::Call { destination, kind, sources }
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources,
+                }
             }
             OP_JUMP => {
                 let target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
@@ -1325,7 +1342,11 @@ fn decode_executable_register_code(
                 let condition = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
                 let then_target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
                 let else_target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
-                RegisterOperation::Branch { condition, then_target, else_target }
+                RegisterOperation::Branch {
+                    condition,
+                    then_target,
+                    else_target,
+                }
             }
             OP_RETURN => {
                 let source = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
