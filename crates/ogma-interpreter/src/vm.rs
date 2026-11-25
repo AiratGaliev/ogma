@@ -18,8 +18,9 @@ use ogma_bytecode::{
     verify_register_artifact_from_manifest,
 };
 use ogma_runtime::{
-    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, ScopeToken, Value, ValueType,
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
+    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, ScopeToken, Value,
+    ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
@@ -80,6 +81,9 @@ pub struct ExecutionOptions {
     pub instruction_budget: u64,
     /// Host call-depth ceiling, further restricted by the artifact manifest.
     pub max_call_depth: u32,
+    /// Maximum estimated active VM frame/register-stack bytes, including nested
+    /// host re-entry on the same ExecutionState.
+    pub max_stack_bytes: usize,
     /// Maximum dispatches between ordinary cancellation/deadline polls.
     ///
     /// Function entry, call boundaries, loop back-edges and potentially
@@ -100,6 +104,7 @@ impl Default for ExecutionOptions {
         Self {
             instruction_budget: 1_000_000,
             max_call_depth: 256,
+            max_stack_bytes: 8 * 1024 * 1024,
             interrupt_poll_interval: 64,
             cancellation: None,
             deadline: None,
@@ -141,6 +146,8 @@ pub struct ExecutionReport {
     pub fuel_remaining: u64,
     /// Maximum VM call depth reached, including the entry frame.
     pub max_call_depth_reached: u32,
+    /// Peak estimated active VM frame/register-stack bytes.
+    pub max_stack_bytes_reached: usize,
     /// Source location of the last dispatched instruction.
     pub last_location: Option<InstructionLocation>,
 }
@@ -150,8 +157,18 @@ pub struct ExecutionReport {
 pub enum HostError {
     /// Capability is not registered or is denied.
     Denied,
+    /// The registry belongs to a different Runtime heap.
+    WrongRuntime,
     /// Host propagates this JavaScript thrown value.
     Throw(Value),
+    /// A Runtime heap operation failed during a host callback.
+    Runtime(HeapError),
+    /// A host callback panicked and the panic was contained at the boundary.
+    Panicked,
+    /// A host callback reported a transport or internal failure.
+    CallbackFailed,
+    /// A host callback returned a malformed completion record.
+    InvalidCompletion,
 }
 
 /// Synchronous host capability dispatcher on the Runtime owner thread.
@@ -163,6 +180,133 @@ pub trait Host {
         capability: &str,
         arguments: &[Value],
     ) -> Result<Value, HostError>;
+
+    /// Invokes a capability with access to the current execution session.
+    ///
+    /// Implementations that support nested JavaScript calls override this
+    /// method. The default preserves the original synchronous Host contract.
+    fn call_with_context(
+        &mut self,
+        context: &mut HostCallContext<'_>,
+        capability: &str,
+        arguments: &[Value],
+    ) -> Result<HostCallCompletion, HostError> {
+        self.call(context.heap, capability, arguments)
+            .map(HostCallCompletion::Normal)
+    }
+}
+
+/// Observable result of one synchronous host callback.
+#[derive(Clone, Copy, Debug)]
+pub enum HostCallCompletion {
+    /// The host returned a JavaScript value.
+    Normal(Value),
+    /// The host propagated a JavaScript thrown value.
+    Throw(Value),
+    /// The host observed the shared execution budget or cancellation.
+    Interrupted(ExecutionInterruption),
+}
+
+/// Scoped access to the active interpreter execution.
+///
+/// A callback can run another verified module using the same Runtime heap,
+/// instruction budget, cancellation token and call-depth accounting. The
+/// caller's VM frames remain rooted while the nested execution is active.
+pub struct HostCallContext<'a> {
+    heap: &'a mut Heap,
+    state: &'a mut ExecutionState,
+    options: &'a ExecutionOptions,
+    parent_depth: u32,
+}
+
+/// Opaque temporary Runtime root created by a synchronous host callback.
+///
+/// The token is generation-checked, belongs to the active Runtime and exposes
+/// neither Value bits nor a GC cell/object pointer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct HostCallRoot(HostHandle);
+
+impl HostCallContext<'_> {
+    /// Allocates a JavaScript String in the active Runtime.
+    ///
+    /// The returned Value is transient. Retain it with `retain_value` before
+    /// performing another operation that may allocate or collect.
+    pub fn create_string(&mut self, text: &str) -> Result<Value, HeapError> {
+        self.heap.allocate_string(text)
+    }
+
+    /// Runs tracing collection while preserving all currently registered roots.
+    pub fn collect(&mut self) -> Result<CollectionReport, HeapError> {
+        self.heap.collect()
+    }
+
+    /// Retains a value as a callback-local root until it is explicitly released.
+    pub fn retain_value(&mut self, value: Value) -> Result<HostCallRoot, HeapError> {
+        self.heap.retain_host_value(value).map(HostCallRoot)
+    }
+
+    /// Resolves a callback-local root to a transient Runtime value.
+    ///
+    /// Retain the returned value again before another allocation if it must
+    /// remain live after the current callback scope changes.
+    pub fn resolve_root(&self, root: HostCallRoot) -> Result<Value, HeapError> {
+        self.heap.resolve_host_handle(root.0)
+    }
+
+    /// Releases a callback-local root and invalidates its generation.
+    pub fn release_root(&mut self, root: HostCallRoot) -> Result<(), HeapError> {
+        self.heap.release_host_handle(root.0)
+    }
+
+    /// Executes a function in another verified module as a nested activation.
+    ///
+    /// `entry_function_id` is the stable identity returned by `module.functions()`.
+    /// This reuses the current Runtime heap and the same execution budget. The
+    /// nested call depth is one greater than the host-calling activation.
+    pub fn execute_nested<H: Host>(
+        &mut self,
+        module: &ExecutableModule,
+        entry_function_id: &str,
+        arguments: &[Value],
+        host: &mut H,
+    ) -> Result<ExecutionCompletion, InterpreterError> {
+        let entry_depth =
+            self.parent_depth
+                .checked_add(1)
+                .ok_or(InterpreterError::CallDepthExceeded {
+                    limit: self.options.max_call_depth,
+                })?;
+        module.execute_with_state(
+            self.heap,
+            entry_function_id,
+            arguments,
+            host,
+            self.options,
+            self.state,
+            entry_depth,
+        )
+    }
+
+    /// Returns the host-selected execution options shared by nested calls.
+    #[must_use]
+    pub const fn options(&self) -> &ExecutionOptions {
+        self.options
+    }
+
+    /// Returns the unique identity of the Runtime heap executing this callback.
+    ///
+    /// Embedding registries use this to reject cross-Runtime dispatch before
+    /// exposing callback-scoped handles.
+    #[must_use]
+    pub const fn heap_identity(&self) -> u64 {
+        self.heap.identity()
+    }
+
+    /// Returns the active activation depth.
+    #[must_use]
+    pub const fn call_depth(&self) -> u32 {
+        self.parent_depth
+    }
 }
 
 /// Host implementation which denies every capability call.
@@ -195,6 +339,14 @@ pub enum InterpreterError {
     Runtime(HeapError),
     /// Host capability was denied.
     HostCapabilityDenied(String),
+    /// A host registry was invoked with a different Runtime heap.
+    HostRuntimeMismatch,
+    /// A Rust host callback panicked; the panic did not unwind through the VM.
+    HostCallbackPanicked,
+    /// A host callback failed independently of capability authorization.
+    HostCallbackFailed,
+    /// A C host callback returned an invalid completion record.
+    InvalidHostCompletion,
     /// Invalid register or internal register category.
     InvalidRegister(u16),
     /// Missing constant-pool item.
@@ -207,6 +359,13 @@ pub enum InterpreterError {
     CallDepthExceeded {
         /// Maximum permitted active VM frame depth.
         limit: u32,
+    },
+    /// The estimated active VM frame/register stack exceeded its configured quota.
+    StackQuotaExceeded {
+        /// Configured maximum active stack bytes.
+        limit_bytes: usize,
+        /// Required bytes at the attempted frame entry.
+        requested_bytes: usize,
     },
     /// Invalid execution configuration.
     InvalidOptions(&'static str),
@@ -228,6 +387,15 @@ impl From<HeapError> for InterpreterError {
     fn from(error: HeapError) -> Self {
         Self::Runtime(error)
     }
+}
+
+/// Public identity of one function in a verified executable module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutableFunctionInfo {
+    /// Stable function identity used by interpreter entry points.
+    pub id: String,
+    /// Human-readable source-level function name.
+    pub name: String,
 }
 
 /// Immutable collection of independently verified OGMB function artifacts.
@@ -431,6 +599,18 @@ impl ExecutableModule {
         self.functions.len()
     }
 
+    /// Lists verified function identities and names in deterministic ID order.
+    #[must_use]
+    pub fn functions(&self) -> Vec<ExecutableFunctionInfo> {
+        self.functions
+            .values()
+            .map(|image| ExecutableFunctionInfo {
+                id: image.id.clone(),
+                name: image.name.clone(),
+            })
+            .collect()
+    }
+
     /// Returns manifest metadata for a function.
     #[must_use]
     pub fn function_metadata(&self, function_id: &str) -> Option<&JsonValue> {
@@ -459,16 +639,42 @@ impl ExecutableModule {
 
     /// Executes an entry function and all nested VM calls.
     ///
-    /// Entry functions with lexical captures cannot be called directly.
+    /// `entry_function_id` is the stable identity returned by `functions()`,
+    /// not the human-readable source-level function name. Entry functions
+    /// with lexical captures cannot be called directly.
     pub fn execute<H: Host>(
         &self,
         heap: &mut Heap,
-        entry_function: &str,
+        entry_function_id: &str,
         arguments: &[Value],
         host: &mut H,
         options: ExecutionOptions,
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
+        let mut state = ExecutionState::new(&options)?;
+        let completion = self.execute_with_state(
+            heap,
+            entry_function_id,
+            arguments,
+            host,
+            &options,
+            &mut state,
+            1,
+        )?;
+        Ok(state.report(completion))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_with_state<H: Host>(
+        &self,
+        heap: &mut Heap,
+        entry_function: &str,
+        arguments: &[Value],
+        host: &mut H,
+        options: &ExecutionOptions,
+        state: &mut ExecutionState,
+        entry_depth: u32,
+    ) -> Result<ExecutionCompletion, InterpreterError> {
         let image = self
             .functions
             .get(entry_function)
@@ -479,8 +685,20 @@ impl ExecutableModule {
                 "entry function {entry_function:?} requires lexical captures"
             )));
         }
+        let depth_limit = options.max_call_depth.min(image.max_call_depth);
+        if entry_depth > depth_limit {
+            return Err(InterpreterError::CallDepthExceeded { limit: depth_limit });
+        }
+        let base_stack_bytes = state.active_stack_bytes;
+        let frame_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        let requested_stack_bytes = base_stack_bytes.saturating_add(frame_stack_bytes);
+        if requested_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: requested_stack_bytes,
+            });
+        }
 
-        let mut state = ExecutionState::new(&options)?;
         let scope = heap.open_scope()?;
         let setup = (|| {
             // The host may pass freshly allocated, non-persistent Values.
@@ -516,14 +734,13 @@ impl ExecutableModule {
             return Err(error.into());
         }
 
-        let depth_limit = options.max_call_depth.min(image.max_call_depth);
         let root_frame = match VmFrame::new(
             heap,
             image,
             activation,
             function_value,
             arguments,
-            1,
+            entry_depth,
             depth_limit,
         ) {
             Ok(frame) => frame,
@@ -532,9 +749,12 @@ impl ExecutableModule {
                 return Err(error);
             }
         };
-        state.max_call_depth_reached = 1;
-        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame])?;
-        Ok(state.report(completion))
+        state.max_call_depth_reached = state.max_call_depth_reached.max(entry_depth);
+        state.active_stack_bytes = requested_stack_bytes;
+        state.max_stack_bytes_reached = state.max_stack_bytes_reached.max(requested_stack_bytes);
+        let completion = self.run_loop(heap, host, options, state, vec![root_frame]);
+        state.active_stack_bytes = base_stack_bytes;
+        completion
     }
 
     /// Executes without granting host capabilities.
@@ -649,6 +869,20 @@ impl ExecutableModule {
                         kind: pending_kind,
                     });
                     state.max_call_depth_reached = state.max_call_depth_reached.max(child.depth);
+                    let requested_stack_bytes =
+                        state.active_stack_bytes.saturating_add(child.stack_bytes);
+                    if requested_stack_bytes > options.max_stack_bytes {
+                        heap.leave_function_call(child.activation)?;
+                        frames.push(frame);
+                        self.unwind_frames(heap, &mut frames)?;
+                        return Err(InterpreterError::StackQuotaExceeded {
+                            limit_bytes: options.max_stack_bytes,
+                            requested_bytes: requested_stack_bytes,
+                        });
+                    }
+                    state.active_stack_bytes = requested_stack_bytes;
+                    state.max_stack_bytes_reached =
+                        state.max_stack_bytes_reached.max(requested_stack_bytes);
                     frames.push(frame);
                     frames.push(*child);
                 }
@@ -678,6 +912,8 @@ impl ExecutableModule {
                         self.unwind_frames(heap, &mut frames)?;
                         return Err(error.into());
                     }
+                    state.active_stack_bytes =
+                        state.active_stack_bytes.saturating_sub(frame.stack_bytes);
                     match completion {
                         ExecutionCompletion::Return(value) => {
                             let Some(mut caller) = frames.pop() else {
@@ -986,21 +1222,37 @@ impl ExecutableModule {
                     .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
-                match host.call(heap, &capability, &arguments) {
-                    Ok(value) => {
-                        heap.scope_root(scope, value)?;
+                let mut call_context = HostCallContext {
+                    heap,
+                    state,
+                    options,
+                    parent_depth: frame.depth,
+                };
+                match host.call_with_context(&mut call_context, &capability, &arguments) {
+                    Ok(HostCallCompletion::Normal(value)) => {
+                        call_context.heap.scope_root(scope, value)?;
                         write_register(frame, destination, RegisterValue::Value(value))?;
                         Ok(Step::Continue {
                             next_pc: frame.pc + 1,
                             back_edge: false,
                         })
                     }
-                    Err(HostError::Throw(value)) => {
-                        heap.scope_root(scope, value)?;
+                    Ok(HostCallCompletion::Throw(value)) | Err(HostError::Throw(value)) => {
+                        call_context.heap.scope_root(scope, value)?;
                         Ok(Step::Complete(ExecutionCompletion::Throw(value)))
+                    }
+                    Ok(HostCallCompletion::Interrupted(reason)) => {
+                        Ok(Step::Complete(ExecutionCompletion::Interrupted(reason)))
                     }
                     Err(HostError::Denied) => {
                         Err(InterpreterError::HostCapabilityDenied(capability))
+                    }
+                    Err(HostError::WrongRuntime) => Err(InterpreterError::HostRuntimeMismatch),
+                    Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
+                    Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
+                    Err(HostError::CallbackFailed) => Err(InterpreterError::HostCallbackFailed),
+                    Err(HostError::InvalidCompletion) => {
+                        Err(InterpreterError::InvalidHostCompletion)
                     }
                 }
             }
@@ -1199,6 +1451,14 @@ impl ExecutableModule {
             .min(options.max_call_depth);
         if caller.depth >= call_limit {
             return Err(InterpreterError::CallDepthExceeded { limit: call_limit });
+        }
+        let child_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        let requested_stack_bytes = state.active_stack_bytes.saturating_add(child_stack_bytes);
+        if requested_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: requested_stack_bytes,
+            });
         }
         let activation = heap.enter_function_call(
             callee,
@@ -1704,6 +1964,11 @@ fn validate_options(options: &ExecutionOptions) -> Result<(), InterpreterError> 
             "interrupt_poll_interval must be positive",
         ));
     }
+    if options.max_stack_bytes == 0 {
+        return Err(InterpreterError::InvalidOptions(
+            "max_stack_bytes must be positive",
+        ));
+    }
     if options
         .time_budget
         .is_some_and(|budget| Instant::now().checked_add(budget).is_none())
@@ -1723,6 +1988,8 @@ struct ExecutionState {
     deadline: Option<Instant>,
     poll_interval: u64,
     last_location: Option<InstructionLocation>,
+    active_stack_bytes: usize,
+    max_stack_bytes_reached: usize,
 }
 
 impl ExecutionState {
@@ -1747,6 +2014,8 @@ impl ExecutionState {
             deadline,
             poll_interval: u64::from(options.interrupt_poll_interval),
             last_location: None,
+            active_stack_bytes: 0,
+            max_stack_bytes_reached: 0,
         })
     }
 
@@ -1780,6 +2049,7 @@ impl ExecutionState {
             instructions_executed: self.instructions_executed,
             fuel_remaining: self.fuel_remaining,
             max_call_depth_reached: self.max_call_depth_reached,
+            max_stack_bytes_reached: self.max_stack_bytes_reached,
             last_location: self.last_location.clone(),
         }
     }
@@ -1804,9 +2074,23 @@ struct VmFrame {
     call_depth_limit: u32,
     entry_poll: bool,
     pending_call: Option<PendingCall>,
+    stack_bytes: usize,
 }
 
 impl VmFrame {
+    fn estimated_stack_bytes(image: &FunctionImage) -> usize {
+        let registers = image
+            .register_count
+            .saturating_mul(std::mem::size_of::<RegisterValue>());
+        let bindings = image
+            .local_binding_ids
+            .len()
+            .saturating_mul(std::mem::size_of::<BindingId>() + std::mem::size_of::<usize>() * 2);
+        std::mem::size_of::<Self>()
+            .saturating_add(registers)
+            .saturating_add(bindings)
+    }
+
     fn new(
         heap: &mut Heap,
         image: Rc<FunctionImage>,
@@ -1859,6 +2143,7 @@ impl VmFrame {
             write_register_slot(&mut registers, register, value)?;
         }
         Ok(Self {
+            stack_bytes: Self::estimated_stack_bytes(&image),
             image: image.clone(),
             activation,
             function_value,

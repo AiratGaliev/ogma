@@ -10,9 +10,9 @@
 mod vm;
 
 pub use vm::{
-    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionOptions, ExecutionReport, Host, HostError, InstructionLocation, InterpreterError,
-    NoHost,
+    CancellationToken, ExecutableFunctionInfo, ExecutableModule, ExecutionCompletion,
+    ExecutionInterruption, ExecutionOptions, ExecutionReport, Host, HostCallCompletion,
+    HostCallContext, HostCallRoot, HostError, InstructionLocation, InterpreterError, NoHost,
 };
 
 /// OGMB container version consumed by the interpreter.
