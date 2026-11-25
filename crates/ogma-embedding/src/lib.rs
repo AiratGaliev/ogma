@@ -2964,6 +2964,51 @@ mod tests {
     }
 
     #[test]
+    fn rust_host_callback_uses_opaque_roots_across_forced_collection() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        context
+            .register_host_function(
+                HostFunctionDescriptor::new(78, "benchmark.host.echo"),
+                |call, _arguments| {
+                    let value = call
+                        .create_string("callback root survives GC")
+                        .map_err(HostError::Runtime)?;
+                    let root = call.retain_value(value).map_err(HostError::Runtime)?;
+                    call.collect().map_err(HostError::Runtime)?;
+                    let rooted = call.resolve_root(root).map_err(HostError::Runtime)?;
+                    call.release_root(root).map_err(HostError::Runtime)?;
+                    Ok(HostCallCompletion::Normal(rooted))
+                },
+            )
+            .expect("register Rust callback");
+
+        let report = context
+            .execute_persistent(
+                "fn_host_call",
+                &[Value::number(1.0)],
+                ExecutionRequest::default(),
+            )
+            .expect("host callback roots its result during GC");
+        let PersistentCompletion::Return(handle) = report.completion else {
+            panic!("expected callback string Return");
+        };
+        let value = context.resolve(handle).expect("persistent callback result");
+        let units = context
+            .read_string_utf16(value)
+            .expect("callback string survived collection");
+        assert_eq!(
+            String::from_utf16(&units).expect("valid callback string"),
+            "callback root survives GC"
+        );
+        context.release(handle).expect("release result root");
+    }
+
+    #[test]
     fn temporary_root_scope_keeps_values_alive_during_collection_then_releases_them() {
         let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
         let mut runtime = engine.create_runtime().expect("Runtime");
