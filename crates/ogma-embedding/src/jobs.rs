@@ -229,8 +229,8 @@ impl Context<'_> {
 
         let mut jobs_executed = 0;
         while jobs_executed < total_budget {
-            let turn_budget = (total_budget - jobs_executed)
-                .min(self.runtime.config.max_jobs_per_pump);
+            let turn_budget =
+                (total_budget - jobs_executed).min(self.runtime.config.max_jobs_per_pump);
             let mut turn = self.pump_promise_jobs(Some(turn_budget))?;
             jobs_executed += turn.jobs_executed;
             turn.jobs_executed = jobs_executed;
