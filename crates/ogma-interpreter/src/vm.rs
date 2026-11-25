@@ -10,14 +10,14 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 
 use ogma_bytecode::{
-    BinaryOperation, CallKind, ConstantKind, DecodedRegisterInstruction, Diagnostic,
-    RegisterOperation, UnaryOperation, VerifiedArtifact, verify_register_artifact_from_manifest,
+    ArtifactJsonValue as JsonValue, BinaryOperation, CallKind, ConstantKind,
+    DecodedRegisterInstruction, Diagnostic, RegisterOperation, UnaryOperation,
+    VerifiedArtifact, verify_register_artifact_from_manifest,
 };
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
     FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, ScopeToken, Value, ValueType,
 };
-use serde_json::Value as JsonValue;
 
 /// Cancellation signal shared with a host control thread.
 #[derive(Clone, Debug, Default)]
