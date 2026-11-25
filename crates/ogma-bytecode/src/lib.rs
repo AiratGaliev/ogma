@@ -1018,14 +1018,14 @@ fn decode_register_code(
             "decoded instruction stream must not be empty",
         )]);
     }
-    for index in 0..decoded.len() {
-        let next = decoded[index].offset + decoded[index].size;
+    for instruction in &mut decoded {
+        let next = instruction.offset + instruction.size;
         if !matches!(
-            decoded[index].operation,
+            instruction.operation,
             "jump" | "branch" | "return" | "throw"
         ) && next < code.len() as u32
         {
-            decoded[index].successors = vec![next];
+            instruction.successors = vec![next];
         }
     }
 
@@ -1145,16 +1145,14 @@ fn verify_register_program(
         }
         if let (Some(kind), Some(index)) =
             (instruction.constant_kind, instruction.constant_refs.first())
+            && let Some(value) = constants.get(*index as usize)
+            && !constant_value_matches(kind, value)
         {
-            if let Some(value) = constants.get(*index as usize)
-                && !constant_value_matches(kind, value)
-            {
-                errors.push(Diagnostic::new(
-                    "constant.kind_mismatch",
-                    format!("$.instructions[{}].constant_refs", instruction.offset),
-                    format!("constant-pool value does not match instruction kind {kind:?}"),
-                ));
-            }
+            errors.push(Diagnostic::new(
+                "constant.kind_mismatch",
+                format!("$.instructions[{}].constant_refs", instruction.offset),
+                format!("constant-pool value does not match instruction kind {kind:?}"),
+            ));
         }
         if instruction
             .constant_refs
@@ -1462,7 +1460,7 @@ fn read_container(raw: &[u8]) -> Result<ParsedContainer, Vec<Diagnostic>> {
         if alignment == 0
             || alignment > MAX_ALIGNMENT
             || !alignment.is_power_of_two()
-            || offset % alignment as u64 != 0
+            || !offset.is_multiple_of(alignment as u64)
         {
             errors.push(Diagnostic::new(
                 "container.section_alignment",
@@ -2295,14 +2293,14 @@ fn validate_source_map(
                 "source file ID, path or language is invalid",
             )]);
         }
-        if let Some(sha) = file.get("sha256") {
-            if !sha.as_str().is_some_and(is_lower_sha256) {
-                return Err(vec![Diagnostic::new(
-                    "source_map.file_digest",
-                    format!("{path}.sha256"),
-                    "source SHA-256 must be 64 lowercase hexadecimal characters",
-                )]);
-            }
+        if let Some(sha) = file.get("sha256")
+            && !sha.as_str().is_some_and(is_lower_sha256)
+        {
+            return Err(vec![Diagnostic::new(
+                "source_map.file_digest",
+                format!("{path}.sha256"),
+                "source SHA-256 must be 64 lowercase hexadecimal characters",
+            )]);
         }
     }
 
@@ -2803,10 +2801,16 @@ pub fn sha256_hex(input: &[u8]) -> String {
         0x1f83d9ab,
         0x5be0cd19,
     ];
-    for block in message.chunks_exact(64) {
+    for block in message.as_chunks::<64>().0.iter() {
         let mut words = [0u32; 64];
-        for (index, chunk) in block.chunks_exact(4).enumerate().take(16) {
-            words[index] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (index, word) in words.iter_mut().take(16).enumerate() {
+            let start = index * 4;
+            *word = u32::from_be_bytes([
+                block[start],
+                block[start + 1],
+                block[start + 2],
+                block[start + 3],
+            ]);
         }
         for index in 16..64 {
             let x = words[index - 15];
