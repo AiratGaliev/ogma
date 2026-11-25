@@ -422,7 +422,6 @@ fn property_operations_use_the_shared_runtime_object_model() {
         "semantic_type": "object",
         "representation": "boxed"
     });
-    let location = json!({"binding": "object_arg", "kind": "register", "index": 1});
     let bytes = artifact(
         "read_property",
         "read_property_env",
