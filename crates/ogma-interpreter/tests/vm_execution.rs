@@ -8,7 +8,7 @@ use ogma_compiler::{CompileFailure, compile_to_bytecode};
 use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
 use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionOptions, Host, HostError, InterpreterError,
+    ExecutionOptions, Host, HostError, InterpreterError, NoHost,
 };
 use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
 use oxc_allocator::Allocator;
@@ -340,6 +340,7 @@ fn host_callback_can_execute_a_nested_module_on_the_same_heap_and_budget() {
 
     assert_eq!(host.observed_depth, Some(1));
     assert_eq!(report.max_call_depth_reached, 2);
+    assert!(report.max_stack_bytes_reached > 0);
     assert_eq!(report.instructions_executed, 6);
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(7.0)),
@@ -378,6 +379,70 @@ fn nested_host_execution_consumes_the_parent_instruction_fuel() {
         ExecutionCompletion::Interrupted(ExecutionInterruption::FuelExhausted)
     ));
     assert_eq!(report.instructions_executed, 2);
+}
+
+#[test]
+fn vm_stack_quota_is_enforced_at_exact_and_over_limit_boundaries() {
+    let module = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-ssa-branch.json"
+    ));
+    let mut baseline_heap = Heap::new(HeapConfig::default()).expect("baseline heap");
+    let mut baseline_host = NoHost;
+    let baseline = module
+        .execute(
+            &mut baseline_heap,
+            "fn0",
+            &[Value::number(7.0), Value::number(7.0)],
+            &mut baseline_host,
+            ExecutionOptions {
+                max_stack_bytes: usize::MAX,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("baseline execution with a permissive stack quota");
+    let required = baseline.max_stack_bytes_reached;
+    assert!(required > 0);
+
+    let mut exact_heap = Heap::new(HeapConfig::default()).expect("exact heap");
+    let mut exact_host = NoHost;
+    let exact = module
+        .execute(
+            &mut exact_heap,
+            "fn0",
+            &[Value::number(7.0), Value::number(7.0)],
+            &mut exact_host,
+            ExecutionOptions {
+                max_stack_bytes: required,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("an exact stack quota is sufficient");
+    assert_eq!(exact.max_stack_bytes_reached, required);
+
+    let mut limited_heap = Heap::new(HeapConfig::default()).expect("limited heap");
+    let mut limited_host = NoHost;
+    let error = module
+        .execute(
+            &mut limited_heap,
+            "fn0",
+            &[Value::number(7.0), Value::number(7.0)],
+            &mut limited_host,
+            ExecutionOptions {
+                max_stack_bytes: required - 1,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect_err("one byte below the required frame allocation is rejected");
+    assert!(matches!(
+        error,
+        InterpreterError::StackQuotaExceeded {
+            limit_bytes,
+            requested_bytes
+        } if limit_bytes == required - 1 && requested_bytes == required
+    ));
+    let roots = limited_heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
 }
 
 #[test]
