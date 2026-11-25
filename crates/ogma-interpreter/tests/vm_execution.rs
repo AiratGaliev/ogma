@@ -1419,6 +1419,10 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
     assert!(entry_location.source.is_some());
     assert!(!entry_location.lexical_scopes.is_empty());
     assert!(!entry_location.variable_locations.is_empty());
+    assert!(
+        module.source_location(&entry_id, u32::MAX).is_none(),
+        "offsets outside the verified instruction stream are not source locations"
+    );
 
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let report = module
