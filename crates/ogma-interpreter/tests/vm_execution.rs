@@ -1284,6 +1284,54 @@ fn call_depth_limit_rejects_nested_frames_and_unwinds_runtime_roots() {
 }
 
 #[test]
+fn entry_arguments_survive_vm_setup_and_return_values_can_be_promoted() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "identity",
+        "identity_env",
+        None,
+        1,
+        1,
+        0,
+        vec![return_register(0)],
+        Vec::new(),
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified identity module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let argument = heap.allocate_object().expect("managed argument object");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            "identity",
+            &[argument],
+            ExecutionOptions::default(),
+        )
+        .expect("identity call completes");
+
+    let returned = match report.completion {
+        ExecutionCompletion::Return(value) => value,
+        completion => panic!("expected identity return, got {completion:?}"),
+    };
+    assert!(heap.strict_equal(argument, returned).expect("same heap object"));
+    let persistent = heap
+        .retain_host_value(returned)
+        .expect("promote transient completion to a host root");
+    assert_eq!(heap.root_snapshot().interpreter_frames, 0);
+    assert_eq!(heap.root_snapshot().temporary_scopes, 0);
+    assert_eq!(heap.root_snapshot().persistent_host_roots, 1);
+
+    heap.collect().expect("collection after result promotion");
+    let resolved = heap
+        .resolve_host_handle(persistent)
+        .expect("persistent completion remains alive");
+    assert!(heap.strict_equal(argument, resolved).expect("same retained object"));
+}
+
+
+#[test]
 fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
     let allocator = Allocator::default();
     let source = SourceFile::new(
