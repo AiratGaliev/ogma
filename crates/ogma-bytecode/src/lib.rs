@@ -754,6 +754,21 @@ pub fn verify_register_artifact(
         limits.get("max_registers"),
         "$.manifest.resource_limits.max_registers",
     )?;
+    let max_locals = read_u32_value(
+        limits.get("max_locals"),
+        "$.manifest.resource_limits.max_locals",
+    )?;
+    let local_count = read_u32_value(
+        metadata.pointer("/frame_layout/local_count"),
+        "$.manifest.metadata.frame_layout.local_count",
+    )?;
+    if local_count > max_locals {
+        return Err(vec![Diagnostic::new(
+            "resource.local_limit",
+            "$.manifest.metadata.frame_layout.local_count",
+            "frame local_count exceeds the manifest max_locals limit",
+        )]);
+    }
     let max_exceptions = read_u32_value(
         limits.get("max_exception_regions"),
         "$.manifest.resource_limits.max_exception_regions",
@@ -3676,6 +3691,37 @@ mod tests {
             errors
                 .iter()
                 .any(|item| item.code == "register.entry_layout")
+        );
+    }
+
+    #[test]
+    fn rejects_local_frame_size_above_declared_resource_limit() {
+        let instructions = vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Return { source: 0 },
+                may_throw: false,
+            },
+        ];
+        let code = encode_register_code(&instructions).expect("encode");
+        let mut artifact_manifest = manifest(2, 1);
+        artifact_manifest["metadata"]["frame_layout"]["local_count"] = json!(2);
+        artifact_manifest["resource_limits"]["max_locals"] = json!(1);
+        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None)
+            .expect("build");
+        let errors = verify_register_artifact(&bytes, &[])
+            .expect_err("frame local_count must not exceed max_locals");
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "resource.local_limit")
         );
     }
 
