@@ -468,7 +468,7 @@ mod tests {
         let mut context = runtime.create_context().expect("Context");
         let callback = load_callback(
             &mut context,
-            "function factory() { return function callback() { return 1; }; }",
+            "function factory() { return function() { return 1; }; }",
         );
 
         context.enqueue_promise_job(callback, &[]).expect("enqueue");
@@ -494,7 +494,7 @@ mod tests {
         let mut context = runtime.create_context().expect("Context");
         let callback = load_callback(
             &mut context,
-            "function factory() { return function callback() { return 1; }; }",
+            "function factory() { return function() { return 1; }; }",
         );
         context.enqueue_promise_job(callback, &[]).expect("first");
         context.enqueue_promise_job(callback, &[]).expect("second");
@@ -527,7 +527,7 @@ mod tests {
         let mut context = runtime.create_context().expect("Context");
         let callback = load_callback(
             &mut context,
-            "function factory() { return function callback() { return 1; }; }",
+            "function factory() { return function() { return 1; }; }",
         );
         context.enqueue_promise_job(callback, &[]).expect("first");
         context.enqueue_promise_job(callback, &[]).expect("second");
@@ -547,7 +547,7 @@ mod tests {
         let mut context = runtime.create_context().expect("Context");
         let callback = load_callback(
             &mut context,
-            "function factory() { return function callback() { return 1; }; }",
+            "function factory() { return function() { return 1; }; }",
         );
         context.enqueue_promise_job(callback, &[]).expect("enqueue");
 
@@ -586,7 +586,7 @@ mod tests {
         let mut context = runtime.create_context().expect("Context");
         let callback = load_callback(
             &mut context,
-            "function factory() { return function callback() { throw 99; }; }",
+            "function factory() { return function() { throw 99; }; }",
         );
         context.enqueue_promise_job(callback, &[]).expect("enqueue");
 
