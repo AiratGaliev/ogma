@@ -296,7 +296,11 @@ name = "ogma-interpreter"
 version = "0.1.0"
 dependencies = [
  "ogma-bytecode",
+ "ogma-compiler",
+ "ogma-frontend",
  "ogma-runtime",
+ "oxc_allocator",
+ "serde_json",
 ]
 
 [[package]]
