@@ -4,7 +4,7 @@ use ogma_bytecode::{
     BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation, build_ogmb_v1,
     encode_register_code,
 };
-use ogma_compiler::compile_to_bytecode;
+use ogma_compiler::{CompileFailure, compile_to_bytecode};
 use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
 use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
@@ -1404,6 +1404,22 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         .collect::<Vec<_>>();
     let module = ExecutableModule::load(artifacts)
         .expect("interpreter re-verifies compiler-produced serialized OGMB artifacts");
+    let entry_location = module
+        .source_location(&entry_id, 0)
+        .expect("verified byte offset resolves through the compiler source map");
+    assert_eq!(entry_location.function_id, entry_id);
+    assert_eq!(
+        entry_location.code_generation_id.as_deref(),
+        Some("ogma_m1_register_codegen")
+    );
+    assert_eq!(
+        entry_location.code_generation_version.as_deref(),
+        Some("1.0.0")
+    );
+    assert!(entry_location.source.is_some());
+    assert!(!entry_location.lexical_scopes.is_empty());
+    assert!(!entry_location.variable_locations.is_empty());
+
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let report = module
         .execute_without_host(
@@ -1413,6 +1429,13 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
             ExecutionOptions::default(),
         )
         .expect("compiler-produced artifact executes");
+
+    let last_location = report
+        .last_location
+        .as_ref()
+        .expect("execution report retains the last dispatched source location");
+    assert!(last_location.source.is_some());
+    assert!(!last_location.lexical_scopes.is_empty());
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(85.0)),
