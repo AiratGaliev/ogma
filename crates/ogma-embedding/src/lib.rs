@@ -21,8 +21,7 @@ use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
     ExecutionReport, Host, HostCallCompletion, HostCallContext, HostCallRoot, HostError,
-    InstructionLocation,
-    InterpreterError, NoHost,
+    InstructionLocation, InterpreterError, NoHost,
 };
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
 use ogma_runtime::{Heap, HeapConfig, HostHandle, ScopeToken};
@@ -1151,8 +1150,7 @@ impl Drop for ActiveCContextGuard {
             // HostCallContext mutable borrow. This guard is dropped before
             // that callback invocation returns and before the borrow is used
             // again. The pointer is never retained beyond this scope.
-            let host_context =
-                unsafe { &mut *self.host_context.cast::<HostCallContext<'_>>() };
+            let host_context = unsafe { &mut *self.host_context.cast::<HostCallContext<'_>>() };
             let mut roots = self.runtime.active_handles.borrow_mut();
             for handle in handles {
                 if let Some(root) = roots.remove(&handle) {
@@ -1170,7 +1168,13 @@ impl Drop for ActiveCContextGuard {
 unsafe fn active_c_host_context<'runtime, 'context>(
     runtime: *const OgmaRuntime,
     context: OgmaContextHandle,
-) -> Result<(&'runtime OgmaRuntime, &'context mut HostCallContext<'context>), OgmaStatus> {
+) -> Result<
+    (
+        &'runtime OgmaRuntime,
+        &'context mut HostCallContext<'context>,
+    ),
+    OgmaStatus,
+> {
     if runtime.is_null() {
         return Err(OgmaStatus::INVALID_ARGUMENT);
     }
@@ -1189,10 +1193,9 @@ unsafe fn active_c_host_context<'runtime, 'context>(
     // SAFETY: ActiveCContextGuard installs this pointer from the current
     // mutable HostCallContext borrow and resets it before callback dispatch
     // returns. The pointer never escapes the active callback helpers.
-    Ok((
-        runtime,
-        unsafe { &mut *host_context.cast::<HostCallContext<'a>>() },
-    ))
+    Ok((runtime, unsafe {
+        &mut *host_context.cast::<HostCallContext<'a>>()
+    }))
 }
 
 /// Runs a full Runtime collection during an active C host callback.
@@ -1886,9 +1889,7 @@ fn throw_host_error(
     context: &mut HostCallContext<'_>,
     message: &str,
 ) -> Result<HostCallCompletion, HostError> {
-    let value = context
-        .create_string(message)
-        .map_err(HostError::Runtime)?;
+    let value = context.create_string(message).map_err(HostError::Runtime)?;
     Ok(HostCallCompletion::Throw(value))
 }
 
