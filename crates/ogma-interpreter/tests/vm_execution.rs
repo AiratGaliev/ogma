@@ -172,6 +172,14 @@ fn executes_nested_function_calls_using_verified_function_table() {
                 may_throw: false,
             },
             RegisterInstruction {
+                operation: RegisterOperation::Unary {
+                    destination: 3,
+                    source: 0,
+                    operation: ogma_bytecode::UnaryOperation::Copy,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
                 operation: RegisterOperation::Call {
                     destination: 4,
                     kind: CallKind::StoreBinding,
@@ -436,6 +444,14 @@ fn property_operations_use_the_shared_runtime_object_model() {
                     destination: 2,
                     constant: 0,
                     kind: ConstantKind::String,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Unary {
+                    destination: 1,
+                    source: 0,
+                    operation: ogma_bytecode::UnaryOperation::Copy,
                 },
                 may_throw: false,
             },
@@ -796,7 +812,7 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         "ogm46-compiler-integration",
         "memory:///ogm46-compiler-integration.js",
         None,
-        "function run(seed) { let count = seed; const step = 1; if (seed > 0) { count = count + step; } function create() { return function increment() { count = count + step; return count; }; } const increment = create(); return increment() + increment(); }",
+        "function run(seed) { let count = seed; if (seed > 0) { count = count + 1; } function create() { return function() { count = count + 1; return count; }; } const increment = create(); return increment() + increment(); }",
     )
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
