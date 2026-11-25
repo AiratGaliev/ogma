@@ -17,13 +17,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
+use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
-    CancellationToken, ExecutionCompletion, ExecutionInterruption, ExecutionReport, Host,
-    HostCallCompletion, HostCallContext, HostError, ExecutableModule, InstructionLocation,
+    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
+    ExecutionReport, Host, HostCallCompletion, HostCallContext, HostError, InstructionLocation,
     InterpreterError, NoHost,
 };
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
-use ogma_interpreter::ExecutionOptions;
 use ogma_runtime::{Heap, HeapConfig, HostHandle, ScopeToken};
 
 /// ABI major version implemented by this crate.
@@ -1039,7 +1039,13 @@ impl OgmaRuntime {
 
     fn context_handle(&self, context_id: u64) -> OgmaContextHandle {
         OgmaContextHandle {
-            opaque: [self.runtime_id, context_id, ABI_VERSION as u64, ABI_MINOR as u64, 0],
+            opaque: [
+                self.runtime_id,
+                context_id,
+                ABI_VERSION as u64,
+                ABI_MINOR as u64,
+                0,
+            ],
         }
     }
 
@@ -1055,9 +1061,7 @@ impl OgmaRuntime {
             return Err(HostError::Denied);
         }
         let mut frames = self.handle_frames.borrow_mut();
-        frames
-            .try_reserve(1)
-            .map_err(|_| HostError::Denied)?;
+        frames.try_reserve(1).map_err(|_| HostError::Denied)?;
         frames.push(Vec::new());
         drop(frames);
         let previous_heap = self.active_heap.replace(heap);
@@ -1140,7 +1144,12 @@ struct ActiveCContextGuard {
 
 impl Drop for ActiveCContextGuard {
     fn drop(&mut self) {
-        let handles = self.runtime.handle_frames.borrow_mut().pop().unwrap_or_default();
+        let handles = self
+            .runtime
+            .handle_frames
+            .borrow_mut()
+            .pop()
+            .unwrap_or_default();
         if !self.heap.is_null() {
             // SAFETY: this guard is scoped to the active interpreter callback.
             // The HostCallContext keeps the Runtime heap exclusively borrowed,
@@ -1364,10 +1373,7 @@ pub unsafe extern "C" fn ogma_context_sum_numbers(
     count: usize,
     out_sum: *mut f64,
 ) -> OgmaStatus {
-    if out_sum.is_null()
-        || (count != 0 && handles.is_null())
-        || count > MAX_C_CALLBACK_HANDLES
-    {
+    if out_sum.is_null() || (count != 0 && handles.is_null()) || count > MAX_C_CALLBACK_HANDLES {
         return OgmaStatus::INVALID_ARGUMENT;
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -1817,9 +1823,7 @@ impl Host for HostFunctionRegistry {
             }
             HostHandler::C(handler) => {
                 let heap = context.heap() as *mut Heap;
-                let _scope = self
-                    .abi_runtime
-                    .enter_call(heap, self.context_handle)?;
+                let _scope = self.abi_runtime.enter_call(heap, self.context_handle)?;
                 invoke_c_handler(
                     &self.abi_runtime,
                     self.context_handle,
@@ -1827,7 +1831,7 @@ impl Host for HostFunctionRegistry {
                     handler,
                     arguments,
                 )
-            },
+            }
         }
     }
 }
@@ -1887,8 +1891,7 @@ fn invoke_c_handler(
     if handler.signature == SIGNATURE_NUMBER_HANDLE_BINARY
         && handler.signature_id == SIGNATURE_ID_NUMBER_HANDLE_BINARY
         && handler.effects & COMPLEX_EFFECTS == 0
-        && let (Some(thunk), [left, right]) =
-            (handler.number_handle_f64_thunk, arguments)
+        && let (Some(thunk), [left, right]) = (handler.number_handle_f64_thunk, arguments)
     {
         let left_handle = runtime.create_temp_handle(context.heap(), context_handle, *left)?;
         let right_handle = runtime.create_temp_handle(context.heap(), context_handle, *right)?;
@@ -1943,13 +1946,11 @@ fn invoke_c_handler(
     if status != OgmaStatus::OK {
         return callback_status_to_host_error(context, status);
     }
-    if completion.reserved != 0
-        || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
+    if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
     {
         return Err(HostError::Panicked);
     }
-    let value = runtime
-        .resolve_temp_handle(context.heap(), context_handle, completion.value)?;
+    let value = runtime.resolve_temp_handle(context.heap(), context_handle, completion.value)?;
     Ok(if completion.kind == COMPLETION_THROW {
         HostCallCompletion::Throw(value)
     } else {
@@ -2156,9 +2157,8 @@ mod tests {
         }
         let mut value = OgmaHandle::default();
         // SAFETY: Runtime/context are borrowed for this callback invocation.
-        let status = unsafe {
-            ogma_context_create_number(runtime, context, f64::from(integer), &mut value)
-        };
+        let status =
+            unsafe { ogma_context_create_number(runtime, context, f64::from(integer), &mut value) };
         if status != OgmaStatus::OK {
             return status;
         }
@@ -2188,8 +2188,7 @@ mod tests {
         let argument = unsafe { *arguments };
         let mut boolean = 0_u8;
         // SAFETY: the callback receives the active Runtime/Context pair.
-        let status =
-            unsafe { ogma_context_get_boolean(runtime, context, argument, &mut boolean) };
+        let status = unsafe { ogma_context_get_boolean(runtime, context, argument, &mut boolean) };
         if status != OgmaStatus::OK {
             return status;
         }
@@ -2295,7 +2294,9 @@ mod tests {
             panic!("fractional Number must fail checked i32 conversion");
         };
         let text = String::from_utf16(
-            &context.read_string_utf16(message).expect("RangeError string"),
+            &context
+                .read_string_utf16(message)
+                .expect("RangeError string"),
         )
         .expect("valid RangeError text");
         assert!(text.starts_with("RangeError:"));
@@ -2333,7 +2334,9 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(ContextError::Interpreter(InterpreterError::HostCallbackPanicked))
+            Err(ContextError::Interpreter(
+                InterpreterError::HostCallbackPanicked
+            ))
         ));
         context.unregister_host_function(slot).expect("unregister");
     }
@@ -2341,20 +2344,23 @@ mod tests {
     #[test]
     fn abi_negotiation_c_entrypoint_validates_output_and_features() {
         let null_status = unsafe {
-            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, FEATURE_CALLBACKS, std::ptr::null_mut())
+            ogma_abi_negotiate(
+                ABI_VERSION,
+                ABI_MINOR,
+                FEATURE_CALLBACKS,
+                std::ptr::null_mut(),
+            )
         };
         assert_eq!(null_status, OgmaStatus::INVALID_ARGUMENT);
 
         let mut version = OgmaAbiVersion::default();
-        let accepted = unsafe {
-            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, FEATURE_CALLBACKS, &mut version)
-        };
+        let accepted =
+            unsafe { ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, FEATURE_CALLBACKS, &mut version) };
         assert_eq!(accepted, OgmaStatus::OK);
         assert_eq!(version, OgmaAbiVersion::current());
 
-        let rejected = unsafe {
-            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, 1_u64 << 63, &mut version)
-        };
+        let rejected =
+            unsafe { ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, 1_u64 << 63, &mut version) };
         assert_eq!(rejected, OgmaStatus::UNSUPPORTED_FEATURE);
     }
 
@@ -2720,7 +2726,7 @@ mod tests {
         );
     }
 
-        #[test]
+    #[test]
     fn registered_rust_host_callback_reenters_the_same_runtime_context() {
         let outer = host_call_artifacts();
         let nested_document: FunctionDocument = from_str(include_str!(
@@ -2753,12 +2759,8 @@ mod tests {
                         )
                         .map_err(|_| HostError::Panicked)?
                     {
-                        ExecutionCompletion::Return(value) => {
-                            Ok(HostCallCompletion::Normal(value))
-                        }
-                        ExecutionCompletion::Throw(value) => {
-                            Ok(HostCallCompletion::Throw(value))
-                        }
+                        ExecutionCompletion::Return(value) => Ok(HostCallCompletion::Normal(value)),
+                        ExecutionCompletion::Throw(value) => Ok(HostCallCompletion::Throw(value)),
                         ExecutionCompletion::Interrupted(reason) => {
                             Ok(HostCallCompletion::Interrupted(reason))
                         }
@@ -2783,7 +2785,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn host_registry_rejects_stale_slots_and_busy_unregistration() {
         let engine = Engine::new(EngineConfig::default()).expect("Engine");
         let mut runtime = engine.create_runtime().expect("Runtime");
@@ -2825,8 +2827,11 @@ mod tests {
                     let slot = callback_slot
                         .borrow()
                         .expect("published callback slot before execution");
-                    *callback_result_slot.borrow_mut() =
-                        Some(callback_registry.unregister(slot).expect_err("active dispatch is busy"));
+                    *callback_result_slot.borrow_mut() = Some(
+                        callback_registry
+                            .unregister(slot)
+                            .expect_err("active dispatch is busy"),
+                    );
                     Ok(HostCallCompletion::Normal(Value::number(42.0)))
                 },
             )
@@ -2844,11 +2849,10 @@ mod tests {
             report.completion,
             ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
         ));
-        assert_eq!(
-            *callback_result.borrow(),
-            Some(HostRegistrationError::Busy)
-        );
-        registry.unregister(slot).expect("unregister after dispatch");
+        assert_eq!(*callback_result.borrow(), Some(HostRegistrationError::Busy));
+        registry
+            .unregister(slot)
+            .expect("unregister after dispatch");
     }
 
     #[test]
@@ -2928,7 +2932,10 @@ mod tests {
         let text = context
             .read_string_utf16(value)
             .expect("value survived the scoped collection");
-        assert_eq!(String::from_utf16(&text).expect("valid text"), "scoped value");
+        assert_eq!(
+            String::from_utf16(&text).expect("valid text"),
+            "scoped value"
+        );
         context.collect().expect("collect after scope closure");
         assert!(context.read_string_utf16(value).is_err());
     }
@@ -2938,13 +2945,13 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         context
             .register_host_function(
                 HostFunctionDescriptor::new(77, "benchmark.host.echo"),
-                |_call, _arguments| {
-                    Ok(HostCallCompletion::Throw(Value::number(99.0)))
-                },
+                |_call, _arguments| Ok(HostCallCompletion::Throw(Value::number(99.0))),
             )
             .expect("register throwing callback");
 
@@ -2959,15 +2966,23 @@ mod tests {
             panic!("host Throw must remain distinct from Return");
         };
         assert_eq!(
-            context.resolve(handle).expect("persistent throw value").as_number(),
+            context
+                .resolve(handle)
+                .expect("persistent throw value")
+                .as_number(),
             Some(99.0)
         );
         context.collect().expect("throw value survives forced GC");
         assert_eq!(
-            context.resolve(handle).expect("persistent throw after GC").as_number(),
+            context
+                .resolve(handle)
+                .expect("persistent throw after GC")
+                .as_number(),
             Some(99.0)
         );
-        context.release(handle).expect("release persistent thrown value");
+        context
+            .release(handle)
+            .expect("release persistent thrown value");
     }
 
     #[test]
