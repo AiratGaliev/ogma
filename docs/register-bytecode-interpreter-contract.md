@@ -25,7 +25,7 @@ The interpreter does not treat verifier acceptance as a general sandbox. The hos
 
 The M1 VM uses a register frame per active function and an explicit VM frame stack. Calls do not recursively invoke the Rust interpreter. Each decoded instruction carries its code-section byte offset, encoded size, typed operation and verified exceptional-effect flag. Branch destinations are byte offsets and are mapped to verifier-accepted instruction boundaries before a program counter is changed.
 
-The entry-register layout is derived from manifest metadata and re-verified: parameters occupy the initial register range, followed by captures in manifest order. Function arguments are copied into those parameter registers. The emitted StoreBinding operations initialize lexical parameter bindings in the shared Runtime environment. Runtime activation roots preserve arguments and the closure environment for the call lifetime.
+The entry-register layout is derived from manifest metadata and re-verified: parameters occupy the initial register range, followed by captures in manifest order. Before allocating the entry environment or closure, the interpreter roots all supplied arguments and `global_this` in a temporary setup scope; this protects newly allocated host Values if setup allocations trigger GC under quota pressure. Function arguments are then copied into those parameter registers. The emitted StoreBinding operations initialize lexical parameter bindings in the shared Runtime environment. Runtime activation roots preserve arguments and the closure environment for the call lifetime.
 
 The VM register file distinguishes four internal states:
 
