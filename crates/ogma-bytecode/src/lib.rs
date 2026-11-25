@@ -3702,14 +3702,8 @@ mod tests {
             ],
             "variable_locations":[]
         });
-        let bytes = build_ogmb_v1(
-            manifest(2, 1),
-            &code,
-            &[json!(1)],
-            &[],
-            Some(&source_map),
-        )
-        .expect("build malformed source map");
+        let bytes = build_ogmb_v1(manifest(2, 1), &code, &[json!(1)], &[], Some(&source_map))
+            .expect("build malformed source map");
         let errors = verify_register_artifact(&bytes, &[])
             .expect_err("cyclic lexical scope ancestry must fail closed");
         assert!(
