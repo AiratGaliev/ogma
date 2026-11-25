@@ -494,7 +494,9 @@ fn compile_function_with_cells(
     for block in &function.blocks {
         for instruction in &block.instructions {
             for binding in source_bindings(&instruction.source) {
-                if const_binding_ids.contains(&binding) && seen_const_definitions.insert(binding.clone()) {
+                if const_binding_ids.contains(&binding)
+                    && seen_const_definitions.insert(binding.clone())
+                {
                     const_definition_bindings
                         .entry(instruction.id.clone())
                         .or_default()
