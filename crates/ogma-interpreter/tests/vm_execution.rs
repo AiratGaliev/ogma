@@ -774,7 +774,7 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         "ogm46-compiler-integration",
         "memory:///ogm46-compiler-integration.js",
         None,
-        "function run(seed) { let count = seed; const increment = function() { count = count + 1; return count; }; return increment() + increment(); }",
+        "function run(seed) { let count = seed; const step = 1; function create() { return function increment() { count = count + step; return count; }; } const increment = create(); return increment() + increment(); }",
     )
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
