@@ -1183,6 +1183,28 @@ unsafe fn active_c_heap<'a>(
     Ok((runtime, unsafe { &mut *heap }))
 }
 
+/// Runs a full Runtime collection during an active C host callback.
+///
+/// Callback argument handles and values created through the C helpers remain
+/// rooted for the callback's lifetime and survive this collection.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_collect_unrooted(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+) -> OgmaStatus {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the callback supplies its active Runtime and Context handles.
+        let (_runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        heap.collect().map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
 /// Creates a JavaScript Number during a C host callback.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_create_number(
@@ -2387,6 +2409,12 @@ mod tests {
             unsafe { (user_data.cast::<OgmaHandle>()).write(argument) };
         }
         let mut number = 0.0;
+        // Force GC while the argument handle is still callback-scoped.
+        // SAFETY: callback receives its active Runtime and Context handles.
+        let collection_status = unsafe { ogma_context_collect_unrooted(runtime, context) };
+        if collection_status != OgmaStatus::OK {
+            return collection_status;
+        }
         // SAFETY: callback receives its active Runtime and Context handles.
         let read_status =
             unsafe { ogma_context_get_number(runtime, context, argument, &mut number) };
@@ -2714,6 +2742,7 @@ mod tests {
             .register_host_function(
                 HostFunctionDescriptor::new(81, "benchmark.host.echo"),
                 move |call, _arguments| {
+                    call.heap().collect().map_err(HostError::Runtime)?;
                     let mut no_host = NoHost;
                     match call
                         .execute_nested(
