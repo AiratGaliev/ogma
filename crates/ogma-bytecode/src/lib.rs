@@ -509,6 +509,9 @@ pub fn encode_register_code(
     Ok(output)
 }
 
+/// JSON value type used by OGMB manifests, constants and source maps.
+pub type ArtifactJsonValue = serde_json::Value;
+
 /// Artifact returned only after container and register verification succeeds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerifiedArtifact {
