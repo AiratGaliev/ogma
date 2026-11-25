@@ -2517,25 +2517,57 @@ fn validate_source_map(
             )]);
         }
     }
+    let mut scope_parents = BTreeMap::<String, Option<String>>::new();
     for (index, scope) in scopes.iter().enumerate() {
+        let path = format!("$.source_map.lexical_scopes[{index}].parent");
         let parent = scope.get("parent").ok_or_else(|| {
             vec![Diagnostic::new(
                 "source_map.scope_parent",
-                format!("$.source_map.lexical_scopes[{index}].parent"),
+                &path,
                 "parent field is required",
             )]
         })?;
+        let parent_id = parent.as_str();
         if !parent.is_null()
-            && parent.as_str().is_none_or(|id| {
+            && parent_id.is_none_or(|id| {
                 !scope_ids.contains(id)
                     || id == scope.get("id").and_then(Value::as_str).unwrap_or_default()
             })
         {
             return Err(vec![Diagnostic::new(
                 "source_map.scope_parent",
-                format!("$.source_map.lexical_scopes[{index}].parent"),
+                &path,
                 "scope parent must be null or another declared scope",
             )]);
+        }
+        let id = scope.get("id").and_then(Value::as_str).unwrap_or_default();
+        scope_parents.insert(id.to_owned(), parent_id.map(str::to_owned));
+    }
+
+    // Lexical scope ancestry is a forest. Walk the single-parent graph iteratively
+    // so deeply nested untrusted metadata cannot recurse on the native stack.
+    let mut scope_state = BTreeMap::<String, u8>::new();
+    for start in scope_parents.keys() {
+        let mut path = Vec::<String>::new();
+        let mut current = Some(start.as_str());
+        while let Some(id) = current {
+            match scope_state.get(id).copied() {
+                Some(1) => {
+                    return Err(vec![Diagnostic::new(
+                        "source_map.scope_cycle",
+                        "$.source_map.lexical_scopes",
+                        format!("lexical scope parent chain contains a cycle at {id:?}"),
+                    )]);
+                }
+                Some(2) => break,
+                _ => {}
+            }
+            scope_state.insert(id.to_owned(), 1);
+            path.push(id.to_owned());
+            current = scope_parents.get(id).and_then(Option::as_deref);
+        }
+        for id in path {
+            scope_state.insert(id, 2);
         }
     }
 
@@ -3627,6 +3659,63 @@ mod tests {
             errors
                 .iter()
                 .any(|item| item.code == "constant.kind_mismatch")
+        );
+    }
+
+    #[test]
+    fn rejects_cyclic_source_map_lexical_scope_hierarchies() {
+        let instructions = vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Return { source: 0 },
+                may_throw: false,
+            },
+        ];
+        let code = encode_register_code(&instructions).expect("encode");
+        let source = |scope: &str| {
+            json!({
+                "origin":"generated",
+                "reason":"lexical scope cycle regression",
+                "scope":scope,
+                "bindings":[],
+                "suspension":null,
+                "inline_chain":[]
+            })
+        };
+        let source_map = json!({
+            "version":"1.0.0",
+            "files":[],
+            "locations":[
+                {"offset":0,"source":source("scope_a")},
+                {"offset":9,"source":source("scope_b")}
+            ],
+            "lexical_scopes":[
+                {"id":"scope_a","parent":"scope_b","start_offset":0,"end_offset":13,"bindings":[]},
+                {"id":"scope_b","parent":"scope_a","start_offset":0,"end_offset":13,"bindings":[]}
+            ],
+            "variable_locations":[]
+        });
+        let bytes = build_ogmb_v1(
+            manifest(2, 1),
+            &code,
+            &[json!(1)],
+            &[],
+            Some(&source_map),
+        )
+        .expect("build malformed source map");
+        let errors = verify_register_artifact(&bytes, &[])
+            .expect_err("cyclic lexical scope ancestry must fail closed");
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "source_map.scope_cycle")
         );
     }
 
