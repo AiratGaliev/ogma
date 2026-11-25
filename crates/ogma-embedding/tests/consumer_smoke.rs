@@ -38,10 +38,17 @@ fn external_rust_consumer_creates_runtime_executes_and_releases_persistent_resul
     context
         .load_module(compile_module("function add(a, b) { return a + b; }"))
         .expect("verified module");
+    let add_id = context
+        .functions()
+        .expect("verified function metadata")
+        .into_iter()
+        .find(|function| function.name == "add")
+        .expect("compiled add function")
+        .id;
 
     let report = context
         .execute_persistent(
-            "add",
+            &add_id,
             &[Value::number(19.0), Value::number(23.0)],
             ExecutionRequest::default(),
         )
