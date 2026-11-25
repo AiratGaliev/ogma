@@ -423,15 +423,21 @@ impl Context<'_> {
     /// Cancels all pending jobs and releases their callback/argument roots.
     pub fn cancel_pending_promise_jobs(&mut self) -> Result<usize, JobQueueError> {
         let mut cancelled = 0;
+        let mut first_error = None;
         while let Some(job) = self.runtime.jobs.queue.pop_front() {
-            release_job_roots(&mut self.runtime.heap, job)?;
+            if let Err(error) = release_job_roots(&mut self.runtime.heap, job) {
+                first_error.get_or_insert(error);
+            }
             cancelled += 1;
         }
-        Ok(cancelled)
+        first_error.map_or(Ok(cancelled), |error| Err(JobQueueError::Heap(error)))
     }
 
     /// Irreversibly shuts down the queue and releases every pending job root.
     pub fn shutdown_promise_jobs(&mut self) -> Result<(), JobQueueError> {
+        if self.runtime.jobs.pumping {
+            return Err(JobQueueError::ReentrantPump);
+        }
         self.runtime.jobs.state = JobQueueState::Shutdown;
         self.cancel_pending_promise_jobs()?;
         Ok(())
@@ -551,6 +557,29 @@ mod tests {
     }
 
     #[test]
+    fn enqueue_rejects_oversized_argument_vectors_before_rooting() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 1; }; }",
+        );
+        let arguments = vec![crate::Value::undefined(); crate::MAX_HOST_ARGUMENTS + 1];
+
+        assert!(matches!(
+            context.enqueue_promise_job(callback, &arguments),
+            Err(JobQueueError::TooManyArguments {
+                count,
+                maximum
+            }) if count == crate::MAX_HOST_ARGUMENTS + 1
+                && maximum == crate::MAX_HOST_ARGUMENTS
+        ));
+        assert_eq!(context.pending_promise_jobs(), 0);
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
     fn pump_preserves_fifo_budget_and_roots_callbacks_across_collection() {
         let engine = Engine::new(EngineConfig {
             max_jobs_per_pump: 1,
@@ -565,6 +594,11 @@ mod tests {
         );
         context.enqueue_promise_job(callback, &[]).expect("first");
         context.enqueue_promise_job(callback, &[]).expect("second");
+        assert!(matches!(
+            context.pump_promise_jobs(Some(2)),
+            Err(JobQueueError::InvalidPumpBudget)
+        ));
+        assert_eq!(context.pending_promise_jobs(), 2);
         context.collect().expect("queued callback roots survive GC");
 
         let first = context.pump_promise_jobs(None).expect("first pump");
@@ -636,6 +670,7 @@ mod tests {
         context.shutdown_promise_jobs().expect("shutdown");
         assert_eq!(context.promise_job_state(), JobQueueState::Shutdown);
         assert_eq!(context.pending_promise_jobs(), 0);
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
         assert!(matches!(
             context.enqueue_promise_job(callback, &[]),
             Err(JobQueueError::ShuttingDown)
