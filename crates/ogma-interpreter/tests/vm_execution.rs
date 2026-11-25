@@ -180,8 +180,8 @@ fn compiler_rejects_arrow_functions_until_ogmb_preserves_function_kind() {
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
         .expect("arrow function source parses");
-    let failure = compile_to_bytecode(&parsed)
-        .expect_err("OGMB v1 must not erase the arrow function kind");
+    let failure =
+        compile_to_bytecode(&parsed).expect_err("OGMB v1 must not erase the arrow function kind");
     let CompileFailure::Semantic(diagnostics) = failure else {
         panic!("unsupported arrow metadata must be reported as a semantic diagnostic");
     };
