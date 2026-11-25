@@ -611,7 +611,14 @@ impl ExecutableModule {
                         return Err(error.into());
                     }
                     frame.pc = next_pc;
-                    if back_edge && let Some(reason) = state.poll(true) {
+                    // Runtime helpers and host callbacks are cooperative
+                    // interrupt boundaries on both entry and return. Polling
+                    // only before a callback can miss cancellation requested
+                    // while the callback was running, especially when the
+                    // ordinary dispatch interval is greater than one.
+                    if (back_edge || operation_needs_interrupt(&instruction.operation))
+                        && let Some(reason) = state.poll(true)
+                    {
                         frames.push(frame);
                         self.unwind_frames(heap, &mut frames)?;
                         return Ok(ExecutionCompletion::Interrupted(reason));
@@ -634,6 +641,22 @@ impl ExecutableModule {
                     frames.push(*child);
                 }
                 Ok(Step::Complete(completion)) => {
+                    // Function exit is the return side of a call boundary.
+                    // Observe cancellation/deadline before releasing the
+                    // child's roots and publishing its completion to the
+                    // caller. An already-produced interruption is preserved.
+                    if !matches!(completion, ExecutionCompletion::Interrupted(_))
+                        && let Some(reason) = state.poll(true)
+                    {
+                        if let Err(error) = heap.close_scope(scope) {
+                            frames.push(frame);
+                            self.unwind_frames(heap, &mut frames)?;
+                            return Err(error.into());
+                        }
+                        frames.push(frame);
+                        self.unwind_frames(heap, &mut frames)?;
+                        return Ok(ExecutionCompletion::Interrupted(reason));
+                    }
                     if let Err(error) = heap.close_scope(scope) {
                         frames.push(frame);
                         self.unwind_frames(heap, &mut frames)?;
