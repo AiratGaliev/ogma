@@ -423,8 +423,7 @@ fn compile_function_with_cells(
             }
         }
         for instruction in &block.instructions {
-            if instruction.result.is_some() {
-                let result = instruction.result.as_ref().expect("checked");
+            if let Some(result) = &instruction.result {
                 value_registers.insert(result.id.clone(), allocator.allocate()?);
             }
             if instruction.effects.may_suspend {
@@ -1835,20 +1834,19 @@ fn lower_instruction(
         && const_definition_instructions.contains(&instruction.id)
     {
         for binding in source_bindings(&source) {
-            if const_binding_is_local(function, &binding) {
-                if let Some(binding_register) = bindings.get(&binding).copied() {
-                    if binding_register != result_register {
-                        output.push(PlannedInstruction {
-                            operation: PlannedOperation::Ready(RegisterOperation::Unary {
-                                destination: binding_register,
-                                source: result_register,
-                                operation: UnaryOperation::Copy,
-                            }),
-                            may_throw: false,
-                            source: source.clone(),
-                        });
-                    }
-                }
+            if const_binding_is_local(function, &binding)
+                && let Some(binding_register) = bindings.get(&binding).copied()
+                && binding_register != result_register
+            {
+                output.push(PlannedInstruction {
+                    operation: PlannedOperation::Ready(RegisterOperation::Unary {
+                        destination: binding_register,
+                        source: result_register,
+                        operation: UnaryOperation::Copy,
+                    }),
+                    may_throw: false,
+                    source: source.clone(),
+                });
             }
         }
     }
