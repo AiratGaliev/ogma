@@ -2,6 +2,9 @@ use ogma_bytecode::{
     BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation,
     build_ogmb_v1, encode_register_code,
 };
+use ogma_compiler::compile_to_bytecode;
+use ogma_frontend::{parse, ParseRequestOptions, SourceFile};
+use oxc_allocator::Allocator;
 use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
     ExecutionOptions, Host, HostError, InterpreterError,
@@ -761,4 +764,46 @@ fn host_calls_are_capability_named_and_traced() {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(7.0)),
         completion => panic!("expected host result, got {completion:?}"),
     }
+}
+
+
+#[test]
+fn executes_real_compiler_output_with_lexical_closure_capture() {
+    let allocator = Allocator::default();
+    let source = SourceFile::new(
+        "ogm46-compiler-integration",
+        "memory:///ogm46-compiler-integration.js",
+        None,
+        "function run(seed) { let count = seed; const increment = function() { count = count + 1; return count; }; return increment() + increment(); }",
+    )
+    .expect("source is valid");
+    let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+        .expect("source parses through the pinned Oxc frontend");
+    let compiled = compile_to_bytecode(&parsed)
+        .expect("frontend, semantic analysis, Core IR and OGMB compilation succeed");
+    assert!(compiled.functions.len() >= 3);
+
+    let entry = compiled.functions.iter()
+        .find(|function| function.name == "run")
+        .expect("run function artifact");
+    let entry_id = entry.id.clone();
+    let artifacts = compiled.functions.iter()
+        .map(|function| function.artifact.bytes.clone())
+        .collect::<Vec<_>>();
+    let module = ExecutableModule::load(artifacts)
+        .expect("interpreter re-verifies compiler-produced serialized OGMB artifacts");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        &entry_id,
+        &[Value::number(40.0)],
+        ExecutionOptions::default(),
+    ).expect("compiler-produced artifact executes");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(83.0)),
+        completion => panic!("expected closure-backed compiler result, got {completion:?}"),
+    }
+    assert!(report.instructions_executed > 0);
+    assert_eq!(report.max_call_depth_reached, 2);
 }
