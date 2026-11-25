@@ -585,6 +585,7 @@ impl ExecutableModule {
         Ok(state.report(completion))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_with_state<H: Host>(
         &self,
         heap: &mut Heap,
