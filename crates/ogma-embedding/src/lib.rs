@@ -1194,7 +1194,7 @@ unsafe fn active_c_host_context<'runtime, 'context>(
     // mutable HostCallContext borrow and resets it before callback dispatch
     // returns. The pointer never escapes the active callback helpers.
     Ok((runtime, unsafe {
-        &mut *host_context.cast::<HostCallContext<'a>>()
+        &mut *host_context.cast::<HostCallContext<'context>>()
     }))
 }
 
