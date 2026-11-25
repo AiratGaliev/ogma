@@ -791,6 +791,17 @@ impl ExecutableModule {
                         }
                     },
                 };
+                if *operation == UnaryOperation::Copy
+                    && let Some(binding) = frame.image.register_bindings.get(destination)
+                    && frame.image.const_binding_ids.contains(binding)
+                {
+                    if frame.initialized_bindings.contains(binding) {
+                        return Err(InterpreterError::Runtime(HeapError::AlreadyInitialized));
+                    }
+                    let value = read_value_slot(&result)?;
+                    heap.initialize_binding(frame.activation.environment(), *binding, value)?;
+                    frame.initialized_bindings.insert(*binding);
+                }
                 write_register(frame, *destination, result)?;
                 Ok(Step::Continue {
                     next_pc,
@@ -1446,6 +1457,7 @@ struct FunctionImage {
     register_bindings: HashMap<u16, BindingId>,
     local_binding_ids: HashSet<BindingId>,
     var_binding_ids: HashSet<BindingId>,
+    const_binding_ids: HashSet<BindingId>,
     offset_to_index: HashMap<u32, usize>,
     definition: FunctionDefinition,
 }
@@ -1467,6 +1479,7 @@ impl FunctionImage {
         let mut register_bindings = HashMap::new();
         let mut local_binding_ids = HashSet::new();
         let mut var_binding_ids = HashSet::new();
+        let mut const_binding_ids = HashSet::new();
 
         for binding in &raw.bindings {
             let key = (raw.environment_id.clone(), binding.id.clone());
@@ -1481,7 +1494,10 @@ impl FunctionImage {
                     BindingDefinition::mutable(id, Value::undefined())
                 }
                 "let" | "parameter" => BindingDefinition::uninitialized(id, true),
-                "const" => BindingDefinition::uninitialized(id, false),
+                "const" => {
+                    const_binding_ids.insert(id);
+                    BindingDefinition::uninitialized(id, false)
+                },
                 _ => {
                     return Err(InterpreterError::UnsupportedOperation(
                         "catch/import binding",
@@ -1567,6 +1583,7 @@ impl FunctionImage {
             register_bindings,
             local_binding_ids,
             var_binding_ids,
+            const_binding_ids,
             offset_to_index,
             definition,
         })
