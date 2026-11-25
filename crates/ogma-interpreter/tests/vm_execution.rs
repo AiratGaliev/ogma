@@ -140,6 +140,129 @@ fn empty_bindings() -> (Vec<JsonValue>, Vec<JsonValue>) {
     (Vec::new(), Vec::new())
 }
 
+
+fn module_from_core_ir_fixture(source: &str) -> ExecutableModule {
+    let document: ogma_core_ir::FunctionDocument =
+        serde_json::from_str(source).expect("canonical Core IR v1 fixture");
+    let functions = ogma_compiler::bytecode::compile_functions(&[document])
+        .expect("fixture compiles through the Rust Core IR-to-OGMB backend");
+    let artifacts = functions
+        .into_iter()
+        .map(|function| function.artifact.bytes)
+        .collect::<Vec<_>>();
+    ExecutableModule::load(artifacts)
+        .expect("interpreter re-verifies every serialized fixture artifact")
+}
+
+fn execute_number(
+    module: &ExecutableModule,
+    entry: &str,
+    arguments: &[Value],
+    heap: &mut Heap,
+) -> f64 {
+    let report = module
+        .execute_without_host(heap, entry, arguments, ExecutionOptions::default())
+        .expect("verified Core IR fixture executes");
+    match report.completion {
+        ExecutionCompletion::Return(value) => {
+            value.as_number().expect("fixture returns a Number")
+        }
+        completion => panic!("expected normal fixture completion, got {completion:?}"),
+    }
+}
+
+#[test]
+fn executes_canonical_core_ir_branch_and_loop_fixtures_via_serialized_ogmb() {
+    // These are the same checked-in Core IR inputs used by the OGM-31
+    // cross-backend proof. This path intentionally compiles to OGMB first;
+    // the interpreter never receives or evaluates Core IR directly.
+    let branch = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-ssa-branch.json"
+    ));
+    let loop_module = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-loop-carried-values.json"
+    ));
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+
+    assert_eq!(
+        execute_number(&branch, "fn0", &[Value::number(7.0), Value::number(7.0)], &mut heap),
+        7.0
+    );
+    assert_eq!(
+        execute_number(&branch, "fn0", &[Value::number(7.0), Value::number(8.0)], &mut heap),
+        8.0
+    );
+    assert_eq!(
+        execute_number(
+            &loop_module,
+            "fn_loop_carried",
+            &[Value::number(0.0), Value::number(5.0), Value::number(1.0)],
+            &mut heap
+        ),
+        5.0
+    );
+    assert_eq!(
+        execute_number(
+            &loop_module,
+            "fn_loop_carried",
+            &[Value::number(0.5), Value::number(3.5), Value::number(0.75)],
+            &mut heap
+        ),
+        3.5
+    );
+}
+
+#[derive(Default)]
+struct CanonicalEchoHost {
+    calls: Vec<(String, Vec<f64>)>,
+}
+
+impl Host for CanonicalEchoHost {
+    fn call(
+        &mut self,
+        _heap: &mut Heap,
+        capability: &str,
+        arguments: &[Value],
+    ) -> Result<Value, HostError> {
+        if capability != "benchmark.host.echo" || arguments.len() != 1 {
+            return Err(HostError::Denied);
+        }
+        let Some(argument) = arguments[0].as_number() else {
+            return Err(HostError::Denied);
+        };
+        self.calls
+            .push((capability.to_owned(), vec![argument]));
+        Ok(Value::number(argument + 11.0))
+    }
+}
+
+#[test]
+fn executes_canonical_core_ir_host_call_fixture_with_observable_host_trace() {
+    let module = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-host-call.json"
+    ));
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let mut host = CanonicalEchoHost::default();
+    let report = module
+        .execute(
+            &mut heap,
+            "fn_host_call",
+            &[Value::number(31.0)],
+            &mut host,
+            ExecutionOptions::default(),
+        )
+        .expect("host-backed Core IR fixture executes");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected host-backed return, got {completion:?}"),
+    }
+    assert_eq!(
+        host.calls,
+        vec![("benchmark.host.echo".to_owned(), vec![31.0])]
+    );
+}
+
 #[test]
 fn executes_serialized_decoded_register_bytecode() {
     let (bindings, captures) = empty_bindings();
