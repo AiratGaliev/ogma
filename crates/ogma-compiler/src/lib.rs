@@ -7,6 +7,7 @@
 
 #![deny(missing_docs)]
 
+pub mod bytecode;
 pub mod lowering;
 pub mod semantic;
 
@@ -35,6 +36,8 @@ pub struct CompiledModule {
 pub enum CompileFailure {
     /// Frontend-resolved semantic facts cannot be represented by the M1 model.
     Semantic(Vec<semantic::SemanticDiagnostic>),
+    /// A verified Core IR function cannot be faithfully represented by the M1 bytecode profile.
+    Bytecode(Vec<ogma_bytecode::Diagnostic>),
     /// A source construct cannot be faithfully represented by Core IR v1.
     Lowering(Vec<lowering::LoweringDiagnostic>),
 }
@@ -56,6 +59,31 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
         functions,
         frontend_diagnostics: parsed.diagnostics.clone(),
     })
+}
+
+impl CompiledModule {
+    /// Emits and verifies one portable OGMB v1 artifact per Core IR function.
+    ///
+    /// Each artifact is independently encoded and validated by the bytecode
+    /// boundary. This method does not execute code or claim interpreter
+    /// compatibility beyond the registered M1 encoding profile.
+    pub fn emit_bytecode(&self) -> Result<bytecode::CompiledBytecodeModule, CompileFailure> {
+        let functions =
+            bytecode::compile_functions(&self.functions).map_err(CompileFailure::Bytecode)?;
+        Ok(bytecode::CompiledBytecodeModule { functions })
+    }
+}
+
+/// Compiles a parsed source unit directly to independently verified OGMB v1
+/// function artifacts.
+///
+/// The existing Core IR-only compile API remains available for other
+/// backends. Unsupported M1 semantics are returned as bytecode diagnostics
+/// instead of being silently discarded.
+pub fn compile_to_bytecode(
+    parsed: &ParsedProgram<'_>,
+) -> Result<bytecode::CompiledBytecodeModule, CompileFailure> {
+    compile(parsed)?.emit_bytecode()
 }
 
 #[cfg(test)]
@@ -669,5 +697,135 @@ mod tests {
                 instruction.op == "env.store" && instruction.attributes.contains_key("binding")
             })
         }));
+    }
+    #[test]
+    fn compiles_register_artifacts_and_accepts_them_with_the_reference_verifier() {
+        use std::process::Command;
+
+        let cases = [
+            (
+                "arithmetic_and_calls",
+                "function add(left, right) { return left + right; } add(40, 2);",
+            ),
+            (
+                "branch_and_loop",
+                "function sum(value) { let total = 0; while (value > 0) { total = total + value; value = 0; } if (total > 0) { total = total + 1; } return total; } sum(3);",
+            ),
+            (
+                "property_access",
+                "function read(value) { return value.name; } read(42);",
+            ),
+            (
+                "closure_capture",
+                "function makeCounter() { let count = 0; const step = 1; const increment = function() { count = count + step; return count; }; return increment; } makeCounter();",
+            ),
+            (
+                "propagated_exception",
+                "function fail() { throw 42; } fail();",
+            ),
+        ];
+
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repository_root = manifest_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("compiler crate is inside the workspace");
+        let verifier = repository_root.join(".github/scripts/verify_ogmb.py");
+        assert!(verifier.is_file(), "repository OGMB verifier must exist");
+
+        for (case_name, source_text) in cases {
+            let allocator = Allocator::default();
+            let file = SourceFile::new(
+                case_name,
+                format!("fixtures/{case_name}.js"),
+                None,
+                source_text,
+            )
+            .expect("source fixture is valid");
+            let parsed = parse(&allocator, &file, ParseRequestOptions::default())
+                .expect("source fixture parses");
+            let compiled = compile_to_bytecode(&parsed)
+                .unwrap_or_else(|error| panic!("{case_name} did not compile: {error:?}"));
+            assert!(
+                !compiled.functions.is_empty(),
+                "{case_name} emitted no functions"
+            );
+
+            for function in compiled.functions {
+                assert!(function.metrics.instruction_count > 0);
+                assert!(function.metrics.code_bytes > 0);
+                assert_eq!(
+                    function.metrics.instruction_count as usize,
+                    function.artifact.verification_input["instructions"]
+                        .as_array()
+                        .unwrap()
+                        .len()
+                );
+                assert_eq!(function.metrics.code_bytes, function.artifact.code.len());
+                assert_eq!(
+                    function.metrics.constant_count,
+                    function.artifact.constants.len()
+                );
+                assert_eq!(
+                    function.metrics.register_count,
+                    function.artifact.manifest["metadata"]["frame_layout"]["register_count"]
+                        .as_u64()
+                        .unwrap() as u32
+                );
+
+                let safe_function_id = function
+                    .id
+                    .chars()
+                    .map(|character| {
+                        if matches!(character, ':' | '/' | '\\') {
+                            '_'
+                        } else {
+                            character
+                        }
+                    })
+                    .collect::<String>();
+                let sequence = format!("{}_{}", std::process::id(), safe_function_id);
+                let container_path = std::env::temp_dir().join(format!("ogm45_{sequence}.ogmb"));
+                let program_path = std::env::temp_dir().join(format!("ogm45_{sequence}.json"));
+                std::fs::write(&container_path, &function.artifact.bytes)
+                    .expect("write generated OGMB artifact");
+                std::fs::write(
+                    &program_path,
+                    serde_json::to_vec(&function.artifact.verification_input)
+                        .expect("serialize verifier input"),
+                )
+                .expect("write normalized verification input");
+
+                let mut result = None;
+                for interpreter in ["python3", "python"] {
+                    match Command::new(interpreter)
+                        .arg(&verifier)
+                        .arg("--container")
+                        .arg(&container_path)
+                        .arg("--program")
+                        .arg(&program_path)
+                        .current_dir(repository_root)
+                        .output()
+                    {
+                        Ok(output) => {
+                            result = Some(output);
+                            break;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => panic!("could not launch reference verifier: {error}"),
+                    }
+                }
+                let output = result.expect("Python is required by the repository Fast CI");
+                let _ = std::fs::remove_file(&container_path);
+                let _ = std::fs::remove_file(&program_path);
+                assert!(
+                    output.status.success(),
+                    "reference verifier rejected {case_name}/{}: stdout={} stderr={}",
+                    function.id,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+        }
     }
 }
