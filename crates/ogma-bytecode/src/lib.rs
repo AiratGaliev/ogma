@@ -341,6 +341,13 @@ pub fn encode_register_code(
     }
     for (index, instruction) in instructions.iter().enumerate() {
         if let RegisterOperation::Call { kind, sources, .. } = &instruction.operation {
+            if sources.is_empty() || sources.len() > 1025 {
+                return Err(vec![Diagnostic::new(
+                    "operand.call_arity",
+                    format!("$.instructions[{index}]"),
+                    "call requires between one and 1025 source registers",
+                )]);
+            }
             if !kind.accepts_source_count(sources.len()) {
                 return Err(vec![Diagnostic::new(
                     "call.kind_arity",
@@ -419,6 +426,13 @@ pub fn encode_register_code(
                 kind,
                 sources,
             } => {
+                if sources.is_empty() || sources.len() > 1025 {
+                    return Err(vec![Diagnostic::new(
+                        "operand.call_arity",
+                        format!("$.instructions[{index}]"),
+                        "call requires between one and 1025 source registers",
+                    )]);
+                }
                 if !kind.accepts_source_count(sources.len()) {
                     return Err(vec![Diagnostic::new(
                         "call.kind_arity",
@@ -976,6 +990,13 @@ fn decode_register_code(
                 // complete abruptly in the M1 compatibility profile.
                 requires_may_throw = call_kind != CallKind::MakeClosure;
                 let count = read_u16(code, &mut cursor).map_err(|error| vec![error])? as usize;
+                if count == 0 || count > 1025 {
+                    return Err(vec![Diagnostic::new(
+                        "operand.call_arity",
+                        format!("$.instructions[{start}]"),
+                        "call requires between one and 1025 source registers",
+                    )]);
+                }
                 if !call_kind.accepts_source_count(count) {
                     return Err(vec![Diagnostic::new(
                         "call.kind_arity",
