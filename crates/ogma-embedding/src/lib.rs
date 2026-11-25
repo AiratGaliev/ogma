@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionReport, Host, HostCallCompletion, HostCallContext, HostCallRoot, HostError,
-    InstructionLocation, InterpreterError, NoHost,
+    ExecutableFunctionInfo, ExecutionReport, Host, HostCallCompletion, HostCallContext,
+    HostCallRoot, HostError, InstructionLocation, InterpreterError, NoHost,
 };
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
 use ogma_runtime::{Heap, HeapConfig, HostHandle, ScopeToken};
@@ -520,6 +520,17 @@ impl Context<'_> {
             .map_or(0, ExecutableModule::function_count)
     }
 
+    /// Lists the verified functions in deterministic stable-ID order.
+    ///
+    /// The returned source-level names are descriptive only; use each
+    /// `ExecutableFunctionInfo.id` as the entry identifier for execution.
+    pub fn functions(&self) -> Result<Vec<ExecutableFunctionInfo>, ContextError> {
+        self.module
+            .as_ref()
+            .map(ExecutableModule::functions)
+            .ok_or(ContextError::ModuleNotLoaded)
+    }
+
     /// Sets the capability bitset granted to host functions in this Context.
     pub fn set_capabilities(&self, capabilities: u64) {
         self.host_functions.set_capabilities(capabilities);
@@ -572,10 +583,13 @@ impl Context<'_> {
         self.host_functions.unregister(slot)
     }
 
-    /// Executes an exported function from the loaded, verified module.
+    /// Executes a function from the loaded, verified module by stable OGMB function ID.
+    ///
+    /// Obtain the ID from `functions()`; the human-readable source-level name
+    /// is not necessarily the executable function identity.
     pub fn execute(
         &mut self,
-        entry_function: &str,
+        entry_function_id: &str,
         arguments: &[Value],
         request: ExecutionRequest,
     ) -> Result<ExecutionReport, ContextError> {
@@ -587,7 +601,7 @@ impl Context<'_> {
         module
             .execute(
                 &mut self.runtime.heap,
-                entry_function,
+                entry_function_id,
                 arguments,
                 &mut host,
                 options,
@@ -595,17 +609,18 @@ impl Context<'_> {
             .map_err(ContextError::Interpreter)
     }
 
-    /// Executes a function and immediately promotes a Return/Throw value.
+    /// Executes a function by stable OGMB ID and immediately promotes its completion.
     ///
+    /// Use the function ID returned by `functions()`, not its source-level name.
     /// This API avoids exposing a transient GC-managed result that could be
     /// collected by the next allocation.
     pub fn execute_persistent(
         &mut self,
-        entry_function: &str,
+        entry_function_id: &str,
         arguments: &[Value],
         request: ExecutionRequest,
     ) -> Result<PersistentExecutionReport, ContextError> {
-        let report = self.execute(entry_function, arguments, request)?;
+        let report = self.execute(entry_function_id, arguments, request)?;
         let completion = match report.completion {
             ExecutionCompletion::Return(value) => {
                 PersistentCompletion::Return(self.persist(value).map_err(ContextError::Heap)?)
