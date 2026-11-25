@@ -6,11 +6,12 @@
 
 use std::collections::VecDeque;
 
-use ogma_runtime::{HeapError, HostHandle};
+use ogma_runtime::{ExternalMemoryCharge, HeapError, HostHandle};
 
 use crate::{
     ConfigurationError, Context, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionRequest, InterpreterError, PersistentCompletion, PersistentHandle,
+    ExecutionRequest, HostFunctionRegistry, InterpreterError, PersistentCompletion,
+    PersistentHandle,
 };
 
 #[derive(Default)]
@@ -24,6 +25,8 @@ struct PendingJob {
     module: ExecutableModule,
     callback: HostHandle,
     arguments: Vec<HostHandle>,
+    host_functions: HostFunctionRegistry,
+    accounting: ExternalMemoryCharge,
 }
 
 /// Lifecycle state of the Runtime's ECMAScript job queue.
@@ -88,6 +91,13 @@ pub enum JobQueueError {
     InvalidCallback,
     /// A queue/root allocation could not be reserved.
     AllocationFailed,
+    /// A callback exceeds the supported argument limit.
+    TooManyArguments {
+        /// Actual callback argument count.
+        count: usize,
+        /// Maximum accepted arguments.
+        maximum: usize,
+    },
     /// A pump budget must be positive.
     InvalidPumpBudget,
     /// A pump call was re-entered for the same Runtime.
@@ -139,6 +149,12 @@ impl Context<'_> {
         if self.runtime.jobs.queue.len() >= capacity {
             return Err(JobQueueError::QueueFull { capacity });
         }
+        if arguments.len() > crate::MAX_HOST_ARGUMENTS {
+            return Err(JobQueueError::TooManyArguments {
+                count: arguments.len(),
+                maximum: crate::MAX_HOST_ARGUMENTS,
+            });
+        }
 
         let module = self
             .module
@@ -159,7 +175,22 @@ impl Context<'_> {
             .try_reserve_exact(arguments.len())
             .map_err(|_| JobQueueError::AllocationFailed)?;
 
-        let callback_root = self.runtime.heap.retain_host_value(callback)?;
+        let accounted_bytes = std::mem::size_of::<PendingJob>()
+            .checked_add(
+                arguments
+                    .len()
+                    .checked_mul(std::mem::size_of::<HostHandle>())
+                    .ok_or(JobQueueError::AllocationFailed)?,
+            )
+            .ok_or(JobQueueError::AllocationFailed)?;
+        let accounting = self.runtime.heap.charge_external_memory(accounted_bytes)?;
+        let callback_root = match self.runtime.heap.retain_host_value(callback) {
+            Ok(root) => root,
+            Err(error) => {
+                let _ = self.runtime.heap.release_external_memory(accounting);
+                return Err(JobQueueError::Heap(error));
+            }
+        };
         for argument in arguments {
             match self.runtime.heap.retain_host_value(*argument) {
                 Ok(root) => argument_roots.push(root),
@@ -168,6 +199,7 @@ impl Context<'_> {
                         let _ = self.runtime.heap.release_host_handle(root);
                     }
                     let _ = self.runtime.heap.release_host_handle(callback_root);
+                    let _ = self.runtime.heap.release_external_memory(accounting);
                     return Err(JobQueueError::Heap(error));
                 }
             }
@@ -177,6 +209,8 @@ impl Context<'_> {
             module,
             callback: callback_root,
             arguments: argument_roots,
+            host_functions: self.host_functions.clone(),
+            accounting,
         });
         Ok(())
     }
@@ -188,6 +222,19 @@ impl Context<'_> {
     pub fn pump_promise_jobs(
         &mut self,
         max_jobs: Option<usize>,
+    ) -> Result<JobPumpReport, JobQueueError> {
+        self.pump_promise_jobs_with_request(max_jobs, ExecutionRequest::default())
+    }
+
+    /// Dispatches queued callbacks with host-supplied cancellation and time limits.
+    ///
+    /// Cancellation is observed by the existing interpreter at its normal
+    /// safepoints. A job that completes as Interrupted is removed and its
+    /// retained roots are released; later FIFO jobs remain queued.
+    pub fn pump_promise_jobs_with_request(
+        &mut self,
+        max_jobs: Option<usize>,
+        request: ExecutionRequest,
     ) -> Result<JobPumpReport, JobQueueError> {
         let configured_budget = self.runtime.config.max_jobs_per_pump;
         let budget = max_jobs.unwrap_or(configured_budget);
@@ -208,7 +255,7 @@ impl Context<'_> {
         }
 
         self.runtime.jobs.pumping = true;
-        let result = self.pump_promise_jobs_inner(budget);
+        let result = self.pump_promise_jobs_inner(budget, &request);
         self.runtime.jobs.pumping = false;
         result
     }
@@ -221,6 +268,15 @@ impl Context<'_> {
         &mut self,
         total_budget: Option<usize>,
     ) -> Result<JobPumpReport, JobQueueError> {
+        self.run_promise_jobs_until_idle_with_request(total_budget, ExecutionRequest::default())
+    }
+
+    /// Drains bounded turns while applying the same cancellation/deadline policy to each job.
+    pub fn run_promise_jobs_until_idle_with_request(
+        &mut self,
+        total_budget: Option<usize>,
+        request: ExecutionRequest,
+    ) -> Result<JobPumpReport, JobQueueError> {
         let total_budget = match total_budget {
             Some(0) => return Err(JobQueueError::InvalidPumpBudget),
             Some(budget) => budget,
@@ -231,7 +287,8 @@ impl Context<'_> {
         while jobs_executed < total_budget {
             let turn_budget =
                 (total_budget - jobs_executed).min(self.runtime.config.max_jobs_per_pump);
-            let mut turn = self.pump_promise_jobs(Some(turn_budget))?;
+            let mut turn =
+                self.pump_promise_jobs_with_request(Some(turn_budget), request.clone())?;
             jobs_executed += turn.jobs_executed;
             turn.jobs_executed = jobs_executed;
             if turn.outcome != JobPumpOutcome::BudgetExhausted {
@@ -247,7 +304,11 @@ impl Context<'_> {
         Ok(JobPumpReport::new(outcome, jobs_executed))
     }
 
-    fn pump_promise_jobs_inner(&mut self, budget: usize) -> Result<JobPumpReport, JobQueueError> {
+    fn pump_promise_jobs_inner(
+        &mut self,
+        budget: usize,
+        request: &ExecutionRequest,
+    ) -> Result<JobPumpReport, JobQueueError> {
         let mut jobs_executed = 0;
         while jobs_executed < budget {
             let Some(job) = self.runtime.jobs.queue.pop_front() else {
@@ -278,14 +339,14 @@ impl Context<'_> {
                     return Err(JobQueueError::Heap(error));
                 }
             };
-            let options = match ExecutionRequest::default().options(&self.runtime.config) {
+            let options = match request.options(&self.runtime.config) {
                 Ok(options) => options,
                 Err(error) => {
                     let _ = release_job_roots(&mut self.runtime.heap, job);
                     return Err(JobQueueError::Configuration(error));
                 }
             };
-            let mut host = self.host_functions.clone();
+            let mut host = job.host_functions.clone();
             let execution = job.module.execute_callable(
                 &mut self.runtime.heap,
                 callback,
@@ -409,6 +470,9 @@ fn release_job_roots(heap: &mut crate::Heap, job: PendingJob) -> Result<(), Heap
     if let Err(error) = heap.release_host_handle(job.callback) {
         first_error.get_or_insert(error);
     }
+    if let Err(error) = heap.release_external_memory(job.accounting) {
+        first_error.get_or_insert(error);
+    }
     first_error.map_or(Ok(()), Err)
 }
 
@@ -476,9 +540,11 @@ mod tests {
             context.enqueue_promise_job(callback, &[]),
             Err(JobQueueError::QueueFull { capacity: 1 })
         ));
+        assert!(context.heap_stats().external_memory_bytes > 0);
         let live_before_cancel = context.heap_stats().live_objects;
         assert_eq!(context.cancel_pending_promise_jobs().expect("cancel"), 1);
         assert_eq!(context.pending_promise_jobs(), 0);
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
         context.collect().expect("collect after releasing roots");
         assert!(context.heap_stats().live_objects < live_before_cancel);
     }
@@ -577,6 +643,58 @@ mod tests {
             context.pump_promise_jobs(None).unwrap().outcome,
             JobPumpOutcome::Shutdown
         );
+    }
+
+    #[test]
+    fn queued_job_keeps_its_module_and_registry_after_context_recreation() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut first = runtime.create_context().expect("first Context");
+        let callback = load_callback(
+            &mut first,
+            "function factory() { return function() { return 7; }; }",
+        );
+        first.enqueue_promise_job(callback, &[]).expect("enqueue");
+        drop(first);
+
+        let mut second = runtime.create_context().expect("second Context");
+        let report = second
+            .pump_promise_jobs(None)
+            .expect("job uses its originating module");
+        assert_eq!(report.outcome, JobPumpOutcome::Progress);
+        assert_eq!(report.jobs_executed, 1);
+        assert_eq!(report.completion, None);
+        assert_eq!(second.pending_promise_jobs(), 0);
+        assert_eq!(second.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn pump_observes_cancellation_at_interpreter_entry_and_releases_the_job() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 1; }; }",
+        );
+        context.enqueue_promise_job(callback, &[]).expect("enqueue");
+
+        let cancellation = crate::CancellationToken::new();
+        cancellation.cancel();
+        let report = context
+            .pump_promise_jobs_with_request(
+                None,
+                ExecutionRequest {
+                    cancellation: Some(cancellation),
+                    ..ExecutionRequest::default()
+                },
+            )
+            .expect("cancellation is an execution completion");
+        assert_eq!(report.outcome, JobPumpOutcome::Interrupted);
+        assert_eq!(report.interruption, Some(crate::ExecutionInterruption::Cancelled));
+        assert_eq!(report.jobs_executed, 1);
+        assert_eq!(context.pending_promise_jobs(), 0);
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
     }
 
     #[test]

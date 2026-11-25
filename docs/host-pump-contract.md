@@ -2,11 +2,11 @@
 
 - **Contract ID:** ogma-host-pump-contract
 - **Contract version:** 1.0.0
-- **Status:** M0 architectural contract and reference proof; not a Runtime implementation
+- **Status:** normative scheduling contract and M0 reference proof; OGM-48 implements the bounded M1 callback-queue substrate, not full Promise or Node scheduler conformance
 - **Node reference:** 26.13.0, source commit 18b32a3b1552e199a01f1a8d9fd64aa756d3b75b
 - **Authority:** this document defines the host-pump and scheduling contract; [Compatibility Profile](compatibility-profile.md) remains the source of truth for compatibility claims and feature status.
 
-The contract follows the authoritative [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.8, 11 and 20.6. It is an implementation-facing M0 decision. It does not claim that an Ogma Runtime, Node adapter or public Rust API already exists.
+The contract follows the authoritative [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.8, 11 and 20.6. It is an implementation-facing semantic decision. The production M1 Runtime and Rust embedding API are implemented by OGM-47. The OGM-48 scheduler substrate does not claim that Promise objects/reactions, the ESM module loader or the Node adapter already conform to this contract.
 
 ## 1. Goals and non-goals
 
@@ -124,6 +124,18 @@ The semantic outcome set is:
 | Shutdown | The Runtime is terminal and cannot accept work. |
 
 The exact Rust enum layout is deliberately not frozen here.
+
+### 4.4 Current M1 implementation boundary (OGM-48)
+
+The current Rust implementation is a bounded, host-driven callback-queue substrate in `ogma-embedding`:
+
+- `EngineConfig.max_pending_jobs` limits admitted jobs; `EngineConfig.max_jobs_per_pump` caps each pump turn.
+- `Context::enqueue_promise_job` accepts a verified callable Function and arguments. It retains the originating `ExecutableModule`, host-function registry, callback and argument roots until dispatch or cancellation.
+- `Context::pump_promise_jobs` dispatches one bounded FIFO turn. `pump_promise_jobs_with_request` applies the existing interpreter cancellation/deadline/fuel policy at ordinary VM safepoints.
+- `Context::run_promise_jobs_until_idle` performs multiple bounded turns under a separate total-work budget. Its request-aware variant applies the same execution policy to each job.
+- Pause/resume retains pending jobs. Queue cancellation and shutdown release persistent roots and external-memory accounting exactly once. A thrown completion is returned as a persistent handle owned by the caller.
+
+This is intentionally **not yet the ECMAScript Promise implementation**. The Runtime does not yet expose Promise objects/reactions or `queueMicrotask`; JavaScript Promise settlement does not automatically enqueue through this API. The ESM graph loader, import/export linking and live-binding evaluation are also not implemented by this scheduler substrate. The callback queue validates the ownership, boundedness, host-pump and lifecycle primitives needed by those integrations, but it is not evidence of PromiseJobs or ESM conformance. Do not promote those features to SUPPORTED in the compatibility matrix based on these APIs alone.
 
 ## 5. Fairness and lifecycle
 
