@@ -11,8 +11,8 @@ mod vm;
 
 pub use vm::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionOptions, ExecutionReport, Host, HostCallCompletion, HostCallContext, HostCallRoot, HostError,
-    InstructionLocation, InterpreterError, NoHost,
+    ExecutionOptions, ExecutionReport, Host, HostCallCompletion, HostCallContext, HostCallRoot,
+    HostError, InstructionLocation, InterpreterError, NoHost,
 };
 
 /// OGMB container version consumed by the interpreter.
