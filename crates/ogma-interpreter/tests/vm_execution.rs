@@ -341,7 +341,8 @@ fn host_callback_can_execute_a_nested_module_on_the_same_heap_and_budget() {
     assert_eq!(host.observed_depth, Some(1));
     assert_eq!(report.max_call_depth_reached, 2);
     assert!(report.max_stack_bytes_reached > 0);
-    assert_eq!(report.instructions_executed, 6);
+    // Both the outer host-call fixture and nested branch fixture share fuel.
+    assert_eq!(report.instructions_executed, 12);
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(7.0)),
         completion => panic!("expected nested Return completion, got {completion:?}"),
