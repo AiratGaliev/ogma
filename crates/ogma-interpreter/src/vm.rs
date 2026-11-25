@@ -253,6 +253,24 @@ impl ExecutableModule {
             }
         }
         for function in raw_functions.values() {
+            let parent = match function.parent_environment.as_deref() {
+                Some(parent_environment) => {
+                    let parent_id = environments.get(parent_environment).ok_or_else(|| {
+                        InterpreterError::InvalidMetadata(format!(
+                            "function {:?} refers to missing parent environment {:?}",
+                            function.id, parent_environment
+                        ))
+                    })?;
+                    Some(&raw_functions[parent_id])
+                }
+                None => None,
+            };
+            if !function.captures.is_empty() && parent.is_none() {
+                return Err(InterpreterError::InvalidMetadata(format!(
+                    "capturing function {:?} has no lexical parent environment",
+                    function.id
+                )));
+            }
             for capture in &function.captures {
                 let owner_id = environments.get(&capture.source_environment).ok_or_else(|| {
                     InterpreterError::InvalidMetadata(format!(
@@ -264,6 +282,22 @@ impl ExecutableModule {
                 if !owner.bindings.iter().any(|binding| binding.id == capture.binding) {
                     return Err(InterpreterError::InvalidMetadata(format!(
                         "capture {:?} refers to missing binding {:?}", capture.id, capture.binding
+                    )));
+                }
+                let parent = parent.ok_or_else(|| InterpreterError::InvalidMetadata(
+                    "capture has no lexical parent".to_owned(),
+                ))?;
+                let direct = function.parent_environment.as_deref()
+                    == Some(capture.source_environment.as_str())
+                    && parent.bindings.iter().any(|binding| binding.id == capture.binding);
+                let forwarded = parent.captures.iter().any(|item| {
+                    item.source_environment == capture.source_environment
+                        && item.binding == capture.binding
+                });
+                if !direct && !forwarded {
+                    return Err(InterpreterError::InvalidMetadata(format!(
+                        "capture {:?} is not visible from its immediate parent environment",
+                        capture.id
                     )));
                 }
             }
@@ -294,12 +328,17 @@ impl ExecutableModule {
 
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
-        for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
+        for (index, (function_id, raw)) in raw_functions.iter().enumerate() {
             let numeric = u32::try_from(index + 1)
                 .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
-            let image = Rc::new(FunctionImage::build(raw, FunctionId(numeric), &binding_ids)?);
+            let image = Rc::new(FunctionImage::build(
+                raw.clone(),
+                FunctionId(numeric),
+                &binding_ids,
+                &raw_functions,
+            )?);
             runtime_functions.insert(numeric, function_id.clone());
-            functions.insert(function_id, image);
+            functions.insert(function_id.clone(), image);
         }
 
         for image in functions.values() {
@@ -781,7 +820,20 @@ impl ExecutableModule {
                             RegisterValue::Cell(binding) if *binding == capture.source_binding => {}
                             _ => return Err(InterpreterError::InvalidRegister(*register)),
                         },
-                        CaptureMode::Value => { let _ = read_value(frame, *register)?; }
+                        CaptureMode::Value => {
+                            let visible_binding = frame.image.register_bindings.get(register)
+                                == Some(&capture.source_binding)
+                                || frame.image.captures.iter().enumerate().any(|(index, parent_capture)| {
+                                    parent_capture.alias_binding == capture.source_binding
+                                        && frame.image.artifact.entry_registers
+                                            .get(frame.image.parameter_count + index) == Some(register)
+                                });
+                            if !visible_binding || !matches!(
+                                read_register(frame, *register)?, RegisterValue::Value(_)
+                            ) {
+                                return Err(InterpreterError::InvalidRegister(*register));
+                            }
+                        }
                     }
                 }
                 let closure = heap.create_closure(
@@ -907,7 +959,10 @@ impl ExecutableModule {
     }
 }
 
+#[derive(Clone)]
 struct RawBinding { id: String, kind: String }
+
+#[derive(Clone)]
 struct RawCapture {
     id: String,
     source_environment: String,
@@ -915,11 +970,13 @@ struct RawCapture {
     mode: CaptureMode,
 }
 
+#[derive(Clone)]
 struct RawFunction {
     artifact: VerifiedArtifact,
     id: String,
     name: String,
     environment_id: String,
+    parent_environment: Option<String>,
     parameter_count: usize,
     register_count: usize,
     max_call_depth: u32,
@@ -940,6 +997,8 @@ impl RawFunction {
         let id = required_string(metadata.pointer("/function/id"), "function.id")?.to_owned();
         let name = required_string(metadata.pointer("/function/name"), "function.name")?.to_owned();
         let environment_id = required_string(metadata.pointer("/environment/id"), "environment.id")?.to_owned();
+        let parent_environment = metadata.pointer("/environment/parent")
+            .and_then(JsonValue::as_str).map(str::to_owned);
         let parameter_count = required_usize(
             metadata.pointer("/frame_layout/parameter_count"), "frame_layout.parameter_count",
         )?;
@@ -1059,8 +1118,8 @@ impl RawFunction {
         }
 
         Ok(Self {
-            artifact, id, name, environment_id, parameter_count, register_count,
-            max_call_depth, bindings, captures, binding_registers,
+            artifact, id, name, environment_id, parent_environment, parameter_count,
+            register_count, max_call_depth, bindings, captures, binding_registers,
         })
     }
 }
@@ -1092,6 +1151,7 @@ impl FunctionImage {
         raw: RawFunction,
         runtime_id: FunctionId,
         binding_ids: &HashMap<(String, String), BindingId>,
+        all_functions: &BTreeMap<String, RawFunction>,
     ) -> Result<Self, InterpreterError> {
         let mut locals = Vec::with_capacity(raw.bindings.len());
         let mut register_bindings = HashMap::new();
@@ -1121,9 +1181,32 @@ impl FunctionImage {
         let mut captures = Vec::with_capacity(raw.captures.len());
         let mut runtime_captures = Vec::with_capacity(raw.captures.len());
         for capture in &raw.captures {
-            let source_key = (capture.source_environment.clone(), capture.binding.clone());
-            let source_binding = binding_ids.get(&source_key).copied()
-                .ok_or(InterpreterError::IdentitySpaceExceeded)?;
+            let parent_environment = raw.parent_environment.as_deref().ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "capturing function {:?} has no parent environment", raw.id
+                ))
+            })?;
+            let source_binding = if capture.source_environment == parent_environment {
+                let source_key = (capture.source_environment.clone(), capture.binding.clone());
+                binding_ids.get(&source_key).copied()
+                    .ok_or(InterpreterError::IdentitySpaceExceeded)?
+            } else {
+                let parent = all_functions.values()
+                    .find(|function| function.environment_id == parent_environment)
+                    .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
+                        "missing parent function for lexical environment {parent_environment:?}"
+                    )))?;
+                let forwarded = parent.captures.iter().find(|item| {
+                    item.source_environment == capture.source_environment
+                        && item.binding == capture.binding
+                }).ok_or_else(|| InterpreterError::InvalidMetadata(format!(
+                    "parent function {:?} does not import captured binding {:?}",
+                    parent.id, capture.binding
+                )))?;
+                let alias_key = (closure_environment_key(&parent.id), forwarded.id.clone());
+                binding_ids.get(&alias_key).copied()
+                    .ok_or(InterpreterError::IdentitySpaceExceeded)?
+            };
             let alias_key = (closure_environment_key(&raw.id), capture.id.clone());
             let alias_binding = binding_ids.get(&alias_key).copied()
                 .ok_or(InterpreterError::IdentitySpaceExceeded)?;
