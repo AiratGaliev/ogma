@@ -110,6 +110,73 @@ These paths are not interchangeable workloads: scalar and bulk results must be i
 | Bidirectional callback and ownership/error paths | callback registration, mock function dispatch, persistent promotion, unregister and reentrancy tests |
 | Reproducible primitive/handle/bulk/roundtrip measurements | src/bin/benchmark.rs; CI JSON artifact |
 
+## Production M1 embedding boundary (OGM-47)
+
+The synchronous production embedding path is provided by the `ogma-embedding`
+crate and uses the actual verifier, register-bytecode interpreter and Runtime
+heap. The M0 benchmark/mock projects remain independent contract evidence and
+are not used as the execution backend.
+
+- `Engine` validates the resource policy and creates independent owner-thread
+  `Runtime` instances. Each Runtime owns one production Heap/GC and is neither
+  `Send` nor `Sync`. A `Context` exclusively borrows its Runtime, loads
+  verifier-accepted OGMB artifacts, executes exports and is dropped before the
+  Runtime can be reused or destroyed.
+- The public Rust API exposes opaque `Value` values, explicit
+  generation-checked `PersistentHandle` promotion/release, a strict-LIFO RAII
+  `RootScope`, explicit collection and heap accounting. Heap cells, GC
+  references, object layouts and interpreter frames are not exposed.
+- ABI negotiation uses the fixed 24-byte ABI-v1 `OgmaAbiVersion` record.
+  Consumers negotiate required major/minor and feature bits. The production
+  C callback contract reuses the canonical opaque records:
+  `OgmaContextHandle`, `OgmaHandle`, `OgmaRootScopeHandle`,
+  `OgmaPersistentHandle` and `OgmaCallbackHandle` are 40 bytes;
+  `OgmaCompletion` is 48 bytes; the host descriptor is 216 bytes on the
+  supported 64-bit target; and `OgmaHostFunctionSlot` is 24 bytes.
+- One typed host registry backs Rust and C callbacks. It resolves stable ID
+  and name to generation-checked slots, validates ABI version, exact descriptor
+  size, inline UTF-8 name, signature/signature ID, reserved fields, effects
+  and capability requirements, then snapshots the callback before invoking
+  user code. Unregistration returns `Busy` while dispatch is active.
+- C callbacks receive callback-scoped opaque handles rooted in the actual
+  Runtime. Handles are released after callback completion and become stale.
+  Exported helpers provide checked Number/Boolean reads and writes, checked
+  `i32` conversion and bounded bulk Number conversion. Fixed-signature
+  `(f64, f64) -> f64` and `(OgmaHandle, OgmaHandle) -> f64` thunks are eligible
+  only when descriptor signature, signature ID, argument types and declared
+  effects allow the fast path; a generic callback is always required as the
+  fallback.
+- Rust callbacks receive `HostCallContext`. Nested execution reuses the same
+  Heap, root state, cancellation/deadline, instruction fuel, stack quota and
+  call-depth accounting. It does not create another Runtime. Registry borrows
+  are released before user callbacks run. Rust and C-unwind callback panics
+  are caught and converted to interpreter boundary errors rather than being
+  unwound through an exported C ABI function.
+- `EngineConfig` validates heap quota, maximum single allocation, estimated
+  active VM stack bytes, instruction fuel, call depth, interrupt polling
+  interval and pending-job capacity before Runtime creation. The interpreter
+  enforces the estimated frame/register-stack quota, call depth and shared
+  instruction/cancellation/deadline policy. `max_stack_bytes` is an explicit
+  estimate of active frame structures, register windows and local-binding
+  tracking; it is not a claim about process RSS or allocator capacity.
+
+The synchronous M1 interpreter does not yet enqueue or pump PromiseJobs.
+`max_pending_jobs` is validated and retained in Engine configuration so
+OGM-48 can consume the same resource policy, but queue admission, scheduling,
+fairness, pumping and shutdown are implemented in OGM-48. OGM-47 does not
+advertise asynchronous scheduling as available.
+
+The public C declarations are kept in
+`crates/ogma-embedding/include/ogma_embedding_abi.h`. The Rust consumer
+integration tests compile JavaScript to OGMB, create and drop real
+Runtime/Context values, execute the production interpreter, invoke Rust/C
+host callbacks, preserve Return/Throw completion kind, force GC and verify
+handle invalidation.
+
 ## Explicit exclusions
 
-This task does not implement the production runtime, JS object/Value model, GC, interpreter, native AOT, typed host-function table, HostExecutionScope-vs-mutex experiment, buffer leases/zero-copy, FrameSnapshot/batch CGE APIs, async Future/Waker task bridge, bindgen or TypeScript declarations. Those are separate architecture areas and downstream M0/M1 tasks. The current code is evidence for designing the embedding seam, not a production-ready stable ABI.
+OGM-47 does not add native AOT entry points, the HostExecutionScope-vs-mutex
+performance experiment, buffer leases/zero-copy, FrameSnapshot/batch CGE APIs,
+the async Future/Waker bridge, bindgen or TypeScript declarations. The
+PromiseJobs queue and host pump are OGM-48. M2/M3 provider selection, generated
+Rust modules and native AOT remain separate architecture milestones.
