@@ -534,7 +534,7 @@ impl Context<'_> {
     pub fn function_count(&self) -> usize {
         self.module
             .as_ref()
-            .map_or(0, ExecutableModule::function_count)
+            .map_or(0, |module| module.function_count())
     }
 
     /// Lists the verified functions in deterministic stable-ID order.
@@ -544,7 +544,7 @@ impl Context<'_> {
     pub fn functions(&self) -> Result<Vec<ExecutableFunctionInfo>, ContextError> {
         self.module
             .as_ref()
-            .map(ExecutableModule::functions)
+            .map(|module| module.functions())
             .ok_or(ContextError::ModuleNotLoaded)
     }
 
