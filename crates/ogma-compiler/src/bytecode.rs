@@ -808,10 +808,7 @@ fn compile_function_with_cells(
                     error.to_string(),
                 )]
             })?;
-            if let Some(path) = value
-                .get("path")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+            if let Some(path) = value.get("path").and_then(Value::as_str).map(str::to_owned)
                 && let Some(relative) = path.strip_prefix("memory:///")
             {
                 value["path"] = Value::String(format!("memory/{relative}"));
