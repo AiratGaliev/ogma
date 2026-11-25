@@ -1592,7 +1592,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         context
             .register_host_function(
                 HostFunctionDescriptor::new(2, "benchmark.host.echo").requiring_capabilities(0b10),
@@ -1652,7 +1654,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         let name = b"benchmark.host.echo";
         let descriptor = OgmaHostFunctionDescriptor {
             struct_size: std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32,
@@ -1737,7 +1741,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         let name = b"benchmark.host.echo";
         let descriptor = OgmaHostFunctionDescriptor {
             struct_size: std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32,
