@@ -2112,9 +2112,16 @@ mod tests {
         context
             .load_module(compile_source("function add(a, b) { return a + b; }"))
             .expect("verified module");
+        let add_id = context
+            .functions()
+            .expect("verified function metadata")
+            .into_iter()
+            .find(|function| function.name == "add")
+            .expect("compiled add function")
+            .id;
         let report = context
             .execute_persistent(
-                "add",
+                &add_id,
                 &[Value::number(19.0), Value::number(23.0)],
                 ExecutionRequest::default(),
             )
@@ -3124,12 +3131,19 @@ mod tests {
         context
             .load_module(compile_source("function identity(value) { return value; }"))
             .expect("verified compiled source");
+        let identity_id = context
+            .functions()
+            .expect("verified function metadata")
+            .into_iter()
+            .find(|function| function.name == "identity")
+            .expect("compiled identity function")
+            .id;
 
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let cancelled = context
             .execute(
-                "identity",
+                &identity_id,
                 &[Value::number(42.0)],
                 ExecutionRequest {
                     cancellation: Some(cancellation),
@@ -3145,7 +3159,7 @@ mod tests {
 
         let deadline = context
             .execute(
-                "identity",
+                &identity_id,
                 &[Value::number(42.0)],
                 ExecutionRequest {
                     time_budget: Some(Duration::ZERO),
@@ -3168,6 +3182,13 @@ mod tests {
         context
             .load_module(compile_source("function identity(value) { return value; }"))
             .expect("verified compiled source");
+        let identity_id = context
+            .functions()
+            .expect("verified function metadata")
+            .into_iter()
+            .find(|function| function.name == "identity")
+            .expect("compiled identity function")
+            .id;
 
         for request in [
             ExecutionRequest {
@@ -3184,7 +3205,7 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                context.execute("identity", &[Value::number(1.0)], request),
+                context.execute(&identity_id, &[Value::number(1.0)], request),
                 Err(ContextError::Configuration(_))
             ));
         }
