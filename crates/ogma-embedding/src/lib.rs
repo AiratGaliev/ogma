@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
-    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutableFunctionInfo, ExecutionReport, Host, HostCallCompletion, HostCallContext,
+    CancellationToken, ExecutableFunctionInfo, ExecutableModule, ExecutionCompletion,
+    ExecutionInterruption, ExecutionReport, Host, HostCallCompletion, HostCallContext,
     HostCallRoot, HostError, InstructionLocation, InterpreterError, NoHost,
 };
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
