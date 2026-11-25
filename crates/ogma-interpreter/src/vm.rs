@@ -254,12 +254,13 @@ impl HostCallContext<'_> {
 
     /// Executes a function in another verified module as a nested activation.
     ///
+    /// `entry_function_id` is the stable identity returned by `module.functions()`.
     /// This reuses the current Runtime heap and the same execution budget. The
     /// nested call depth is one greater than the host-calling activation.
     pub fn execute_nested<H: Host>(
         &mut self,
         module: &ExecutableModule,
-        entry_function: &str,
+        entry_function_id: &str,
         arguments: &[Value],
         host: &mut H,
     ) -> Result<ExecutionCompletion, InterpreterError> {
@@ -271,7 +272,7 @@ impl HostCallContext<'_> {
                 })?;
         module.execute_with_state(
             self.heap,
-            entry_function,
+            entry_function_id,
             arguments,
             host,
             self.options,
@@ -365,6 +366,15 @@ impl From<HeapError> for InterpreterError {
     fn from(error: HeapError) -> Self {
         Self::Runtime(error)
     }
+}
+
+/// Public identity of one function in a verified executable module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutableFunctionInfo {
+    /// Stable function identity used by interpreter entry points.
+    pub id: String,
+    /// Human-readable source-level function name.
+    pub name: String,
 }
 
 /// Immutable collection of independently verified OGMB function artifacts.
@@ -568,6 +578,18 @@ impl ExecutableModule {
         self.functions.len()
     }
 
+    /// Lists verified function identities and names in deterministic ID order.
+    #[must_use]
+    pub fn functions(&self) -> Vec<ExecutableFunctionInfo> {
+        self.functions
+            .values()
+            .map(|image| ExecutableFunctionInfo {
+                id: image.id.clone(),
+                name: image.name.clone(),
+            })
+            .collect()
+    }
+
     /// Returns manifest metadata for a function.
     #[must_use]
     pub fn function_metadata(&self, function_id: &str) -> Option<&JsonValue> {
@@ -596,11 +618,13 @@ impl ExecutableModule {
 
     /// Executes an entry function and all nested VM calls.
     ///
-    /// Entry functions with lexical captures cannot be called directly.
+    /// `entry_function_id` is the stable identity returned by `functions()`,
+    /// not the human-readable source-level function name. Entry functions
+    /// with lexical captures cannot be called directly.
     pub fn execute<H: Host>(
         &self,
         heap: &mut Heap,
-        entry_function: &str,
+        entry_function_id: &str,
         arguments: &[Value],
         host: &mut H,
         options: ExecutionOptions,
@@ -609,7 +633,7 @@ impl ExecutableModule {
         let mut state = ExecutionState::new(&options)?;
         let completion = self.execute_with_state(
             heap,
-            entry_function,
+            entry_function_id,
             arguments,
             host,
             &options,
