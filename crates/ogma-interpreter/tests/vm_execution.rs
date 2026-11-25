@@ -182,7 +182,7 @@ fn executes_nested_function_calls_using_verified_function_table() {
             RegisterInstruction {
                 operation: RegisterOperation::Unary {
                     destination: 5,
-                    source: 3,
+                    source: 0,
                     operation: ogma_bytecode::UnaryOperation::LoadBinding,
                 },
                 may_throw: true,
