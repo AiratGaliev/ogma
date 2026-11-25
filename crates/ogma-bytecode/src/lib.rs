@@ -317,6 +317,22 @@ impl RegisterInstruction {
     }
 }
 
+/// One instruction decoded from an already structurally verified register stream.
+///
+/// Offsets are byte offsets into the OGMB code section. Branch destinations use
+/// the same byte-offset coordinate system and are verified instruction boundaries.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedRegisterInstruction {
+    /// Byte offset of the instruction in its function.
+    pub offset: u32,
+    /// Encoded instruction size in bytes.
+    pub size: u32,
+    /// Typed executable operation.
+    pub operation: RegisterOperation,
+    /// Conservative exceptional-effect flag verified by the decoder.
+    pub may_throw: bool,
+}
+
 /// Encodes a laid-out register instruction stream.
 ///
 /// All branch destinations must already reference absolute instruction byte
@@ -493,6 +509,9 @@ pub fn encode_register_code(
     Ok(output)
 }
 
+/// JSON value type used by OGMB manifests, constants and source maps.
+pub type ArtifactJsonValue = serde_json::Value;
+
 /// Artifact returned only after container and register verification succeeds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VerifiedArtifact {
@@ -508,6 +527,10 @@ pub struct VerifiedArtifact {
     pub exceptions: Vec<Value>,
     /// Optional source/debug map.
     pub source_map: Option<Value>,
+    /// Typed instructions produced by the registered decoder after verification.
+    pub instructions: Vec<DecodedRegisterInstruction>,
+    /// Canonical initialized entry registers for parameters and captures.
+    pub entry_registers: Vec<u16>,
     /// Normalized facts for the repository bytecode verifier contract.
     pub verification_input: Value,
 }
@@ -864,6 +887,15 @@ pub fn verify_register_artifact(
         )]);
     }
 
+    let executable_instructions = decode_executable_register_code(&code)?;
+    if executable_instructions.len() != instructions.len() {
+        return Err(vec![Diagnostic::new(
+            "decoder.executable_count",
+            "$.instructions",
+            "executable decoder output differs from verified instruction count",
+        )]);
+    }
+
     Ok(VerifiedArtifact {
         bytes: bytes.to_vec(),
         manifest,
@@ -871,8 +903,59 @@ pub fn verify_register_artifact(
         constants,
         exceptions,
         source_map,
+        instructions: executable_instructions,
+        entry_registers: entry_registers.to_vec(),
         verification_input,
     })
+}
+
+/// Verifies an OGMB artifact using the canonical parameter/capture entry window
+/// declared in its manifest. This is the preferred boundary for interpreter
+/// hosts that do not otherwise own compiler register-allocation metadata.
+pub fn verify_register_artifact_from_manifest(
+    bytes: &[u8],
+) -> Result<VerifiedArtifact, Vec<Diagnostic>> {
+    let (manifest, _, _, _, _) = read_container(bytes)?;
+    let metadata = manifest.get("metadata").ok_or_else(|| {
+        vec![Diagnostic::new(
+            "metadata.shape",
+            "$.manifest.metadata",
+            "metadata is required",
+        )]
+    })?;
+    let parameter_count = read_u32_value(
+        metadata.pointer("/frame_layout/parameter_count"),
+        "$.manifest.metadata.frame_layout.parameter_count",
+    )?;
+    let capture_count = metadata
+        .pointer("/environment/captures")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let capture_count = u32::try_from(capture_count).map_err(|_| {
+        vec![Diagnostic::new(
+            "register.entry_arity",
+            "$.manifest.metadata.environment.captures",
+            "capture count exceeds the register encoding limit",
+        )]
+    })?;
+    let entry_count = parameter_count.checked_add(capture_count).ok_or_else(|| {
+        vec![Diagnostic::new(
+            "register.entry_arity",
+            "$.manifest.metadata.frame_layout",
+            "parameter and capture counts overflow the entry-register layout",
+        )]
+    })?;
+    let mut entry_registers = Vec::with_capacity(entry_count as usize);
+    for index in 0..entry_count {
+        entry_registers.push(u16::try_from(index).map_err(|_| {
+            vec![Diagnostic::new(
+                "register.entry_arity",
+                "$.manifest.metadata.frame_layout",
+                "parameter and capture entry window exceeds the 16-bit register space",
+            )]
+        })?);
+    }
+    verify_register_artifact(bytes, &entry_registers)
 }
 
 #[derive(Clone, Debug)]
@@ -1156,6 +1239,152 @@ fn decode_register_code(
         "instructions": facts
     });
     Ok((decoded, facts, maximum))
+}
+
+/// Decodes executable register operations after the common verifier accepted the
+/// exact container, code digest, instruction layout, CFG and register dataflow.
+fn decode_executable_register_code(
+    code: &[u8],
+) -> Result<Vec<DecodedRegisterInstruction>, Vec<Diagnostic>> {
+    let mut decoded = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < code.len() {
+        let start = cursor;
+        let opcode = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+        let flags = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+        if flags & !1 != 0 {
+            return Err(vec![Diagnostic::new(
+                "opcode.flags",
+                format!("$.instructions[{start}]"),
+                "unknown instruction flags are not permitted",
+            )]);
+        }
+        let operation = match opcode {
+            OP_CONSTANT => {
+                let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let constant = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
+                let kind = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+                let kind = ConstantKind::from_byte(kind).ok_or_else(|| {
+                    vec![Diagnostic::new(
+                        "constant.kind",
+                        format!("$.instructions[{start}]"),
+                        "unknown constant kind",
+                    )]
+                })?;
+                RegisterOperation::Constant {
+                    destination,
+                    constant,
+                    kind,
+                }
+            }
+            OP_UNARY => {
+                let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let source = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let operation = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+                let operation = UnaryOperation::from_byte(operation).ok_or_else(|| {
+                    vec![Diagnostic::new(
+                        "unary.operation",
+                        format!("$.instructions[{start}]"),
+                        "unknown unary operation",
+                    )]
+                })?;
+                RegisterOperation::Unary {
+                    destination,
+                    source,
+                    operation,
+                }
+            }
+            OP_BINARY => {
+                let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let left = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let right = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let operation = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+                let operation = BinaryOperation::from_byte(operation).ok_or_else(|| {
+                    vec![Diagnostic::new(
+                        "binary.operation",
+                        format!("$.instructions[{start}]"),
+                        "unknown binary operation",
+                    )]
+                })?;
+                RegisterOperation::Binary {
+                    destination,
+                    left,
+                    right,
+                    operation,
+                }
+            }
+            OP_CALL => {
+                let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let kind = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
+                let kind = CallKind::from_byte(kind).ok_or_else(|| {
+                    vec![Diagnostic::new(
+                        "call.kind",
+                        format!("$.instructions[{start}]"),
+                        "unknown call kind",
+                    )]
+                })?;
+                let count = read_u16(code, &mut cursor).map_err(|error| vec![error])? as usize;
+                let mut sources = Vec::with_capacity(count);
+                for _ in 0..count {
+                    sources.push(read_u16(code, &mut cursor).map_err(|error| vec![error])?);
+                }
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources,
+                }
+            }
+            OP_JUMP => {
+                let target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
+                RegisterOperation::Jump { target }
+            }
+            OP_BRANCH => {
+                let condition = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                let then_target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
+                let else_target = read_u32(code, &mut cursor).map_err(|error| vec![error])?;
+                RegisterOperation::Branch {
+                    condition,
+                    then_target,
+                    else_target,
+                }
+            }
+            OP_RETURN => {
+                let source = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                RegisterOperation::Return { source }
+            }
+            OP_THROW => {
+                let source = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
+                RegisterOperation::Throw { source }
+            }
+            _ => {
+                return Err(vec![Diagnostic::new(
+                    "opcode.unsupported",
+                    format!("$.instructions[{start}]"),
+                    format!("unknown register opcode 0x{opcode:02x}"),
+                )]);
+            }
+        };
+        let size = u32::try_from(cursor - start).map_err(|_| {
+            vec![Diagnostic::new(
+                "instruction.bounds",
+                format!("$.instructions[{start}]"),
+                "instruction size exceeds the decoder range",
+            )]
+        })?;
+        decoded.push(DecodedRegisterInstruction {
+            offset: u32::try_from(start).map_err(|_| {
+                vec![Diagnostic::new(
+                    "instruction.bounds",
+                    format!("$.instructions[{start}]"),
+                    "instruction offset exceeds the decoder range",
+                )]
+            })?,
+            size,
+            operation,
+            may_throw: flags & 1 != 0,
+        });
+    }
+    Ok(decoded)
 }
 
 fn verify_register_program(

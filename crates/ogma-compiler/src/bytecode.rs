@@ -489,17 +489,19 @@ fn compile_function_with_cells(
         .map(|binding| binding.id.clone())
         .collect();
     let mut seen_const_definitions = std::collections::BTreeSet::<String>::new();
-    let mut const_definition_instructions = std::collections::BTreeSet::<String>::new();
+    let mut const_definition_bindings =
+        HashMap::<String, std::collections::BTreeSet<String>>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
-            let mut defines_const = false;
             for binding in source_bindings(&instruction.source) {
-                if const_binding_ids.contains(&binding) && seen_const_definitions.insert(binding) {
-                    defines_const = true;
+                if const_binding_ids.contains(&binding)
+                    && seen_const_definitions.insert(binding.clone())
+                {
+                    const_definition_bindings
+                        .entry(instruction.id.clone())
+                        .or_default()
+                        .insert(binding);
                 }
-            }
-            if defines_const {
-                const_definition_instructions.insert(instruction.id.clone());
             }
         }
     }
@@ -555,7 +557,7 @@ fn compile_function_with_cells(
                 &binding_registers,
                 &capture_registers,
                 captured_cells,
-                &const_definition_instructions,
+                &const_definition_bindings,
                 &mut allocator,
                 &mut constants,
             )?;
@@ -1304,7 +1306,7 @@ fn lower_instruction(
     bindings: &HashMap<String, u16>,
     captures: &HashMap<String, u16>,
     captured_cells: &std::collections::BTreeSet<String>,
-    const_definition_instructions: &std::collections::BTreeSet<String>,
+    const_definition_bindings: &HashMap<String, std::collections::BTreeSet<String>>,
     allocator: &mut RegisterAllocator,
     constants: &mut ConstantPool,
 ) -> Result<Vec<PlannedInstruction>, Vec<Diagnostic>> {
@@ -1863,13 +1865,17 @@ fn lower_instruction(
         }
     }
     if let Some(result_register) = destination
-        && const_definition_instructions.contains(&instruction.id)
+        && let Some(defined_bindings) = const_definition_bindings.get(&instruction.id)
     {
-        for binding in source_bindings(&source) {
-            if const_binding_is_local(function, &binding)
-                && let Some(binding_register) = bindings.get(&binding).copied()
-                && binding_register != result_register
-            {
+        for binding in defined_bindings {
+            let Some(binding_register) = bindings.get(binding).copied() else {
+                return Err(vec![diagnostic(
+                    "bytecode.const_binding_register",
+                    format!("$.function.instructions.{}", instruction.id),
+                    format!("const definition {binding:?} has no lexical binding register"),
+                )]);
+            };
+            if binding_register != result_register {
                 output.push(PlannedInstruction {
                     operation: PlannedOperation::Ready(RegisterOperation::Unary {
                         destination: binding_register,
@@ -1984,14 +1990,6 @@ fn source_bindings(source: &Source) -> Vec<String> {
     match source {
         Source::User { bindings, .. } | Source::Generated { bindings, .. } => bindings.clone(),
     }
-}
-
-fn const_binding_is_local(function: &Function, id: &str) -> bool {
-    function
-        .environment
-        .bindings
-        .iter()
-        .any(|binding| binding.id == id && binding.kind == BindingKind::Const)
 }
 
 fn generated_source(function: &Function, reason: &str, bindings: Vec<String>) -> Source {

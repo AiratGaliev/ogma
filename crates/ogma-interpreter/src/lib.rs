@@ -1,13 +1,21 @@
-//! Portable bytecode interpreter boundary.
+//! Portable OGMB v1 register-bytecode interpreter.
 //!
-//! The VM consumes verified OGMB and delegates language operations to the
-//! shared Runtime. Keeping this crate separate from the compiler makes the
-//! interpreter-only dependency graph independent of frontend and Core IR
-//! implementation dependencies.
+//! The interpreter verifies serialized artifacts before dispatch and delegates
+//! JavaScript value, object, closure and lexical environment semantics to the
+//! shared Runtime. Its production dependency graph intentionally excludes the
+//! parser, compiler and Core IR implementation crates.
 
 #![deny(missing_docs)]
 
-/// OGMB container version consumed by the interpreter boundary.
+mod vm;
+
+pub use vm::{
+    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
+    ExecutionOptions, ExecutionReport, Host, HostError, InstructionLocation, InterpreterError,
+    NoHost,
+};
+
+/// OGMB container version consumed by the interpreter.
 pub const INPUT_FORMAT_VERSION: u16 = ogma_bytecode::FORMAT_VERSION;
 
 #[cfg(test)]

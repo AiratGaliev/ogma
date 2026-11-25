@@ -68,6 +68,24 @@ impl CompiledModule {
     /// boundary. This method does not execute code or claim interpreter
     /// compatibility beyond the registered M1 encoding profile.
     pub fn emit_bytecode(&self) -> Result<bytecode::CompiledBytecodeModule, CompileFailure> {
+        // OGMB v1/Core IR v1 do not preserve FunctionKind or lexical-this
+        // metadata. Emitting an arrow function as an ordinary Runtime
+        // function would make it constructable and could change its receiver.
+        // Reject it at this execution-profile boundary until the canonical
+        // metadata contract can express the distinction.
+        if let Some(function) = self.semantic.functions.iter().find(|item| item.is_arrow) {
+            return Err(CompileFailure::Semantic(vec![
+                semantic::SemanticDiagnostic {
+                    code: "semantic.arrow_function_metadata_unsupported",
+                    span: Some(function.span),
+                    message: format!(
+                        "arrow function {:?} cannot be emitted to OGMB v1 because function-kind and lexical-this metadata are not represented",
+                        function.name
+                    ),
+                },
+            ]));
+        }
+
         let functions =
             bytecode::compile_functions(&self.functions).map_err(CompileFailure::Bytecode)?;
         Ok(bytecode::CompiledBytecodeModule { functions })
