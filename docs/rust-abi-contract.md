@@ -146,12 +146,15 @@ are not used as the execution backend.
   only when descriptor signature, signature ID, argument types and declared
   effects allow the fast path; a generic callback is always required as the
   fallback.
-- Rust callbacks receive `HostCallContext`. Nested execution reuses the same
-  Heap, root state, cancellation/deadline, instruction fuel, stack quota and
-  call-depth accounting. It does not create another Runtime. Registry borrows
-  are released before user callbacks run. Rust and C-unwind callback panics
-  are caught and converted to interpreter boundary errors rather than being
-  unwound through an exported C ABI function.
+- Rust callbacks receive `HostCallContext`, not a `Heap` reference. The
+  callback surface is limited to string creation, explicit collection,
+  generation-checked opaque root retention/resolution/release and nested
+  execution. Heap cells, GC registries and Runtime internals remain private.
+  Nested execution reuses the same Heap, root state, cancellation/deadline,
+  instruction fuel, stack quota and call-depth accounting. It does not create
+  another Runtime. Registry borrows are released before user callbacks run.
+  Rust and C-unwind callback panics are caught and converted to interpreter
+  boundary errors rather than being unwound through an exported C ABI function.
 - `EngineConfig` validates heap quota, maximum single allocation, estimated
   active VM stack bytes, instruction fuel, call depth, interrupt polling
   interval and pending-job capacity before Runtime creation. The interpreter
