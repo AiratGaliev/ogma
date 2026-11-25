@@ -1016,7 +1016,7 @@ fn cancellation_inside_nested_host_call_unwinds_every_vm_frame() {
             &mut host,
             ExecutionOptions {
                 cancellation: Some(token.clone()),
-                interrupt_poll_interval: 1,
+                interrupt_poll_interval: 64,
                 ..ExecutionOptions::default()
             },
         )
