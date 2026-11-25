@@ -2136,6 +2136,24 @@ mod tests {
     }
 
     #[test]
+    fn constant_pool_deduplicates_identical_kind_value_pairs_deterministically() {
+        let mut pool = ConstantPool::default();
+        let number = pool
+            .insert(ConstantKind::Number, json!(1))
+            .expect("insert number");
+        let duplicate_number = pool
+            .insert(ConstantKind::Number, json!(1))
+            .expect("deduplicate number");
+        let string = pool
+            .insert(ConstantKind::String, json!("1"))
+            .expect("insert string");
+
+        assert_eq!(number, duplicate_number);
+        assert_ne!(number, string);
+        assert_eq!(pool.values, vec![json!(1), json!("1")]);
+    }
+
+    #[test]
     fn normalized_source_rewrites_capture_aliases_without_moving_bindings() {
         let mut function = function_document().function;
         function.captures.push(Capture {
