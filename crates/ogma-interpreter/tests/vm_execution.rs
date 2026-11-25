@@ -1154,6 +1154,53 @@ fn cancellation_inside_nested_host_call_unwinds_every_vm_frame() {
     ));
 }
 
+
+#[test]
+fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
+    let allocator = Allocator::default();
+    let source = SourceFile::new(
+        "ogm46-const-capture",
+        "memory:///ogm46-const-capture.js",
+        None,
+        "function run(seed) { const immutable = seed + 1; function read() { return immutable; } const callback = read; return callback(); }",
+    )
+    .expect("source is valid");
+    let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+        .expect("source parses through the pinned Oxc frontend");
+    let compiled = compile_to_bytecode(&parsed)
+        .expect("const value capture lowers through Core IR and OGMB");
+    let entry = compiled
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("run function artifact");
+    let entry_id = entry.id.clone();
+    let artifacts = compiled
+        .functions
+        .into_iter()
+        .map(|function| function.artifact.bytes)
+        .collect::<Vec<_>>();
+    let module = ExecutableModule::load(artifacts)
+        .expect("interpreter verifies compiler-produced const-capture artifacts");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            &entry_id,
+            &[Value::number(41.0)],
+            ExecutionOptions::default(),
+        )
+        .expect("const-capturing closure executes");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected by-value closure return, got {completion:?}"),
+    }
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
+}
+
 #[test]
 fn host_calls_are_capability_named_and_traced() {
     let (bindings, captures) = empty_bindings();
