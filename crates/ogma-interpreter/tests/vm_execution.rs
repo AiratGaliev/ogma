@@ -1285,7 +1285,20 @@ fn call_depth_limit_rejects_nested_frames_and_unwinds_runtime_roots() {
 
 #[test]
 fn entry_arguments_survive_vm_setup_and_return_values_can_be_promoted() {
-    let (bindings, captures) = empty_bindings();
+    let (_, captures) = empty_bindings();
+    let bindings = vec![json!({
+        "id": "identity_argument",
+        "name": "argument",
+        "kind": "parameter",
+        "mutable": true,
+        "semantic_type": "object",
+        "representation": "object_ref"
+    })];
+    let locations = vec![json!({
+        "binding": "identity_argument",
+        "kind": "register",
+        "index": 0
+    })];
     let bytes = artifact(
         "identity",
         "identity_env",
@@ -1297,7 +1310,7 @@ fn entry_arguments_survive_vm_setup_and_return_values_can_be_promoted() {
         Vec::new(),
         bindings,
         captures,
-        Vec::new(),
+        locations,
     );
     let module = ExecutableModule::load_one(&bytes).expect("verified identity module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
