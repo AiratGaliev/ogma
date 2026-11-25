@@ -1011,10 +1011,7 @@ impl HostFunctionRegistry {
         callback: F,
     ) -> Result<HostFunctionSlot, HostRegistrationError>
     where
-        F: for<'a> Fn(
-                &mut HostCallContext<'a>,
-                &[Value],
-            ) -> Result<HostCallCompletion, HostError>
+        F: for<'a> Fn(&mut HostCallContext<'a>, &[Value]) -> Result<HostCallCompletion, HostError>
             + 'static,
     {
         self.validate_rust_descriptor(&descriptor)?;
@@ -1380,7 +1377,8 @@ fn invoke_c_handler(
     if status != OgmaStatus::OK {
         return Err(HostError::Panicked);
     }
-    if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW) {
+    if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
+    {
         return Err(HostError::Panicked);
     }
     let value = decode_host_value(completion.value)?;
@@ -1565,7 +1563,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         context
             .register_host_function(
                 HostFunctionDescriptor::new(3, "benchmark.host.echo"),
@@ -1581,7 +1581,9 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(ContextError::Interpreter(InterpreterError::HostCallbackPanicked))
+            Err(ContextError::Interpreter(
+                InterpreterError::HostCallbackPanicked
+            ))
         ));
     }
 
