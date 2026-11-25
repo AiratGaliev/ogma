@@ -911,6 +911,9 @@ fn fuel_exhaustion_stops_a_loop_at_the_back_edge() {
     ));
     assert_eq!(report.instructions_executed, 5);
     assert_eq!(report.fuel_remaining, 0);
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
 }
 
 #[test]
@@ -960,6 +963,9 @@ fn cancellation_is_observed_at_function_entry_without_dispatch() {
         ExecutionCompletion::Interrupted(ExecutionInterruption::Cancelled)
     ));
     assert_eq!(report.instructions_executed, 0);
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
 }
 
 #[test]
@@ -1006,6 +1012,9 @@ fn deadline_exhaustion_is_distinct_from_fuel_and_cancellation() {
         ExecutionCompletion::Interrupted(ExecutionInterruption::DeadlineExceeded)
     ));
     assert_eq!(report.instructions_executed, 0);
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
 }
 
 #[test]
