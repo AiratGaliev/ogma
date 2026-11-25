@@ -157,6 +157,8 @@ pub struct ExecutionReport {
 pub enum HostError {
     /// Capability is not registered or is denied.
     Denied,
+    /// The registry belongs to a different Runtime heap.
+    WrongRuntime,
     /// Host propagates this JavaScript thrown value.
     Throw(Value),
     /// A Runtime heap operation failed during a host callback.
@@ -291,6 +293,15 @@ impl HostCallContext<'_> {
         self.options
     }
 
+    /// Returns the unique identity of the Runtime heap executing this callback.
+    ///
+    /// Embedding registries use this to reject cross-Runtime dispatch before
+    /// exposing callback-scoped handles.
+    #[must_use]
+    pub const fn heap_identity(&self) -> u64 {
+        self.heap.identity()
+    }
+
     /// Returns the active activation depth.
     #[must_use]
     pub const fn call_depth(&self) -> u32 {
@@ -328,6 +339,8 @@ pub enum InterpreterError {
     Runtime(HeapError),
     /// Host capability was denied.
     HostCapabilityDenied(String),
+    /// A host registry was invoked with a different Runtime heap.
+    HostRuntimeMismatch,
     /// A Rust host callback panicked; the panic did not unwind through the VM.
     HostCallbackPanicked,
     /// A host callback failed independently of capability authorization.
@@ -1233,6 +1246,9 @@ impl ExecutableModule {
                     }
                     Err(HostError::Denied) => {
                         Err(InterpreterError::HostCapabilityDenied(capability))
+                    }
+                    Err(HostError::WrongRuntime) => {
+                        Err(InterpreterError::HostRuntimeMismatch)
                     }
                     Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
                     Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
