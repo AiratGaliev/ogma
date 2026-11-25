@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use ogma_runtime::{HeapError, HostHandle};
 
 use crate::{
-    ConfigurationError, Context, ExecutionCompletion, ExecutionInterruption, ExecutionRequest,
-    ExecutableModule, InterpreterError, PersistentCompletion, PersistentHandle,
+    ConfigurationError, Context, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
+    ExecutionRequest, InterpreterError, PersistentCompletion, PersistentHandle,
 };
 
 #[derive(Default)]
@@ -189,8 +189,9 @@ impl Context<'_> {
         &mut self,
         max_jobs: Option<usize>,
     ) -> Result<JobPumpReport, JobQueueError> {
-        let budget = max_jobs.unwrap_or(self.runtime.config.max_jobs_per_pump);
-        if budget == 0 {
+        let configured_budget = self.runtime.config.max_jobs_per_pump;
+        let budget = max_jobs.unwrap_or(configured_budget);
+        if budget == 0 || budget > configured_budget {
             return Err(JobQueueError::InvalidPumpBudget);
         }
         match self.runtime.jobs.state {
@@ -212,10 +213,41 @@ impl Context<'_> {
         result
     }
 
-    fn pump_promise_jobs_inner(
+    /// Repeatedly pumps bounded turns until the queue is idle or total work is exhausted.
+    ///
+    /// Each turn is capped by EngineConfig.max_jobs_per_pump. None uses the
+    /// configured pending-job capacity as the total-work budget.
+    pub fn run_promise_jobs_until_idle(
         &mut self,
-        budget: usize,
+        total_budget: Option<usize>,
     ) -> Result<JobPumpReport, JobQueueError> {
+        let total_budget = match total_budget {
+            Some(0) => return Err(JobQueueError::InvalidPumpBudget),
+            Some(budget) => budget,
+            None => self.runtime.config.max_pending_jobs.max(1),
+        };
+
+        let mut jobs_executed = 0;
+        while jobs_executed < total_budget {
+            let turn_budget = (total_budget - jobs_executed)
+                .min(self.runtime.config.max_jobs_per_pump);
+            let mut turn = self.pump_promise_jobs(Some(turn_budget))?;
+            jobs_executed += turn.jobs_executed;
+            turn.jobs_executed = jobs_executed;
+            if turn.outcome != JobPumpOutcome::BudgetExhausted {
+                return Ok(turn);
+            }
+        }
+
+        let outcome = if self.runtime.jobs.queue.is_empty() {
+            JobPumpOutcome::Progress
+        } else {
+            JobPumpOutcome::BudgetExhausted
+        };
+        Ok(JobPumpReport::new(outcome, jobs_executed))
+    }
+
+    fn pump_promise_jobs_inner(&mut self, budget: usize) -> Result<JobPumpReport, JobQueueError> {
         let mut jobs_executed = 0;
         while jobs_executed < budget {
             let Some(job) = self.runtime.jobs.queue.pop_front() else {
@@ -390,15 +422,10 @@ mod tests {
 
     fn compile_source(source_text: &str) -> Vec<Vec<u8>> {
         let allocator = Allocator::default();
-        let source = SourceFile::new(
-            "job-test",
-            "memory:///job-test.js",
-            None,
-            source_text,
-        )
-        .expect("valid source");
-        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("source parses");
+        let source = SourceFile::new("job-test", "memory:///job-test.js", None, source_text)
+            .expect("valid source");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("source parses");
         compile_to_bytecode(&parsed)
             .expect("source compiles")
             .functions
@@ -408,7 +435,9 @@ mod tests {
     }
 
     fn load_callback(context: &mut crate::Context<'_>, source: &str) -> crate::Value {
-        context.load_module(compile_source(source)).expect("load OGMB");
+        context
+            .load_module(compile_source(source))
+            .expect("load OGMB");
         let factory = context
             .functions()
             .expect("function metadata")
@@ -488,6 +517,30 @@ mod tests {
     }
 
     #[test]
+    fn run_until_idle_respects_total_budget_across_bounded_turns() {
+        let engine = Engine::new(EngineConfig {
+            max_jobs_per_pump: 1,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function callback() { return 1; }; }",
+        );
+        context.enqueue_promise_job(callback, &[]).expect("first");
+        context.enqueue_promise_job(callback, &[]).expect("second");
+
+        let report = context
+            .run_promise_jobs_until_idle(Some(2))
+            .expect("drain queue");
+        assert_eq!(report.outcome, JobPumpOutcome::Progress);
+        assert_eq!(report.jobs_executed, 2);
+        assert_eq!(context.pending_promise_jobs(), 0);
+    }
+
+    #[test]
     fn pause_resume_and_shutdown_have_distinct_terminal_behavior() {
         let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
         let mut runtime = engine.create_runtime().expect("Runtime");
@@ -499,12 +552,20 @@ mod tests {
         context.enqueue_promise_job(callback, &[]).expect("enqueue");
 
         context.pause_promise_jobs();
-        assert_eq!(context.pump_promise_jobs(None).unwrap().outcome, JobPumpOutcome::Paused);
+        assert_eq!(
+            context.pump_promise_jobs(None).unwrap().outcome,
+            JobPumpOutcome::Paused
+        );
         assert_eq!(context.pending_promise_jobs(), 1);
         context.resume_promise_jobs();
-        assert_eq!(context.pump_promise_jobs(None).unwrap().outcome, JobPumpOutcome::Progress);
+        assert_eq!(
+            context.pump_promise_jobs(None).unwrap().outcome,
+            JobPumpOutcome::Progress
+        );
 
-        context.enqueue_promise_job(callback, &[]).expect("enqueue again");
+        context
+            .enqueue_promise_job(callback, &[])
+            .expect("enqueue again");
         context.shutdown_promise_jobs().expect("shutdown");
         assert_eq!(context.promise_job_state(), JobQueueState::Shutdown);
         assert_eq!(context.pending_promise_jobs(), 0);

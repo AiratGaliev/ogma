@@ -18,8 +18,8 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 mod jobs;
-pub use jobs::{JobPumpOutcome, JobPumpReport, JobQueueError, JobQueueState};
 use jobs::JobScheduler;
+pub use jobs::{JobPumpOutcome, JobPumpReport, JobQueueError, JobQueueState};
 
 use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
@@ -3106,6 +3106,7 @@ mod tests {
     fn engine_rejects_invalid_resource_configuration_before_runtime_creation() {
         assert!(EngineConfig::default().validate().is_ok());
         assert_eq!(EngineConfig::default().max_pending_jobs, 1024);
+        assert_eq!(EngineConfig::default().max_jobs_per_pump, 64);
         let invalid_heap = EngineConfig {
             heap_quota_bytes: 0,
             ..EngineConfig::default()
@@ -3137,6 +3138,22 @@ mod tests {
         assert!(matches!(
             Engine::new(invalid_jobs),
             Err(ConfigurationError::PendingJobLimitTooLarge)
+        ));
+        let invalid_job_budget = EngineConfig {
+            max_jobs_per_pump: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_job_budget),
+            Err(ConfigurationError::InvalidJobPumpBudget)
+        ));
+        let oversized_job_budget = EngineConfig {
+            max_jobs_per_pump: 1_048_577,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(oversized_job_budget),
+            Err(ConfigurationError::InvalidJobPumpBudget)
         ));
         let invalid = EngineConfig {
             max_call_depth: 0,
