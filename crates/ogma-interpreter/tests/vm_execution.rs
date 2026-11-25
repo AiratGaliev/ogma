@@ -28,6 +28,46 @@ fn artifact(
     captures: Vec<JsonValue>,
     locations: Vec<JsonValue>,
 ) -> Vec<u8> {
+    let actual_max_register_index = instructions
+        .iter()
+        .flat_map(|instruction| {
+            let mut registers = Vec::new();
+            match &instruction.operation {
+                RegisterOperation::Constant { destination, .. }
+                | RegisterOperation::Unary { destination, .. } => {
+                    registers.push(*destination);
+                    if let RegisterOperation::Unary { source, .. } = &instruction.operation {
+                        registers.push(*source);
+                    }
+                }
+                RegisterOperation::Binary {
+                    destination,
+                    left,
+                    right,
+                    ..
+                } => registers.extend([*destination, *left, *right]),
+                RegisterOperation::Call {
+                    destination,
+                    sources,
+                    ..
+                } => {
+                    registers.push(*destination);
+                    registers.extend(sources.iter().copied());
+                }
+                RegisterOperation::Branch { condition, .. } => registers.push(*condition),
+                RegisterOperation::Return { source } | RegisterOperation::Throw { source } => {
+                    registers.push(*source);
+                }
+                RegisterOperation::Jump { .. } => {}
+            }
+            registers
+        })
+        .max()
+        .map_or(0, u32::from);
+    assert_eq!(
+        max_register_index, actual_max_register_index,
+        "test manifest must declare the maximum register actually used by its instructions"
+    );
     let code = encode_register_code(&instructions).expect("valid test bytecode");
     let manifest = json!({
         "format": "ogma.ogmb",
@@ -69,7 +109,7 @@ fn artifact(
                 "code_sha256": "0".repeat(64),
                 "instruction_count": instructions.len(),
                 "max_stack_depth": 0,
-                "max_register_index": max_register_index,
+                "max_register_index": actual_max_register_index,
                 "exception_region_count": 0,
                 "constant_count": constants.len()
             }
@@ -920,7 +960,7 @@ fn cancellation_inside_nested_host_call_unwinds_every_vm_frame() {
         None,
         0,
         4,
-        3,
+        2,
         vec![
             RegisterInstruction {
                 operation: RegisterOperation::Constant {
