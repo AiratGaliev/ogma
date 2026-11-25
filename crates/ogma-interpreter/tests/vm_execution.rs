@@ -1,0 +1,714 @@
+use ogma_bytecode::{
+    BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation,
+    build_ogmb_v1, encode_register_code,
+};
+use ogma_interpreter::{
+    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
+    ExecutionOptions, Host, HostError, InterpreterError,
+};
+use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
+use serde_json::{Value as JsonValue, json};
+
+fn artifact(
+    function_id: &str,
+    environment_id: &str,
+    parent_environment: Option<&str>,
+    parameter_count: usize,
+    register_count: usize,
+    max_register_index: u32,
+    instructions: Vec<RegisterInstruction>,
+    constants: Vec<JsonValue>,
+    bindings: Vec<JsonValue>,
+    captures: Vec<JsonValue>,
+    locations: Vec<JsonValue>,
+) -> Vec<u8> {
+    let code = encode_register_code(&instructions).expect("valid test bytecode");
+    let manifest = json!({
+        "format": "ogma.ogmb",
+        "version": "1.0",
+        "encoding_id": "ogma.register.m1.v1",
+        "code_sha256": "0".repeat(64),
+        "resource_limits": {
+            "max_code_bytes": 65536,
+            "max_instructions": 1000,
+            "max_constants": 1000,
+            "max_stack": 4096,
+            "max_registers": 65536,
+            "max_locals": 65536,
+            "max_call_depth": 64,
+            "max_exception_regions": 1000
+        },
+        "metadata": {
+            "execution_model": "register",
+            "function": {"id": function_id, "name": function_id},
+            "code_generation": {"id": "ogma_register_codegen", "version": "1.0.0"},
+            "code_cache": {"id": format!("cache_{function_id}"), "version": "1.0.0"},
+            "frame_layout": {
+                "parameter_count": parameter_count,
+                "local_count": 0,
+                "register_count": register_count
+            },
+            "environment": {
+                "id": environment_id,
+                "parent": parent_environment,
+                "bindings": bindings,
+                "captures": captures,
+                "locations": locations
+            },
+            "suspension_points": [],
+            "inline_cache_slots": [],
+            "verifier_summary": {
+                "schema": "ogma.bytecode-verification-summary",
+                "version": "1.0.0",
+                "code_sha256": "0".repeat(64),
+                "instruction_count": instructions.len(),
+                "max_stack_depth": 0,
+                "max_register_index": max_register_index,
+                "exception_region_count": 0,
+                "constant_count": constants.len()
+            }
+        }
+    });
+    build_ogmb_v1(manifest, &code, &constants, &[], None)
+        .expect("valid OGMB test artifact")
+}
+
+fn number_constant(destination: u16, index: u32) -> RegisterInstruction {
+    RegisterInstruction {
+        operation: RegisterOperation::Constant {
+            destination,
+            constant: index,
+            kind: ConstantKind::Number,
+        },
+        may_throw: false,
+    }
+}
+
+fn return_register(source: u16) -> RegisterInstruction {
+    RegisterInstruction {
+        operation: RegisterOperation::Return { source },
+        may_throw: false,
+    }
+}
+
+fn empty_bindings() -> (Vec<JsonValue>, Vec<JsonValue>) {
+    (Vec::new(), Vec::new())
+}
+
+#[test]
+fn executes_serialized_decoded_register_bytecode() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "main",
+        "main_env",
+        None,
+        0,
+        3,
+        2,
+        vec![
+            number_constant(0, 0),
+            number_constant(1, 1),
+            RegisterInstruction {
+                operation: RegisterOperation::Binary {
+                    destination: 2,
+                    left: 0,
+                    right: 1,
+                    operation: BinaryOperation::Add,
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!(40), json!(2)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+
+    let module = ExecutableModule::load_one(&bytes).expect("verified OGMB module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "main",
+        &[],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected normal return, got {completion:?}"),
+    }
+    assert_eq!(report.instructions_executed, 4);
+    assert_eq!(module.function_count(), 1);
+}
+
+#[test]
+fn executes_nested_function_calls_using_verified_function_table() {
+    let (bindings, captures) = empty_bindings();
+    let callee = artifact(
+        "add_one",
+        "add_one_env",
+        None,
+        1,
+        3,
+        2,
+        vec![
+            number_constant(1, 0),
+            RegisterInstruction {
+                operation: RegisterOperation::Binary {
+                    destination: 2,
+                    left: 0,
+                    right: 1,
+                    operation: BinaryOperation::Add,
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!(1)],
+        bindings.clone(),
+        captures.clone(),
+        Vec::new(),
+    );
+    let caller = artifact(
+        "main",
+        "main_env",
+        None,
+        0,
+        4,
+        3,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::FunctionId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 1,
+                    constant: 1,
+                    kind: ConstantKind::Undefined,
+                },
+                may_throw: false,
+            },
+            number_constant(2, 2),
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 3,
+                    kind: CallKind::JavaScript,
+                    sources: vec![0, 1, 2],
+                },
+                may_throw: true,
+            },
+            return_register(3),
+        ],
+        vec![json!("add_one"), JsonValue::Null, json!(41)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+
+    let module = ExecutableModule::load([caller, callee]).expect("verified function module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "main",
+        &[],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected nested call return, got {completion:?}"),
+    }
+    assert_eq!(report.max_call_depth_reached, 2);
+}
+
+#[test]
+fn closures_share_runtime_managed_mutable_binding_cells() {
+    let parent_binding = json!({
+        "id": "counter",
+        "name": "counter",
+        "kind": "let",
+        "mutable": true,
+        "semantic_type": "number",
+        "representation": "boxed"
+    });
+    let binding_location = json!({
+        "binding": "counter",
+        "kind": "register",
+        "index": 1
+    });
+    let child_capture = json!({
+        "id": "counter_capture",
+        "source_environment": "parent_env",
+        "binding": "counter",
+        "name": "counter",
+        "mutable": true,
+        "semantic_type": "number",
+        "representation": "boxed",
+        "mode": "cell"
+    });
+
+    let child = artifact(
+        "read_counter",
+        "child_env",
+        Some("parent_env"),
+        0,
+        2,
+        1,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 1,
+                    kind: CallKind::LoadCapture,
+                    sources: vec![0],
+                },
+                may_throw: true,
+            },
+            return_register(1),
+        ],
+        Vec::new(),
+        Vec::new(),
+        vec![child_capture],
+        Vec::new(),
+    );
+
+    let parent = artifact(
+        "main",
+        "parent_env",
+        None,
+        0,
+        8,
+        7,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Uninitialized,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 1,
+                    kind: CallKind::MakeCell,
+                    sources: vec![0],
+                },
+                may_throw: true,
+            },
+            number_constant(2, 1),
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 3,
+                    kind: CallKind::StoreCapture,
+                    sources: vec![1, 2],
+                },
+                may_throw: true,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 4,
+                    constant: 2,
+                    kind: ConstantKind::FunctionId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 5,
+                    kind: CallKind::MakeClosure,
+                    sources: vec![4, 1],
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 6,
+                    constant: 3,
+                    kind: ConstantKind::Undefined,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 7,
+                    kind: CallKind::JavaScript,
+                    sources: vec![5, 6],
+                },
+                may_throw: true,
+            },
+            return_register(7),
+        ],
+        vec![JsonValue::Null, json!(42), json!("read_counter"), JsonValue::Null],
+        vec![parent_binding],
+        Vec::new(),
+        vec![binding_location],
+    );
+
+    let module = ExecutableModule::load([parent, child]).expect("verified closure module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "main",
+        &[],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected captured value, got {completion:?}"),
+    }
+    assert_eq!(report.max_call_depth_reached, 2);
+}
+
+#[test]
+fn property_operations_use_the_shared_runtime_object_model() {
+    let parameter = json!({
+        "id": "object_arg",
+        "name": "object_arg",
+        "kind": "parameter",
+        "mutable": true,
+        "semantic_type": "object",
+        "representation": "boxed"
+    });
+    let location = json!({"binding": "object_arg", "kind": "register", "index": 1});
+    let bytes = artifact(
+        "read_property",
+        "read_property_env",
+        None,
+        1,
+        3,
+        2,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 2,
+                    constant: 0,
+                    kind: ConstantKind::String,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 1,
+                    kind: CallKind::GetProperty,
+                    sources: vec![0, 2],
+                },
+                may_throw: true,
+            },
+            return_register(1),
+        ],
+        vec![json!("answer")],
+        vec![parameter],
+        Vec::new(),
+        vec![location],
+    );
+
+    let module = ExecutableModule::load_one(&bytes).expect("verified property module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let object = heap.allocate_object().expect("object");
+    let key = heap.intern_property_key("answer").expect("property key");
+    heap.set_property(object, key, Value::number(42.0)).expect("property write");
+
+    let report = module.execute_without_host(
+        &mut heap,
+        "read_property",
+        &[object],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected property value, got {completion:?}"),
+    }
+}
+
+#[test]
+fn throws_are_propagated_as_distinct_completions() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "throws",
+        "throws_env",
+        None,
+        0,
+        1,
+        0,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::String,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Throw { source: 0 },
+                may_throw: true,
+            },
+        ],
+        vec![json!("boom")],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified throw module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "throws",
+        &[],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+    match report.completion {
+        ExecutionCompletion::Throw(value) => {
+            assert_eq!(value.value_type(), ValueType::String);
+            assert_eq!(heap.string_utf16(value).expect("thrown string"), "boom".encode_utf16().collect::<Vec<_>>());
+        }
+        completion => panic!("expected thrown completion, got {completion:?}"),
+    }
+}
+
+#[test]
+fn fuel_exhaustion_stops_a_loop_at_the_back_edge() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "loop",
+        "loop_env",
+        None,
+        0,
+        1,
+        0,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Boolean,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Jump { target: 9 },
+                may_throw: false,
+            },
+        ],
+        vec![json!(true)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified loop module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "loop",
+        &[],
+        ExecutionOptions {
+            instruction_budget: 5,
+            ..ExecutionOptions::default()
+        },
+    ).expect("interrupted report");
+
+    assert!(matches!(
+        report.completion,
+        ExecutionCompletion::Interrupted(ExecutionInterruption::FuelExhausted)
+    ));
+    assert_eq!(report.instructions_executed, 5);
+    assert_eq!(report.fuel_remaining, 0);
+}
+
+#[test]
+fn cancellation_is_observed_at_function_entry_without_dispatch() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "cancelled",
+        "cancelled_env",
+        None,
+        0,
+        1,
+        0,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            return_register(0),
+        ],
+        vec![json!(1)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified cancellation module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let token = CancellationToken::new();
+    token.cancel();
+    let report = module.execute_without_host(
+        &mut heap,
+        "cancelled",
+        &[],
+        ExecutionOptions {
+            cancellation: Some(token),
+            ..ExecutionOptions::default()
+        },
+    ).expect("interrupted report");
+
+    assert!(matches!(
+        report.completion,
+        ExecutionCompletion::Interrupted(ExecutionInterruption::Cancelled)
+    ));
+    assert_eq!(report.instructions_executed, 0);
+}
+
+#[test]
+fn deadline_exhaustion_is_distinct_from_fuel_and_cancellation() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "deadline",
+        "deadline_env",
+        None,
+        0,
+        1,
+        0,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            return_register(0),
+        ],
+        vec![json!(1)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified deadline module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "deadline",
+        &[],
+        ExecutionOptions {
+            time_budget: Some(std::time::Duration::ZERO),
+            ..ExecutionOptions::default()
+        },
+    ).expect("interrupted report");
+    assert!(matches!(
+        report.completion,
+        ExecutionCompletion::Interrupted(ExecutionInterruption::DeadlineExceeded)
+    ));
+    assert_eq!(report.instructions_executed, 0);
+}
+
+#[test]
+fn malformed_serialized_artifact_is_rejected_before_dispatch() {
+    let (bindings, captures) = empty_bindings();
+    let mut bytes = artifact(
+        "invalid",
+        "invalid_env",
+        None,
+        0,
+        1,
+        0,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            return_register(0),
+        ],
+        vec![json!(1)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    bytes[0] ^= 0x01;
+    let error = ExecutableModule::load_one(&bytes).expect_err("corrupt container must fail");
+    assert!(matches!(error, InterpreterError::Bytecode(_)));
+}
+
+struct RecordingHost {
+    calls: Vec<String>,
+}
+
+impl Host for RecordingHost {
+    fn call(
+        &mut self,
+        _heap: &mut Heap,
+        capability: &str,
+        arguments: &[Value],
+    ) -> Result<Value, HostError> {
+        self.calls.push(format!("{capability}:{}", arguments.len()));
+        Ok(Value::number(7.0))
+    }
+}
+
+#[test]
+fn host_calls_are_capability_named_and_traced() {
+    let (bindings, captures) = empty_bindings();
+    let bytes = artifact(
+        "host_call",
+        "host_call_env",
+        None,
+        0,
+        3,
+        2,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::HostCapability,
+                },
+                may_throw: false,
+            },
+            number_constant(1, 1),
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 2,
+                    kind: CallKind::Host,
+                    sources: vec![0, 1],
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!("telemetry.record"), json!(5)],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load_one(&bytes).expect("verified host-call module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let mut host = RecordingHost { calls: Vec::new() };
+    let report = module.execute(
+        &mut heap,
+        "host_call",
+        &[],
+        &mut host,
+        ExecutionOptions::default(),
+    ).expect("execution report");
+
+    assert_eq!(host.calls, vec!["telemetry.record:1"]);
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(7.0)),
+        completion => panic!("expected host result, got {completion:?}"),
+    }
+}
