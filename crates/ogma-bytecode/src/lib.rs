@@ -3803,8 +3803,7 @@ mod tests {
         let mut artifact_manifest = manifest(2, 1);
         artifact_manifest["metadata"]["frame_layout"]["local_count"] = json!(2);
         artifact_manifest["resource_limits"]["max_locals"] = json!(1);
-        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None)
-            .expect("build");
+        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None).expect("build");
         let errors = verify_register_artifact(&bytes, &[])
             .expect_err("frame local_count must not exceed max_locals");
         assert!(
