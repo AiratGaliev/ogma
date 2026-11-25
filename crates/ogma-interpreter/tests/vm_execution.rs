@@ -164,9 +164,7 @@ fn execute_number(
         .execute_without_host(heap, entry, arguments, ExecutionOptions::default())
         .expect("verified Core IR fixture executes");
     match report.completion {
-        ExecutionCompletion::Return(value) => {
-            value.as_number().expect("fixture returns a Number")
-        }
+        ExecutionCompletion::Return(value) => value.as_number().expect("fixture returns a Number"),
         completion => panic!("expected normal fixture completion, got {completion:?}"),
     }
 }
@@ -185,11 +183,21 @@ fn executes_canonical_core_ir_branch_and_loop_fixtures_via_serialized_ogmb() {
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
 
     assert_eq!(
-        execute_number(&branch, "fn0", &[Value::number(7.0), Value::number(7.0)], &mut heap),
+        execute_number(
+            &branch,
+            "fn0",
+            &[Value::number(7.0), Value::number(7.0)],
+            &mut heap
+        ),
         7.0
     );
     assert_eq!(
-        execute_number(&branch, "fn0", &[Value::number(7.0), Value::number(8.0)], &mut heap),
+        execute_number(
+            &branch,
+            "fn0",
+            &[Value::number(7.0), Value::number(8.0)],
+            &mut heap
+        ),
         8.0
     );
     assert_eq!(
@@ -230,8 +238,7 @@ impl Host for CanonicalEchoHost {
         let Some(argument) = arguments[0].as_number() else {
             return Err(HostError::Denied);
         };
-        self.calls
-            .push((capability.to_owned(), vec![argument]));
+        self.calls.push((capability.to_owned(), vec![argument]));
         Ok(Value::number(argument + 11.0))
     }
 }
@@ -1167,8 +1174,8 @@ fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
         .expect("source parses through the pinned Oxc frontend");
-    let compiled = compile_to_bytecode(&parsed)
-        .expect("const value capture lowers through Core IR and OGMB");
+    let compiled =
+        compile_to_bytecode(&parsed).expect("const value capture lowers through Core IR and OGMB");
     let entry = compiled
         .functions
         .iter()
