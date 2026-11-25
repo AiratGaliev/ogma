@@ -267,6 +267,119 @@ impl Host for CanonicalEchoHost {
     }
 }
 
+struct NestedExecutionHost {
+    nested: ExecutableModule,
+    observed_depth: Option<u32>,
+}
+
+impl Host for NestedExecutionHost {
+    fn call(
+        &mut self,
+        _heap: &mut Heap,
+        _capability: &str,
+        _arguments: &[Value],
+    ) -> Result<Value, HostError> {
+        Err(HostError::Denied)
+    }
+
+    fn call_with_context(
+        &mut self,
+        context: &mut ogma_interpreter::HostCallContext<'_>,
+        capability: &str,
+        _arguments: &[Value],
+    ) -> Result<ogma_interpreter::HostCallCompletion, HostError> {
+        if capability != "benchmark.host.echo" {
+            return Err(HostError::Denied);
+        }
+        self.observed_depth = Some(context.call_depth());
+        let mut no_host = ogma_interpreter::NoHost;
+        let nested = context
+            .execute_nested(
+                &self.nested,
+                "fn0",
+                &[Value::number(7.0), Value::number(7.0)],
+                &mut no_host,
+            )
+            .map_err(|_| HostError::Panicked)?;
+        match nested {
+            ExecutionCompletion::Return(value) => {
+                Ok(ogma_interpreter::HostCallCompletion::Normal(value))
+            }
+            ExecutionCompletion::Throw(value) => {
+                Ok(ogma_interpreter::HostCallCompletion::Throw(value))
+            }
+            ExecutionCompletion::Interrupted(reason) => {
+                Ok(ogma_interpreter::HostCallCompletion::Interrupted(reason))
+            }
+        }
+    }
+}
+
+#[test]
+fn host_callback_can_execute_a_nested_module_on_the_same_heap_and_budget() {
+    let outer = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-host-call.json"
+    ));
+    let nested = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-ssa-branch.json"
+    ));
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let mut host = NestedExecutionHost {
+        nested,
+        observed_depth: None,
+    };
+    let report = outer
+        .execute(
+            &mut heap,
+            "fn_host_call",
+            &[Value::number(31.0)],
+            &mut host,
+            ExecutionOptions::default(),
+        )
+        .expect("outer function executes with a nested host call");
+
+    assert_eq!(host.observed_depth, Some(1));
+    assert_eq!(report.max_call_depth_reached, 2);
+    assert_eq!(report.instructions_executed, 6);
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(7.0)),
+        completion => panic!("expected nested Return completion, got {completion:?}"),
+    }
+}
+
+#[test]
+fn nested_host_execution_consumes_the_parent_instruction_fuel() {
+    let outer = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-host-call.json"
+    ));
+    let nested = module_from_core_ir_fixture(include_str!(
+        "../../../tests/core-ir/fixtures/positive-ssa-branch.json"
+    ));
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let mut host = NestedExecutionHost {
+        nested,
+        observed_depth: None,
+    };
+    let report = outer
+        .execute(
+            &mut heap,
+            "fn_host_call",
+            &[Value::number(31.0)],
+            &mut host,
+            ExecutionOptions {
+                instruction_budget: 2,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("nested execution reports cooperative fuel exhaustion");
+
+    assert!(matches!(
+        report.completion,
+        ExecutionCompletion::Interrupted(ExecutionInterruption::FuelExhausted)
+    ));
+    assert_eq!(report.instructions_executed, 2);
+}
+
 #[test]
 fn executes_canonical_core_ir_host_call_fixture_with_observable_host_trace() {
     let module = module_from_core_ir_fixture(include_str!(

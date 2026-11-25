@@ -272,8 +272,13 @@ dependencies = [
 name = "ogma-embedding"
 version = "0.1.0"
 dependencies = [
+ "ogma-compiler",
+ "ogma-core-ir",
+ "ogma-frontend",
  "ogma-interpreter",
  "ogma-runtime",
+ "oxc_allocator",
+ "serde_json",
 ]
 
 [[package]]

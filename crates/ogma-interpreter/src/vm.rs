@@ -152,6 +152,10 @@ pub enum HostError {
     Denied,
     /// Host propagates this JavaScript thrown value.
     Throw(Value),
+    /// A Runtime heap operation failed during a host callback.
+    Runtime(HeapError),
+    /// A host callback panicked and the panic was contained at the boundary.
+    Panicked,
 }
 
 /// Synchronous host capability dispatcher on the Runtime owner thread.
@@ -163,6 +167,90 @@ pub trait Host {
         capability: &str,
         arguments: &[Value],
     ) -> Result<Value, HostError>;
+
+    /// Invokes a capability with access to the current execution session.
+    ///
+    /// Implementations that support nested JavaScript calls override this
+    /// method. The default preserves the original synchronous Host contract.
+    fn call_with_context(
+        &mut self,
+        context: &mut HostCallContext<'_>,
+        capability: &str,
+        arguments: &[Value],
+    ) -> Result<HostCallCompletion, HostError> {
+        self.call(context.heap, capability, arguments)
+            .map(HostCallCompletion::Normal)
+    }
+}
+
+/// Observable result of one synchronous host callback.
+#[derive(Clone, Copy, Debug)]
+pub enum HostCallCompletion {
+    /// The host returned a JavaScript value.
+    Normal(Value),
+    /// The host propagated a JavaScript thrown value.
+    Throw(Value),
+    /// The host observed the shared execution budget or cancellation.
+    Interrupted(ExecutionInterruption),
+}
+
+/// Scoped access to the active interpreter execution.
+///
+/// A callback can run another verified module using the same Runtime heap,
+/// instruction budget, cancellation token and call-depth accounting. The
+/// caller's VM frames remain rooted while the nested execution is active.
+pub struct HostCallContext<'a> {
+    heap: &'a mut Heap,
+    state: &'a mut ExecutionState,
+    options: &'a ExecutionOptions,
+    parent_depth: u32,
+}
+
+impl HostCallContext<'_> {
+    /// Returns the Runtime heap for short-lived host operations.
+    pub fn heap(&mut self) -> &mut Heap {
+        self.heap
+    }
+
+    /// Executes a function in another verified module as a nested activation.
+    ///
+    /// This reuses the current Runtime heap and the same execution budget. The
+    /// nested call depth is one greater than the host-calling activation.
+    pub fn execute_nested<H: Host>(
+        &mut self,
+        module: &ExecutableModule,
+        entry_function: &str,
+        arguments: &[Value],
+        host: &mut H,
+    ) -> Result<ExecutionCompletion, InterpreterError> {
+        let entry_depth = self
+            .parent_depth
+            .checked_add(1)
+            .ok_or(InterpreterError::CallDepthExceeded {
+                limit: self.options.max_call_depth,
+            })?;
+        module.execute_with_state(
+            self.heap,
+            entry_function,
+            arguments,
+            host,
+            self.options,
+            self.state,
+            entry_depth,
+        )
+    }
+
+    /// Returns the host-selected execution options shared by nested calls.
+    #[must_use]
+    pub const fn options(&self) -> &ExecutionOptions {
+        self.options
+    }
+
+    /// Returns the active activation depth.
+    #[must_use]
+    pub const fn call_depth(&self) -> u32 {
+        self.parent_depth
+    }
 }
 
 /// Host implementation which denies every capability call.
@@ -195,6 +283,8 @@ pub enum InterpreterError {
     Runtime(HeapError),
     /// Host capability was denied.
     HostCapabilityDenied(String),
+    /// A Rust host callback panicked; the panic did not unwind through the VM.
+    HostCallbackPanicked,
     /// Invalid register or internal register category.
     InvalidRegister(u16),
     /// Missing constant-pool item.
@@ -469,6 +559,29 @@ impl ExecutableModule {
         options: ExecutionOptions,
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
+        let mut state = ExecutionState::new(&options)?;
+        let completion = self.execute_with_state(
+            heap,
+            entry_function,
+            arguments,
+            host,
+            &options,
+            &mut state,
+            1,
+        )?;
+        Ok(state.report(completion))
+    }
+
+    fn execute_with_state<H: Host>(
+        &self,
+        heap: &mut Heap,
+        entry_function: &str,
+        arguments: &[Value],
+        host: &mut H,
+        options: &ExecutionOptions,
+        state: &mut ExecutionState,
+        entry_depth: u32,
+    ) -> Result<ExecutionCompletion, InterpreterError> {
         let image = self
             .functions
             .get(entry_function)
@@ -479,8 +592,11 @@ impl ExecutableModule {
                 "entry function {entry_function:?} requires lexical captures"
             )));
         }
+        let depth_limit = options.max_call_depth.min(image.max_call_depth);
+        if entry_depth > depth_limit {
+            return Err(InterpreterError::CallDepthExceeded { limit: depth_limit });
+        }
 
-        let mut state = ExecutionState::new(&options)?;
         let scope = heap.open_scope()?;
         let setup = (|| {
             // The host may pass freshly allocated, non-persistent Values.
@@ -516,14 +632,13 @@ impl ExecutableModule {
             return Err(error.into());
         }
 
-        let depth_limit = options.max_call_depth.min(image.max_call_depth);
         let root_frame = match VmFrame::new(
             heap,
             image,
             activation,
             function_value,
             arguments,
-            1,
+            entry_depth,
             depth_limit,
         ) {
             Ok(frame) => frame,
@@ -532,9 +647,8 @@ impl ExecutableModule {
                 return Err(error);
             }
         };
-        state.max_call_depth_reached = 1;
-        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame])?;
-        Ok(state.report(completion))
+        state.max_call_depth_reached = state.max_call_depth_reached.max(entry_depth);
+        self.run_loop(heap, host, options, state, vec![root_frame])
     }
 
     /// Executes without granting host capabilities.
@@ -986,21 +1100,36 @@ impl ExecutableModule {
                     .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
-                match host.call(heap, &capability, &arguments) {
-                    Ok(value) => {
-                        heap.scope_root(scope, value)?;
+                let mut call_context = HostCallContext {
+                    heap,
+                    state,
+                    options,
+                    parent_depth: frame.depth,
+                };
+                match host.call_with_context(&mut call_context, &capability, &arguments) {
+                    Ok(HostCallCompletion::Normal(value)) => {
+                        call_context.heap.scope_root(scope, value)?;
                         write_register(frame, destination, RegisterValue::Value(value))?;
                         Ok(Step::Continue {
                             next_pc: frame.pc + 1,
                             back_edge: false,
                         })
                     }
-                    Err(HostError::Throw(value)) => {
-                        heap.scope_root(scope, value)?;
+                    Ok(HostCallCompletion::Throw(value)) | Err(HostError::Throw(value)) => {
+                        call_context.heap.scope_root(scope, value)?;
                         Ok(Step::Complete(ExecutionCompletion::Throw(value)))
+                    }
+                    Ok(HostCallCompletion::Interrupted(reason)) => {
+                        Ok(Step::Complete(ExecutionCompletion::Interrupted(reason)))
                     }
                     Err(HostError::Denied) => {
                         Err(InterpreterError::HostCapabilityDenied(capability))
+                    }
+                    Err(HostError::Runtime(error)) => {
+                        Err(InterpreterError::Runtime(error))
+                    }
+                    Err(HostError::Panicked) => {
+                        Err(InterpreterError::HostCallbackPanicked)
                     }
                 }
             }
