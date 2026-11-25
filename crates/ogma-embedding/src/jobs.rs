@@ -691,7 +691,10 @@ mod tests {
             )
             .expect("cancellation is an execution completion");
         assert_eq!(report.outcome, JobPumpOutcome::Interrupted);
-        assert_eq!(report.interruption, Some(crate::ExecutionInterruption::Cancelled));
+        assert_eq!(
+            report.interruption,
+            Some(crate::ExecutionInterruption::Cancelled)
+        );
         assert_eq!(report.jobs_executed, 1);
         assert_eq!(context.pending_promise_jobs(), 0);
         assert_eq!(context.heap_stats().external_memory_bytes, 0);
