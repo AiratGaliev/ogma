@@ -3642,7 +3642,11 @@ mod tests {
                 .expect("build malformed constant");
             let errors = verify_register_artifact(&bytes, &[])
                 .expect_err("invalid constant payload must be rejected");
-            assert!(errors.iter().any(|item| item.code == "constant.kind_mismatch"));
+            assert!(
+                errors
+                    .iter()
+                    .any(|item| item.code == "constant.kind_mismatch")
+            );
         }
     }
 
