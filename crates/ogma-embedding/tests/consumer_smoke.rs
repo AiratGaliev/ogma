@@ -64,8 +64,8 @@ fn external_rust_consumer_creates_runtime_executes_and_releases_persistent_resul
     drop(context);
 
     let next_context = runtime.create_context().expect("Context can be recreated");
-    assert_eq!(runtime.id(), runtime_id);
     drop(next_context);
+    assert_eq!(runtime.id(), runtime_id);
 }
 
 #[test]
