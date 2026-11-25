@@ -140,7 +140,6 @@ fn empty_bindings() -> (Vec<JsonValue>, Vec<JsonValue>) {
     (Vec::new(), Vec::new())
 }
 
-
 fn module_from_core_ir_fixture(source: &str) -> ExecutableModule {
     let document: ogma_core_ir::FunctionDocument =
         serde_json::from_str(source).expect("canonical Core IR v1 fixture");
@@ -1159,8 +1158,96 @@ fn cancellation_inside_nested_host_call_unwinds_every_vm_frame() {
         report.completion,
         ExecutionCompletion::Interrupted(ExecutionInterruption::Cancelled)
     ));
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
 }
 
+#[test]
+fn call_depth_limit_rejects_nested_frames_and_unwinds_runtime_roots() {
+    let (bindings, captures) = empty_bindings();
+    let child = artifact(
+        "child",
+        "child_env",
+        Some("main_env"),
+        0,
+        1,
+        0,
+        vec![number_constant(0, 0), return_register(0)],
+        vec![json!(9)],
+        bindings.clone(),
+        captures.clone(),
+        Vec::new(),
+    );
+    let parent = artifact(
+        "main",
+        "main_env",
+        None,
+        0,
+        3,
+        2,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::FunctionId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 0,
+                    kind: CallKind::MakeClosure,
+                    sources: vec![0],
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 1,
+                    constant: 1,
+                    kind: ConstantKind::Undefined,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 2,
+                    kind: CallKind::JavaScript,
+                    sources: vec![0, 1],
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!("child"), JsonValue::Null],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+    let module = ExecutableModule::load([parent, child]).expect("verified nested-call module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let error = module
+        .execute_without_host(
+            &mut heap,
+            "main",
+            &[],
+            ExecutionOptions {
+                max_call_depth: 1,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect_err("second VM frame must exceed the configured depth limit");
+
+    assert!(matches!(
+        error,
+        InterpreterError::CallDepthExceeded { limit: 1 }
+    ));
+    let roots = heap.root_snapshot();
+    assert_eq!(roots.interpreter_frames, 0);
+    assert_eq!(roots.temporary_scopes, 0);
+}
 
 #[test]
 fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
