@@ -59,6 +59,10 @@ pub enum ExecutionInterruption {
 }
 
 /// Observable completion of a synchronous M1 invocation.
+///
+/// Values in Return and Throw are transient Runtime values. After execute()
+/// returns, the caller must promote a managed value with
+/// Heap::retain_host_value before performing any operation that may collect.
 #[derive(Clone, Copy, Debug)]
 pub enum ExecutionCompletion {
     /// A normal JavaScript return value.
