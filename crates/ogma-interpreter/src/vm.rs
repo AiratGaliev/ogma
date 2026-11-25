@@ -222,6 +222,9 @@ pub struct HostCallRoot(HostHandle);
 
 impl HostCallContext<'_> {
     /// Allocates a JavaScript String in the active Runtime.
+    ///
+    /// The returned Value is transient. Retain it with `retain_value` before
+    /// performing another operation that may allocate or collect.
     pub fn create_string(&mut self, text: &str) -> Result<Value, HeapError> {
         self.heap.allocate_string(text)
     }
@@ -237,6 +240,9 @@ impl HostCallContext<'_> {
     }
 
     /// Resolves a callback-local root to a transient Runtime value.
+    ///
+    /// Retain the returned value again before another allocation if it must
+    /// remain live after the current callback scope changes.
     pub fn resolve_root(&self, root: HostCallRoot) -> Result<Value, HeapError> {
         self.heap.resolve_host_handle(root.0)
     }
