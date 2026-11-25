@@ -483,6 +483,14 @@ impl ExecutableModule {
         let mut state = ExecutionState::new(&options)?;
         let scope = heap.open_scope()?;
         let setup = (|| {
+            // The host may pass freshly allocated, non-persistent Values.
+            // Root them before creating the entry environment/closure, because
+            // those Runtime allocations may trigger collection under quota
+            // pressure before enter_function_call has installed activation roots.
+            for argument in arguments {
+                heap.scope_root(scope, *argument)?;
+            }
+            heap.scope_root(scope, options.global_this)?;
             let outer = heap.create_environment(None, &[])?;
             heap.scope_root_environment(scope, outer)?;
             let closure = heap.create_closure(&image.definition, outer, options.global_this)?;
