@@ -68,8 +68,8 @@ impl CompiledModule {
     /// boundary. This method does not execute code or claim interpreter
     /// compatibility beyond the registered M1 encoding profile.
     pub fn emit_bytecode(&self) -> Result<bytecode::CompiledBytecodeModule, CompileFailure> {
-        let functions = bytecode::compile_functions(&self.functions)
-            .map_err(CompileFailure::Bytecode)?;
+        let functions =
+            bytecode::compile_functions(&self.functions).map_err(CompileFailure::Bytecode)?;
         Ok(bytecode::CompiledBytecodeModule { functions })
     }
 }
@@ -746,25 +746,44 @@ mod tests {
                 .expect("source fixture parses");
             let compiled = compile_to_bytecode(&parsed)
                 .unwrap_or_else(|error| panic!("{case_name} did not compile: {error:?}"));
-            assert!(!compiled.functions.is_empty(), "{case_name} emitted no functions");
+            assert!(
+                !compiled.functions.is_empty(),
+                "{case_name} emitted no functions"
+            );
 
             for function in compiled.functions {
                 assert!(function.metrics.instruction_count > 0);
                 assert!(function.metrics.code_bytes > 0);
                 assert_eq!(
                     function.metrics.instruction_count as usize,
-                    function.artifact.verification_input["instructions"].as_array().unwrap().len()
+                    function.artifact.verification_input["instructions"]
+                        .as_array()
+                        .unwrap()
+                        .len()
                 );
                 assert_eq!(function.metrics.code_bytes, function.artifact.code.len());
-                assert_eq!(function.metrics.constant_count, function.artifact.constants.len());
+                assert_eq!(
+                    function.metrics.constant_count,
+                    function.artifact.constants.len()
+                );
                 assert_eq!(
                     function.metrics.register_count,
-                    function.artifact.manifest["metadata"]["frame_layout"]["register_count"].as_u64().unwrap() as u32
+                    function.artifact.manifest["metadata"]["frame_layout"]["register_count"]
+                        .as_u64()
+                        .unwrap() as u32
                 );
 
-                let safe_function_id = function.id.chars().map(|character| {
-                    if matches!(character, ':' | '/' | '\\') { '_' } else { character }
-                }).collect::<String>();
+                let safe_function_id = function
+                    .id
+                    .chars()
+                    .map(|character| {
+                        if matches!(character, ':' | '/' | '\\') {
+                            '_'
+                        } else {
+                            character
+                        }
+                    })
+                    .collect::<String>();
                 let sequence = format!("{}_{}", std::process::id(), safe_function_id);
                 let container_path = std::env::temp_dir().join(format!("ogm45_{sequence}.ogmb"));
                 let program_path = std::env::temp_dir().join(format!("ogm45_{sequence}.json"));
@@ -809,5 +828,4 @@ mod tests {
             }
         }
     }
-
 }

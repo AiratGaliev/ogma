@@ -7,13 +7,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use ogma_bytecode::{
-    BinaryOperation, CallKind, ConstantKind, Diagnostic, RegisterInstruction,
-    RegisterOperation, UnaryOperation, VerifiedArtifact, build_ogmb_v1,
-    encode_register_code, sha256_hex, verify_register_artifact,
+    BinaryOperation, CallKind, ConstantKind, Diagnostic, RegisterInstruction, RegisterOperation,
+    UnaryOperation, VerifiedArtifact, build_ogmb_v1, encode_register_code, sha256_hex,
+    verify_register_artifact,
 };
 use ogma_core_ir::{
-    BindingKind, BlockParameter, CaptureMode, ExceptionFlow, Function,
-    FunctionDocument, Source, Terminator, UnreachableReason, verify_document,
+    BindingKind, BlockParameter, CaptureMode, ExceptionFlow, Function, FunctionDocument, Source,
+    Terminator, UnreachableReason, verify_document,
 };
 use serde_json::{Value, json};
 
@@ -61,7 +61,12 @@ pub fn compile_functions(
 
     let owners: HashMap<&str, &str> = documents
         .iter()
-        .map(|document| (document.function.environment.id.as_str(), document.function.id.as_str()))
+        .map(|document| {
+            (
+                document.function.environment.id.as_str(),
+                document.function.id.as_str(),
+            )
+        })
         .collect();
     let mut captured_cells = HashMap::<String, std::collections::BTreeSet<String>>::new();
     for child in documents {
@@ -103,9 +108,12 @@ pub fn compile_functions(
 /// complete compilation unit.
 pub fn compile_function(document: &FunctionDocument) -> Result<CompiledFunction, Vec<Diagnostic>> {
     if !document.function.captures.is_empty()
-        || document.function.blocks.iter().flat_map(|block| &block.instructions).any(|instruction| {
-            instruction.op == "closure.create"
-        })
+        || document
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| instruction.op == "closure.create")
     {
         return Err(vec![diagnostic(
             "bytecode.module_required",
@@ -142,7 +150,10 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
             return Err(vec![diagnostic(
                 "bytecode.environment_identity_duplicate",
                 "$.functions",
-                format!("duplicate environment identity {:?}", function.environment.id),
+                format!(
+                    "duplicate environment identity {:?}",
+                    function.environment.id
+                ),
             )]);
         }
     }
@@ -150,21 +161,32 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
     for document in documents {
         let parent = &document.function;
         for capture in &parent.captures {
-            let owner = environments.get(capture.source_environment.as_str()).ok_or_else(|| {
-                vec![diagnostic(
-                    "bytecode.capture_owner_missing",
-                    format!("$.function.{}.captures.{}", parent.id, capture.id),
-                    format!("capture owner environment {:?} is absent from the compilation unit", capture.source_environment),
-                )]
-            })?;
-            let source_binding = owner.function.environment.bindings
+            let owner = environments
+                .get(capture.source_environment.as_str())
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.capture_owner_missing",
+                        format!("$.function.{}.captures.{}", parent.id, capture.id),
+                        format!(
+                            "capture owner environment {:?} is absent from the compilation unit",
+                            capture.source_environment
+                        ),
+                    )]
+                })?;
+            let source_binding = owner
+                .function
+                .environment
+                .bindings
                 .iter()
                 .find(|binding| binding.id == capture.binding)
                 .ok_or_else(|| {
                     vec![diagnostic(
                         "bytecode.capture_binding_missing",
                         format!("$.function.{}.captures.{}", parent.id, capture.id),
-                        format!("source binding {:?} is absent from its owning environment", capture.binding),
+                        format!(
+                            "source binding {:?} is absent from its owning environment",
+                            capture.binding
+                        ),
                     )]
                 })?;
             if capture.name != source_binding.name
@@ -186,13 +208,17 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
             if instruction.op != "closure.create" {
                 continue;
             }
-            let target_id = instruction.attributes.get("function").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic(
-                    "bytecode.closure_target",
-                    format!("$.function.{}.instructions.{}", parent.id, instruction.id),
-                    "closure.create must identify a target function",
-                )]
-            })?;
+            let target_id = instruction
+                .attributes
+                .get("function")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.closure_target",
+                        format!("$.function.{}.instructions.{}", parent.id, instruction.id),
+                        "closure.create must identify a target function",
+                    )]
+                })?;
             let target = functions.get(target_id).ok_or_else(|| {
                 vec![diagnostic(
                     "bytecode.closure_target_missing",
@@ -200,13 +226,17 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                     format!("closure target function {target_id:?} is not present in the compilation unit"),
                 )]
             })?;
-            let descriptors = instruction.attributes.get("captures").and_then(Value::as_array).ok_or_else(|| {
-                vec![diagnostic(
-                    "bytecode.closure_captures",
-                    format!("$.function.{}.instructions.{}", parent.id, instruction.id),
-                    "closure capture descriptors must be an array",
-                )]
-            })?;
+            let descriptors = instruction
+                .attributes
+                .get("captures")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.closure_captures",
+                        format!("$.function.{}.instructions.{}", parent.id, instruction.id),
+                        "closure capture descriptors must be an array",
+                    )]
+                })?;
             if descriptors.len() != target.function.captures.len() {
                 return Err(vec![diagnostic(
                     "bytecode.closure_capture_arity",
@@ -228,8 +258,14 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                     "$.function.{}.instructions.{}.attributes.captures[{index}]",
                     parent.id, instruction.id
                 );
-                let alias = descriptor.get("binding").and_then(Value::as_str).unwrap_or_default();
-                let mode = descriptor.get("mode").and_then(Value::as_str).unwrap_or_default();
+                let alias = descriptor
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let mode = descriptor
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let expected_mode = match target_capture.mode {
                     CaptureMode::Cell => "cell",
                     CaptureMode::Value => "value",
@@ -238,12 +274,23 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                     return Err(vec![diagnostic(
                         "bytecode.closure_capture_mode",
                         format!("{path}.mode"),
-                        format!("target capture requires mode {expected_mode:?}, descriptor declares {mode:?}"),
+                        format!(
+                            "target capture requires mode {expected_mode:?}, descriptor declares {mode:?}"
+                        ),
                     )]);
                 }
 
-                if let Some(local) = parent.environment.bindings.iter().find(|binding| binding.id == alias) {
-                    let source_mode = if local.kind == BindingKind::Const { "value" } else { "cell" };
+                if let Some(local) = parent
+                    .environment
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.id == alias)
+                {
+                    let source_mode = if local.kind == BindingKind::Const {
+                        "value"
+                    } else {
+                        "cell"
+                    };
                     if target_capture.source_environment != parent.environment.id
                         || target_capture.binding != local.id
                         || target_capture.name != local.name
@@ -258,7 +305,9 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                             "closure capture does not match the owning local binding identity, environment or mutability mode",
                         )]);
                     }
-                } else if let Some(imported) = parent.captures.iter().find(|capture| capture.id == alias) {
+                } else if let Some(imported) =
+                    parent.captures.iter().find(|capture| capture.id == alias)
+                {
                     let source_mode = match imported.mode {
                         CaptureMode::Cell => "cell",
                         CaptureMode::Value => "value",
@@ -281,7 +330,9 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                     return Err(vec![diagnostic(
                         "bytecode.closure_capture_source_missing",
                         path.clone(),
-                        format!("capture source alias {alias:?} is not owned or imported by the enclosing function"),
+                        format!(
+                            "capture source alias {alias:?} is not owned or imported by the enclosing function"
+                        ),
                     )]);
                 }
             }
@@ -315,7 +366,10 @@ fn compile_function_with_cells(
 
     for parameter in &function.parameters {
         let register = allocator.allocate()?;
-        if value_registers.insert(parameter.id.clone(), register).is_some() {
+        if value_registers
+            .insert(parameter.id.clone(), register)
+            .is_some()
+        {
             return Err(vec![diagnostic(
                 "register.identity_duplicate",
                 "$.function.parameters",
@@ -376,14 +430,20 @@ fn compile_function_with_cells(
             if instruction.effects.may_suspend {
                 return Err(vec![diagnostic(
                     "bytecode.suspension_unsupported",
-                    format!("$.function.blocks[{}].instructions[{}]", block.id, instruction.id),
+                    format!(
+                        "$.function.blocks[{}].instructions[{}]",
+                        block.id, instruction.id
+                    ),
                     "async suspension is outside the current synchronous M1 bytecode profile",
                 )]);
             }
             if matches!(instruction.exception, Some(ExceptionFlow::Edge { .. })) {
                 return Err(vec![diagnostic(
                     "bytecode.exception_edge_unsupported",
-                    format!("$.function.blocks[{}].instructions[{}].exception", block.id, instruction.id),
+                    format!(
+                        "$.function.blocks[{}].instructions[{}].exception",
+                        block.id, instruction.id
+                    ),
                     "local exceptional CFG edges require catch/finally lowering and are not supported by this profile",
                 )]);
             }
@@ -418,11 +478,13 @@ fn compile_function_with_cells(
         .blocks
         .iter()
         .position(|block| block.id == function.entry_block)
-        .ok_or_else(|| vec![diagnostic(
-            "bytecode.entry_missing",
-            "$.function.entry_block",
-            "entry block is missing from the function",
-        )])?;
+        .ok_or_else(|| {
+            vec![diagnostic(
+                "bytecode.entry_missing",
+                "$.function.entry_block",
+                "entry block is missing from the function",
+            )]
+        })?;
 
     let mut ordered_blocks = Vec::with_capacity(function.blocks.len());
     ordered_blocks.push(&function.blocks[entry_index]);
@@ -475,10 +537,7 @@ fn compile_function_with_cells(
                 arguments,
                 source,
             } => {
-                let edge = EdgeView {
-                    target,
-                    arguments,
-                };
+                let edge = EdgeView { target, arguments };
                 let target_id = materialize_edge(
                     function,
                     edge,
@@ -563,11 +622,9 @@ fn compile_function_with_cells(
             }
             Terminator::Return { value, source } => {
                 let register = match value {
-                    Some(value) => value_register(
-                        &value_registers,
-                        value,
-                        "$.function.terminator.return",
-                    )?,
+                    Some(value) => {
+                        value_register(&value_registers, value, "$.function.terminator.return")?
+                    }
                     None => {
                         let destination = allocator.allocate()?;
                         let constant = constants.insert(ConstantKind::Undefined, Value::Null)?;
@@ -578,13 +635,19 @@ fn compile_function_with_cells(
                                 kind: ConstantKind::Undefined,
                             }),
                             may_throw: false,
-                            source: generated_source(function, "materialize implicit undefined return", Vec::new()),
+                            source: generated_source(
+                                function,
+                                "materialize implicit undefined return",
+                                Vec::new(),
+                            ),
                         });
                         destination
                     }
                 };
                 instructions.push(PlannedInstruction {
-                    operation: PlannedOperation::Ready(RegisterOperation::Return { source: register }),
+                    operation: PlannedOperation::Ready(RegisterOperation::Return {
+                        source: register,
+                    }),
                     may_throw: false,
                     source: source.clone(),
                 });
@@ -637,11 +700,13 @@ fn compile_function_with_cells(
         for instruction in &block.instructions {
             code_cursor = code_cursor
                 .checked_add(instruction.encoded_len())
-                .ok_or_else(|| vec![diagnostic(
-                    "resource.code_size",
-                    "$.function.blocks",
-                    "function instruction layout overflowed",
-                )])?;
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "resource.code_size",
+                        "$.function.blocks",
+                        "function instruction layout overflowed",
+                    )]
+                })?;
         }
     }
 
@@ -661,7 +726,11 @@ fn compile_function_with_cells(
             };
             let length = encoded.encoded_len();
             offset = offset.checked_add(length as u32).ok_or_else(|| {
-                vec![diagnostic("resource.code_size", "$.code", "instruction offset overflowed")]
+                vec![diagnostic(
+                    "resource.code_size",
+                    "$.code",
+                    "instruction offset overflowed",
+                )]
             })?;
             encoded_instructions.push(encoded);
         }
@@ -685,11 +754,13 @@ fn compile_function_with_cells(
     }
 
     let max_register_index = maximum_used_register(&encoded_instructions, &entry_registers)
-        .ok_or_else(|| vec![diagnostic(
-            "register.frame_empty",
-            "$.instructions",
-            "encoded function does not reference a register",
-        )])?;
+        .ok_or_else(|| {
+            vec![diagnostic(
+                "register.frame_empty",
+                "$.instructions",
+                "encoded function does not reference a register",
+            )]
+        })?;
     let instruction_count = encoded_instructions.len() as u32;
     let exception_count = 0u32;
     let constant_count = constants.values.len() as u32;
@@ -713,22 +784,41 @@ fn compile_function_with_cells(
     let local_count = 0u32;
 
     let captures_json = serde_json::to_value(&function.captures).map_err(|error| {
-        vec![diagnostic("metadata.capture_serialize", "$.manifest.metadata.environment.captures", error.to_string())]
+        vec![diagnostic(
+            "metadata.capture_serialize",
+            "$.manifest.metadata.environment.captures",
+            error.to_string(),
+        )]
     })?;
     let bindings_json = serde_json::to_value(&function.environment.bindings).map_err(|error| {
-        vec![diagnostic("metadata.binding_serialize", "$.manifest.metadata.environment.bindings", error.to_string())]
+        vec![diagnostic(
+            "metadata.binding_serialize",
+            "$.manifest.metadata.environment.bindings",
+            error.to_string(),
+        )]
     })?;
-    let source_files_json = function.source_files.iter().map(|file| {
-        let mut value = serde_json::to_value(file).map_err(|error| {
-            vec![diagnostic("source_map.files_serialize", "$.source_map.files", error.to_string())]
-        })?;
-        if let Some(path) = value.get_mut("path").and_then(Value::as_str).map(str::to_owned)
-            && let Some(relative) = path.strip_prefix("memory:///")
-        {
-            value["path"] = Value::String(format!("memory/{relative}"));
-        }
-        Ok(value)
-    }).collect::<Result<Vec<_>, Vec<Diagnostic>>>()?;
+    let source_files_json = function
+        .source_files
+        .iter()
+        .map(|file| {
+            let mut value = serde_json::to_value(file).map_err(|error| {
+                vec![diagnostic(
+                    "source_map.files_serialize",
+                    "$.source_map.files",
+                    error.to_string(),
+                )]
+            })?;
+            if let Some(path) = value
+                .get_mut("path")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                && let Some(relative) = path.strip_prefix("memory:///")
+            {
+                value["path"] = Value::String(format!("memory/{relative}"));
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, Vec<Diagnostic>>>()?;
 
     let mut variable_locations = Vec::new();
     for binding in &function.environment.bindings {
@@ -876,14 +966,22 @@ impl ConstantPool {
             )]);
         }
         let canonical = serde_json::to_string(&value).map_err(|error| {
-            vec![diagnostic("constant_pool.serialize", "$.sections.constants", error.to_string())]
+            vec![diagnostic(
+                "constant_pool.serialize",
+                "$.sections.constants",
+                error.to_string(),
+            )]
         })?;
         let key = (kind as u8, canonical);
         if let Some(index) = self.indices.get(&key) {
             return Ok(*index);
         }
         let index = u32::try_from(self.values.len()).map_err(|_| {
-            vec![diagnostic("resource.constant_count", "$.sections.constants", "constant pool exceeds uint32 indexing")]
+            vec![diagnostic(
+                "resource.constant_count",
+                "$.sections.constants",
+                "constant pool exceeds uint32 indexing",
+            )]
         })?;
         self.values.push(value);
         self.indices.insert(key, index);
@@ -925,24 +1023,47 @@ impl PlannedInstruction {
         }
     }
 
-    fn resolve(&self, offsets: &BTreeMap<String, u32>) -> Result<RegisterOperation, Vec<Diagnostic>> {
+    fn resolve(
+        &self,
+        offsets: &BTreeMap<String, u32>,
+    ) -> Result<RegisterOperation, Vec<Diagnostic>> {
         match &self.operation {
             PlannedOperation::Ready(operation) => Ok(operation.clone()),
-            PlannedOperation::Jump(target) => offsets.get(target).copied().map(|target| {
-                RegisterOperation::Jump { target }
-            }).ok_or_else(|| vec![diagnostic(
-                "bytecode.target_missing",
-                "$.instructions",
-                format!("jump target block {target:?} is missing"),
-            )]),
-            PlannedOperation::Branch { condition, then_target, else_target } => {
+            PlannedOperation::Jump(target) => offsets
+                .get(target)
+                .copied()
+                .map(|target| RegisterOperation::Jump { target })
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.target_missing",
+                        "$.instructions",
+                        format!("jump target block {target:?} is missing"),
+                    )]
+                }),
+            PlannedOperation::Branch {
+                condition,
+                then_target,
+                else_target,
+            } => {
                 let then_target = offsets.get(then_target).copied().ok_or_else(|| {
-                    vec![diagnostic("bytecode.target_missing", "$.instructions", "branch true target is missing")]
+                    vec![diagnostic(
+                        "bytecode.target_missing",
+                        "$.instructions",
+                        "branch true target is missing",
+                    )]
                 })?;
                 let else_target = offsets.get(else_target).copied().ok_or_else(|| {
-                    vec![diagnostic("bytecode.target_missing", "$.instructions", "branch false target is missing")]
+                    vec![diagnostic(
+                        "bytecode.target_missing",
+                        "$.instructions",
+                        "branch false target is missing",
+                    )]
                 })?;
-                Ok(RegisterOperation::Branch { condition:*condition, then_target, else_target })
+                Ok(RegisterOperation::Branch {
+                    condition: *condition,
+                    then_target,
+                    else_target,
+                })
             }
         }
     }
@@ -962,17 +1083,38 @@ fn materialize_edge(
     plans: &mut Vec<PlannedBlock>,
     bridge_counter: &mut usize,
 ) -> Result<String, Vec<Diagnostic>> {
-    let target = function.blocks.iter().find(|block| block.id == edge.target).ok_or_else(|| {
-        vec![diagnostic("bytecode.target_missing", "$.function.blocks", format!("edge target {:?} does not exist", edge.target))]
-    })?;
-    let value_parameters: Vec<_> = target.parameters.iter().filter_map(|parameter| {
-        if let BlockParameter::Value(value) = parameter { Some(value) } else { None }
-    }).collect();
+    let target = function
+        .blocks
+        .iter()
+        .find(|block| block.id == edge.target)
+        .ok_or_else(|| {
+            vec![diagnostic(
+                "bytecode.target_missing",
+                "$.function.blocks",
+                format!("edge target {:?} does not exist", edge.target),
+            )]
+        })?;
+    let value_parameters: Vec<_> = target
+        .parameters
+        .iter()
+        .filter_map(|parameter| {
+            if let BlockParameter::Value(value) = parameter {
+                Some(value)
+            } else {
+                None
+            }
+        })
+        .collect();
     if edge.arguments.len() != target.parameters.len() {
         return Err(vec![diagnostic(
             "bytecode.edge_arity",
             "$.function.blocks",
-            format!("edge to {:?} supplies {} arguments for {} block parameters", edge.target, edge.arguments.len(), target.parameters.len()),
+            format!(
+                "edge to {:?} supplies {} arguments for {} block parameters",
+                edge.target,
+                edge.arguments.len(),
+                target.parameters.len()
+            ),
         )]);
     }
     if value_parameters.is_empty() {
@@ -983,9 +1125,17 @@ fn materialize_edge(
     let mut target_registers = Vec::with_capacity(value_parameters.len());
     for (parameter, argument) in target.parameters.iter().zip(edge.arguments) {
         if let BlockParameter::Value(value) = parameter {
-            source_registers.push(value_register(values, argument, "$.function.edge.arguments")?);
+            source_registers.push(value_register(
+                values,
+                argument,
+                "$.function.edge.arguments",
+            )?);
             let destination = values.get(&value.id).copied().ok_or_else(|| {
-                vec![diagnostic("bytecode.block_parameter", "$.function.blocks", "target block parameter has no register")]
+                vec![diagnostic(
+                    "bytecode.block_parameter",
+                    "$.function.blocks",
+                    "target block parameter has no register",
+                )]
             })?;
             target_registers.push(destination);
         }
@@ -998,7 +1148,11 @@ fn materialize_edge(
             break candidate;
         }
     };
-    let generated = generated_source(function, "forward SSA block arguments through a parallel-copy bridge", Vec::new());
+    let generated = generated_source(
+        function,
+        "forward SSA block arguments through a parallel-copy bridge",
+        Vec::new(),
+    );
     let mut bridge = Vec::new();
     let mut temporaries = Vec::with_capacity(source_registers.len());
     for source_register in source_registers {
@@ -1006,31 +1160,34 @@ fn materialize_edge(
         temporaries.push(temporary);
         bridge.push(PlannedInstruction {
             operation: PlannedOperation::Ready(RegisterOperation::Unary {
-                destination:temporary,
-                source:source_register,
-                operation:UnaryOperation::Copy,
+                destination: temporary,
+                source: source_register,
+                operation: UnaryOperation::Copy,
             }),
-            may_throw:false,
-            source:generated.clone(),
+            may_throw: false,
+            source: generated.clone(),
         });
     }
     for (temporary, destination) in temporaries.into_iter().zip(target_registers) {
         bridge.push(PlannedInstruction {
-            operation:PlannedOperation::Ready(RegisterOperation::Unary {
+            operation: PlannedOperation::Ready(RegisterOperation::Unary {
                 destination,
-                source:temporary,
-                operation:UnaryOperation::Copy,
+                source: temporary,
+                operation: UnaryOperation::Copy,
             }),
-            may_throw:false,
-            source:generated.clone(),
+            may_throw: false,
+            source: generated.clone(),
         });
     }
     bridge.push(PlannedInstruction {
-        operation:PlannedOperation::Jump(edge.target.to_owned()),
-        may_throw:false,
-        source:source.clone(),
+        operation: PlannedOperation::Jump(edge.target.to_owned()),
+        may_throw: false,
+        source: source.clone(),
     });
-    plans.push(PlannedBlock { id:bridge_id.clone(), instructions:bridge });
+    plans.push(PlannedBlock {
+        id: bridge_id.clone(),
+        instructions: bridge,
+    });
     Ok(bridge_id)
 }
 
@@ -1079,31 +1236,31 @@ fn emit_binding_initializers(
         if is_cell {
             let initial_value = allocator.allocate()?;
             output.push(PlannedInstruction {
-                operation:PlannedOperation::Ready(RegisterOperation::Constant {
-                    destination:initial_value,
+                operation: PlannedOperation::Ready(RegisterOperation::Constant {
+                    destination: initial_value,
                     constant,
                     kind,
                 }),
-                may_throw:false,
-                source:source.clone(),
+                may_throw: false,
+                source: source.clone(),
             });
             output.push(PlannedInstruction {
-                operation:PlannedOperation::Ready(RegisterOperation::Call {
+                operation: PlannedOperation::Ready(RegisterOperation::Call {
                     destination,
-                    kind:CallKind::MakeCell,
-                    sources:vec![initial_value],
+                    kind: CallKind::MakeCell,
+                    sources: vec![initial_value],
                 }),
-                may_throw:true,
+                may_throw: true,
                 source,
             });
         } else {
             output.push(PlannedInstruction {
-                operation:PlannedOperation::Ready(RegisterOperation::Constant {
+                operation: PlannedOperation::Ready(RegisterOperation::Constant {
                     destination,
                     constant,
                     kind,
                 }),
-                may_throw:false,
+                may_throw: false,
                 source,
             });
         }
@@ -1123,22 +1280,36 @@ fn lower_instruction(
     allocator: &mut RegisterAllocator,
     constants: &mut ConstantPool,
 ) -> Result<Vec<PlannedInstruction>, Vec<Diagnostic>> {
-    let destination = instruction.result.as_ref().map(|result| {
-        values.get(&result.id).copied().ok_or_else(|| {
-            vec![diagnostic("bytecode.result_register", format!("$.instructions.{}.result", instruction.id), "result value has no allocated register")]
+    let destination = instruction
+        .result
+        .as_ref()
+        .map(|result| {
+            values.get(&result.id).copied().ok_or_else(|| {
+                vec![diagnostic(
+                    "bytecode.result_register",
+                    format!("$.instructions.{}.result", instruction.id),
+                    "result value has no allocated register",
+                )]
+            })
         })
-    }).transpose()?;
+        .transpose()?;
     let source = instruction.source.clone();
     let may_throw = instruction.effects.may_throw;
     let mut output = Vec::new();
 
-    let reg = |id: &str| value_register(values, id, &format!("$.function.instructions.{}.operands", instruction.id));
+    let reg = |id: &str| {
+        value_register(
+            values,
+            id,
+            &format!("$.function.instructions.{}.operands", instruction.id),
+        )
+    };
     macro_rules! emit {
         ($operation:expr, $may_throw:expr, $source:expr) => {
             output.push(PlannedInstruction {
-                operation:PlannedOperation::Ready($operation),
-                may_throw:$may_throw,
-                source:$source,
+                operation: PlannedOperation::Ready($operation),
+                may_throw: $may_throw,
+                source: $source,
             });
         };
     }
@@ -1146,12 +1317,28 @@ fn lower_instruction(
     match instruction.op.as_str() {
         "js.constant" => {
             let destination = required_destination(destination, &instruction.id)?;
-            let literal = instruction.attributes.get("literal").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.constant_literal", "$.function.instructions", "constant literal tag is missing")]
-            })?;
-            let value = instruction.attributes.get("value").cloned().ok_or_else(|| {
-                vec![diagnostic("bytecode.constant_value", "$.function.instructions", "constant value is missing")]
-            })?;
+            let literal = instruction
+                .attributes
+                .get("literal")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.constant_literal",
+                        "$.function.instructions",
+                        "constant literal tag is missing",
+                    )]
+                })?;
+            let value = instruction
+                .attributes
+                .get("value")
+                .cloned()
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.constant_value",
+                        "$.function.instructions",
+                        "constant value is missing",
+                    )]
+                })?;
             let kind = match literal {
                 "undefined" => ConstantKind::Undefined,
                 "null" => ConstantKind::Null,
@@ -1159,10 +1346,24 @@ fn lower_instruction(
                 "number" => ConstantKind::Number,
                 "bigint" => ConstantKind::BigInt,
                 "string" => ConstantKind::String,
-                _ => return Err(vec![diagnostic("bytecode.constant_literal", "$.function.instructions", format!("unsupported JavaScript literal {literal:?}"))]),
+                _ => {
+                    return Err(vec![diagnostic(
+                        "bytecode.constant_literal",
+                        "$.function.instructions",
+                        format!("unsupported JavaScript literal {literal:?}"),
+                    )]);
+                }
             };
             let constant = constants.insert(kind, value)?;
-            emit!(RegisterOperation::Constant { destination, constant, kind }, false, source.clone());
+            emit!(
+                RegisterOperation::Constant {
+                    destination,
+                    constant,
+                    kind
+                },
+                false,
+                source.clone()
+            );
         }
         "js.to_boolean" | "js.to_number" | "js.to_string" | "js.typeof" => {
             let destination = required_destination(destination, &instruction.id)?;
@@ -1173,18 +1374,34 @@ fn lower_instruction(
                 "js.to_string" => UnaryOperation::ToString,
                 _ => UnaryOperation::TypeOf,
             };
-            emit!(RegisterOperation::Unary { destination, source:operand, operation }, may_throw, source);
+            emit!(
+                RegisterOperation::Unary {
+                    destination,
+                    source: operand,
+                    operation
+                },
+                may_throw,
+                source
+            );
         }
         "js.add" | "js.strict_equal" | "js.less_than" | "js.greater_than" => {
             let destination = required_destination(destination, &instruction.id)?;
             let mut operands = unique_registers(
-                instruction.operands.iter().map(|operand| reg(operand)).collect::<Result<Vec<_>,_>>()?,
+                instruction
+                    .operands
+                    .iter()
+                    .map(|operand| reg(operand))
+                    .collect::<Result<Vec<_>, _>>()?,
                 allocator,
                 &source,
                 &mut output,
             )?;
             if operands.len() != 2 {
-                return Err(vec![diagnostic("bytecode.operation_arity", "$.function.instructions", "binary operation requires exactly two operands")]);
+                return Err(vec![diagnostic(
+                    "bytecode.operation_arity",
+                    "$.function.instructions",
+                    "binary operation requires exactly two operands",
+                )]);
             }
             let operation = match instruction.op.as_str() {
                 "js.add" => BinaryOperation::Add,
@@ -1192,17 +1409,29 @@ fn lower_instruction(
                 "js.less_than" => BinaryOperation::LessThan,
                 _ => BinaryOperation::GreaterThan,
             };
-            emit!(RegisterOperation::Binary {
-                destination,
-                left:operands.remove(0),
-                right:operands.remove(0),
-                operation,
-            }, may_throw, source);
+            emit!(
+                RegisterOperation::Binary {
+                    destination,
+                    left: operands.remove(0),
+                    right: operands.remove(0),
+                    operation,
+                },
+                may_throw,
+                source
+            );
         }
         "js.get_property" | "js.set_property" => {
-            let key = instruction.attributes.get("key").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.property_key", "$.function.instructions", "named property operation requires a string key")]
-            })?;
+            let key = instruction
+                .attributes
+                .get("key")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.property_key",
+                        "$.function.instructions",
+                        "named property operation requires a string key",
+                    )]
+                })?;
             let key_register = constant_register(
                 key,
                 ConstantKind::String,
@@ -1211,39 +1440,95 @@ fn lower_instruction(
                 &source,
                 &mut output,
             )?;
-            let mut sources = instruction.operands.iter().map(|operand| reg(operand)).collect::<Result<Vec<_>,_>>()?;
+            let mut sources = instruction
+                .operands
+                .iter()
+                .map(|operand| reg(operand))
+                .collect::<Result<Vec<_>, _>>()?;
             sources.insert(1, key_register);
             sources = unique_registers(sources, allocator, &source, &mut output)?;
             let destination = required_destination(destination, &instruction.id)?;
-            let kind = if instruction.op == "js.get_property" { CallKind::GetProperty } else { CallKind::SetProperty };
-            emit!(RegisterOperation::Call { destination, kind, sources }, may_throw, source);
+            let kind = if instruction.op == "js.get_property" {
+                CallKind::GetProperty
+            } else {
+                CallKind::SetProperty
+            };
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources
+                },
+                may_throw,
+                source
+            );
         }
         "js.get_element" | "js.set_element" => {
             let sources = unique_registers(
-                instruction.operands.iter().map(|operand| reg(operand)).collect::<Result<Vec<_>,_>>()?,
+                instruction
+                    .operands
+                    .iter()
+                    .map(|operand| reg(operand))
+                    .collect::<Result<Vec<_>, _>>()?,
                 allocator,
                 &source,
                 &mut output,
             )?;
             let destination = required_destination(destination, &instruction.id)?;
-            let kind = if instruction.op == "js.get_element" { CallKind::GetElement } else { CallKind::SetElement };
-            emit!(RegisterOperation::Call { destination, kind, sources }, may_throw, source);
+            let kind = if instruction.op == "js.get_element" {
+                CallKind::GetElement
+            } else {
+                CallKind::SetElement
+            };
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources
+                },
+                may_throw,
+                source
+            );
         }
         "js.call" | "js.construct" => {
             let sources = unique_registers(
-                instruction.operands.iter().map(|operand| reg(operand)).collect::<Result<Vec<_>,_>>()?,
+                instruction
+                    .operands
+                    .iter()
+                    .map(|operand| reg(operand))
+                    .collect::<Result<Vec<_>, _>>()?,
                 allocator,
                 &source,
                 &mut output,
             )?;
             let destination = required_destination(destination, &instruction.id)?;
-            let kind = if instruction.op == "js.call" { CallKind::JavaScript } else { CallKind::Construct };
-            emit!(RegisterOperation::Call { destination, kind, sources }, may_throw, source);
+            let kind = if instruction.op == "js.call" {
+                CallKind::JavaScript
+            } else {
+                CallKind::Construct
+            };
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources
+                },
+                may_throw,
+                source
+            );
         }
         "host.call" => {
-            let symbol = instruction.attributes.get("symbol").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.host_symbol", "$.function.instructions", "host.call requires a capability symbol")]
-            })?;
+            let symbol = instruction
+                .attributes
+                .get("symbol")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.host_symbol",
+                        "$.function.instructions",
+                        "host.call requires a capability symbol",
+                    )]
+                })?;
             let token = constant_register(
                 symbol,
                 ConstantKind::HostCapability,
@@ -1253,15 +1538,37 @@ fn lower_instruction(
                 &mut output,
             )?;
             let mut sources = vec![token];
-            sources.extend(instruction.operands.iter().map(|operand| reg(operand)).collect::<Result<Vec<_>,_>>()?);
+            sources.extend(
+                instruction
+                    .operands
+                    .iter()
+                    .map(|operand| reg(operand))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
             sources = unique_registers(sources, allocator, &source, &mut output)?;
             let destination = required_destination(destination, &instruction.id)?;
-            emit!(RegisterOperation::Call { destination, kind:CallKind::Host, sources }, may_throw, source);
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind: CallKind::Host,
+                    sources
+                },
+                may_throw,
+                source
+            );
         }
         "closure.create" => {
-            let function_id = instruction.attributes.get("function").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.closure_function", "$.function.instructions", "closure.create requires a target function identity")]
-            })?;
+            let function_id = instruction
+                .attributes
+                .get("function")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.closure_function",
+                        "$.function.instructions",
+                        "closure.create requires a target function identity",
+                    )]
+                })?;
             let function_register = constant_register(
                 function_id,
                 ConstantKind::FunctionId,
@@ -1270,91 +1577,181 @@ fn lower_instruction(
                 &source,
                 &mut output,
             )?;
-            let descriptors = instruction.attributes.get("captures").and_then(Value::as_array).ok_or_else(|| {
-                vec![diagnostic("bytecode.closure_captures", "$.function.instructions", "closure captures must be an array")]
-            })?;
+            let descriptors = instruction
+                .attributes
+                .get("captures")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.closure_captures",
+                        "$.function.instructions",
+                        "closure captures must be an array",
+                    )]
+                })?;
             let mut sources = vec![function_register];
             for descriptor in descriptors {
-                let binding = descriptor.get("binding").and_then(Value::as_str).ok_or_else(|| {
-                    vec![diagnostic("bytecode.closure_capture_binding", "$.function.instructions", "capture descriptor has no binding identity")]
-                })?;
-                let register = bindings.get(binding).or_else(|| captures.get(binding)).copied().ok_or_else(|| {
-                    vec![diagnostic("bytecode.closure_capture_register", "$.function.instructions", format!("capture source {binding:?} has no frame register"))]
-                })?;
-                let mode = descriptor.get("mode").and_then(Value::as_str).ok_or_else(|| {
-                    vec![diagnostic("bytecode.closure_capture_mode", "$.function.instructions", "capture descriptor requires a cell/value mode")]
-                })?;
+                let binding = descriptor
+                    .get("binding")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        vec![diagnostic(
+                            "bytecode.closure_capture_binding",
+                            "$.function.instructions",
+                            "capture descriptor has no binding identity",
+                        )]
+                    })?;
+                let register = bindings
+                    .get(binding)
+                    .or_else(|| captures.get(binding))
+                    .copied()
+                    .ok_or_else(|| {
+                        vec![diagnostic(
+                            "bytecode.closure_capture_register",
+                            "$.function.instructions",
+                            format!("capture source {binding:?} has no frame register"),
+                        )]
+                    })?;
+                let mode = descriptor
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        vec![diagnostic(
+                            "bytecode.closure_capture_mode",
+                            "$.function.instructions",
+                            "capture descriptor requires a cell/value mode",
+                        )]
+                    })?;
                 let source_is_cell = captured_cells.contains(binding)
-                    || function.captures.iter().any(|capture| {
-                        capture.id == binding && capture.mode == CaptureMode::Cell
-                    });
+                    || function
+                        .captures
+                        .iter()
+                        .any(|capture| capture.id == binding && capture.mode == CaptureMode::Cell);
                 if (mode == "cell") != source_is_cell {
                     return Err(vec![diagnostic(
                         "bytecode.closure_capture_mode",
                         "$.function.instructions",
-                        format!("capture {binding:?} expects mode {mode:?}, but its source register has a different storage mode"),
+                        format!(
+                            "capture {binding:?} expects mode {mode:?}, but its source register has a different storage mode"
+                        ),
                     )]);
                 }
                 sources.push(register);
             }
             sources = unique_registers(sources, allocator, &source, &mut output)?;
             let destination = required_destination(destination, &instruction.id)?;
-            emit!(RegisterOperation::Call { destination, kind:CallKind::MakeClosure, sources }, may_throw, source);
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind: CallKind::MakeClosure,
+                    sources
+                },
+                may_throw,
+                source
+            );
         }
         "env.load" => {
-            let alias = instruction.attributes.get("binding").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.binding_id", "$.function.instructions", "env.load requires a binding identity")]
-            })?;
+            let alias = instruction
+                .attributes
+                .get("binding")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.binding_id",
+                        "$.function.instructions",
+                        "env.load requires a binding identity",
+                    )]
+                })?;
             let destination = required_destination(destination, &instruction.id)?;
             if let Some(register) = bindings.get(alias).copied() {
                 if captured_cells.contains(alias) {
-                    emit!(RegisterOperation::Call {
-                        destination,
-                        kind:CallKind::LoadCapture,
-                        sources:vec![register],
-                    }, may_throw, source);
+                    emit!(
+                        RegisterOperation::Call {
+                            destination,
+                            kind: CallKind::LoadCapture,
+                            sources: vec![register],
+                        },
+                        may_throw,
+                        source
+                    );
                 } else {
-                    emit!(RegisterOperation::Unary {
-                        destination,
-                        source:register,
-                        operation:UnaryOperation::LoadBinding,
-                    }, may_throw, source);
+                    emit!(
+                        RegisterOperation::Unary {
+                            destination,
+                            source: register,
+                            operation: UnaryOperation::LoadBinding,
+                        },
+                        may_throw,
+                        source
+                    );
                 }
             } else if let Some(register) = captures.get(alias).copied() {
-                let capture = function.captures.iter().find(|capture| capture.id == alias || capture.binding == alias).ok_or_else(|| {
-                    vec![diagnostic("bytecode.capture_metadata", "$.function.captures", "capture register has no matching descriptor")]
-                })?;
+                let capture = function
+                    .captures
+                    .iter()
+                    .find(|capture| capture.id == alias || capture.binding == alias)
+                    .ok_or_else(|| {
+                        vec![diagnostic(
+                            "bytecode.capture_metadata",
+                            "$.function.captures",
+                            "capture register has no matching descriptor",
+                        )]
+                    })?;
                 if capture.mode == CaptureMode::Cell {
-                    emit!(RegisterOperation::Call {
-                        destination,
-                        kind:CallKind::LoadCapture,
-                        sources:vec![register],
-                    }, may_throw, source);
+                    emit!(
+                        RegisterOperation::Call {
+                            destination,
+                            kind: CallKind::LoadCapture,
+                            sources: vec![register],
+                        },
+                        may_throw,
+                        source
+                    );
                 } else {
-                    emit!(RegisterOperation::Unary {
-                        destination,
-                        source:register,
-                        operation:UnaryOperation::Copy,
-                    }, may_throw, source);
+                    emit!(
+                        RegisterOperation::Unary {
+                            destination,
+                            source: register,
+                            operation: UnaryOperation::Copy,
+                        },
+                        may_throw,
+                        source
+                    );
                 }
             } else {
-                return Err(vec![diagnostic("bytecode.binding_id", "$.function.instructions", format!("unknown binding {alias:?}"))]);
+                return Err(vec![diagnostic(
+                    "bytecode.binding_id",
+                    "$.function.instructions",
+                    format!("unknown binding {alias:?}"),
+                )]);
             }
         }
         "env.store" => {
-            let alias = instruction.attributes.get("binding").and_then(Value::as_str).ok_or_else(|| {
-                vec![diagnostic("bytecode.binding_id", "$.function.instructions", "env.store requires a binding identity")]
-            })?;
+            let alias = instruction
+                .attributes
+                .get("binding")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    vec![diagnostic(
+                        "bytecode.binding_id",
+                        "$.function.instructions",
+                        "env.store requires a binding identity",
+                    )]
+                })?;
             let value = one_operand(instruction, &reg)?;
             let destination = required_destination(destination, &instruction.id)?;
             if let Some(register) = bindings.get(alias).copied() {
                 if captured_cells.contains(alias) {
-                    let sources = unique_registers(vec![register, value], allocator, &source, &mut output)?;
-                    emit!(RegisterOperation::Call {
-                        destination,
-                        kind:CallKind::StoreCapture,
-                        sources,
-                    }, may_throw, source);
+                    let sources =
+                        unique_registers(vec![register, value], allocator, &source, &mut output)?;
+                    emit!(
+                        RegisterOperation::Call {
+                            destination,
+                            kind: CallKind::StoreCapture,
+                            sources,
+                        },
+                        may_throw,
+                        source
+                    );
                 } else {
                     let binding_token = constant_register(
                         alias,
@@ -1370,32 +1767,57 @@ fn lower_instruction(
                         &source,
                         &mut output,
                     )?;
-                    emit!(RegisterOperation::Call {
-                        destination,
-                        kind:CallKind::StoreBinding,
-                        sources,
-                    }, may_throw, source);
+                    emit!(
+                        RegisterOperation::Call {
+                            destination,
+                            kind: CallKind::StoreBinding,
+                            sources,
+                        },
+                        may_throw,
+                        source
+                    );
                 }
             } else if let Some(register) = captures.get(alias).copied() {
-                let capture = function.captures.iter().find(|capture| capture.id == alias || capture.binding == alias).ok_or_else(|| {
-                    vec![diagnostic("bytecode.capture_metadata", "$.function.captures", "capture register has no matching descriptor")]
-                })?;
+                let capture = function
+                    .captures
+                    .iter()
+                    .find(|capture| capture.id == alias || capture.binding == alias)
+                    .ok_or_else(|| {
+                        vec![diagnostic(
+                            "bytecode.capture_metadata",
+                            "$.function.captures",
+                            "capture register has no matching descriptor",
+                        )]
+                    })?;
                 if capture.mode != CaptureMode::Cell {
-                    return Err(vec![diagnostic("bytecode.capture_immutable", "$.function.instructions", "cannot store through a by-value capture")]);
+                    return Err(vec![diagnostic(
+                        "bytecode.capture_immutable",
+                        "$.function.instructions",
+                        "cannot store through a by-value capture",
+                    )]);
                 }
-                let sources = unique_registers(vec![register, value], allocator, &source, &mut output)?;
-                emit!(RegisterOperation::Call {
-                    destination,
-                    kind:CallKind::StoreCapture,
-                    sources,
-                }, may_throw, source);
+                let sources =
+                    unique_registers(vec![register, value], allocator, &source, &mut output)?;
+                emit!(
+                    RegisterOperation::Call {
+                        destination,
+                        kind: CallKind::StoreCapture,
+                        sources,
+                    },
+                    may_throw,
+                    source
+                );
             } else {
-                return Err(vec![diagnostic("bytecode.binding_id", "$.function.instructions", format!("unknown binding {alias:?}"))]);
+                return Err(vec![diagnostic(
+                    "bytecode.binding_id",
+                    "$.function.instructions",
+                    format!("unknown binding {alias:?}"),
+                )]);
             }
         }
         "js.throw" => {
             let value = one_operand(instruction, &reg)?;
-            emit!(RegisterOperation::Throw { source:value }, true, source);
+            emit!(RegisterOperation::Throw { source: value }, true, source);
         }
         "async.await" => {
             return Err(vec![diagnostic(
@@ -1420,13 +1842,13 @@ fn lower_instruction(
                 if let Some(binding_register) = bindings.get(&binding).copied() {
                     if binding_register != result_register {
                         output.push(PlannedInstruction {
-                            operation:PlannedOperation::Ready(RegisterOperation::Unary {
-                                destination:binding_register,
-                                source:result_register,
-                                operation:UnaryOperation::Copy,
+                            operation: PlannedOperation::Ready(RegisterOperation::Unary {
+                                destination: binding_register,
+                                source: result_register,
+                                operation: UnaryOperation::Copy,
                             }),
-                            may_throw:false,
-                            source:source.clone(),
+                            may_throw: false,
+                            source: source.clone(),
                         });
                     }
                 }
@@ -1447,9 +1869,13 @@ fn constant_register(
     let destination = allocator.allocate()?;
     let constant = constants.insert(kind, Value::String(value.to_owned()))?;
     output.push(PlannedInstruction {
-        operation:PlannedOperation::Ready(RegisterOperation::Constant { destination, constant, kind }),
-        may_throw:false,
-        source:source.clone(),
+        operation: PlannedOperation::Ready(RegisterOperation::Constant {
+            destination,
+            constant,
+            kind,
+        }),
+        may_throw: false,
+        source: source.clone(),
     });
     Ok(destination)
 }
@@ -1468,13 +1894,13 @@ fn unique_registers(
         } else {
             let temporary = allocator.allocate()?;
             output.push(PlannedInstruction {
-                operation:PlannedOperation::Ready(RegisterOperation::Unary {
-                    destination:temporary,
-                    source:register,
-                    operation:UnaryOperation::Copy,
+                operation: PlannedOperation::Ready(RegisterOperation::Unary {
+                    destination: temporary,
+                    source: register,
+                    operation: UnaryOperation::Copy,
                 }),
-                may_throw:false,
-                source:source.clone(),
+                may_throw: false,
+                source: source.clone(),
             });
             seen.insert(temporary);
             unique.push(temporary);
@@ -1500,12 +1926,17 @@ where
     register(&instruction.operands[0])
 }
 
-fn required_destination(destination: Option<u16>, instruction_id: &str) -> Result<u16, Vec<Diagnostic>> {
-    destination.ok_or_else(|| vec![diagnostic(
-        "bytecode.result_missing",
-        format!("$.function.instructions.{instruction_id}.result"),
-        "operation requires a destination register",
-    )])
+fn required_destination(
+    destination: Option<u16>,
+    instruction_id: &str,
+) -> Result<u16, Vec<Diagnostic>> {
+    destination.ok_or_else(|| {
+        vec![diagnostic(
+            "bytecode.result_missing",
+            format!("$.function.instructions.{instruction_id}.result"),
+            "operation requires a destination register",
+        )]
+    })
 }
 
 fn value_register(
@@ -1513,11 +1944,13 @@ fn value_register(
     id: &str,
     path: &str,
 ) -> Result<u16, Vec<Diagnostic>> {
-    values.get(id).copied().ok_or_else(|| vec![diagnostic(
-        "bytecode.value_register",
-        path,
-        format!("SSA value {id:?} has no allocated register"),
-    )])
+    values.get(id).copied().ok_or_else(|| {
+        vec![diagnostic(
+            "bytecode.value_register",
+            path,
+            format!("SSA value {id:?} has no allocated register"),
+        )]
+    })
 }
 
 fn source_bindings(source: &Source) -> Vec<String> {
@@ -1527,26 +1960,34 @@ fn source_bindings(source: &Source) -> Vec<String> {
 }
 
 fn const_binding_is_local(function: &Function, id: &str) -> bool {
-    function.environment.bindings.iter().any(|binding| {
-        binding.id == id && binding.kind == BindingKind::Const
-    })
+    function
+        .environment
+        .bindings
+        .iter()
+        .any(|binding| binding.id == id && binding.kind == BindingKind::Const)
 }
 
 fn generated_source(function: &Function, reason: &str, bindings: Vec<String>) -> Source {
     Source::Generated {
-        reason:reason.to_owned(),
-        scope:Some(function.environment.id.clone()),
+        reason: reason.to_owned(),
+        scope: Some(function.environment.id.clone()),
         bindings,
-        suspension:None,
-        inline_chain:Vec::new(),
+        suspension: None,
+        inline_chain: Vec::new(),
     }
 }
 
 fn normalized_source(source: &Source, function: &Function) -> Result<Value, Vec<Diagnostic>> {
     let mut value = serde_json::to_value(source).map_err(|error| {
-        vec![diagnostic("source_map.serialize", "$.source_map.locations", error.to_string())]
+        vec![diagnostic(
+            "source_map.serialize",
+            "$.source_map.locations",
+            error.to_string(),
+        )]
     })?;
-    let aliases: HashMap<&str, &str> = function.captures.iter()
+    let aliases: HashMap<&str, &str> = function
+        .captures
+        .iter()
         .map(|capture| (capture.binding.as_str(), capture.id.as_str()))
         .collect();
     if let Some(bindings) = value.get_mut("bindings").and_then(Value::as_array_mut) {
@@ -1569,16 +2010,31 @@ fn maximum_used_register(
     for instruction in instructions {
         let registers: Vec<u16> = match &instruction.operation {
             RegisterOperation::Constant { destination, .. } => vec![*destination],
-            RegisterOperation::Unary { destination, source, .. } => vec![*destination, *source],
-            RegisterOperation::Binary { destination, left, right, .. } => vec![*destination, *left, *right],
-            RegisterOperation::Call { destination, sources, .. } => {
+            RegisterOperation::Unary {
+                destination,
+                source,
+                ..
+            } => vec![*destination, *source],
+            RegisterOperation::Binary {
+                destination,
+                left,
+                right,
+                ..
+            } => vec![*destination, *left, *right],
+            RegisterOperation::Call {
+                destination,
+                sources,
+                ..
+            } => {
                 let mut result = vec![*destination];
                 result.extend(sources.iter().copied());
                 result
             }
             RegisterOperation::Jump { .. } => Vec::new(),
             RegisterOperation::Branch { condition, .. } => vec![*condition],
-            RegisterOperation::Return { source } | RegisterOperation::Throw { source } => vec![*source],
+            RegisterOperation::Return { source } | RegisterOperation::Throw { source } => {
+                vec![*source]
+            }
         };
         if let Some(register) = registers.into_iter().max() {
             maximum = Some(maximum.map_or(register, |existing| existing.max(register)));
@@ -1589,9 +2045,9 @@ fn maximum_used_register(
 
 fn diagnostic(code: &str, path: impl Into<String>, message: impl Into<String>) -> Diagnostic {
     Diagnostic {
-        code:code.to_owned(),
-        path:path.into(),
-        message:message.into(),
+        code: code.to_owned(),
+        path: path.into(),
+        message: message.into(),
     }
 }
 
@@ -1599,78 +2055,84 @@ fn diagnostic(code: &str, path: impl Into<String>, message: impl Into<String>) -
 mod tests {
     use super::*;
     use ogma_core_ir::{
-        BasicBlock, Function, FunctionDocument, SourceFile, SourceLanguage, Terminator,
-        SemanticType, Representation, ReturnSignature,
+        BasicBlock, Function, FunctionDocument, Representation, ReturnSignature, SemanticType,
+        SourceFile, SourceLanguage, Terminator,
     };
 
     fn function_document() -> FunctionDocument {
         FunctionDocument {
-            contract:"ogma.core-ir".to_owned(),
-            version:"1.0.0".to_owned(),
-            function:Function {
-                id:"ir_test".to_owned(),
-                name:"constant_return".to_owned(),
-                parameters:Vec::new(),
-                return_signature:Some(ReturnSignature {
-                    semantic_type:SemanticType::Number,
-                    representation:Representation::Boxed,
+            contract: "ogma.core-ir".to_owned(),
+            version: "1.0.0".to_owned(),
+            function: Function {
+                id: "ir_test".to_owned(),
+                name: "constant_return".to_owned(),
+                parameters: Vec::new(),
+                return_signature: Some(ReturnSignature {
+                    semantic_type: SemanticType::Number,
+                    representation: Representation::Boxed,
                 }),
-                source_files:vec![SourceFile {
-                    id:"source_test".to_owned(),
-                    path:"fixtures/constant.js".to_owned(),
-                    language:SourceLanguage::Javascript,
-                    sha256:None,
+                source_files: vec![SourceFile {
+                    id: "source_test".to_owned(),
+                    path: "fixtures/constant.js".to_owned(),
+                    language: SourceLanguage::Javascript,
+                    sha256: None,
                 }],
-                environment:ogma_core_ir::Environment {
-                    id:"env_test".to_owned(),
-                    parent:None,
-                    bindings:Vec::new(),
+                environment: ogma_core_ir::Environment {
+                    id: "env_test".to_owned(),
+                    parent: None,
+                    bindings: Vec::new(),
                 },
-                captures:Vec::new(),
-                entry_block:"entry".to_owned(),
-                effect_entry:None,
-                blocks:vec![BasicBlock {
-                    id:"entry".to_owned(),
-                    parameters:Vec::new(),
-                    exception_parameter:None,
-                    instructions:vec![ogma_core_ir::Instruction {
-                        id:"i0".to_owned(),
-                        op:"js.constant".to_owned(),
-                        operands:Vec::new(),
-                        result:Some(ogma_core_ir::ValueDefinition {
-                            id:"v0".to_owned(),
-                            kind:"value".to_owned(),
-                            semantic_type:SemanticType::Number,
-                            representation:Representation::Boxed,
+                captures: Vec::new(),
+                entry_block: "entry".to_owned(),
+                effect_entry: None,
+                blocks: vec![BasicBlock {
+                    id: "entry".to_owned(),
+                    parameters: Vec::new(),
+                    exception_parameter: None,
+                    instructions: vec![ogma_core_ir::Instruction {
+                        id: "i0".to_owned(),
+                        op: "js.constant".to_owned(),
+                        operands: Vec::new(),
+                        result: Some(ogma_core_ir::ValueDefinition {
+                            id: "v0".to_owned(),
+                            kind: "value".to_owned(),
+                            semantic_type: SemanticType::Number,
+                            representation: Representation::Boxed,
                         }),
-                        attributes:BTreeMap::from([
-                            ("literal".to_owned(),json!("number")),
-                            ("value".to_owned(),json!(42)),
+                        attributes: BTreeMap::from([
+                            ("literal".to_owned(), json!("number")),
+                            ("value".to_owned(), json!(42)),
                         ]),
-                        effects:Default::default(),
-                        source:Source::User {
-                            file:"source_test".to_owned(),
-                            start:ogma_core_ir::SourcePosition { line:1,column:0 },
-                            end:ogma_core_ir::SourcePosition { line:1,column:10 },
-                            scope:Some("env_test".to_owned()),
-                            bindings:Vec::new(),
-                            suspension:None,
-                            inline_chain:Vec::new(),
+                        effects: Default::default(),
+                        source: Source::User {
+                            file: "source_test".to_owned(),
+                            start: ogma_core_ir::SourcePosition { line: 1, column: 0 },
+                            end: ogma_core_ir::SourcePosition {
+                                line: 1,
+                                column: 10,
+                            },
+                            scope: Some("env_test".to_owned()),
+                            bindings: Vec::new(),
+                            suspension: None,
+                            inline_chain: Vec::new(),
                         },
-                        effect_in:None,
-                        effect_out:None,
-                        exception:None,
+                        effect_in: None,
+                        effect_out: None,
+                        exception: None,
                     }],
-                    terminator:Terminator::Return {
-                        value:Some("v0".to_owned()),
-                        source:Source::User {
-                            file:"source_test".to_owned(),
-                            start:ogma_core_ir::SourcePosition { line:1,column:0 },
-                            end:ogma_core_ir::SourcePosition { line:1,column:10 },
-                            scope:Some("env_test".to_owned()),
-                            bindings:Vec::new(),
-                            suspension:None,
-                            inline_chain:Vec::new(),
+                    terminator: Terminator::Return {
+                        value: Some("v0".to_owned()),
+                        source: Source::User {
+                            file: "source_test".to_owned(),
+                            start: ogma_core_ir::SourcePosition { line: 1, column: 0 },
+                            end: ogma_core_ir::SourcePosition {
+                                line: 1,
+                                column: 10,
+                            },
+                            scope: Some("env_test".to_owned()),
+                            bindings: Vec::new(),
+                            suspension: None,
+                            inline_chain: Vec::new(),
                         },
                     },
                 }],
@@ -1680,17 +2142,37 @@ mod tests {
 
     #[test]
     fn lowers_a_verified_core_ir_function_to_deterministic_ogmb() {
-        let document=function_document();
-        let first=compile_function(&document).expect("first artifact");
-        let second=compile_function(&document).expect("second artifact");
-        assert_eq!(first.artifact.bytes,second.artifact.bytes);
-        assert_eq!(first.metrics,second.metrics);
-        assert_eq!(first.metrics.instruction_count as usize, first.artifact.verification_input["instructions"].as_array().unwrap().len());
+        let document = function_document();
+        let first = compile_function(&document).expect("first artifact");
+        let second = compile_function(&document).expect("second artifact");
+        assert_eq!(first.artifact.bytes, second.artifact.bytes);
+        assert_eq!(first.metrics, second.metrics);
+        assert_eq!(
+            first.metrics.instruction_count as usize,
+            first.artifact.verification_input["instructions"]
+                .as_array()
+                .unwrap()
+                .len()
+        );
         assert_eq!(first.metrics.code_bytes, first.artifact.code.len());
         assert_eq!(first.metrics.constant_count, first.artifact.constants.len());
-        assert_eq!(first.metrics.register_count, first.artifact.manifest["metadata"]["frame_layout"]["register_count"].as_u64().unwrap() as u32);
-        assert_eq!(first.artifact.verification_input["execution_model"],"register");
-        assert_eq!(first.artifact.source_map.as_ref().expect("source map")["locations"].as_array().unwrap().len(),2);
+        assert_eq!(
+            first.metrics.register_count,
+            first.artifact.manifest["metadata"]["frame_layout"]["register_count"]
+                .as_u64()
+                .unwrap() as u32
+        );
+        assert_eq!(
+            first.artifact.verification_input["execution_model"],
+            "register"
+        );
+        assert_eq!(
+            first.artifact.source_map.as_ref().expect("source map")["locations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
