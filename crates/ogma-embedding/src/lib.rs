@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionReport, Host, HostCallCompletion, HostCallContext, HostError, InstructionLocation,
+    ExecutionReport, Host, HostCallCompletion, HostCallContext, HostCallRoot, HostError,
+    InstructionLocation,
     InterpreterError, NoHost,
 };
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
@@ -860,10 +861,10 @@ pub enum HostRegistrationError {
 pub struct OgmaRuntime {
     runtime_id: u64,
     owner_thread: ThreadId,
-    active_heap: Cell<*mut Heap>,
+    active_context_ptr: Cell<*mut c_void>,
     active_context: Cell<OgmaContextHandle>,
     next_handle_id: Cell<u64>,
-    active_handles: RefCell<HashMap<OgmaHandle, HostHandle>>,
+    active_handles: RefCell<HashMap<OgmaHandle, HostCallRoot>>,
     handle_frames: RefCell<Vec<Vec<OgmaHandle>>>,
 }
 
@@ -1025,7 +1026,7 @@ impl OgmaRuntime {
         Self {
             runtime_id,
             owner_thread: thread::current().id(),
-            active_heap: Cell::new(std::ptr::null_mut()),
+            active_context_ptr: Cell::new(std::ptr::null_mut()),
             active_context: Cell::new(OgmaContextHandle::default()),
             next_handle_id: Cell::new(1),
             active_handles: RefCell::new(HashMap::new()),
@@ -1047,32 +1048,29 @@ impl OgmaRuntime {
 
     fn enter_call(
         self: &Rc<Self>,
-        heap: *mut Heap,
+        host_context: *mut c_void,
         context: OgmaContextHandle,
     ) -> Result<ActiveCContextGuard, HostError> {
-        if thread::current().id() != self.owner_thread {
-            return Err(HostError::Denied);
-        }
-        if heap.is_null() {
+        if thread::current().id() != self.owner_thread || host_context.is_null() {
             return Err(HostError::Denied);
         }
         let mut frames = self.handle_frames.borrow_mut();
         frames.try_reserve(1).map_err(|_| HostError::Denied)?;
         frames.push(Vec::new());
         drop(frames);
-        let previous_heap = self.active_heap.replace(heap);
+        let previous_context_ptr = self.active_context_ptr.replace(host_context);
         let previous_context = self.active_context.replace(context);
         Ok(ActiveCContextGuard {
             runtime: Rc::clone(self),
-            heap,
-            previous_heap,
+            host_context,
+            previous_context_ptr,
             previous_context,
         })
     }
 
     fn create_temp_handle(
         &self,
-        heap: &mut Heap,
+        host_context: &mut HostCallContext<'_>,
         context: OgmaContextHandle,
         value: Value,
     ) -> Result<OgmaHandle, HostError> {
@@ -1095,7 +1093,9 @@ impl OgmaRuntime {
             .borrow_mut()
             .try_reserve(1)
             .map_err(|_| HostError::Denied)?;
-        let root = heap.retain_host_value(value).map_err(HostError::Runtime)?;
+        let root = host_context
+            .retain_value(value)
+            .map_err(HostError::Runtime)?;
         let handle = OgmaHandle {
             opaque: [self.runtime_id, context.opaque[1], id, 1, 0],
         };
@@ -1111,7 +1111,7 @@ impl OgmaRuntime {
 
     fn resolve_temp_handle(
         &self,
-        heap: &Heap,
+        host_context: &HostCallContext<'_>,
         context: OgmaContextHandle,
         handle: OgmaHandle,
     ) -> Result<Value, HostError> {
@@ -1127,14 +1127,14 @@ impl OgmaRuntime {
             .get(&handle)
             .copied()
             .ok_or(HostError::Denied)?;
-        heap.resolve_host_handle(root).map_err(HostError::Runtime)
+        host_context.resolve_root(root).map_err(HostError::Runtime)
     }
 }
 
 struct ActiveCContextGuard {
     runtime: Rc<OgmaRuntime>,
-    heap: *mut Heap,
-    previous_heap: *mut Heap,
+    host_context: *mut c_void,
+    previous_context_ptr: *mut c_void,
     previous_context: OgmaContextHandle,
 }
 
@@ -1146,27 +1146,31 @@ impl Drop for ActiveCContextGuard {
             .borrow_mut()
             .pop()
             .unwrap_or_default();
-        if !self.heap.is_null() {
-            // SAFETY: this guard is scoped to the active interpreter callback.
-            // The HostCallContext keeps the Runtime heap exclusively borrowed,
-            // and the raw pointer was derived from that exclusive borrow.
-            let heap = unsafe { &mut *self.heap };
+        if !self.host_context.is_null() {
+            // SAFETY: enter_call stores a pointer derived from the active
+            // HostCallContext mutable borrow. This guard is dropped before
+            // that callback invocation returns and before the borrow is used
+            // again. The pointer is never retained beyond this scope.
+            let host_context =
+                unsafe { &mut *self.host_context.cast::<HostCallContext<'_>>() };
             let mut roots = self.runtime.active_handles.borrow_mut();
             for handle in handles {
                 if let Some(root) = roots.remove(&handle) {
-                    let _ = heap.release_host_handle(root);
+                    let _ = host_context.release_root(root);
                 }
             }
         }
-        self.runtime.active_heap.set(self.previous_heap);
+        self.runtime
+            .active_context_ptr
+            .set(self.previous_context_ptr);
         self.runtime.active_context.set(self.previous_context);
     }
 }
 
-unsafe fn active_c_heap<'a>(
+unsafe fn active_c_host_context<'runtime, 'context>(
     runtime: *const OgmaRuntime,
     context: OgmaContextHandle,
-) -> Result<(&'a OgmaRuntime, &'a mut Heap), OgmaStatus> {
+) -> Result<(&'runtime OgmaRuntime, &'context mut HostCallContext<'context>), OgmaStatus> {
     if runtime.is_null() {
         return Err(OgmaStatus::INVALID_ARGUMENT);
     }
@@ -1178,14 +1182,17 @@ unsafe fn active_c_heap<'a>(
     if runtime.active_context.get() != context {
         return Err(OgmaStatus::STALE_HANDLE);
     }
-    let heap = runtime.active_heap.get();
-    if heap.is_null() {
+    let host_context = runtime.active_context_ptr.get();
+    if host_context.is_null() {
         return Err(OgmaStatus::BUSY);
     }
     // SAFETY: ActiveCContextGuard installs this pointer from the current
-    // exclusive HostCallContext heap borrow and resets it before the callback
-    // dispatch returns.
-    Ok((runtime, unsafe { &mut *heap }))
+    // mutable HostCallContext borrow and resets it before callback dispatch
+    // returns. The pointer never escapes the active callback helpers.
+    Ok((
+        runtime,
+        unsafe { &mut *host_context.cast::<HostCallContext<'a>>() },
+    ))
 }
 
 /// Runs a full Runtime collection during an active C host callback.
@@ -1205,8 +1212,10 @@ pub unsafe extern "C" fn ogma_context_collect_unrooted(
 ) -> OgmaStatus {
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: the callback supplies its active Runtime and Context handles.
-        let (_runtime, heap) = unsafe { active_c_heap(runtime, context)? };
-        heap.collect().map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
+        let (_runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
+        host_context
+            .collect()
+            .map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
         Ok::<_, OgmaStatus>(())
     }));
     match result {
@@ -1235,9 +1244,9 @@ pub unsafe extern "C" fn ogma_context_create_number(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         let value = runtime
-            .create_temp_handle(heap, context, Value::number(number))
+            .create_temp_handle(host_context, context, Value::number(number))
             .map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
         // SAFETY: caller provided writable output storage.
         unsafe { out_value.write(value) };
@@ -1269,9 +1278,9 @@ pub unsafe extern "C" fn ogma_context_get_number(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         let value = runtime
-            .resolve_temp_handle(heap, context, value)
+            .resolve_temp_handle(host_context, context, value)
             .map_err(|_| OgmaStatus::STALE_HANDLE)?;
         let number = value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
         // SAFETY: caller provided writable output storage.
@@ -1304,9 +1313,9 @@ pub unsafe extern "C" fn ogma_context_create_boolean(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         let value = runtime
-            .create_temp_handle(heap, context, Value::boolean(boolean == 1))
+            .create_temp_handle(host_context, context, Value::boolean(boolean == 1))
             .map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
         // SAFETY: caller provided writable output storage.
         unsafe { out_value.write(value) };
@@ -1338,9 +1347,9 @@ pub unsafe extern "C" fn ogma_context_get_boolean(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         let value = runtime
-            .resolve_temp_handle(heap, context, value)
+            .resolve_temp_handle(host_context, context, value)
             .map_err(|_| OgmaStatus::STALE_HANDLE)?;
         let boolean = value.as_boolean().ok_or(OgmaStatus::TYPE_MISMATCH)?;
         // SAFETY: caller provided writable output storage.
@@ -1373,9 +1382,9 @@ pub unsafe extern "C" fn ogma_context_get_i32(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         let value = runtime
-            .resolve_temp_handle(heap, context, value)
+            .resolve_temp_handle(host_context, context, value)
             .map_err(|_| OgmaStatus::STALE_HANDLE)?;
         let number = value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
         if !number.is_finite()
@@ -1418,7 +1427,7 @@ pub unsafe extern "C" fn ogma_context_sum_numbers(
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: runtime/context are supplied by the active C callback.
-        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let (runtime, host_context) = unsafe { active_c_host_context(runtime, context)? };
         // SAFETY: the caller supplies a readable array for count elements.
         let handles = if count == 0 {
             &[][..]
@@ -1428,7 +1437,7 @@ pub unsafe extern "C" fn ogma_context_sum_numbers(
         let mut sum = 0.0;
         for handle in handles {
             let value = runtime
-                .resolve_temp_handle(heap, context, *handle)
+                .resolve_temp_handle(host_context, context, *handle)
                 .map_err(|_| OgmaStatus::STALE_HANDLE)?;
             sum += value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
         }
@@ -1857,8 +1866,10 @@ impl Host for HostFunctionRegistry {
                 }
             }
             HostHandler::C(handler) => {
-                let heap = context.heap() as *mut Heap;
-                let _scope = self.abi_runtime.enter_call(heap, self.context_handle)?;
+                let host_context = (context as *mut HostCallContext<'_>).cast::<c_void>();
+                let _scope = self
+                    .abi_runtime
+                    .enter_call(host_context, self.context_handle)?;
                 invoke_c_handler(
                     &self.abi_runtime,
                     self.context_handle,
@@ -1876,8 +1887,7 @@ fn throw_host_error(
     message: &str,
 ) -> Result<HostCallCompletion, HostError> {
     let value = context
-        .heap()
-        .allocate_string(message)
+        .create_string(message)
         .map_err(HostError::Runtime)?;
     Ok(HostCallCompletion::Throw(value))
 }
@@ -1928,8 +1938,8 @@ fn invoke_c_handler(
         && handler.effects & COMPLEX_EFFECTS == 0
         && let (Some(thunk), [left, right]) = (handler.number_handle_f64_thunk, arguments)
     {
-        let left_handle = runtime.create_temp_handle(context.heap(), context_handle, *left)?;
-        let right_handle = runtime.create_temp_handle(context.heap(), context_handle, *right)?;
+        let left_handle = runtime.create_temp_handle(context, context_handle, *left)?;
+        let right_handle = runtime.create_temp_handle(context, context_handle, *right)?;
         let mut result = 0.0;
         let status = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: descriptor validation pins callback/user_data lifetime;
@@ -1960,7 +1970,7 @@ fn invoke_c_handler(
         .try_reserve_exact(arguments.len())
         .map_err(|_| HostError::Runtime(HeapError::AllocationFailed))?;
     for argument in arguments {
-        handles.push(runtime.create_temp_handle(context.heap(), context_handle, *argument)?);
+        handles.push(runtime.create_temp_handle(context, context_handle, *argument)?);
     }
     let mut completion = OgmaCompletion::default();
     let status = catch_unwind(AssertUnwindSafe(|| {
@@ -1985,7 +1995,7 @@ fn invoke_c_handler(
     {
         return Err(HostError::Panicked);
     }
-    let value = runtime.resolve_temp_handle(context.heap(), context_handle, completion.value)?;
+    let value = runtime.resolve_temp_handle(context, context_handle, completion.value)?;
     Ok(if completion.kind == COMPLETION_THROW {
         HostCallCompletion::Throw(value)
     } else {
@@ -2783,7 +2793,7 @@ mod tests {
             .register_host_function(
                 HostFunctionDescriptor::new(81, "benchmark.host.echo"),
                 move |call, _arguments| {
-                    call.heap().collect().map_err(HostError::Runtime)?;
+                    call.collect().map_err(HostError::Runtime)?;
                     let mut no_host = NoHost;
                     match call
                         .execute_nested(
