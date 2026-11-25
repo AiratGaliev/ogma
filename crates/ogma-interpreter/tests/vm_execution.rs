@@ -1,15 +1,15 @@
 use ogma_bytecode::{
-    BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation,
-    build_ogmb_v1, encode_register_code,
+    BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation, build_ogmb_v1,
+    encode_register_code,
 };
 use ogma_compiler::compile_to_bytecode;
-use ogma_frontend::{parse, ParseRequestOptions, SourceFile};
-use oxc_allocator::Allocator;
+use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
 use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
     ExecutionOptions, Host, HostError, InterpreterError,
 };
 use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
+use oxc_allocator::Allocator;
 use serde_json::{Value as JsonValue, json};
 
 fn artifact(
@@ -72,8 +72,7 @@ fn artifact(
             }
         }
     });
-    build_ogmb_v1(manifest, &code, &constants, &[], None)
-        .expect("valid OGMB test artifact")
+    build_ogmb_v1(manifest, &code, &constants, &[], None).expect("valid OGMB test artifact")
 }
 
 fn number_constant(destination: u16, index: u32) -> RegisterInstruction {
@@ -130,12 +129,9 @@ fn executes_serialized_decoded_register_bytecode() {
 
     let module = ExecutableModule::load_one(&bytes).expect("verified OGMB module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "main",
-        &[],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(&mut heap, "main", &[], ExecutionOptions::default())
+        .expect("execution report");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -247,12 +243,9 @@ fn executes_nested_function_calls_using_verified_function_table() {
 
     let module = ExecutableModule::load([caller, callee]).expect("verified function module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "main",
-        &[],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(&mut heap, "main", &[], ExecutionOptions::default())
+        .expect("execution report");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -378,7 +371,12 @@ fn closures_share_runtime_managed_mutable_binding_cells() {
             },
             return_register(7),
         ],
-        vec![JsonValue::Null, json!(42), json!("read_counter"), JsonValue::Null],
+        vec![
+            JsonValue::Null,
+            json!(42),
+            json!("read_counter"),
+            JsonValue::Null,
+        ],
         vec![parent_binding],
         Vec::new(),
         vec![binding_location],
@@ -386,12 +384,9 @@ fn closures_share_runtime_managed_mutable_binding_cells() {
 
     let module = ExecutableModule::load([parent, child]).expect("verified closure module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "main",
-        &[],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(&mut heap, "main", &[], ExecutionOptions::default())
+        .expect("execution report");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -463,14 +458,17 @@ fn property_operations_use_the_shared_runtime_object_model() {
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let object = heap.allocate_object().expect("object");
     let key = heap.intern_property_key("answer").expect("property key");
-    heap.set_property(object, key, Value::number(42.0)).expect("property write");
+    heap.set_property(object, key, Value::number(42.0))
+        .expect("property write");
 
-    let report = module.execute_without_host(
-        &mut heap,
-        "read_property",
-        &[object],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            "read_property",
+            &[object],
+            ExecutionOptions::default(),
+        )
+        .expect("execution report");
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
         completion => panic!("expected property value, got {completion:?}"),
@@ -508,16 +506,16 @@ fn throws_are_propagated_as_distinct_completions() {
     );
     let module = ExecutableModule::load_one(&bytes).expect("verified throw module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "throws",
-        &[],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(&mut heap, "throws", &[], ExecutionOptions::default())
+        .expect("execution report");
     match report.completion {
         ExecutionCompletion::Throw(value) => {
             assert_eq!(value.value_type(), ValueType::String);
-            assert_eq!(heap.string_utf16(value).expect("thrown string"), "boom".encode_utf16().collect::<Vec<_>>());
+            assert_eq!(
+                heap.string_utf16(value).expect("thrown string"),
+                "boom".encode_utf16().collect::<Vec<_>>()
+            );
         }
         completion => panic!("expected thrown completion, got {completion:?}"),
     }
@@ -554,15 +552,17 @@ fn fuel_exhaustion_stops_a_loop_at_the_back_edge() {
     );
     let module = ExecutableModule::load_one(&bytes).expect("verified loop module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "loop",
-        &[],
-        ExecutionOptions {
-            instruction_budget: 5,
-            ..ExecutionOptions::default()
-        },
-    ).expect("interrupted report");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            "loop",
+            &[],
+            ExecutionOptions {
+                instruction_budget: 5,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("interrupted report");
 
     assert!(matches!(
         report.completion,
@@ -602,15 +602,17 @@ fn cancellation_is_observed_at_function_entry_without_dispatch() {
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let token = CancellationToken::new();
     token.cancel();
-    let report = module.execute_without_host(
-        &mut heap,
-        "cancelled",
-        &[],
-        ExecutionOptions {
-            cancellation: Some(token),
-            ..ExecutionOptions::default()
-        },
-    ).expect("interrupted report");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            "cancelled",
+            &[],
+            ExecutionOptions {
+                cancellation: Some(token),
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("interrupted report");
 
     assert!(matches!(
         report.completion,
@@ -647,15 +649,17 @@ fn deadline_exhaustion_is_distinct_from_fuel_and_cancellation() {
     );
     let module = ExecutableModule::load_one(&bytes).expect("verified deadline module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "deadline",
-        &[],
-        ExecutionOptions {
-            time_budget: Some(std::time::Duration::ZERO),
-            ..ExecutionOptions::default()
-        },
-    ).expect("interrupted report");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            "deadline",
+            &[],
+            ExecutionOptions {
+                time_budget: Some(std::time::Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("interrupted report");
     assert!(matches!(
         report.completion,
         ExecutionCompletion::Interrupted(ExecutionInterruption::DeadlineExceeded)
@@ -751,13 +755,15 @@ fn host_calls_are_capability_named_and_traced() {
     let module = ExecutableModule::load_one(&bytes).expect("verified host-call module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let mut host = RecordingHost { calls: Vec::new() };
-    let report = module.execute(
-        &mut heap,
-        "host_call",
-        &[],
-        &mut host,
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute(
+            &mut heap,
+            "host_call",
+            &[],
+            &mut host,
+            ExecutionOptions::default(),
+        )
+        .expect("execution report");
 
     assert_eq!(host.calls, vec!["telemetry.record:1"]);
     match report.completion {
@@ -765,7 +771,6 @@ fn host_calls_are_capability_named_and_traced() {
         completion => panic!("expected host result, got {completion:?}"),
     }
 }
-
 
 #[test]
 fn executes_real_compiler_output_with_lexical_closure_capture() {
@@ -783,22 +788,28 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         .expect("frontend, semantic analysis, Core IR and OGMB compilation succeed");
     assert!(compiled.functions.len() >= 3);
 
-    let entry = compiled.functions.iter()
+    let entry = compiled
+        .functions
+        .iter()
         .find(|function| function.name == "run")
         .expect("run function artifact");
     let entry_id = entry.id.clone();
-    let artifacts = compiled.functions.iter()
+    let artifacts = compiled
+        .functions
+        .iter()
         .map(|function| function.artifact.bytes.clone())
         .collect::<Vec<_>>();
     let module = ExecutableModule::load(artifacts)
         .expect("interpreter re-verifies compiler-produced serialized OGMB artifacts");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        &entry_id,
-        &[Value::number(40.0)],
-        ExecutionOptions::default(),
-    ).expect("compiler-produced artifact executes");
+    let report = module
+        .execute_without_host(
+            &mut heap,
+            &entry_id,
+            &[Value::number(40.0)],
+            ExecutionOptions::default(),
+        )
+        .expect("compiler-produced artifact executes");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(83.0)),
