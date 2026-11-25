@@ -253,6 +253,20 @@ fn executes_nested_function_calls_using_verified_function_table() {
         completion => panic!("expected nested call return, got {completion:?}"),
     }
     assert_eq!(report.max_call_depth_reached, 2);
+
+    let depth_error = module.execute_without_host(
+        &mut heap,
+        "main",
+        &[],
+        ExecutionOptions {
+            max_call_depth: 1,
+            ..ExecutionOptions::default()
+        },
+    );
+    assert!(matches!(
+        depth_error,
+        Err(InterpreterError::CallDepthExceeded { limit: 1 })
+    ));
 }
 
 #[test]
@@ -780,7 +794,7 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         "ogm46-compiler-integration",
         "memory:///ogm46-compiler-integration.js",
         None,
-        "function run(seed) { let count = seed; const step = 1; function create() { return function increment() { count = count + step; return count; }; } const increment = create(); return increment() + increment(); }",
+        "function run(seed) { let count = seed; const step = 1; if (seed > 0) { count = count + step; } function create() { return function increment() { count = count + step; return count; }; } const increment = create(); return increment() + increment(); }",
     )
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
@@ -813,7 +827,7 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
         .expect("compiler-produced artifact executes");
 
     match report.completion {
-        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(83.0)),
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(85.0)),
         completion => panic!("expected closure-backed compiler result, got {completion:?}"),
     }
     assert!(report.instructions_executed > 0);
