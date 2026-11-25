@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use ogma_interpreter::{
     CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
     ExecutionOptions, ExecutionReport, Host, HostCallCompletion, HostCallContext, HostError,
-    InterpreterError, InstructionLocation,
+    InstructionLocation, InterpreterError,
 };
 use ogma_runtime::{
     CollectionReport, Heap, HeapConfig, HeapError, HeapStats, HostHandle, ScopeToken, Value,
@@ -215,9 +215,7 @@ pub unsafe extern "C" fn ogma_abi_negotiate(
             OgmaStatus::OK
         }
         Ok(Err(AbiNegotiationError::IncompatibleVersion)) => OgmaStatus::INCOMPATIBLE_ABI,
-        Ok(Err(AbiNegotiationError::UnsupportedFeatures { .. })) => {
-            OgmaStatus::UNSUPPORTED_FEATURE
-        }
+        Ok(Err(AbiNegotiationError::UnsupportedFeatures { .. })) => OgmaStatus::UNSUPPORTED_FEATURE,
         Err(_) => OgmaStatus::PANIC,
     }
 }
@@ -285,9 +283,7 @@ impl EngineConfig {
         if self.heap_quota_bytes == 0 {
             return Err(ConfigurationError::ZeroHeapQuota);
         }
-        if self.max_allocation_bytes == 0
-            || self.max_allocation_bytes > self.heap_quota_bytes
-        {
+        if self.max_allocation_bytes == 0 || self.max_allocation_bytes > self.heap_quota_bytes {
             return Err(ConfigurationError::InvalidAllocationLimit);
         }
         if self.instruction_budget == 0 {
@@ -495,7 +491,9 @@ impl Context<'_> {
     /// Returns the number of verified functions in the loaded module.
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.module.as_ref().map_or(0, ExecutableModule::function_count)
+        self.module
+            .as_ref()
+            .map_or(0, ExecutableModule::function_count)
     }
 
     /// Sets the capability bitset granted to host functions in this Context.
@@ -516,10 +514,7 @@ impl Context<'_> {
         callback: F,
     ) -> Result<HostFunctionSlot, HostRegistrationError>
     where
-        F: for<'a> Fn(
-                &mut HostCallContext<'a>,
-                &[Value],
-            ) -> Result<HostCallCompletion, HostError>
+        F: for<'a> Fn(&mut HostCallContext<'a>, &[Value]) -> Result<HostCallCompletion, HostError>
             + 'static,
     {
         self.host_functions.register(descriptor, callback)
@@ -594,9 +589,7 @@ impl Context<'_> {
             ExecutionCompletion::Throw(value) => {
                 PersistentCompletion::Throw(self.persist(value).map_err(ContextError::Heap)?)
             }
-            ExecutionCompletion::Interrupted(reason) => {
-                PersistentCompletion::Interrupted(reason)
-            }
+            ExecutionCompletion::Interrupted(reason) => PersistentCompletion::Interrupted(reason),
         };
         Ok(PersistentExecutionReport {
             completion,
@@ -619,15 +612,15 @@ impl Context<'_> {
 
     /// Reads a String as UTF-16 code units without losing unpaired surrogates.
     pub fn read_string_utf16(&self, value: Value) -> Result<Vec<u16>, HeapError> {
-        self.runtime
-            .heap
-            .string_utf16(value)
-            .map(ToOwned::to_owned)
+        self.runtime.heap.string_utf16(value).map(ToOwned::to_owned)
     }
 
     /// Promotes a value to an opaque, generation-checked persistent host root.
     pub fn persist(&mut self, value: Value) -> Result<PersistentHandle, HeapError> {
-        self.runtime.heap.retain_host_value(value).map(PersistentHandle)
+        self.runtime
+            .heap
+            .retain_host_value(value)
+            .map(PersistentHandle)
     }
 
     /// Resolves a persistent handle to a transient Runtime value.
@@ -1025,10 +1018,7 @@ impl HostFunctionRegistry {
             + 'static,
     {
         self.validate_rust_descriptor(&descriptor)?;
-        self.insert(
-            descriptor,
-            HostHandler::Rust(Rc::new(callback)),
-        )
+        self.insert(descriptor, HostHandler::Rust(Rc::new(callback)))
     }
 
     fn validate_rust_descriptor(
@@ -1060,8 +1050,7 @@ impl HostFunctionRegistry {
         descriptor: &OgmaHostFunctionDescriptor,
     ) -> Result<HostFunctionSlot, HostRegistrationError> {
         self.ensure_owner_thread()?;
-        if descriptor.struct_size
-            != std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32
+        if descriptor.struct_size != std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32
             || descriptor.descriptor_version != DESCRIPTOR_VERSION
             || descriptor.abi_major != ABI_VERSION
             || descriptor.abi_minor > ABI_MINOR
@@ -1077,9 +1066,8 @@ impl HostFunctionRegistry {
             return Err(HostRegistrationError::InvalidDescriptor);
         }
         // SAFETY: the caller contract guarantees a readable name buffer.
-        let name_bytes = unsafe {
-            std::slice::from_raw_parts(descriptor.name, descriptor.name_len)
-        };
+        let name_bytes =
+            unsafe { std::slice::from_raw_parts(descriptor.name, descriptor.name_len) };
         let name = std::str::from_utf8(name_bytes)
             .map_err(|_| HostRegistrationError::InvalidDescriptor)?;
         if name.as_bytes().contains(&0) {
@@ -1255,10 +1243,7 @@ impl HostFunctionRegistry {
         })
     }
 
-    fn snapshot(
-        &self,
-        name: &str,
-    ) -> Result<RegisteredHostFunction, HostRegistrationError> {
+    fn snapshot(&self, name: &str) -> Result<RegisteredHostFunction, HostRegistrationError> {
         self.ensure_owner_thread()?;
         let state = self.inner.state.borrow();
         let index = *state
@@ -1274,9 +1259,7 @@ impl HostFunctionRegistry {
     fn enter_dispatch(&self) -> Result<DispatchGuard, HostRegistrationError> {
         self.ensure_owner_thread()?;
         let active = self.inner.active_dispatches.get();
-        let next = active
-            .checked_add(1)
-            .ok_or(HostRegistrationError::Busy)?;
+        let next = active.checked_add(1).ok_or(HostRegistrationError::Busy)?;
         self.inner.active_dispatches.set(next);
         Ok(DispatchGuard {
             inner: self.inner.clone(),
@@ -1352,22 +1335,14 @@ fn invoke_c_handler(
 ) -> Result<HostCallCompletion, HostError> {
     if handler.signature == SIGNATURE_F64_BINARY
         && handler.effects & COMPLEX_EFFECTS == 0
-        && let (Some(thunk), [left, right]) =
-            (handler.primitive_f64_thunk, arguments)
+        && let (Some(thunk), [left, right]) = (handler.primitive_f64_thunk, arguments)
         && let (Some(left), Some(right)) = (left.as_number(), right.as_number())
     {
         let mut result = 0.0;
         let status = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: thunk validity and user_data lifetime are guaranteed by
             // the unsafe registration contract.
-            unsafe {
-                thunk(
-                    left,
-                    right,
-                    &mut result,
-                    handler.user_data,
-                )
-            }
+            unsafe { thunk(left, right, &mut result, handler.user_data) }
         }))
         .map_err(|_| HostError::Panicked)?;
         if status == OgmaStatus::OK {
@@ -1405,9 +1380,7 @@ fn invoke_c_handler(
     if status != OgmaStatus::OK {
         return Err(HostError::Panicked);
     }
-    if completion.reserved != 0
-        || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
-    {
+    if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW) {
         return Err(HostError::Panicked);
     }
     let value = decode_host_value(completion.value)?;
@@ -1479,8 +1452,8 @@ mod tests {
             source_text,
         )
         .expect("valid source");
-        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-            .expect("source parses");
+        let parsed =
+            parse(&allocator, &source, ParseRequestOptions::default()).expect("source parses");
         compile_to_bytecode(&parsed)
             .expect("source compiles to M1 OGMB")
             .functions
@@ -1541,9 +1514,18 @@ mod tests {
         let PersistentCompletion::Return(result) = report.completion else {
             panic!("expected persistent Return completion");
         };
-        assert_eq!(context.resolve(result).expect("live root").as_number(), Some(42.0));
+        assert_eq!(
+            context.resolve(result).expect("live root").as_number(),
+            Some(42.0)
+        );
         context.collect().expect("forced mark-sweep collection");
-        assert_eq!(context.resolve(result).expect("persistent root survives GC").as_number(), Some(42.0));
+        assert_eq!(
+            context
+                .resolve(result)
+                .expect("persistent root survives GC")
+                .as_number(),
+            Some(42.0)
+        );
         context.release(result).expect("release root");
         assert!(context.resolve(result).is_err());
     }
@@ -1553,7 +1535,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         context
             .register_host_function(
                 HostFunctionDescriptor::new(1, "benchmark.host.echo"),
@@ -1609,8 +1593,7 @@ mod tests {
         context.load_module(host_call_artifacts()).expect("verified OGMB");
         context
             .register_host_function(
-                HostFunctionDescriptor::new(2, "benchmark.host.echo")
-                    .requiring_capabilities(0b10),
+                HostFunctionDescriptor::new(2, "benchmark.host.echo").requiring_capabilities(0b10),
                 |_call, _arguments| Ok(HostCallCompletion::Normal(Value::undefined())),
             )
             .expect("register capability");
@@ -1625,7 +1608,12 @@ mod tests {
         let ExecutionCompletion::Throw(message) = report.completion else {
             panic!("capability denial must propagate as Throw");
         };
-        assert!(!context.read_string_utf16(message).expect("throw string").is_empty());
+        assert!(
+            !context
+                .read_string_utf16(message)
+                .expect("throw string")
+                .is_empty()
+        );
     }
 
     unsafe extern "C-unwind" fn c_generic_echo(
@@ -1704,9 +1692,7 @@ mod tests {
 
     #[test]
     fn c_abi_primitive_entrypoint_checks_null_outputs_and_computes() {
-        let status = unsafe {
-            ogma_primitive_add_f64(1.5, 2.5, std::ptr::null_mut())
-        };
+        let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, std::ptr::null_mut()) };
         assert_eq!(status, OgmaStatus::INVALID_ARGUMENT);
         let mut result = 0.0;
         let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, &mut result) };
@@ -1847,7 +1833,9 @@ mod tests {
         assert_ne!(first.id(), second.id());
         let mut first_context = first.create_context().expect("first Context");
         let mut second_context = second.create_context().expect("second Context");
-        let value = first_context.create_string("first").expect("String allocation");
+        let value = first_context
+            .create_string("first")
+            .expect("String allocation");
         let handle = first_context.persist(value).expect("persistent root");
         assert!(second_context.resolve(handle).is_err());
         first_context.release(handle).expect("release");

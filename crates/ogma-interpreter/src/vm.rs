@@ -223,12 +223,12 @@ impl HostCallContext<'_> {
         arguments: &[Value],
         host: &mut H,
     ) -> Result<ExecutionCompletion, InterpreterError> {
-        let entry_depth = self
-            .parent_depth
-            .checked_add(1)
-            .ok_or(InterpreterError::CallDepthExceeded {
-                limit: self.options.max_call_depth,
-            })?;
+        let entry_depth =
+            self.parent_depth
+                .checked_add(1)
+                .ok_or(InterpreterError::CallDepthExceeded {
+                    limit: self.options.max_call_depth,
+                })?;
         module.execute_with_state(
             self.heap,
             entry_function,
@@ -1125,12 +1125,8 @@ impl ExecutableModule {
                     Err(HostError::Denied) => {
                         Err(InterpreterError::HostCapabilityDenied(capability))
                     }
-                    Err(HostError::Runtime(error)) => {
-                        Err(InterpreterError::Runtime(error))
-                    }
-                    Err(HostError::Panicked) => {
-                        Err(InterpreterError::HostCallbackPanicked)
-                    }
+                    Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
+                    Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
                 }
             }
             CallKind::GetProperty | CallKind::GetElement => {
