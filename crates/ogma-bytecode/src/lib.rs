@@ -211,6 +211,17 @@ impl CallKind {
             _ => return None,
         })
     }
+
+    fn accepts_source_count(self, count: usize) -> bool {
+        match self {
+            Self::JavaScript | Self::Construct => (2..=1025).contains(&count),
+            Self::Host | Self::MakeClosure => (1..=1025).contains(&count),
+            Self::GetProperty | Self::GetElement => count == 2,
+            Self::SetProperty | Self::SetElement => count == 3,
+            Self::LoadCapture | Self::MakeCell => count == 1,
+            Self::StoreCapture | Self::StoreBinding => count == 2,
+        }
+    }
 }
 
 /// One register instruction before byte-offset layout.
@@ -329,12 +340,12 @@ pub fn encode_register_code(
         )]);
     }
     for (index, instruction) in instructions.iter().enumerate() {
-        if let RegisterOperation::Call { sources, .. } = &instruction.operation {
-            if sources.is_empty() || sources.len() > 1025 {
+        if let RegisterOperation::Call { kind, sources, .. } = &instruction.operation {
+            if !kind.accepts_source_count(sources.len()) {
                 return Err(vec![Diagnostic::new(
-                    "operand.call_arity",
-                    format!("$.instructions[{index}]"),
-                    "call requires between one and 1025 source registers",
+                    "call.kind_arity",
+                    format!("$.instructions[{index}].sources"),
+                    format!("call kind {kind:?} does not accept {} source registers", sources.len()),
                 )]);
             }
             if sources.iter().copied().collect::<BTreeSet<_>>().len() != sources.len() {
@@ -405,11 +416,11 @@ pub fn encode_register_code(
                 kind,
                 sources,
             } => {
-                if sources.is_empty() || sources.len() > 1025 {
+                if !kind.accepts_source_count(sources.len()) {
                     return Err(vec![Diagnostic::new(
-                        "operand.call_arity",
-                        format!("$.instructions[{index}]"),
-                        "call requires between one and 1025 source registers",
+                        "call.kind_arity",
+                        format!("$.instructions[{index}].sources"),
+                        format!("call kind {kind:?} does not accept {} source registers", sources.len()),
                     )]);
                 }
                 let unique: BTreeSet<u16> = sources.iter().copied().collect();
@@ -660,27 +671,57 @@ pub fn verify_register_artifact(
     let parameter_count = read_u32_value(
         metadata.pointer("/frame_layout/parameter_count"),
         "$.manifest.metadata.frame_layout.parameter_count",
-    )? as usize;
+    )?;
     let capture_count = metadata
         .pointer("/environment/captures")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    if entry_registers.len() != parameter_count.saturating_add(capture_count) {
-        return Err(vec![Diagnostic::new(
-            "register.entry_arity",
-            "$.entry_registers",
-            format!(
-                "entry registers must contain one initialized register per parameter and capture (expected {}, got {})",
-                parameter_count.saturating_add(capture_count),
-                entry_registers.len()
-            ),
-        )]);
-    }
     if frame_count == 0 || frame_count > 65_536 {
         return Err(vec![Diagnostic::new(
             "frame.register_count",
             "$.manifest.metadata.frame_layout.register_count",
             "register_count must be in the range 1..=65536",
+        )]);
+    }
+    let capture_count = u32::try_from(capture_count).map_err(|_| {
+        vec![Diagnostic::new(
+            "register.entry_arity",
+            "$.manifest.metadata.environment.captures",
+            "capture count exceeds the register encoding limit",
+        )]
+    })?;
+    let expected_entry_count = parameter_count.checked_add(capture_count).ok_or_else(|| {
+        vec![Diagnostic::new(
+            "register.entry_arity",
+            "$.manifest.metadata.frame_layout",
+            "parameter and capture counts overflow the entry-register layout",
+        )]
+    })?;
+    if expected_entry_count > frame_count {
+        return Err(vec![Diagnostic::new(
+            "register.entry_frame",
+            "$.manifest.metadata.frame_layout",
+            "parameter and capture entry registers do not fit the declared frame",
+        )]);
+    }
+    if entry_registers.len() != expected_entry_count as usize {
+        return Err(vec![Diagnostic::new(
+            "register.entry_arity",
+            "$.entry_registers",
+            format!(
+                "entry registers must contain one initialized register per parameter and capture (expected {expected_entry_count}, got {})",
+                entry_registers.len()
+            ),
+        )]);
+    }
+    let expected_entry_registers = (0..expected_entry_count)
+        .map(|index| index as u16)
+        .collect::<Vec<_>>();
+    if entry_registers != expected_entry_registers {
+        return Err(vec![Diagnostic::new(
+            "register.entry_layout",
+            "$.entry_registers",
+            "M1 entry layout assigns parameters first, followed by captures in metadata order",
         )]);
     }
     let limits = manifest.get("resource_limits").ok_or_else(|| {
@@ -903,22 +944,22 @@ fn decode_register_code(
             OP_CALL => {
                 let destination = read_u16(code, &mut cursor).map_err(|error| vec![error])?;
                 let kind = read_u8(code, &mut cursor).map_err(|error| vec![error])?;
-                if CallKind::from_byte(kind).is_none() {
+                let Some(call_kind) = CallKind::from_byte(kind) else {
                     return Err(vec![Diagnostic::new(
                         "call.kind",
                         format!("$.instructions[{start}]"),
                         format!("unknown call kind {kind}"),
                     )]);
-                }
+                };
                 // All call semantics except pure closure materialization can
                 // complete abruptly in the M1 compatibility profile.
-                requires_may_throw = kind != CallKind::MakeClosure as u8;
+                requires_may_throw = call_kind != CallKind::MakeClosure;
                 let count = read_u16(code, &mut cursor).map_err(|error| vec![error])? as usize;
-                if count == 0 || count > 1025 {
+                if !call_kind.accepts_source_count(count) {
                     return Err(vec![Diagnostic::new(
-                        "operand.call_arity",
-                        format!("$.instructions[{start}]"),
-                        "call requires between one and 1025 source registers",
+                        "call.kind_arity",
+                        format!("$.instructions[{start}].sources"),
+                        format!("call kind {call_kind:?} does not accept {count} source registers"),
                     )]);
                 }
                 for _ in 0..count {
@@ -1838,6 +1879,24 @@ fn validate_metadata(metadata: &Value) -> Result<(), Vec<Diagnostic>> {
             "resource.binding_count",
             "$.manifest.metadata.environment",
             "binding, capture or location metadata exceeds the hard limit",
+        )]);
+    }
+
+    let parameter_binding_count = bindings
+        .iter()
+        .filter(|binding| binding.get("kind").and_then(Value::as_str) == Some("parameter"))
+        .count();
+    let declared_parameter_count = read_u32_value(
+        frame.get("parameter_count"),
+        "$.manifest.metadata.frame_layout.parameter_count",
+    )? as usize;
+    if parameter_binding_count != declared_parameter_count {
+        return Err(vec![Diagnostic::new(
+            "metadata.parameter_binding_count",
+            "$.manifest.metadata.frame_layout.parameter_count",
+            format!(
+                "parameter_count declares {declared_parameter_count} parameters but environment contains {parameter_binding_count} parameter bindings"
+            ),
         )]);
     }
 
@@ -3083,18 +3142,38 @@ fn constant_value_matches(kind: ConstantKind, value: &Value) -> bool {
         }
         ConstantKind::Boolean => value.is_boolean(),
         ConstantKind::Number => {
-            value.is_number()
+            let exact_integer = value
+                .as_i64()
+                .is_some_and(|integer| (integer as f64) as i128 == integer as i128)
+                || value
+                    .as_u64()
+                    .is_some_and(|integer| (integer as f64) as u128 == integer as u128);
+            exact_integer
+                || (value.as_i64().is_none()
+                    && value.as_u64().is_none()
+                    && value.as_f64().is_some_and(f64::is_finite))
                 || value
                     .as_str()
                     .is_some_and(|value| matches!(value, "NaN" | "Infinity" | "-Infinity" | "-0"))
         }
-        ConstantKind::BigInt
-        | ConstantKind::String
-        | ConstantKind::HostCapability
+        ConstantKind::BigInt => value.as_str().is_some_and(is_canonical_bigint),
+        ConstantKind::String => value.is_string(),
+        ConstantKind::HostCapability
         | ConstantKind::Intrinsic
         | ConstantKind::FunctionId
-        | ConstantKind::BindingId => value.is_string(),
+        | ConstantKind::BindingId => value.as_str().is_some_and(|value| valid_id(Some(value))),
     }
+}
+
+fn is_canonical_bigint(value: &str) -> bool {
+    if value == "0" {
+        return true;
+    }
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    !digits.is_empty()
+        && digits.as_bytes()[0].is_ascii_digit()
+        && digits.as_bytes()[0] != b'0'
+        && digits.as_bytes().iter().all(u8::is_ascii_digit)
 }
 fn valid_id(value: Option<&str>) -> bool {
     value.is_some_and(|id| {
@@ -3251,16 +3330,20 @@ mod tests {
             },
         ];
         let code = encode_register_code(&instructions).expect("encode");
-        let mut manifest = manifest(2, 1);
-        manifest["metadata"]["frame_layout"]["parameter_count"] = json!(1);
-        let bytes = build_ogmb_v1(manifest, &code, &[json!(1)], &[], None).expect("build");
+        let mut artifact_manifest = manifest(2, 1);
+        artifact_manifest["metadata"]["frame_layout"]["parameter_count"] = json!(1);
+        artifact_manifest["metadata"]["environment"]["bindings"] = json!([{
+            "id":"parameter_0","name":"value","kind":"parameter","mutable":true,
+            "semantic_type":"number","representation":"boxed"
+        }]);
+        artifact_manifest["metadata"]["environment"]["locations"] = json!([{
+            "binding":"parameter_0","kind":"register","index":0
+        }]);
+        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None)
+            .expect("build");
         let errors = verify_register_artifact(&bytes, &[])
             .expect_err("parameter entry register is mandatory");
-        assert!(
-            errors
-                .iter()
-                .any(|item| item.code == "register.entry_arity")
-        );
+        assert!(errors.iter().any(|item| item.code == "register.entry_arity"));
     }
 
     #[test]
@@ -3447,6 +3530,132 @@ mod tests {
                 .iter()
                 .any(|item| item.code == "opcode.may_throw_underreported")
         );
+    }
+
+    #[test]
+    fn enforces_call_kind_specific_source_arity_in_encoder_and_decoder() {
+        let invalid = [
+            (CallKind::JavaScript, 1usize),
+            (CallKind::Construct, 1),
+            (CallKind::GetProperty, 1),
+            (CallKind::SetProperty, 2),
+            (CallKind::GetElement, 1),
+            (CallKind::SetElement, 2),
+            (CallKind::LoadCapture, 2),
+            (CallKind::StoreCapture, 1),
+            (CallKind::MakeCell, 2),
+            (CallKind::StoreBinding, 1),
+        ];
+        for (kind, count) in invalid {
+            let sources = (0..count).map(|index| index as u16).collect();
+            let errors = encode_register_code(&[RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 0,
+                    kind,
+                    sources,
+                },
+                may_throw: kind != CallKind::MakeClosure,
+            }])
+            .expect_err("kind-specific source arity must be rejected");
+            assert!(errors.iter().any(|item| item.code == "call.kind_arity"));
+        }
+
+        let mut code = vec![OP_CALL, 1];
+        push_u16(&mut code, 0);
+        code.push(CallKind::GetProperty as u8);
+        push_u16(&mut code, 1);
+        push_u16(&mut code, 0);
+        let bytes = build_ogmb_v1(manifest(1, 0), &code, &[], &[], None)
+            .expect("build malformed container");
+        let errors = verify_register_artifact(&bytes, &[])
+            .expect_err("decoder must reject an invalid operation shape");
+        assert!(errors.iter().any(|item| item.code == "call.kind_arity"));
+    }
+
+    #[test]
+    fn rejects_integer_number_constants_not_exactly_representable_as_binary64() {
+        let instructions = vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Return { source: 0 },
+                may_throw: false,
+            },
+        ];
+        let code = encode_register_code(&instructions).expect("encode");
+        let bytes = build_ogmb_v1(
+            manifest(2, 1),
+            &code,
+            &[json!(9_007_199_254_740_993u64)],
+            &[],
+            None,
+        )
+        .expect("build");
+        let errors = verify_register_artifact(&bytes, &[])
+            .expect_err("inexact integer Number payload must fail");
+        assert!(errors.iter().any(|item| item.code == "constant.kind_mismatch"));
+    }
+
+    #[test]
+    fn rejects_noncanonical_bigint_and_identifier_constants() {
+        for (kind, value) in [
+            (ConstantKind::BigInt, json!("01")),
+            (ConstantKind::BigInt, json!("-0")),
+            (ConstantKind::FunctionId, json!("not an id")),
+            (ConstantKind::BindingId, json!("bad id")),
+        ] {
+            let instructions = vec![
+                RegisterInstruction {
+                    operation: RegisterOperation::Constant {
+                        destination: 0,
+                        constant: 0,
+                        kind,
+                    },
+                    may_throw: false,
+                },
+                RegisterInstruction {
+                    operation: RegisterOperation::Return { source: 0 },
+                    may_throw: false,
+                },
+            ];
+            let code = encode_register_code(&instructions).expect("encode");
+            let bytes = build_ogmb_v1(manifest(2, 1), &code, &[value], &[], None)
+                .expect("build malformed constant");
+            let errors = verify_register_artifact(&bytes, &[])
+                .expect_err("invalid constant payload must be rejected");
+            assert!(errors.iter().any(|item| item.code == "constant.kind_mismatch"));
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_entry_register_mapping() {
+        let instructions = vec![RegisterInstruction {
+            operation: RegisterOperation::Return { source: 1 },
+            may_throw: false,
+        }];
+        let code = encode_register_code(&instructions).expect("encode");
+        let mut artifact_manifest = manifest(1, 0);
+        artifact_manifest["metadata"]["frame_layout"]["parameter_count"] = json!(1);
+        artifact_manifest["metadata"]["frame_layout"]["register_count"] = json!(2);
+        artifact_manifest["metadata"]["verifier_summary"]["max_register_index"] = json!(1);
+        artifact_manifest["metadata"]["environment"]["bindings"] = json!([{
+            "id":"parameter_0","name":"value","kind":"parameter","mutable":true,
+            "semantic_type":"number","representation":"boxed"
+        }]);
+        artifact_manifest["metadata"]["environment"]["locations"] = json!([{
+            "binding":"parameter_0","kind":"register","index":0
+        }]);
+        let bytes = build_ogmb_v1(artifact_manifest, &code, &[], &[], None)
+            .expect("build malformed entry layout");
+        let errors = verify_register_artifact(&bytes, &[1])
+            .expect_err("entry registers must follow canonical M1 prefix layout");
+        assert!(errors.iter().any(|item| item.code == "register.entry_layout"));
     }
 
     #[test]

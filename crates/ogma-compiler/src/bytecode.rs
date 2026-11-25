@@ -160,7 +160,37 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
 
     for document in documents {
         let parent = &document.function;
+        let mut ancestor_environments = std::collections::BTreeSet::new();
+        let mut parent_environment = parent.environment.parent.as_deref();
+        while let Some(environment_id) = parent_environment {
+            if !ancestor_environments.insert(environment_id.to_owned()) {
+                return Err(vec![diagnostic(
+                    "bytecode.environment_parent_cycle",
+                    format!("$.function.{}.environment.parent", parent.id),
+                    format!("environment parent chain contains a cycle at {environment_id:?}"),
+                )]);
+            }
+            let owner = environments.get(environment_id).ok_or_else(|| {
+                vec![diagnostic(
+                    "bytecode.environment_parent_missing",
+                    format!("$.function.{}.environment.parent", parent.id),
+                    format!("parent environment {environment_id:?} is absent from the compilation unit"),
+                )]
+            })?;
+            parent_environment = owner.function.environment.parent.as_deref();
+        }
+
         for capture in &parent.captures {
+            if !ancestor_environments.contains(&capture.source_environment) {
+                return Err(vec![diagnostic(
+                    "bytecode.capture_owner_not_ancestor",
+                    format!("$.function.{}.captures.{}", parent.id, capture.id),
+                    format!(
+                        "capture source environment {:?} is not on the function's lexical parent chain",
+                        capture.source_environment
+                    ),
+                )]);
+            }
             let owner = environments
                 .get(capture.source_environment.as_str())
                 .ok_or_else(|| {
@@ -2050,7 +2080,7 @@ fn diagnostic(code: &str, path: impl Into<String>, message: impl Into<String>) -
 mod tests {
     use super::*;
     use ogma_core_ir::{
-        BasicBlock, Capture, CaptureMode, Function, FunctionDocument, Representation,
+        BasicBlock, Binding, Capture, CaptureMode, Function, FunctionDocument, Representation,
         ReturnSignature, SemanticType, SourceFile, SourceLanguage, Terminator,
     };
 
@@ -2133,6 +2163,83 @@ mod tests {
                 }],
             },
         }
+    }
+
+    #[test]
+    fn rejects_capture_sources_outside_the_lexical_parent_chain() {
+        let mut owner = function_document();
+        owner.function.id = "owner_fn".to_owned();
+        owner.function.environment.bindings.push(Binding {
+            id: "binding_outer".to_owned(),
+            name: "outer".to_owned(),
+            kind: BindingKind::Let,
+            mutable: true,
+            semantic_type: SemanticType::Number,
+            representation: Representation::Boxed,
+        });
+
+        let mut unrelated = function_document();
+        unrelated.function.id = "unrelated_fn".to_owned();
+        unrelated.function.environment.id = "env_unrelated".to_owned();
+        for block in &mut unrelated.function.blocks {
+            for instruction in &mut block.instructions {
+                match &mut instruction.source {
+                    Source::User { scope, .. } | Source::Generated { scope, .. } => {
+                        *scope = Some("env_unrelated".to_owned());
+                    }
+                }
+            }
+            match &mut block.terminator {
+                Terminator::Jump { source, .. }
+                | Terminator::Branch { source, .. }
+                | Terminator::Return { source, .. }
+                | Terminator::Unreachable { source, .. } => match source {
+                    Source::User { scope, .. } | Source::Generated { scope, .. } => {
+                        *scope = Some("env_unrelated".to_owned());
+                    }
+                },
+            }
+        }
+
+        let mut child = function_document();
+        child.function.id = "child_fn".to_owned();
+        child.function.environment.id = "env_child".to_owned();
+        child.function.environment.parent = Some("env_unrelated".to_owned());
+        for block in &mut child.function.blocks {
+            for instruction in &mut block.instructions {
+                match &mut instruction.source {
+                    Source::User { scope, .. } | Source::Generated { scope, .. } => {
+                        *scope = Some("env_child".to_owned());
+                    }
+                }
+            }
+            match &mut block.terminator {
+                Terminator::Jump { source, .. }
+                | Terminator::Branch { source, .. }
+                | Terminator::Return { source, .. }
+                | Terminator::Unreachable { source, .. } => match source {
+                    Source::User { scope, .. } | Source::Generated { scope, .. } => {
+                        *scope = Some("env_child".to_owned());
+                    }
+                },
+            }
+        }
+        child.function.captures.push(Capture {
+            id: "capture_outer".to_owned(),
+            source_environment: owner.function.environment.id.clone(),
+            binding: "binding_outer".to_owned(),
+            name: "outer".to_owned(),
+            mutable: true,
+            semantic_type: SemanticType::Number,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Cell,
+        });
+
+        let errors = compile_functions(&[owner, unrelated, child])
+            .expect_err("capture must originate from a lexical ancestor");
+        assert!(errors
+            .iter()
+            .any(|item| item.code == "bytecode.capture_owner_not_ancestor"));
     }
 
     #[test]
