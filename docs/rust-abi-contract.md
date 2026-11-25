@@ -120,8 +120,9 @@ are not used as the execution backend.
 - `Engine` validates the resource policy and creates independent owner-thread
   `Runtime` instances. Each Runtime owns one production Heap/GC and is neither
   `Send` nor `Sync`. A `Context` exclusively borrows its Runtime, loads
-  verifier-accepted OGMB artifacts, executes exports and is dropped before the
-  Runtime can be reused or destroyed.
+  verifier-accepted OGMB artifacts, lists their stable function IDs/names with
+  `Context::functions()`, executes a selected function by its canonical OGMB
+  ID and is dropped before the Runtime can be reused or destroyed.
 - The public Rust API exposes opaque `Value` values, explicit
   generation-checked `PersistentHandle` promotion/release, a strict-LIFO RAII
   `RootScope`, explicit collection and heap accounting. Heap cells, GC
@@ -171,10 +172,10 @@ advertise asynchronous scheduling as available.
 
 The public C declarations are kept in
 `crates/ogma-embedding/include/ogma_embedding_abi.h`. The Rust consumer
-integration tests compile JavaScript to OGMB, create and drop real
-Runtime/Context values, execute the production interpreter, invoke Rust/C
-host callbacks, preserve Return/Throw completion kind, force GC and verify
-handle invalidation.
+integration tests compile JavaScript to OGMB, discover stable entry IDs from
+the loaded module metadata, create and drop real Runtime/Context values,
+execute the production interpreter, invoke Rust/C host callbacks, preserve
+Return/Throw completion kind, force GC and verify handle invalidation.
 
 ## Explicit exclusions
 
