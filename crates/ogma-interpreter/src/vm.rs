@@ -671,9 +671,7 @@ impl ExecutableModule {
         };
         state.max_call_depth_reached = state.max_call_depth_reached.max(entry_depth);
         state.active_stack_bytes = requested_stack_bytes;
-        state.max_stack_bytes_reached = state
-            .max_stack_bytes_reached
-            .max(requested_stack_bytes);
+        state.max_stack_bytes_reached = state.max_stack_bytes_reached.max(requested_stack_bytes);
         let completion = self.run_loop(heap, host, options, state, vec![root_frame]);
         state.active_stack_bytes = base_stack_bytes;
         completion
@@ -803,9 +801,8 @@ impl ExecutableModule {
                         });
                     }
                     state.active_stack_bytes = requested_stack_bytes;
-                    state.max_stack_bytes_reached = state
-                        .max_stack_bytes_reached
-                        .max(requested_stack_bytes);
+                    state.max_stack_bytes_reached =
+                        state.max_stack_bytes_reached.max(requested_stack_bytes);
                     frames.push(frame);
                     frames.push(*child);
                 }
@@ -1371,8 +1368,7 @@ impl ExecutableModule {
             return Err(InterpreterError::CallDepthExceeded { limit: call_limit });
         }
         let child_stack_bytes = VmFrame::estimated_stack_bytes(&image);
-        let requested_stack_bytes =
-            state.active_stack_bytes.saturating_add(child_stack_bytes);
+        let requested_stack_bytes = state.active_stack_bytes.saturating_add(child_stack_bytes);
         if requested_stack_bytes > options.max_stack_bytes {
             return Err(InterpreterError::StackQuotaExceeded {
                 limit_bytes: options.max_stack_bytes,
@@ -2001,9 +1997,10 @@ impl VmFrame {
         let registers = image
             .register_count
             .saturating_mul(std::mem::size_of::<RegisterValue>());
-        let bindings = image.local_binding_ids.len().saturating_mul(
-            std::mem::size_of::<BindingId>() + std::mem::size_of::<usize>() * 2,
-        );
+        let bindings = image
+            .local_binding_ids
+            .len()
+            .saturating_mul(std::mem::size_of::<BindingId>() + std::mem::size_of::<usize>() * 2);
         std::mem::size_of::<Self>()
             .saturating_add(registers)
             .saturating_add(bindings)
