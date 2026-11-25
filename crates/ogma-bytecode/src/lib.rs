@@ -739,7 +739,7 @@ pub fn verify_register_artifact(
         &instructions,
         frame_count,
         entry_registers,
-        constants.len(),
+        &constants,
         code.len(),
     )?;
     if let Some(map) = source_map.as_ref() {
@@ -1079,9 +1079,10 @@ fn verify_register_program(
     instructions: &[DecodedInstruction],
     frame_count: u32,
     entry_registers: &[u16],
-    constant_count: usize,
+    constants: &[Value],
     code_size: usize,
 ) -> Result<(), Vec<Diagnostic>> {
+    let constant_count = constants.len();
     let mut errors = Vec::new();
     let mut by_offset = BTreeMap::new();
     let mut previous_end = 0u32;
