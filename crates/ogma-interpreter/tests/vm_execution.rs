@@ -1,3 +1,5 @@
+//! End-to-end tests for verified OGMB loading and M1 interpreter execution.
+
 use ogma_bytecode::{
     BinaryOperation, CallKind, ConstantKind, RegisterInstruction, RegisterOperation, build_ogmb_v1,
     encode_register_code,
