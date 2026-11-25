@@ -1443,9 +1443,8 @@ pub unsafe extern "C" fn ogma_context_sum_numbers(
     }
 }
 
-type RustHostCallback =
-    dyn for<'a> Fn(&mut HostCallContext<'a>, &[Value]) -> Result<HostCallCompletion, HostError>
-        + 'static;
+type RustHostCallback = dyn for<'a> Fn(&mut HostCallContext<'a>, &[Value]) -> Result<HostCallCompletion, HostError>
+    + 'static;
 
 #[derive(Clone)]
 enum HostHandler {
