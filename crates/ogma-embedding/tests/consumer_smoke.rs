@@ -1,3 +1,8 @@
+//! External Rust consumer smoke tests for the production embedding API.
+//!
+//! These tests compile JavaScript to verified OGMB artifacts, execute them
+//! through the public Engine/Runtime/Context API, and exercise host callbacks.
+
 use ogma_compiler::compile_to_bytecode;
 use ogma_embedding::{
     Engine, EngineConfig, ExecutionCompletion, ExecutionRequest, HostCallCompletion,
