@@ -717,7 +717,7 @@ mod tests {
             ),
             (
                 "closure_capture",
-                "function makeCounter() { let count = 0; const step = 1; function increment() { count = count + step; return count; } return increment; } makeCounter();",
+                "function makeCounter() { let count = 0; const step = 1; const increment = function() { count = count + step; return count; }; return increment; } makeCounter();",
             ),
             (
                 "propagated_exception",
