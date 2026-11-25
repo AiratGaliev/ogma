@@ -1247,9 +1247,7 @@ impl ExecutableModule {
                     Err(HostError::Denied) => {
                         Err(InterpreterError::HostCapabilityDenied(capability))
                     }
-                    Err(HostError::WrongRuntime) => {
-                        Err(InterpreterError::HostRuntimeMismatch)
-                    }
+                    Err(HostError::WrongRuntime) => Err(InterpreterError::HostRuntimeMismatch),
                     Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
                     Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
                     Err(HostError::CallbackFailed) => Err(InterpreterError::HostCallbackFailed),
