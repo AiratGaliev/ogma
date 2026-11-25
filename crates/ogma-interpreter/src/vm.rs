@@ -1497,7 +1497,7 @@ impl FunctionImage {
                 "const" => {
                     const_binding_ids.insert(id);
                     BindingDefinition::uninitialized(id, false)
-                },
+                }
                 _ => {
                     return Err(InterpreterError::UnsupportedOperation(
                         "catch/import binding",
