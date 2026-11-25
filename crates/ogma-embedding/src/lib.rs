@@ -2194,8 +2194,7 @@ mod tests {
         }
         let mut value = OgmaHandle::default();
         // SAFETY: the callback receives the active Runtime/Context pair.
-        let status =
-            unsafe { ogma_context_create_boolean(runtime, context, boolean, &mut value) };
+        let status = unsafe { ogma_context_create_boolean(runtime, context, boolean, &mut value) };
         if status != OgmaStatus::OK {
             return status;
         }
