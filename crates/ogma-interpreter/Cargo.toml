@@ -13,3 +13,8 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+ogma-compiler.workspace = true
+ogma-frontend.workspace = true
+oxc_allocator = "=0.158.0"
