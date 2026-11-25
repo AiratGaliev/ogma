@@ -220,6 +220,14 @@ fn executes_nested_function_calls_using_verified_function_table() {
                 may_throw: false,
             },
             RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 0,
+                    kind: CallKind::MakeClosure,
+                    sources: vec![0],
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
                 operation: RegisterOperation::Constant {
                     destination: 1,
                     constant: 1,
