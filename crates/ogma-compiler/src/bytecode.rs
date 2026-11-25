@@ -2055,8 +2055,8 @@ fn diagnostic(code: &str, path: impl Into<String>, message: impl Into<String>) -
 mod tests {
     use super::*;
     use ogma_core_ir::{
-        BasicBlock, Function, FunctionDocument, Representation, ReturnSignature, SemanticType,
-        SourceFile, SourceLanguage, Terminator,
+        BasicBlock, Capture, CaptureMode, Function, FunctionDocument, Representation,
+        ReturnSignature, SemanticType, SourceFile, SourceLanguage, Terminator,
     };
 
     fn function_document() -> FunctionDocument {
@@ -2138,6 +2138,35 @@ mod tests {
                 }],
             },
         }
+    }
+
+    #[test]
+    fn normalized_source_rewrites_capture_aliases_without_moving_bindings() {
+        let mut function = function_document().function;
+        function.captures.push(Capture {
+            id: "capture_0".to_owned(),
+            source_environment: "env_parent".to_owned(),
+            binding: "binding_outer".to_owned(),
+            name: "outer".to_owned(),
+            mutable: true,
+            semantic_type: SemanticType::Number,
+            representation: Representation::Boxed,
+            mode: CaptureMode::Cell,
+        });
+        let source = Source::Generated {
+            reason: "capture alias regression".to_owned(),
+            scope: Some("env_test".to_owned()),
+            bindings: vec![
+                "binding_outer".to_owned(),
+                "capture_0".to_owned(),
+                "binding_outer".to_owned(),
+            ],
+            suspension: None,
+            inline_chain: Vec::new(),
+        };
+
+        let normalized = normalized_source(&source, &function).expect("normalize source");
+        assert_eq!(normalized["bindings"], json!(["capture_0"]));
     }
 
     #[test]
