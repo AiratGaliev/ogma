@@ -1315,7 +1315,10 @@ fn entry_arguments_survive_vm_setup_and_return_values_can_be_promoted() {
         ExecutionCompletion::Return(value) => value,
         completion => panic!("expected identity return, got {completion:?}"),
     };
-    assert!(heap.strict_equal(argument, returned).expect("same heap object"));
+    assert!(
+        heap.strict_equal(argument, returned)
+            .expect("same heap object")
+    );
     let persistent = heap
         .retain_host_value(returned)
         .expect("promote transient completion to a host root");
@@ -1327,9 +1330,11 @@ fn entry_arguments_survive_vm_setup_and_return_values_can_be_promoted() {
     let resolved = heap
         .resolve_host_handle(persistent)
         .expect("persistent completion remains alive");
-    assert!(heap.strict_equal(argument, resolved).expect("same retained object"));
+    assert!(
+        heap.strict_equal(argument, resolved)
+            .expect("same retained object")
+    );
 }
-
 
 #[test]
 fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
