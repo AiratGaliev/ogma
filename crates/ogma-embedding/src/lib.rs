@@ -2805,7 +2805,9 @@ mod tests {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
-        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
         let descriptor = c_host_descriptor(
             b"benchmark.host.echo",
             46,
@@ -3013,10 +3015,7 @@ mod tests {
                 ExecutionOptions::default(),
             )
             .expect_err("a cloned registry must not dispatch on another Runtime heap");
-        assert!(matches!(
-            error,
-            InterpreterError::HostRuntimeMismatch
-        ));
+        assert!(matches!(error, InterpreterError::HostRuntimeMismatch));
     }
 
     #[test]
