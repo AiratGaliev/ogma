@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
+mod jobs;
+pub use jobs::{JobPumpOutcome, JobPumpReport, JobQueueError, JobQueueState};
+use jobs::JobScheduler;
+
 use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
     CancellationToken, ExecutableFunctionInfo, ExecutableModule, ExecutionCompletion,
@@ -262,6 +266,8 @@ pub struct EngineConfig {
     /// M1 synchronous execution does not enqueue jobs. OGM-48 supplies the
     /// queue/pump and consumes this already-validated resource policy.
     pub max_pending_jobs: usize,
+    /// Maximum number of callbacks dispatched by one host pump call.
+    pub max_jobs_per_pump: usize,
 }
 
 impl Default for EngineConfig {
@@ -274,6 +280,7 @@ impl Default for EngineConfig {
             max_call_depth: 256,
             interrupt_poll_interval: 64,
             max_pending_jobs: 1024,
+            max_jobs_per_pump: 64,
         }
     }
 }
@@ -302,6 +309,9 @@ impl EngineConfig {
         if self.max_pending_jobs > 1_048_576 {
             return Err(ConfigurationError::PendingJobLimitTooLarge);
         }
+        if self.max_jobs_per_pump == 0 || self.max_jobs_per_pump > 1_048_576 {
+            return Err(ConfigurationError::InvalidJobPumpBudget);
+        }
         Ok(())
     }
 }
@@ -321,6 +331,8 @@ pub enum ConfigurationError {
     ZeroPollInterval,
     /// Pending-job capacity exceeds the supported configuration ceiling.
     PendingJobLimitTooLarge,
+    /// The per-pump job budget must be within 1..=1,048,576.
+    InvalidJobPumpBudget,
     /// Stack quota must be positive.
     ZeroStackQuota,
     /// Per-call instruction budget must be positive when supplied.
@@ -367,6 +379,7 @@ impl Engine {
             heap,
             abi_runtime: Rc::new(OgmaRuntime::new(id)),
             next_context_id: 1,
+            jobs: JobScheduler::default(),
             _thread_affinity: PhantomData,
         })
     }
@@ -383,6 +396,7 @@ pub struct Runtime {
     heap: Heap,
     abi_runtime: Rc<OgmaRuntime>,
     next_context_id: u64,
+    jobs: JobScheduler,
     _thread_affinity: PhantomData<Rc<()>>,
 }
 

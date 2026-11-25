@@ -402,6 +402,7 @@ pub struct ExecutableFunctionInfo {
 ///
 /// The loader accepts serialized bytes and re-runs verification. Caller-
 /// supplied decoded instructions and Core IR are never execution inputs.
+#[derive(Clone)]
 pub struct ExecutableModule {
     functions: BTreeMap<String, Rc<FunctionImage>>,
     runtime_functions: HashMap<u32, String>,
@@ -662,6 +663,101 @@ impl ExecutableModule {
             1,
         )?;
         Ok(state.report(completion))
+    }
+
+    /// Executes a callable Function value using this module's verified function table.
+    ///
+    /// Unlike execute(), this preserves the closure environment stored in the
+    /// supplied Function value. It is used by the host-driven job pump to invoke
+    /// queued callbacks without creating a second Runtime.
+    pub fn execute_callable<H: Host>(
+        &self,
+        heap: &mut Heap,
+        callee: Value,
+        arguments: &[Value],
+        host: &mut H,
+        options: ExecutionOptions,
+    ) -> Result<ExecutionReport, InterpreterError> {
+        validate_options(&options)?;
+        let function_id = heap.function_id(callee)?;
+        let entry_id = self
+            .runtime_functions
+            .get(&function_id.0)
+            .ok_or_else(|| InterpreterError::MissingFunction(format!("runtime function {}", function_id.0)))?;
+        let image = self
+            .functions
+            .get(entry_id)
+            .cloned()
+            .ok_or_else(|| InterpreterError::MissingFunction(entry_id.clone()))?;
+        let depth_limit = options.max_call_depth.min(image.max_call_depth);
+        let frame_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        if frame_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: frame_stack_bytes,
+            });
+        }
+
+        let mut state = ExecutionState::new(&options)?;
+        let scope = heap.open_scope()?;
+        let setup = (|| {
+            // Root inputs before activation allocations can collect.
+            heap.scope_root(scope, callee)?;
+            for argument in arguments {
+                heap.scope_root(scope, *argument)?;
+            }
+            heap.scope_root(scope, options.global_this)?;
+            heap.enter_function_call(
+                callee,
+                &image.definition,
+                Value::undefined(),
+                arguments,
+                options.global_this,
+            )
+        })();
+        let activation = match setup {
+            Ok(activation) => activation,
+            Err(error) => {
+                let _ = heap.close_scope(scope);
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = heap.close_scope(scope) {
+            let _ = heap.leave_function_call(activation);
+            return Err(error.into());
+        }
+
+        let root_frame = match VmFrame::new(
+            heap,
+            image,
+            activation,
+            callee,
+            arguments,
+            1,
+            depth_limit,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = heap.leave_function_call(activation);
+                return Err(error);
+            }
+        };
+        state.max_call_depth_reached = 1;
+        state.active_stack_bytes = frame_stack_bytes;
+        state.max_stack_bytes_reached = frame_stack_bytes;
+        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame]);
+        state.active_stack_bytes = 0;
+        completion.map(|completion| state.report(completion))
+    }
+
+    /// Returns whether a Function value belongs to this verified module.
+    pub fn contains_callable(
+        &self,
+        heap: &Heap,
+        callee: Value,
+    ) -> Result<bool, InterpreterError> {
+        let function_id = heap.function_id(callee)?;
+        Ok(self.runtime_functions.contains_key(&function_id.0))
     }
 
     #[allow(clippy::too_many_arguments)]
