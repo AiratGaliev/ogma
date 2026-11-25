@@ -480,15 +480,16 @@ impl ExecutableModule {
             heap.scope_root_environment(scope, outer)?;
             let closure = heap.create_closure(&image.definition, outer, options.global_this)?;
             heap.scope_root(scope, closure)?;
-            heap.enter_function_call(
+            let activation = heap.enter_function_call(
                 closure,
                 &image.definition,
                 Value::undefined(),
                 arguments,
                 options.global_this,
-            )
+            )?;
+            Ok::<_, HeapError>((activation, closure))
         })();
-        let activation = match setup {
+        let (activation, function_value) = match setup {
             Ok(activation) => activation,
             Err(error) => {
                 let _ = heap.close_scope(scope);
@@ -501,7 +502,15 @@ impl ExecutableModule {
         }
 
         let depth_limit = options.max_call_depth.min(image.max_call_depth);
-        let root_frame = match VmFrame::new(heap, image, activation, arguments, 1, depth_limit) {
+        let root_frame = match VmFrame::new(
+            heap,
+            image,
+            activation,
+            function_value,
+            arguments,
+            1,
+            depth_limit,
+        ) {
             Ok(frame) => frame,
             Err(error) => {
                 let _ = heap.leave_function_call(activation);
@@ -1150,6 +1159,7 @@ impl ExecutableModule {
             heap,
             image,
             activation,
+            callee,
             arguments,
             caller.depth + 1,
             call_limit,
@@ -1719,6 +1729,7 @@ enum RegisterValue {
 struct VmFrame {
     image: Rc<FunctionImage>,
     activation: CallActivation,
+    function_value: Value,
     registers: Vec<RegisterValue>,
     initialized_bindings: HashSet<BindingId>,
     pc: usize,
@@ -1733,6 +1744,7 @@ impl VmFrame {
         heap: &mut Heap,
         image: Rc<FunctionImage>,
         activation: CallActivation,
+        function_value: Value,
         arguments: &[Value],
         depth: u32,
         call_depth_limit: u32,
@@ -1782,6 +1794,7 @@ impl VmFrame {
         Ok(Self {
             image: image.clone(),
             activation,
+            function_value,
             registers,
             initialized_bindings: image.var_binding_ids.clone(),
             pc: 0,
@@ -1824,6 +1837,7 @@ fn root_frame_values(
 ) -> Result<(), InterpreterError> {
     heap.scope_root_environment(scope, frame.activation.environment())?;
     heap.scope_root(scope, frame.activation.this_value())?;
+    heap.scope_root(scope, frame.function_value)?;
     for value in &frame.registers {
         if let RegisterValue::Value(value) = value {
             heap.scope_root(scope, *value)?;
