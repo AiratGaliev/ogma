@@ -1281,7 +1281,7 @@ fn compiler_output_materializes_const_ssa_values_before_by_value_capture() {
         "ogm46-const-capture",
         "memory:///ogm46-const-capture.js",
         None,
-        "function run(seed) { const immutable = seed + 1; function read() { return immutable; } const callback = read; return callback(); }",
+        "function run(seed) { const immutable = seed + 1; const read = function() { return immutable; }; return read(); }",
     )
     .expect("source is valid");
     let parsed = parse(&allocator, &source, ParseRequestOptions::default())
