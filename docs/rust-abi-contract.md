@@ -138,7 +138,9 @@ are not used as the execution backend.
   and name to generation-checked slots, validates ABI version, exact descriptor
   size, inline UTF-8 name, signature/signature ID, reserved fields, effects
   and capability requirements, then snapshots the callback before invoking
-  user code. Unregistration returns `Busy` while dispatch is active.
+  user code. The registry also verifies the active HostCallContext belongs to
+  the same Runtime heap; a detached/cloned registry cannot dispatch into a
+  different Runtime. Unregistration returns `Busy` while dispatch is active.
 - C callbacks receive callback-scoped opaque handles rooted in the actual
   Runtime. Handles are released after callback completion and become stale.
   Exported helpers provide checked Number/Boolean reads and writes, checked
