@@ -5,7 +5,7 @@
 - **Decoded verifier input:** `ogma.bytecode-verification` `1.0.0` ([JSON Schema](../contracts/ogmb/v1/verification-input.schema.json))
 - **Reference verifier:** [`.github/scripts/verify_ogmb.py`](../.github/scripts/verify_ogmb.py)
 - **Reference fixture generator:** [`tests/ogmb/build_fixtures.py`](../tests/ogmb/build_fixtures.py)
-- **Status:** M0 container/verifier contract and dependency-free proof harness. This is not a production encoder, decoder, interpreter or runtime.
+- **Status:** M0 container/verifier contract; M1 Rust register encoder, decoder-to-verifier facts and structural verification are implemented by OGM-45. No bytecode interpreter or production-frozen ISA is implied.
 - **Authority:** this document refines architecture specification section 0.4 and OGM-36. Core IR semantics remain defined only by [Core IR Contract v1](core-ir-contract.md).
 
 ## 1. Purpose and security boundary
@@ -22,7 +22,7 @@ An artifact is untrusted input. Before an artifact can be accepted for execution
 6. Verify opcode/operand constraints, constant references, control flow, execution state, exception regions and declared resource limits.
 7. Only then make the verified instruction stream available to an interpreter.
 
-The checked-in implementation is a reference proof for the binary envelope and common decoder-to-verifier contract. It does not implement a production bytecode decoder or interpreter. An artifact without decoder verification input is rejected for execution. `ogma.test-records.v1` is a fixture-only identifier and is not a production encoding selection.
+The Python implementation remains the independent reference verifier and corpus oracle. OGM-45 adds a Rust `ogma-bytecode` boundary for the selected M1 register encoding: it writes and reads the unchanged OGMB v1 envelope, decodes register instructions into the normalized verification input, checks metadata/CFG/register initialization and returns a `VerifiedArtifact` only after validation. This is a compile/verification boundary, not an interpreter or an execution authorization token; the Runtime must still verify untrusted bytes before execution. An artifact without decoder verification input is rejected for execution. `ogma.test-records.v1` remains a fixture-only identifier and is not a production encoding selection.
 
 The verifier is a pre-execution structural safety boundary, not a general sandbox. Runtime instruction/time budgets, heap quotas, cancellation, call-depth accounting and host capabilities must also be enforced dynamically. Native AOT code executes in the host process; these checks do not isolate arbitrary native code. Untrusted native execution requires a separate process or WASM boundary.
 
@@ -158,6 +158,25 @@ The reference semantic operation vocabulary is `nop`, `constant`, `unary`, `bina
 
 Instructions exactly and contiguously cover the code section from byte offset zero to `code_size`. Offsets, sizes, opcode IDs, operands, local indexes, constant indexes and branch targets are uint32 values; booleans are not integers for this purpose. Instruction offsets are unique and sizes are positive. Branch targets and exception boundaries resolve to instruction boundaries (the exclusive end of an exception range may equal `code_size`). Decoder output must not contain host pointers, Rust references, Rust type/layout identifiers, native addresses, target calling-convention values or target object offsets.
 
+
+## 5.1. M1 Core IR to register-bytecode compiler
+
+OGM-45 introduces the first Rust compiler path over canonical Core IR v1. Every source compilation unit produces one independently verified OGMB v1 artifact per Core IR function/CodeBlock. The public compiler pipeline is:
+
+`ParsedProgram → semantic analysis → verified Core IR v1 → register lowering/layout → OGMB v1 → Rust register verifier`.
+
+The M1 decoder identity is `ogma.register.m1.v1` and the manifest declares `metadata.execution_model = "register"`. The encoding is deliberately an M1 implementation profile, not a frozen public ISA: numeric opcode values, sub-opcode tags and operand widths remain private to this decoder until the Rust interpreter and measured workloads establish a stable format. The register execution model itself is the M0 OGM-16 recommendation and is the M1 baseline.
+
+The current Rust lowering handles the Core IR operations admitted by the synchronous M1 subset: literals, unary conversions, binary JS operations, named/computed property access, calls/construction, explicit host capability calls, closure creation, lexical binding loads/stores, branch/jump/return and propagated throws. It preserves receiver/new-target operands, property-key evaluation, ordered call sources, SSA block arguments (through parallel-copy bridge blocks), and conservative `may_throw` facts. Unsupported operations, suspension, local exceptional CFG edges and local catch/finally handlers fail with diagnostics; they are never silently erased. Local lexical writes are emitted as the explicit `StoreBinding` call kind (cell captures use `StoreCapture`); this preserves the storage operation for the following interpreter rather than disguising it as an ordinary register copy.
+
+Each function artifact has a deterministic scalar constant pool, explicit constant-kind tags (so `undefined`, `null`, `BigInt`, TDZ sentinel and compiler capability/function/binding-identity tokens do not collapse into one value), function/code-generation/cache identity, register frame and binding/capture locations, verifier summary and an optional source map. Source maps carry one provenance record per emitted instruction, source-file identities/positions, function lexical-scope metadata, and variable storage ranges. Mutable captures are represented by shared cells; by-value captures remain immutable copies. Register assignment, pool ordering, instruction layout and metadata serialization are deterministic for identical Core IR input.
+
+The Rust boundary independently checks the OGMB header and section directory, strict bounded JSON (including duplicate-key rejection), manifest and metadata field sets, source-map references and boundaries, digest binding, registered encoding identity, decoded instruction coverage, register bounds, CFG targets/reachability and definite register initialization. The normalized verification-input object is derived from the exact code bytes; callers cannot supply unrelated decoder facts to bless an artifact. The compiler's integration test also submits emitted container/program pairs to the repository Python reference verifier.
+
+OGMB v1 intentionally has no free-form manifest feature-list field: its exact manifest and metadata field sets are part of the contract, and the v1 header feature-flags field must remain zero. For M1, the registered `encoding_id` together with `execution_model` is the versioned decoder/execution-model requirement. Do not add ad hoc feature fields or set reserved header bits; a future independent runtime feature requirement needs an explicitly versioned contract/schema change. The current encoder rejects unsupported operations and profile features at compile time.
+
+This implementation does not execute bytecode, prove broad ECMAScript conformance, implement AOT/JIT or freeze the production ISA. The interpreter and M1 language/runtime semantics remain owned by the Runtime and interpreter work.
+
 ## 6. Opcode, operand and constant-pool invariants
 
 - A decoder identifies the semantic operation class; unsupported classes fail closed.
@@ -265,7 +284,7 @@ The checked-in corpus covers valid stack/register candidates, exception and susp
 - Unknown versions and unknown mandatory features fail closed. V1 accepts only 1.0. A future minor version is accepted by an older reader only when an explicit compatibility policy and safe extension rules are defined.
 - Native AOT object files are separate target-specific artifacts, not native objects embedded in `.ogmb`.
 - No binary compatibility with QuickJS `qjsc` bytecode is promised or implied. qjsc encoding, pointer/layout assumptions and runtime internals are outside this contract.
-- OGM-36 does not implement a production encoder, decoder, interpreter, Core IR lowering, native AOT backend or sandbox.
-- OGM-36 does not decide stack versus register encoding. OGM-16 owns that comparison.
+- OGM-36 established the container and verifier contracts; OGM-45 adds the first Rust Core IR → register-bytecode encoder and structural decoder/verifier boundary. This is not an interpreter or sandbox.
+- OGM-16 selected the register-oriented execution model as the M1 baseline. Its opcode/operand prototype values remain provisional; Rust-native interpreter evidence is still required before freezing a production ISA.
 - Core IR v1 remains the sole source of Core IR semantics; this bytecode contract does not duplicate or redefine those semantics.
 - The planned M2 Rust embedding generator is a thin build-time adapter over canonical `.ogmb`: it emits a Rust source module that includes the same artifact bytes at Rust compile time. It does not change this container, add a new execution backend or Rust ABI, generate Rust implementations of JavaScript semantics, or bypass Runtime verification. The embedded bytes remain untrusted input and must pass the ordinary verifier. See [Rust Embedding Code Generation Contract](rust-embedding-codegen-contract.md); this generator is not implemented by OGM-36.
