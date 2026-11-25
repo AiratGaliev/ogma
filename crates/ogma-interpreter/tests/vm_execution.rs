@@ -864,6 +864,134 @@ impl Host for RecordingHost {
     }
 }
 
+
+struct CancellingHost {
+    token: CancellationToken,
+}
+
+impl Host for CancellingHost {
+    fn call(
+        &mut self,
+        _heap: &mut Heap,
+        _capability: &str,
+        _arguments: &[Value],
+    ) -> Result<Value, HostError> {
+        self.token.cancel();
+        Ok(Value::number(7.0))
+    }
+}
+
+#[test]
+fn cancellation_inside_nested_host_call_unwinds_every_vm_frame() {
+    let (bindings, captures) = empty_bindings();
+    let child = artifact(
+        "nested_host",
+        "nested_host_env",
+        None,
+        0,
+        3,
+        2,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::HostCapability,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 2,
+                    kind: CallKind::Host,
+                    sources: vec![0],
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!("cancel.request")],
+        bindings.clone(),
+        captures.clone(),
+        Vec::new(),
+    );
+    let parent = artifact(
+        "main",
+        "main_env",
+        None,
+        0,
+        4,
+        3,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::FunctionId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 0,
+                    kind: CallKind::MakeClosure,
+                    sources: vec![0],
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 1,
+                    constant: 1,
+                    kind: ConstantKind::Undefined,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 2,
+                    kind: CallKind::JavaScript,
+                    sources: vec![0, 1],
+                },
+                may_throw: true,
+            },
+            return_register(2),
+        ],
+        vec![json!("nested_host"), JsonValue::Null],
+        bindings,
+        captures,
+        Vec::new(),
+    );
+
+    let module = ExecutableModule::load([parent, child]).expect("verified nested host module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let token = CancellationToken::new();
+    let mut host = CancellingHost {
+        token: token.clone(),
+    };
+    let report = module
+        .execute(
+            &mut heap,
+            "main",
+            &[],
+            &mut host,
+            ExecutionOptions {
+                cancellation: Some(token.clone()),
+                interrupt_poll_interval: 1,
+                ..ExecutionOptions::default()
+            },
+        )
+        .expect("interrupted execution report");
+
+    assert!(token.is_cancelled());
+    assert!(report.instructions_executed > 0);
+    assert_eq!(report.max_call_depth_reached, 2);
+    assert!(matches!(
+        report.completion,
+        ExecutionCompletion::Interrupted(ExecutionInterruption::Cancelled)
+    ));
+}
+
 #[test]
 fn host_calls_are_capability_named_and_traced() {
     let (bindings, captures) = empty_bindings();
