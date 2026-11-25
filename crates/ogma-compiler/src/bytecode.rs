@@ -809,7 +809,7 @@ fn compile_function_with_cells(
                 )]
             })?;
             if let Some(path) = value
-                .get_mut("path")
+                .get("path")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 && let Some(relative) = path.strip_prefix("memory:///")
@@ -1309,7 +1309,7 @@ fn lower_instruction(
             output.push(PlannedInstruction {
                 operation: PlannedOperation::Ready($operation),
                 may_throw: $may_throw,
-                source: $source,
+                source: $source.clone(),
             });
         };
     }
@@ -1991,7 +1991,7 @@ fn normalized_source(source: &Source, function: &Function) -> Result<Value, Vec<
         .map(|capture| (capture.binding.as_str(), capture.id.as_str()))
         .collect();
     if let Some(bindings) = value.get_mut("bindings").and_then(Value::as_array_mut) {
-        for binding in bindings {
+        for binding in bindings.iter_mut() {
             if let Some(id) = binding.as_str().and_then(|id| aliases.get(id).copied()) {
                 *binding = Value::String(id.to_owned());
             }
