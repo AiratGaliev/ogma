@@ -19,7 +19,8 @@ use ogma_bytecode::{
 };
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, ScopeToken, Value, ValueType,
+    CollectionReport, FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError,
+    HostHandle, ScopeToken, Value, ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
@@ -212,10 +213,37 @@ pub struct HostCallContext<'a> {
     parent_depth: u32,
 }
 
+/// Opaque temporary Runtime root created by a synchronous host callback.
+///
+/// The token is generation-checked, belongs to the active Runtime and exposes
+/// neither Value bits nor a GC cell/object pointer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct HostCallRoot(HostHandle);
+
 impl HostCallContext<'_> {
-    /// Returns the Runtime heap for short-lived host operations.
-    pub fn heap(&mut self) -> &mut Heap {
-        self.heap
+    /// Allocates a JavaScript String in the active Runtime.
+    pub fn create_string(&mut self, text: &str) -> Result<Value, HeapError> {
+        self.heap.allocate_string(text)
+    }
+
+    /// Runs tracing collection while preserving all currently registered roots.
+    pub fn collect(&mut self) -> Result<CollectionReport, HeapError> {
+        self.heap.collect()
+    }
+
+    /// Retains a value as a callback-local root until it is explicitly released.
+    pub fn retain_value(&mut self, value: Value) -> Result<HostCallRoot, HeapError> {
+        self.heap.retain_host_value(value).map(HostCallRoot)
+    }
+
+    /// Resolves a callback-local root to a transient Runtime value.
+    pub fn resolve_root(&self, root: HostCallRoot) -> Result<Value, HeapError> {
+        self.heap.resolve_host_handle(root.0)
+    }
+
+    /// Releases a callback-local root and invalidates its generation.
+    pub fn release_root(&mut self, root: HostCallRoot) -> Result<(), HeapError> {
+        self.heap.release_host_handle(root.0)
     }
 
     /// Executes a function in another verified module as a nested activation.
