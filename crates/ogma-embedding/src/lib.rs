@@ -416,9 +416,12 @@ impl Runtime {
             .checked_add(1)
             .ok_or(RuntimeError::IdentitySpaceExhausted)?;
         let context_handle = self.abi_runtime.context_handle(context_id);
-        let host_functions =
-            HostFunctionRegistry::new(Rc::clone(&self.abi_runtime), context_handle)
-                .map_err(RuntimeError::HostRegistry)?;
+        let host_functions = HostFunctionRegistry::new(
+            Rc::clone(&self.abi_runtime),
+            context_handle,
+            self.heap.identity(),
+        )
+        .map_err(RuntimeError::HostRegistry)?;
         Ok(Context {
             runtime: self,
             module: None,
@@ -1527,6 +1530,7 @@ pub struct HostFunctionRegistry {
     inner: Rc<RegistryInner>,
     abi_runtime: Rc<OgmaRuntime>,
     context_handle: OgmaContextHandle,
+    heap_identity: u64,
 }
 
 impl HostFunctionRegistry {
@@ -1534,6 +1538,7 @@ impl HostFunctionRegistry {
     pub fn new(
         abi_runtime: Rc<OgmaRuntime>,
         context_handle: OgmaContextHandle,
+        heap_identity: u64,
     ) -> Result<Self, HostRegistrationError> {
         let id = NEXT_REGISTRY_ID
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1551,6 +1556,7 @@ impl HostFunctionRegistry {
             }),
             abi_runtime,
             context_handle,
+            heap_identity,
         })
     }
 
@@ -1866,6 +1872,9 @@ impl Host for HostFunctionRegistry {
         capability: &str,
         arguments: &[Value],
     ) -> Result<HostCallCompletion, HostError> {
+        if context.heap_identity() != self.heap_identity {
+            return Err(HostError::WrongRuntime);
+        }
         if arguments.len() > MAX_HOST_ARGUMENTS {
             return throw_host_error(context, "RangeError: too many host arguments");
         }
@@ -2958,6 +2967,55 @@ mod tests {
         assert!(matches!(
             report.completion,
             ExecutionCompletion::Return(value) if value.as_number() == Some(7.0)
+        ));
+    }
+
+    #[test]
+    fn cloned_host_registry_rejects_dispatch_on_a_different_runtime_heap() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut first_runtime = engine.create_runtime().expect("first Runtime");
+        let mut first_context = first_runtime.create_context().expect("first Context");
+        first_context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            47,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_generic_echo,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: callback has static lifetime and user_data is null.
+        unsafe {
+            first_context
+                .register_c_host_function(&descriptor)
+                .expect("register callback in first Runtime");
+        }
+        let mut detached_registry = first_context.host_function_registry();
+        drop(first_context);
+        drop(first_runtime);
+
+        let mut second_runtime = engine.create_runtime().expect("second Runtime");
+        let mut second_context = second_runtime.create_context().expect("second Context");
+        second_context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let module = second_context.module.as_ref().expect("loaded module");
+        let error = module
+            .execute(
+                &mut second_context.runtime.heap,
+                "fn_host_call",
+                &[Value::number(31.0)],
+                &mut detached_registry,
+                ExecutionOptions::default(),
+            )
+            .expect_err("a cloned registry must not dispatch on another Runtime heap");
+        assert!(matches!(
+            error,
+            InterpreterError::HostRuntimeMismatch
         ));
     }
 
