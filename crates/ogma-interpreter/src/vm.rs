@@ -6,13 +6,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use ogma_bytecode::{
     ArtifactJsonValue as JsonValue, BinaryOperation, CallKind, ConstantKind,
-    DecodedRegisterInstruction, Diagnostic, RegisterOperation, UnaryOperation,
-    VerifiedArtifact, verify_register_artifact_from_manifest,
+    DecodedRegisterInstruction, Diagnostic, RegisterOperation, UnaryOperation, VerifiedArtifact,
+    verify_register_artifact_from_manifest,
 };
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
@@ -28,14 +31,20 @@ pub struct CancellationToken {
 impl CancellationToken {
     /// Creates a non-cancelled signal.
     #[must_use]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Requests cooperative cancellation.
-    pub fn cancel(&self) { self.cancelled.store(true, Ordering::Release); }
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
 
     /// Returns whether cancellation has been requested.
     #[must_use]
-    pub fn is_cancelled(&self) -> bool { self.cancelled.load(Ordering::Acquire) }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
 }
 
 /// A cooperative VM interruption.
@@ -209,7 +218,9 @@ impl fmt::Display for InterpreterError {
 impl std::error::Error for InterpreterError {}
 
 impl From<HeapError> for InterpreterError {
-    fn from(error: HeapError) -> Self { Self::Runtime(error) }
+    fn from(error: HeapError) -> Self {
+        Self::Runtime(error)
+    }
 }
 
 /// Immutable collection of independently verified OGMB function artifacts.
@@ -246,9 +257,13 @@ impl ExecutableModule {
 
         let mut environments = HashMap::<String, String>::new();
         for (function_id, function) in &raw_functions {
-            if environments.insert(function.environment_id.clone(), function_id.clone()).is_some() {
+            if environments
+                .insert(function.environment_id.clone(), function_id.clone())
+                .is_some()
+            {
                 return Err(InterpreterError::InvalidMetadata(format!(
-                    "duplicate lexical environment identity {:?}", function.environment_id
+                    "duplicate lexical environment identity {:?}",
+                    function.environment_id
                 )));
             }
         }
@@ -272,24 +287,34 @@ impl ExecutableModule {
                 )));
             }
             for capture in &function.captures {
-                let owner_id = environments.get(&capture.source_environment).ok_or_else(|| {
-                    InterpreterError::InvalidMetadata(format!(
-                        "capture {:?} refers to missing source environment {:?}",
-                        capture.id, capture.source_environment
-                    ))
-                })?;
+                let owner_id = environments
+                    .get(&capture.source_environment)
+                    .ok_or_else(|| {
+                        InterpreterError::InvalidMetadata(format!(
+                            "capture {:?} refers to missing source environment {:?}",
+                            capture.id, capture.source_environment
+                        ))
+                    })?;
                 let owner = &raw_functions[owner_id];
-                if !owner.bindings.iter().any(|binding| binding.id == capture.binding) {
+                if !owner
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.id == capture.binding)
+                {
                     return Err(InterpreterError::InvalidMetadata(format!(
-                        "capture {:?} refers to missing binding {:?}", capture.id, capture.binding
+                        "capture {:?} refers to missing binding {:?}",
+                        capture.id, capture.binding
                     )));
                 }
-                let parent = parent.ok_or_else(|| InterpreterError::InvalidMetadata(
-                    "capture has no lexical parent".to_owned(),
-                ))?;
+                let parent = parent.ok_or_else(|| {
+                    InterpreterError::InvalidMetadata("capture has no lexical parent".to_owned())
+                })?;
                 let direct = function.parent_environment.as_deref()
                     == Some(capture.source_environment.as_str())
-                    && parent.bindings.iter().any(|binding| binding.id == capture.binding);
+                    && parent
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.id == capture.binding);
                 let forwarded = parent.captures.iter().any(|item| {
                     item.source_environment == capture.source_environment
                         && item.binding == capture.binding
@@ -309,29 +334,24 @@ impl ExecutableModule {
                 binding_keys.insert((function.environment_id.clone(), binding.id.clone()));
             }
             for capture in &function.captures {
-                binding_keys.insert((
-                    capture.source_environment.clone(),
-                    capture.binding.clone(),
-                ));
-                binding_keys.insert((
-                    closure_environment_key(&function.id),
-                    capture.id.clone(),
-                ));
+                binding_keys.insert((capture.source_environment.clone(), capture.binding.clone()));
+                binding_keys.insert((closure_environment_key(&function.id), capture.id.clone()));
             }
         }
         let mut binding_ids = HashMap::<(String, String), BindingId>::new();
         for (index, key) in binding_keys.into_iter().enumerate() {
-            let numeric = u32::try_from(index + 1)
-                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let numeric =
+                u32::try_from(index + 1).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             binding_ids.insert(key, BindingId(numeric));
         }
 
-        let mut forwarded_capture_bindings =
-            HashMap::<(String, String, String), BindingId>::new();
+        let mut forwarded_capture_bindings = HashMap::<(String, String, String), BindingId>::new();
         for function in raw_functions.values() {
             for capture in &function.captures {
                 let alias_key = (closure_environment_key(&function.id), capture.id.clone());
-                let alias = binding_ids.get(&alias_key).copied()
+                let alias = binding_ids
+                    .get(&alias_key)
+                    .copied()
                     .ok_or(InterpreterError::IdentitySpaceExceeded)?;
                 forwarded_capture_bindings.insert(
                     (
@@ -347,8 +367,8 @@ impl ExecutableModule {
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
         for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
-            let numeric = u32::try_from(index + 1)
-                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let numeric =
+                u32::try_from(index + 1).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let image = Rc::new(FunctionImage::build(
                 raw,
                 FunctionId(numeric),
@@ -367,7 +387,9 @@ impl ExecutableModule {
                     ..
                 } = &instruction.operation
                 {
-                    let target = image.artifact.constants
+                    let target = image
+                        .artifact
+                        .constants
                         .get(*constant as usize)
                         .and_then(JsonValue::as_str)
                         .ok_or(InterpreterError::InvalidConstant(*constant))?;
@@ -385,7 +407,10 @@ impl ExecutableModule {
             }
         }
 
-        Ok(Self { functions, runtime_functions })
+        Ok(Self {
+            functions,
+            runtime_functions,
+        })
     }
 
     /// Loads and verifies one serialized function artifact.
@@ -395,25 +420,33 @@ impl ExecutableModule {
 
     /// Returns the verified function count.
     #[must_use]
-    pub fn function_count(&self) -> usize { self.functions.len() }
+    pub fn function_count(&self) -> usize {
+        self.functions.len()
+    }
 
     /// Returns manifest metadata for a function.
     #[must_use]
     pub fn function_metadata(&self, function_id: &str) -> Option<&JsonValue> {
-        self.functions.get(function_id)
+        self.functions
+            .get(function_id)
             .and_then(|image| image.artifact.manifest.get("metadata"))
     }
 
     /// Returns optional source/debug map for a function.
     #[must_use]
     pub fn source_map(&self, function_id: &str) -> Option<&JsonValue> {
-        self.functions.get(function_id)
+        self.functions
+            .get(function_id)
             .and_then(|image| image.artifact.source_map.as_ref())
     }
 
     /// Resolves a verified instruction offset to its source/debug metadata.
     #[must_use]
-    pub fn source_location(&self, function_id: &str, byte_offset: u32) -> Option<InstructionLocation> {
+    pub fn source_location(
+        &self,
+        function_id: &str,
+        byte_offset: u32,
+    ) -> Option<InstructionLocation> {
         self.functions.get(function_id)?.location(byte_offset)
     }
 
@@ -429,7 +462,10 @@ impl ExecutableModule {
         options: ExecutionOptions,
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
-        let image = self.functions.get(entry_function).cloned()
+        let image = self
+            .functions
+            .get(entry_function)
+            .cloned()
             .ok_or_else(|| InterpreterError::MissingFunction(entry_function.to_owned()))?;
         if !image.captures.is_empty() {
             return Err(InterpreterError::InvalidMetadata(format!(
@@ -511,7 +547,9 @@ impl ExecutableModule {
             if state.fuel_remaining == 0 {
                 frames.push(frame);
                 self.unwind_frames(heap, &mut frames)?;
-                return Ok(ExecutionCompletion::Interrupted(ExecutionInterruption::FuelExhausted));
+                return Ok(ExecutionCompletion::Interrupted(
+                    ExecutionInterruption::FuelExhausted,
+                ));
             }
 
             let instruction = match frame.image.artifact.instructions.get(frame.pc).cloned() {
@@ -566,9 +604,17 @@ impl ExecutableModule {
                     }
                     frames.push(frame);
                 }
-                Ok(Step::PushFrame { child, pending_kind, destination }) => {
+                Ok(Step::PushFrame {
+                    child,
+                    pending_kind,
+                    destination,
+                }) => {
                     frame.pc += 1;
-                    frame.pending_call = Some(PendingCall { scope, destination, kind: pending_kind });
+                    frame.pending_call = Some(PendingCall {
+                        scope,
+                        destination,
+                        kind: pending_kind,
+                    });
                     state.max_call_depth_reached = state.max_call_depth_reached.max(child.depth);
                     frames.push(frame);
                     frames.push(child);
@@ -591,7 +637,9 @@ impl ExecutableModule {
                             let Some(pending) = caller.pending_call.take() else {
                                 frames.push(caller);
                                 self.unwind_frames(heap, &mut frames)?;
-                                return Err(InterpreterError::InvalidControlFlow(instruction.offset));
+                                return Err(InterpreterError::InvalidControlFlow(
+                                    instruction.offset,
+                                ));
                             };
                             if let Err(error) = heap.close_scope(pending.scope) {
                                 frames.push(caller);
@@ -601,7 +649,10 @@ impl ExecutableModule {
                             let result = match pending.kind {
                                 PendingKind::Call => value,
                                 PendingKind::Construct(instance) => {
-                                    if matches!(value.value_type(), ValueType::Object | ValueType::Function) {
+                                    if matches!(
+                                        value.value_type(),
+                                        ValueType::Object | ValueType::Function
+                                    ) {
                                         value
                                     } else {
                                         instance
@@ -609,7 +660,9 @@ impl ExecutableModule {
                                 }
                             };
                             if let Err(error) = write_register(
-                                &mut caller, pending.destination, RegisterValue::Value(result),
+                                &mut caller,
+                                pending.destination,
+                                RegisterValue::Value(result),
                             ) {
                                 frames.push(caller);
                                 self.unwind_frames(heap, &mut frames)?;
@@ -649,12 +702,23 @@ impl ExecutableModule {
     ) -> Result<Step, InterpreterError> {
         let next_pc = frame.pc + 1;
         match &instruction.operation {
-            RegisterOperation::Constant { destination, constant, kind } => {
+            RegisterOperation::Constant {
+                destination,
+                constant,
+                kind,
+            } => {
                 let value = materialize_constant(heap, &frame.image.artifact, *constant, *kind)?;
                 write_register(frame, *destination, value)?;
-                Ok(Step::Continue { next_pc, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc,
+                    back_edge: false,
+                })
             }
-            RegisterOperation::Unary { destination, source, operation } => {
+            RegisterOperation::Unary {
+                destination,
+                source,
+                operation,
+            } => {
                 let source_value = read_register(frame, *source)?.clone();
                 let result = match operation {
                     UnaryOperation::Copy => source_value,
@@ -664,9 +728,9 @@ impl ExecutableModule {
                     UnaryOperation::ToNumber => RegisterValue::Value(Value::number(
                         heap.to_number(read_value_slot(&source_value)?)?,
                     )),
-                    UnaryOperation::ToString => RegisterValue::Value(
-                        to_js_string(heap, read_value_slot(&source_value)?)?,
-                    ),
+                    UnaryOperation::ToString => {
+                        RegisterValue::Value(to_js_string(heap, read_value_slot(&source_value)?)?)
+                    }
                     UnaryOperation::TypeOf => {
                         let value = read_value_slot(&source_value)?;
                         let text = match value.value_type() {
@@ -690,16 +754,24 @@ impl ExecutableModule {
                     },
                 };
                 write_register(frame, *destination, result)?;
-                Ok(Step::Continue { next_pc, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc,
+                    back_edge: false,
+                })
             }
-            RegisterOperation::Binary { destination, left, right, operation } => {
+            RegisterOperation::Binary {
+                destination,
+                left,
+                right,
+                operation,
+            } => {
                 let left = read_value(frame, *left)?;
                 let right = read_value(frame, *right)?;
                 let result = match operation {
                     BinaryOperation::Add => RegisterValue::Value(js_add(heap, left, right)?),
-                    BinaryOperation::StrictEqual => RegisterValue::Value(Value::boolean(
-                        heap.strict_equal(left, right)?,
-                    )),
+                    BinaryOperation::StrictEqual => {
+                        RegisterValue::Value(Value::boolean(heap.strict_equal(left, right)?))
+                    }
                     BinaryOperation::LessThan => RegisterValue::Value(Value::boolean(
                         abstract_relational_compare(heap, left, right, false)?,
                     )),
@@ -708,30 +780,67 @@ impl ExecutableModule {
                     )),
                 };
                 write_register(frame, *destination, result)?;
-                Ok(Step::Continue { next_pc, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc,
+                    back_edge: false,
+                })
             }
-            RegisterOperation::Call { destination, kind, sources } => self.dispatch_call(
-                heap, host, options, state, frame, scope, *destination, *kind, sources,
+            RegisterOperation::Call {
+                destination,
+                kind,
+                sources,
+            } => self.dispatch_call(
+                heap,
+                host,
+                options,
+                state,
+                frame,
+                scope,
+                *destination,
+                *kind,
+                sources,
                 instruction.offset,
             ),
             RegisterOperation::Jump { target } => {
-                let target_pc = frame.image.offset_to_index.get(target).copied()
+                let target_pc = frame
+                    .image
+                    .offset_to_index
+                    .get(target)
+                    .copied()
                     .ok_or(InterpreterError::InvalidControlFlow(*target))?;
-                Ok(Step::Continue { next_pc: target_pc, back_edge: *target <= instruction.offset })
+                Ok(Step::Continue {
+                    next_pc: target_pc,
+                    back_edge: *target <= instruction.offset,
+                })
             }
-            RegisterOperation::Branch { condition, then_target, else_target } => {
+            RegisterOperation::Branch {
+                condition,
+                then_target,
+                else_target,
+            } => {
                 let condition = read_value(frame, *condition)?;
-                let target = if heap.to_boolean(condition)? { *then_target } else { *else_target };
-                let target_pc = frame.image.offset_to_index.get(&target).copied()
+                let target = if heap.to_boolean(condition)? {
+                    *then_target
+                } else {
+                    *else_target
+                };
+                let target_pc = frame
+                    .image
+                    .offset_to_index
+                    .get(&target)
+                    .copied()
                     .ok_or(InterpreterError::InvalidControlFlow(target))?;
-                Ok(Step::Continue { next_pc: target_pc, back_edge: target <= instruction.offset })
+                Ok(Step::Continue {
+                    next_pc: target_pc,
+                    back_edge: target <= instruction.offset,
+                })
             }
             RegisterOperation::Return { source } => Ok(Step::Complete(
                 ExecutionCompletion::Return(read_value(frame, *source)?),
             )),
-            RegisterOperation::Throw { source } => Ok(Step::Complete(
-                ExecutionCompletion::Throw(read_value(frame, *source)?),
-            )),
+            RegisterOperation::Throw { source } => Ok(Step::Complete(ExecutionCompletion::Throw(
+                read_value(frame, *source)?,
+            ))),
         }
     }
 
@@ -753,12 +862,22 @@ impl ExecutableModule {
             CallKind::JavaScript => {
                 let callee = read_value(frame, sources[0])?;
                 let this_arg = read_value(frame, sources[1])?;
-                let arguments = sources[2..].iter()
+                let arguments = sources[2..]
+                    .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.prepare_child_call(
-                    heap, options, state, frame, scope, destination, callee, this_arg,
-                    &arguments, PendingKind::Call, offset,
+                    heap,
+                    options,
+                    state,
+                    frame,
+                    scope,
+                    destination,
+                    callee,
+                    this_arg,
+                    &arguments,
+                    PendingKind::Call,
+                    offset,
                 )
             }
             CallKind::Construct => {
@@ -770,7 +889,10 @@ impl ExecutableModule {
                 heap.scope_root(scope, instance)?;
                 let prototype_key = heap.intern_property_key("prototype")?;
                 let prototype = heap.get_property(new_target, prototype_key)?;
-                let prototype = if matches!(prototype.value_type(), ValueType::Object | ValueType::Function) {
+                let prototype = if matches!(
+                    prototype.value_type(),
+                    ValueType::Object | ValueType::Function
+                ) {
                     Some(prototype)
                 } else {
                     None
@@ -778,30 +900,47 @@ impl ExecutableModule {
                 if !heap.set_prototype_of(instance, prototype)? {
                     return Err(InterpreterError::Runtime(HeapError::PrototypeCycle));
                 }
-                let arguments = sources[2..].iter()
+                let arguments = sources[2..]
+                    .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.prepare_child_call(
-                    heap, options, state, frame, scope, destination, constructor, instance,
-                    &arguments, PendingKind::Construct(instance), offset,
+                    heap,
+                    options,
+                    state,
+                    frame,
+                    scope,
+                    destination,
+                    constructor,
+                    instance,
+                    &arguments,
+                    PendingKind::Construct(instance),
+                    offset,
                 )
             }
             CallKind::Host => {
-                let capability = read_token(frame, sources[0], ConstantKind::HostCapability)?.to_owned();
-                let arguments = sources[1..].iter()
+                let capability =
+                    read_token(frame, sources[0], ConstantKind::HostCapability)?.to_owned();
+                let arguments = sources[1..]
+                    .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
                 match host.call(heap, &capability, &arguments) {
                     Ok(value) => {
                         heap.scope_root(scope, value)?;
                         write_register(frame, destination, RegisterValue::Value(value))?;
-                        Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                        Ok(Step::Continue {
+                            next_pc: frame.pc + 1,
+                            back_edge: false,
+                        })
                     }
                     Err(HostError::Throw(value)) => {
                         heap.scope_root(scope, value)?;
                         Ok(Step::Complete(ExecutionCompletion::Throw(value)))
                     }
-                    Err(HostError::Denied) => Err(InterpreterError::HostCapabilityDenied(capability)),
+                    Err(HostError::Denied) => {
+                        Err(InterpreterError::HostCapabilityDenied(capability))
+                    }
                 }
             }
             CallKind::GetProperty | CallKind::GetElement => {
@@ -811,7 +950,10 @@ impl ExecutableModule {
                 let value = heap.get_property(object, key)?;
                 heap.scope_root(scope, value)?;
                 write_register(frame, destination, RegisterValue::Value(value))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::SetProperty | CallKind::SetElement => {
                 let object = read_value(frame, sources[0])?;
@@ -820,16 +962,23 @@ impl ExecutableModule {
                 let key = heap.to_property_key(key)?;
                 heap.set_property_or_throw(object, key, value)?;
                 write_register(frame, destination, RegisterValue::Value(value))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::MakeClosure => {
                 let target_id = read_token(frame, sources[0], ConstantKind::FunctionId)?.to_owned();
-                let target = self.functions.get(&target_id).cloned()
+                let target = self
+                    .functions
+                    .get(&target_id)
+                    .cloned()
                     .ok_or_else(|| InterpreterError::MissingFunction(target_id.clone()))?;
                 if sources.len() != target.captures.len() + 1 {
                     return Err(InterpreterError::InvalidMetadata(format!(
                         "closure target {target_id:?} expects {} captures, received {}",
-                        target.captures.len(), sources.len().saturating_sub(1),
+                        target.captures.len(),
+                        sources.len().saturating_sub(1),
                     )));
                 }
                 for (register, capture) in sources[1..].iter().zip(target.captures.iter()) {
@@ -862,7 +1011,10 @@ impl ExecutableModule {
                 )?;
                 heap.scope_root(scope, closure)?;
                 write_register(frame, destination, RegisterValue::Value(closure))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::LoadCapture => {
                 let RegisterValue::Cell(binding) = read_register(frame, sources[0])? else {
@@ -871,7 +1023,10 @@ impl ExecutableModule {
                 let value = heap.load_binding(frame.activation.environment(), *binding)?;
                 heap.scope_root(scope, value)?;
                 write_register(frame, destination, RegisterValue::Value(value))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::StoreCapture => {
                 let RegisterValue::Cell(binding) = read_register(frame, sources[0])? else {
@@ -890,25 +1045,46 @@ impl ExecutableModule {
                     heap.store_binding(frame.activation.environment(), binding, value)?;
                 }
                 write_register(frame, destination, RegisterValue::Value(value))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::MakeCell => {
-                let binding = frame.image.register_bindings.get(&destination).copied()
+                let binding = frame
+                    .image
+                    .register_bindings
+                    .get(&destination)
+                    .copied()
                     .ok_or(InterpreterError::InvalidRegister(destination))?;
                 if !frame.image.local_binding_ids.contains(&binding) {
                     return Err(InterpreterError::InvalidRegister(destination));
                 }
                 // Runtime has already allocated the traced cell in the activation environment.
                 write_register(frame, destination, RegisterValue::Cell(binding))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
             CallKind::StoreBinding => {
-                let binding_name = read_token(frame, sources[0], ConstantKind::BindingId)?.to_owned();
-                let binding_register = frame.image.binding_registers.get(&binding_name).copied()
-                    .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                        "StoreBinding refers to unknown binding {binding_name:?}"
-                    )))?;
-                let binding = frame.image.register_bindings.get(&binding_register).copied()
+                let binding_name =
+                    read_token(frame, sources[0], ConstantKind::BindingId)?.to_owned();
+                let binding_register = frame
+                    .image
+                    .binding_registers
+                    .get(&binding_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        InterpreterError::InvalidMetadata(format!(
+                            "StoreBinding refers to unknown binding {binding_name:?}"
+                        ))
+                    })?;
+                let binding = frame
+                    .image
+                    .register_bindings
+                    .get(&binding_register)
+                    .copied()
                     .ok_or(InterpreterError::InvalidRegister(binding_register))?;
                 let value = read_value(frame, sources[1])?;
                 if frame.initialized_bindings.contains(&binding) {
@@ -919,7 +1095,10 @@ impl ExecutableModule {
                 }
                 write_register(frame, binding_register, RegisterValue::Value(value))?;
                 write_register(frame, destination, RegisterValue::Value(value))?;
-                Ok(Step::Continue { next_pc: frame.pc + 1, back_edge: false })
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
             }
         }
     }
@@ -948,26 +1127,51 @@ impl ExecutableModule {
                 "Runtime function identity {runtime_id} at byte offset {offset}"
             ))
         })?;
-        let image = self.functions.get(function_id).cloned()
+        let image = self
+            .functions
+            .get(function_id)
+            .cloned()
             .ok_or_else(|| InterpreterError::MissingFunction(function_id.clone()))?;
-        let call_limit = caller.call_depth_limit.min(image.max_call_depth).min(options.max_call_depth);
+        let call_limit = caller
+            .call_depth_limit
+            .min(image.max_call_depth)
+            .min(options.max_call_depth);
         if caller.depth >= call_limit {
             return Err(InterpreterError::CallDepthExceeded { limit: call_limit });
         }
         let activation = heap.enter_function_call(
-            callee, &image.definition, this_argument, arguments, options.global_this,
+            callee,
+            &image.definition,
+            this_argument,
+            arguments,
+            options.global_this,
         )?;
-        let child = match VmFrame::new(heap, image, activation, arguments, caller.depth + 1, call_limit) {
+        let child = match VmFrame::new(
+            heap,
+            image,
+            activation,
+            arguments,
+            caller.depth + 1,
+            call_limit,
+        ) {
             Ok(frame) => frame,
             Err(error) => {
                 let _ = heap.leave_function_call(activation);
                 return Err(error);
             }
         };
-        Ok(Step::PushFrame { child, pending_kind, destination })
+        Ok(Step::PushFrame {
+            child,
+            pending_kind,
+            destination,
+        })
     }
 
-    fn unwind_frames(&self, heap: &mut Heap, frames: &mut Vec<VmFrame>) -> Result<(), InterpreterError> {
+    fn unwind_frames(
+        &self,
+        heap: &mut Heap,
+        frames: &mut Vec<VmFrame>,
+    ) -> Result<(), InterpreterError> {
         while let Some(mut frame) = frames.pop() {
             if let Some(pending) = frame.pending_call.take() {
                 heap.close_scope(pending.scope)?;
@@ -978,7 +1182,10 @@ impl ExecutableModule {
     }
 }
 
-struct RawBinding { id: String, kind: String }
+struct RawBinding {
+    id: String,
+    kind: String,
+}
 
 struct RawCapture {
     id: String,
@@ -1003,7 +1210,9 @@ struct RawFunction {
 
 impl RawFunction {
     fn parse(artifact: VerifiedArtifact) -> Result<Self, InterpreterError> {
-        let metadata = artifact.manifest.get("metadata")
+        let metadata = artifact
+            .manifest
+            .get("metadata")
             .ok_or_else(|| InterpreterError::InvalidMetadata("metadata is missing".to_owned()))?;
         if metadata.get("execution_model").and_then(JsonValue::as_str) != Some("register") {
             return Err(InterpreterError::InvalidMetadata(
@@ -1012,14 +1221,19 @@ impl RawFunction {
         }
         let id = required_string(metadata.pointer("/function/id"), "function.id")?.to_owned();
         let name = required_string(metadata.pointer("/function/name"), "function.name")?.to_owned();
-        let environment_id = required_string(metadata.pointer("/environment/id"), "environment.id")?.to_owned();
-        let parent_environment = metadata.pointer("/environment/parent")
-            .and_then(JsonValue::as_str).map(str::to_owned);
+        let environment_id =
+            required_string(metadata.pointer("/environment/id"), "environment.id")?.to_owned();
+        let parent_environment = metadata
+            .pointer("/environment/parent")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
         let parameter_count = required_usize(
-            metadata.pointer("/frame_layout/parameter_count"), "frame_layout.parameter_count",
+            metadata.pointer("/frame_layout/parameter_count"),
+            "frame_layout.parameter_count",
         )?;
         let register_count = required_usize(
-            metadata.pointer("/frame_layout/register_count"), "frame_layout.register_count",
+            metadata.pointer("/frame_layout/register_count"),
+            "frame_layout.register_count",
         )?;
         let max_call_depth = required_u32(
             artifact.manifest.pointer("/resource_limits/max_call_depth"),
@@ -1031,11 +1245,14 @@ impl RawFunction {
             )));
         }
 
-        let binding_values = metadata.pointer("/environment/bindings")
+        let binding_values = metadata
+            .pointer("/environment/bindings")
             .and_then(JsonValue::as_array)
-            .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                "function {id:?} has no environment binding array"
-            )))?;
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "function {id:?} has no environment binding array"
+                ))
+            })?;
         let mut bindings = Vec::with_capacity(binding_values.len());
         let mut binding_names = HashSet::new();
         for binding in binding_values {
@@ -1047,25 +1264,35 @@ impl RawFunction {
             }
             let kind = required_string(binding.get("kind"), "environment binding kind")?;
             if !matches!(kind, "var" | "let" | "const" | "parameter") {
-                return Err(InterpreterError::UnsupportedOperation("catch/import lexical binding"));
+                return Err(InterpreterError::UnsupportedOperation(
+                    "catch/import lexical binding",
+                ));
             }
-            let mutable = binding.get("mutable").and_then(JsonValue::as_bool)
-                .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                    "binding {binding_id:?} has no mutability metadata"
-                )))?;
+            let mutable = binding
+                .get("mutable")
+                .and_then(JsonValue::as_bool)
+                .ok_or_else(|| {
+                    InterpreterError::InvalidMetadata(format!(
+                        "binding {binding_id:?} has no mutability metadata"
+                    ))
+                })?;
             if (kind == "const") == mutable {
                 return Err(InterpreterError::InvalidMetadata(format!(
                     "binding {binding_id:?} has inconsistent kind/mutability metadata"
                 )));
             }
-            bindings.push(RawBinding { id: binding_id.to_owned(), kind: kind.to_owned() });
+            bindings.push(RawBinding {
+                id: binding_id.to_owned(),
+                kind: kind.to_owned(),
+            });
         }
 
-        let capture_values = metadata.pointer("/environment/captures")
+        let capture_values = metadata
+            .pointer("/environment/captures")
             .and_then(JsonValue::as_array)
-            .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                "function {id:?} has no capture array"
-            )))?;
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!("function {id:?} has no capture array"))
+            })?;
         let mut captures = Vec::with_capacity(capture_values.len());
         let mut capture_ids = HashSet::new();
         for capture in capture_values {
@@ -1076,19 +1303,26 @@ impl RawFunction {
                 )));
             }
             let source_environment = required_string(
-                capture.get("source_environment"), "capture source environment",
+                capture.get("source_environment"),
+                "capture source environment",
             )?;
             let binding = required_string(capture.get("binding"), "capture source binding")?;
-            let mutable = capture.get("mutable").and_then(JsonValue::as_bool)
-                .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                    "capture {capture_id:?} has no mutability metadata"
-                )))?;
+            let mutable = capture
+                .get("mutable")
+                .and_then(JsonValue::as_bool)
+                .ok_or_else(|| {
+                    InterpreterError::InvalidMetadata(format!(
+                        "capture {capture_id:?} has no mutability metadata"
+                    ))
+                })?;
             let mode = match required_string(capture.get("mode"), "capture mode")? {
                 "cell" if mutable => CaptureMode::Cell,
                 "value" if !mutable => CaptureMode::Value,
-                _ => return Err(InterpreterError::InvalidMetadata(format!(
-                    "capture {capture_id:?} has inconsistent mode/mutability metadata"
-                ))),
+                _ => {
+                    return Err(InterpreterError::InvalidMetadata(format!(
+                        "capture {capture_id:?} has inconsistent mode/mutability metadata"
+                    )));
+                }
             };
             captures.push(RawCapture {
                 id: capture_id.to_owned(),
@@ -1098,24 +1332,36 @@ impl RawFunction {
             });
         }
 
-        let locations = metadata.pointer("/environment/locations")
+        let locations = metadata
+            .pointer("/environment/locations")
             .and_then(JsonValue::as_array)
-            .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                "function {id:?} has no binding location array"
-            )))?;
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "function {id:?} has no binding location array"
+                ))
+            })?;
         let mut binding_registers = HashMap::new();
         for location in locations {
             let binding = required_string(location.get("binding"), "binding location id")?;
             if required_string(location.get("kind"), "binding location kind")? != "register" {
-                return Err(InterpreterError::UnsupportedOperation("non-register lexical storage"));
+                return Err(InterpreterError::UnsupportedOperation(
+                    "non-register lexical storage",
+                ));
             }
-            let register = u16::try_from(required_u32(location.get("index"), "binding location index")?)
-                .map_err(|_| InterpreterError::InvalidMetadata(format!(
+            let register = u16::try_from(required_u32(
+                location.get("index"),
+                "binding location index",
+            )?)
+            .map_err(|_| {
+                InterpreterError::InvalidMetadata(format!(
                     "binding {binding:?} register index exceeds encoded width"
-                )))?;
+                ))
+            })?;
             if register as usize >= register_count
                 || !binding_names.contains(binding)
-                || binding_registers.insert(binding.to_owned(), register).is_some()
+                || binding_registers
+                    .insert(binding.to_owned(), register)
+                    .is_some()
             {
                 return Err(InterpreterError::InvalidMetadata(format!(
                     "binding {binding:?} has an invalid or duplicate register location"
@@ -1134,8 +1380,17 @@ impl RawFunction {
         }
 
         Ok(Self {
-            artifact, id, name, environment_id, parent_environment, parameter_count,
-            register_count, max_call_depth, bindings, captures, binding_registers,
+            artifact,
+            id,
+            name,
+            environment_id,
+            parent_environment,
+            parameter_count,
+            register_count,
+            max_call_depth,
+            bindings,
+            captures,
+            binding_registers,
         })
     }
 }
@@ -1176,7 +1431,9 @@ impl FunctionImage {
 
         for binding in &raw.bindings {
             let key = (raw.environment_id.clone(), binding.id.clone());
-            let id = binding_ids.get(&key).copied()
+            let id = binding_ids
+                .get(&key)
+                .copied()
                 .ok_or(InterpreterError::IdentitySpaceExceeded)?;
             local_binding_ids.insert(id);
             let definition = match binding.kind.as_str() {
@@ -1186,7 +1443,11 @@ impl FunctionImage {
                 }
                 "let" | "parameter" => BindingDefinition::uninitialized(id, true),
                 "const" => BindingDefinition::uninitialized(id, false),
-                _ => return Err(InterpreterError::UnsupportedOperation("catch/import binding")),
+                _ => {
+                    return Err(InterpreterError::UnsupportedOperation(
+                        "catch/import binding",
+                    ));
+                }
             };
             locals.push(definition);
             if let Some(register) = raw.binding_registers.get(&binding.id) {
@@ -1199,12 +1460,15 @@ impl FunctionImage {
         for capture in &raw.captures {
             let parent_environment = raw.parent_environment.as_deref().ok_or_else(|| {
                 InterpreterError::InvalidMetadata(format!(
-                    "capturing function {:?} has no parent environment", raw.id
+                    "capturing function {:?} has no parent environment",
+                    raw.id
                 ))
             })?;
             let source_binding = if capture.source_environment == parent_environment {
                 let source_key = (capture.source_environment.clone(), capture.binding.clone());
-                binding_ids.get(&source_key).copied()
+                binding_ids
+                    .get(&source_key)
+                    .copied()
                     .ok_or(InterpreterError::IdentitySpaceExceeded)?
             } else {
                 let forwarded_key = (
@@ -1219,11 +1483,19 @@ impl FunctionImage {
                     )))?
             };
             let alias_key = (closure_environment_key(&raw.id), capture.id.clone());
-            let alias_binding = binding_ids.get(&alias_key).copied()
+            let alias_binding = binding_ids
+                .get(&alias_key)
+                .copied()
                 .ok_or(InterpreterError::IdentitySpaceExceeded)?;
-            captures.push(ImageCapture { alias_binding, source_binding, mode: capture.mode });
+            captures.push(ImageCapture {
+                alias_binding,
+                source_binding,
+                mode: capture.mode,
+            });
             runtime_captures.push(CaptureDefinition {
-                source: source_binding, alias: alias_binding, mode: capture.mode,
+                source: source_binding,
+                alias: alias_binding,
+                mode: capture.mode,
             });
         }
 
@@ -1236,7 +1508,11 @@ impl FunctionImage {
             kind: FunctionKind::Ordinary,
             strict: true,
         };
-        let offset_to_index = raw.artifact.instructions.iter().enumerate()
+        let offset_to_index = raw
+            .artifact
+            .instructions
+            .iter()
+            .enumerate()
             .map(|(index, instruction)| (instruction.offset, index))
             .collect();
 
@@ -1260,31 +1536,53 @@ impl FunctionImage {
     fn location(&self, byte_offset: u32) -> Option<InstructionLocation> {
         let metadata = self.artifact.manifest.get("metadata")?;
         let source_map = self.artifact.source_map.as_ref();
-        let source = source_map.and_then(|map| map.get("locations"))
+        let source = source_map
+            .and_then(|map| map.get("locations"))
             .and_then(JsonValue::as_array)
-            .and_then(|locations| locations.iter().find(|item| {
-                item.get("offset").and_then(JsonValue::as_u64) == Some(u64::from(byte_offset))
-            }))
-            .and_then(|item| item.get("source")).cloned();
-        let lexical_scopes = source_map.and_then(|map| map.get("lexical_scopes"))
+            .and_then(|locations| {
+                locations.iter().find(|item| {
+                    item.get("offset").and_then(JsonValue::as_u64) == Some(u64::from(byte_offset))
+                })
+            })
+            .and_then(|item| item.get("source"))
+            .cloned();
+        let lexical_scopes = source_map
+            .and_then(|map| map.get("lexical_scopes"))
             .and_then(JsonValue::as_array)
-            .map(|items| items.iter().filter(|item| range_contains(item, byte_offset))
-                .cloned().collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| range_contains(item, byte_offset))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default();
-        let variable_locations = source_map.and_then(|map| map.get("variable_locations"))
+        let variable_locations = source_map
+            .and_then(|map| map.get("variable_locations"))
             .and_then(JsonValue::as_array)
-            .map(|items| items.iter().filter(|item| range_contains(item, byte_offset))
-                .cloned().collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| range_contains(item, byte_offset))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default();
         Some(InstructionLocation {
             function_id: self.id.clone(),
             function_name: self.name.clone(),
             byte_offset,
-            code_generation_id: metadata.pointer("/code_generation/id")
-                .and_then(JsonValue::as_str).map(str::to_owned),
-            code_generation_version: metadata.pointer("/code_generation/version")
-                .and_then(JsonValue::as_str).map(str::to_owned),
-            source, lexical_scopes, variable_locations,
+            code_generation_id: metadata
+                .pointer("/code_generation/id")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned),
+            code_generation_version: metadata
+                .pointer("/code_generation/version")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned),
+            source,
+            lexical_scopes,
+            variable_locations,
         })
     }
 }
@@ -1303,31 +1601,43 @@ fn required_string<'a>(
     value: Option<&'a JsonValue>,
     path: &str,
 ) -> Result<&'a str, InterpreterError> {
-    value.and_then(JsonValue::as_str)
+    value
+        .and_then(JsonValue::as_str)
         .ok_or_else(|| InterpreterError::InvalidMetadata(format!("{path} must be a string")))
 }
 
 fn required_u32(value: Option<&JsonValue>, path: &str) -> Result<u32, InterpreterError> {
-    value.and_then(JsonValue::as_u64)
+    value
+        .and_then(JsonValue::as_u64)
         .and_then(|number| u32::try_from(number).ok())
         .ok_or_else(|| InterpreterError::InvalidMetadata(format!("{path} must be uint32")))
 }
 
 fn required_usize(value: Option<&JsonValue>, path: &str) -> Result<usize, InterpreterError> {
-    value.and_then(JsonValue::as_u64)
+    value
+        .and_then(JsonValue::as_u64)
         .and_then(|number| usize::try_from(number).ok())
         .ok_or_else(|| InterpreterError::InvalidMetadata(format!("{path} must be unsigned")))
 }
 
 fn validate_options(options: &ExecutionOptions) -> Result<(), InterpreterError> {
     if options.max_call_depth == 0 {
-        return Err(InterpreterError::InvalidOptions("max_call_depth must be positive"));
+        return Err(InterpreterError::InvalidOptions(
+            "max_call_depth must be positive",
+        ));
     }
     if options.interrupt_poll_interval == 0 {
-        return Err(InterpreterError::InvalidOptions("interrupt_poll_interval must be positive"));
+        return Err(InterpreterError::InvalidOptions(
+            "interrupt_poll_interval must be positive",
+        ));
     }
-    if options.time_budget.is_some_and(|budget| Instant::now().checked_add(budget).is_none()) {
-        return Err(InterpreterError::InvalidOptions("time_budget overflows monotonic clock"));
+    if options
+        .time_budget
+        .is_some_and(|budget| Instant::now().checked_add(budget).is_none())
+    {
+        return Err(InterpreterError::InvalidOptions(
+            "time_budget overflows monotonic clock",
+        ));
     }
     Ok(())
 }
@@ -1371,10 +1681,17 @@ impl ExecutionState {
         if !force && self.instructions_executed % self.poll_interval != 0 {
             return None;
         }
-        if self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
             return Some(ExecutionInterruption::Cancelled);
         }
-        if self.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             return Some(ExecutionInterruption::DeadlineExceeded);
         }
         None
@@ -1422,21 +1739,38 @@ impl VmFrame {
     ) -> Result<Self, InterpreterError> {
         let mut registers = vec![RegisterValue::Uninitialized; image.register_count];
         for index in 0..image.parameter_count {
-            let register = image.artifact.entry_registers.get(index).copied()
-                .ok_or_else(|| InterpreterError::InvalidMetadata(
-                    "parameter register is missing from entry window".to_owned(),
-                ))?;
+            let register = image
+                .artifact
+                .entry_registers
+                .get(index)
+                .copied()
+                .ok_or_else(|| {
+                    InterpreterError::InvalidMetadata(
+                        "parameter register is missing from entry window".to_owned(),
+                    )
+                })?;
             write_register_slot(
                 &mut registers,
                 register,
-                RegisterValue::Value(arguments.get(index).copied().unwrap_or_else(Value::undefined)),
+                RegisterValue::Value(
+                    arguments
+                        .get(index)
+                        .copied()
+                        .unwrap_or_else(Value::undefined),
+                ),
             )?;
         }
         for (index, capture) in image.captures.iter().enumerate() {
-            let register = image.artifact.entry_registers.get(image.parameter_count + index)
-                .copied().ok_or_else(|| InterpreterError::InvalidMetadata(
-                    "capture register is missing from entry window".to_owned(),
-                ))?;
+            let register = image
+                .artifact
+                .entry_registers
+                .get(image.parameter_count + index)
+                .copied()
+                .ok_or_else(|| {
+                    InterpreterError::InvalidMetadata(
+                        "capture register is missing from entry window".to_owned(),
+                    )
+                })?;
             let value = match capture.mode {
                 CaptureMode::Cell => RegisterValue::Cell(capture.alias_binding),
                 CaptureMode::Value => RegisterValue::Value(
@@ -1465,11 +1799,21 @@ struct PendingCall {
     kind: PendingKind,
 }
 
-enum PendingKind { Call, Construct(Value) }
+enum PendingKind {
+    Call,
+    Construct(Value),
+}
 
 enum Step {
-    Continue { next_pc: usize, back_edge: bool },
-    PushFrame { child: VmFrame, pending_kind: PendingKind, destination: u16 },
+    Continue {
+        next_pc: usize,
+        back_edge: bool,
+    },
+    PushFrame {
+        child: VmFrame,
+        pending_kind: PendingKind,
+        destination: u16,
+    },
     Complete(ExecutionCompletion),
 }
 
@@ -1489,7 +1833,9 @@ fn root_frame_values(
 }
 
 fn read_register(frame: &VmFrame, register: u16) -> Result<&RegisterValue, InterpreterError> {
-    frame.registers.get(register as usize)
+    frame
+        .registers
+        .get(register as usize)
         .ok_or(InterpreterError::InvalidRegister(register))
 }
 
@@ -1500,19 +1846,31 @@ fn read_value(frame: &VmFrame, register: u16) -> Result<Value, InterpreterError>
 fn read_value_slot(value: &RegisterValue) -> Result<Value, InterpreterError> {
     match value {
         RegisterValue::Value(value) => Ok(*value),
-        RegisterValue::Uninitialized => Err(InterpreterError::Runtime(HeapError::UninitializedBinding)),
-        RegisterValue::Token { .. } | RegisterValue::Cell(_) => Err(InterpreterError::InvalidRegister(u16::MAX)),
+        RegisterValue::Uninitialized => {
+            Err(InterpreterError::Runtime(HeapError::UninitializedBinding))
+        }
+        RegisterValue::Token { .. } | RegisterValue::Cell(_) => {
+            Err(InterpreterError::InvalidRegister(u16::MAX))
+        }
     }
 }
 
-fn read_token(frame: &VmFrame, register: u16, expected: ConstantKind) -> Result<&str, InterpreterError> {
+fn read_token(
+    frame: &VmFrame,
+    register: u16,
+    expected: ConstantKind,
+) -> Result<&str, InterpreterError> {
     match read_register(frame, register)? {
         RegisterValue::Token { kind, value } if *kind == expected => Ok(value),
         _ => Err(InterpreterError::InvalidRegister(register)),
     }
 }
 
-fn write_register(frame: &mut VmFrame, register: u16, value: RegisterValue) -> Result<(), InterpreterError> {
+fn write_register(
+    frame: &mut VmFrame,
+    register: u16,
+    value: RegisterValue,
+) -> Result<(), InterpreterError> {
     write_register_slot(&mut frame.registers, register, value)
 }
 
@@ -1521,7 +1879,8 @@ fn write_register_slot(
     register: u16,
     value: RegisterValue,
 ) -> Result<(), InterpreterError> {
-    let slot = registers.get_mut(register as usize)
+    let slot = registers
+        .get_mut(register as usize)
         .ok_or(InterpreterError::InvalidRegister(register))?;
     *slot = value;
     Ok(())
@@ -1533,14 +1892,21 @@ fn materialize_constant(
     index: u32,
     kind: ConstantKind,
 ) -> Result<RegisterValue, InterpreterError> {
-    let constant = artifact.constants.get(index as usize)
+    let constant = artifact
+        .constants
+        .get(index as usize)
         .ok_or(InterpreterError::InvalidConstant(index))?;
     match kind {
         ConstantKind::Undefined => Ok(RegisterValue::Value(Value::undefined())),
         ConstantKind::Null => Ok(RegisterValue::Value(Value::null())),
-        ConstantKind::Boolean => constant.as_bool()
+        ConstantKind::Boolean => constant
+            .as_bool()
             .map(|value| RegisterValue::Value(Value::boolean(value)))
-            .ok_or_else(|| InterpreterError::InvalidMetadata("Boolean constant must be a JSON boolean".to_owned())),
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(
+                    "Boolean constant must be a JSON boolean".to_owned(),
+                )
+            }),
         ConstantKind::Number => {
             let value = if let Some(number) = constant.as_f64() {
                 number
@@ -1550,25 +1916,36 @@ fn materialize_constant(
                     Some("Infinity") => f64::INFINITY,
                     Some("-Infinity") => f64::NEG_INFINITY,
                     Some("-0") => -0.0,
-                    _ => return Err(InterpreterError::InvalidMetadata(
-                        "Number constant has an invalid binary64 payload".to_owned(),
-                    )),
+                    _ => {
+                        return Err(InterpreterError::InvalidMetadata(
+                            "Number constant has an invalid binary64 payload".to_owned(),
+                        ));
+                    }
                 }
             };
             Ok(RegisterValue::Value(Value::number(value)))
         }
         ConstantKind::String => {
-            let text = constant.as_str().ok_or_else(|| InterpreterError::InvalidMetadata(
-                "String constant must be a JSON string".to_owned(),
-            ))?;
+            let text = constant.as_str().ok_or_else(|| {
+                InterpreterError::InvalidMetadata(
+                    "String constant must be a JSON string".to_owned(),
+                )
+            })?;
             Ok(RegisterValue::Value(heap.allocate_string(text)?))
         }
-        ConstantKind::HostCapability | ConstantKind::FunctionId
-        | ConstantKind::BindingId | ConstantKind::Intrinsic => {
-            let value = constant.as_str().ok_or_else(|| InterpreterError::InvalidMetadata(
-                "compiler token constant must be a JSON string".to_owned(),
-            ))?;
-            Ok(RegisterValue::Token { kind, value: value.to_owned() })
+        ConstantKind::HostCapability
+        | ConstantKind::FunctionId
+        | ConstantKind::BindingId
+        | ConstantKind::Intrinsic => {
+            let value = constant.as_str().ok_or_else(|| {
+                InterpreterError::InvalidMetadata(
+                    "compiler token constant must be a JSON string".to_owned(),
+                )
+            })?;
+            Ok(RegisterValue::Token {
+                kind,
+                value: value.to_owned(),
+            })
         }
         ConstantKind::Uninitialized => Ok(RegisterValue::Uninitialized),
         ConstantKind::BigInt => Err(InterpreterError::UnsupportedConstant(kind)),
@@ -1577,14 +1954,22 @@ fn materialize_constant(
 
 fn operation_needs_interrupt(operation: &RegisterOperation) -> bool {
     match operation {
-        RegisterOperation::Constant { kind, .. } => matches!(kind, ConstantKind::String | ConstantKind::BigInt),
-        RegisterOperation::Unary { operation, .. } => matches!(operation, UnaryOperation::ToNumber | UnaryOperation::ToString),
+        RegisterOperation::Constant { kind, .. } => {
+            matches!(kind, ConstantKind::String | ConstantKind::BigInt)
+        }
+        RegisterOperation::Unary { operation, .. } => matches!(
+            operation,
+            UnaryOperation::ToNumber | UnaryOperation::ToString
+        ),
         RegisterOperation::Binary { operation, .. } => matches!(
-            operation, BinaryOperation::Add | BinaryOperation::LessThan | BinaryOperation::GreaterThan,
+            operation,
+            BinaryOperation::Add | BinaryOperation::LessThan | BinaryOperation::GreaterThan,
         ),
         RegisterOperation::Call { .. } => true,
-        RegisterOperation::Jump { .. } | RegisterOperation::Branch { .. }
-        | RegisterOperation::Return { .. } | RegisterOperation::Throw { .. } => false,
+        RegisterOperation::Jump { .. }
+        | RegisterOperation::Branch { .. }
+        | RegisterOperation::Return { .. }
+        | RegisterOperation::Throw { .. } => false,
     }
 }
 
@@ -1594,7 +1979,9 @@ fn js_add(heap: &mut Heap, left: Value, right: Value) -> Result<Value, Interpret
         units.extend(to_string_units(heap, right)?);
         return Ok(heap.allocate_string_utf16(&units)?);
     }
-    Ok(Value::number(heap.to_number(left)? + heap.to_number(right)?))
+    Ok(Value::number(
+        heap.to_number(left)? + heap.to_number(right)?,
+    ))
 }
 
 fn abstract_relational_compare(
@@ -1603,7 +1990,11 @@ fn abstract_relational_compare(
     right: Value,
     greater_than: bool,
 ) -> Result<bool, InterpreterError> {
-    let (first, second) = if greater_than { (right, left) } else { (left, right) };
+    let (first, second) = if greater_than {
+        (right, left)
+    } else {
+        (left, right)
+    };
     if first.value_type() == ValueType::String && second.value_type() == ValueType::String {
         return Ok(heap.string_utf16(first)?.to_vec() < heap.string_utf16(second)?.to_vec());
     }
@@ -1613,7 +2004,9 @@ fn abstract_relational_compare(
 }
 
 fn to_js_string(heap: &mut Heap, value: Value) -> Result<Value, InterpreterError> {
-    if value.value_type() == ValueType::String { return Ok(value); }
+    if value.value_type() == ValueType::String {
+        return Ok(value);
+    }
     let units = to_string_units(heap, value)?;
     Ok(heap.allocate_string_utf16(&units)?)
 }
@@ -1622,7 +2015,12 @@ fn to_string_units(heap: &Heap, value: Value) -> Result<Vec<u16>, InterpreterErr
     let string = match value.value_type() {
         ValueType::Undefined => "undefined".to_owned(),
         ValueType::Null => "null".to_owned(),
-        ValueType::Boolean => if value.as_boolean() == Some(true) { "true" } else { "false" }.to_owned(),
+        ValueType::Boolean => if value.as_boolean() == Some(true) {
+            "true"
+        } else {
+            "false"
+        }
+        .to_owned(),
         ValueType::Number => format_number(value.as_number().unwrap_or(f64::NAN)),
         ValueType::String => return Ok(heap.string_utf16(value)?.to_vec()),
         ValueType::Object | ValueType::Function => {
@@ -1633,9 +2031,17 @@ fn to_string_units(heap: &Heap, value: Value) -> Result<Vec<u16>, InterpreterErr
 }
 
 fn format_number(number: f64) -> String {
-    if number.is_nan() { return "NaN".to_owned(); }
-    if number == f64::INFINITY { return "Infinity".to_owned(); }
-    if number == f64::NEG_INFINITY { return "-Infinity".to_owned(); }
-    if number == 0.0 { return "0".to_owned(); }
+    if number.is_nan() {
+        return "NaN".to_owned();
+    }
+    if number == f64::INFINITY {
+        return "Infinity".to_owned();
+    }
+    if number == f64::NEG_INFINITY {
+        return "-Infinity".to_owned();
+    }
+    if number == 0.0 {
+        return "0".to_owned();
+    }
     number.to_string()
 }
