@@ -491,7 +491,6 @@ fn property_operations_use_the_shared_runtime_object_model() {
     }
 }
 
-
 #[test]
 fn closures_capture_immutable_values_by_value() {
     let child = artifact(
@@ -585,7 +584,12 @@ fn closures_capture_immutable_values_by_value() {
             },
             return_register(6),
         ],
-        vec![json!(42), json!("snapshot"), json!("read_snapshot"), JsonValue::Null],
+        vec![
+            json!(42),
+            json!("snapshot"),
+            json!("read_snapshot"),
+            JsonValue::Null,
+        ],
         vec![json!({
             "id": "snapshot",
             "name": "snapshot",
@@ -600,12 +604,9 @@ fn closures_capture_immutable_values_by_value() {
 
     let module = ExecutableModule::load([parent, child]).expect("verified value-capture module");
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
-    let report = module.execute_without_host(
-        &mut heap,
-        "main",
-        &[],
-        ExecutionOptions::default(),
-    ).expect("execution report");
+    let report = module
+        .execute_without_host(&mut heap, "main", &[], ExecutionOptions::default())
+        .expect("execution report");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
