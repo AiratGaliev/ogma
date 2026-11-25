@@ -163,6 +163,10 @@ pub enum HostError {
     Runtime(HeapError),
     /// A host callback panicked and the panic was contained at the boundary.
     Panicked,
+    /// A host callback reported a transport or internal failure.
+    CallbackFailed,
+    /// A host callback returned a malformed completion record.
+    InvalidCompletion,
 }
 
 /// Synchronous host capability dispatcher on the Runtime owner thread.
@@ -326,6 +330,10 @@ pub enum InterpreterError {
     HostCapabilityDenied(String),
     /// A Rust host callback panicked; the panic did not unwind through the VM.
     HostCallbackPanicked,
+    /// A host callback failed independently of capability authorization.
+    HostCallbackFailed,
+    /// A C host callback returned an invalid completion record.
+    InvalidHostCompletion,
     /// Invalid register or internal register category.
     InvalidRegister(u16),
     /// Missing constant-pool item.
@@ -1228,6 +1236,10 @@ impl ExecutableModule {
                     }
                     Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
                     Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
+                    Err(HostError::CallbackFailed) => Err(InterpreterError::HostCallbackFailed),
+                    Err(HostError::InvalidCompletion) => {
+                        Err(InterpreterError::InvalidHostCompletion)
+                    }
                 }
             }
             CallKind::GetProperty | CallKind::GetElement => {
