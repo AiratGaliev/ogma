@@ -64,6 +64,8 @@ An invocation produces one of three externally observable completions:
 
 A child function's return value is written to its caller's destination register. A constructor call returns an explicit object/function result when supplied; otherwise the newly allocated instance is returned. A child throw propagates out of the current invocation after all VM frames and pending root scopes are unwound.
 
+A top-level Return/Throw completion carries a transient Runtime Value after the invocation frames have been released. The caller must immediately promote any managed result with `Heap::retain_host_value` before performing another allocation or any other operation that may trigger collection. The interpreter does not silently create a persistent host root or extend result lifetime beyond the completion boundary.
+
 OGMB v1 M1 compiler output does not include local catch/finally handlers. The bytecode verifier rejects exception-region records for this profile; Throw is therefore a propagated completion, not a locally caught exception. This does not claim complete JavaScript try/catch/finally, Error construction, stack formatting or host exception translation.
 
 Host effects are explicit and named. Host::call receives the capability identifier and evaluated arguments on the Runtime owner thread. The default NoHost denies every capability. A host may return a value, deliberately propagate a thrown value or deny the call. The interpreter does not grant ambient filesystem, process, network or other OS authority. Host callbacks are synchronous; a callback that blocks cannot be pre-empted by the VM's cooperative interrupt checks.
