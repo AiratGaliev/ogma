@@ -18,9 +18,9 @@ use ogma_bytecode::{
     verify_register_artifact_from_manifest,
 };
 use ogma_runtime::{
-    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    CollectionReport, FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError,
-    HostHandle, ScopeToken, Value, ValueType,
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
+    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, ScopeToken, Value,
+    ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
