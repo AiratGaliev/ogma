@@ -169,6 +169,31 @@ fn execute_number(
 }
 
 #[test]
+fn compiler_rejects_arrow_functions_until_ogmb_preserves_function_kind() {
+    let allocator = Allocator::default();
+    let source = SourceFile::new(
+        "ogm46-arrow-function-profile",
+        "memory:///ogm46-arrow-function-profile.js",
+        None,
+        "function run(seed) { const read = () => seed; return read(); }",
+    )
+    .expect("source is valid");
+    let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+        .expect("arrow function source parses");
+    let failure = compile_to_bytecode(&parsed)
+        .expect_err("OGMB v1 must not erase the arrow function kind");
+    let CompileFailure::Semantic(diagnostics) = failure else {
+        panic!("unsupported arrow metadata must be reported as a semantic diagnostic");
+    };
+    let diagnostic = diagnostics
+        .iter()
+        .find(|item| item.code == "semantic.arrow_function_metadata_unsupported")
+        .expect("source-linked arrow metadata diagnostic");
+    assert!(diagnostic.span.is_some());
+    assert!(diagnostic.message.contains("function-kind"));
+}
+
+#[test]
 fn executes_canonical_core_ir_branch_and_loop_fixtures_via_serialized_ogmb() {
     // These are the same checked-in Core IR inputs used by the OGM-31
     // cross-backend proof. This path intentionally compiles to OGMB first;
