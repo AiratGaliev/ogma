@@ -1590,6 +1590,11 @@ impl FunctionImage {
     }
 
     fn location(&self, byte_offset: u32) -> Option<InstructionLocation> {
+        // A source-map record is meaningful only for an actual verified
+        // instruction boundary, never for an arbitrary byte inside the code.
+        if !self.offset_to_index.contains_key(&byte_offset) {
+            return None;
+        }
         let metadata = self.artifact.manifest.get("metadata")?;
         let source_map = self.artifact.source_map.as_ref();
         let source = source_map
