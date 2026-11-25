@@ -1123,10 +1123,10 @@ impl FunctionImage {
         for capture in &raw.captures {
             let source_key = (capture.source_environment.clone(), capture.binding.clone());
             let source_binding = binding_ids.get(&source_key).copied()
-                .ok_or(InterpreterError::IdentitySpaceExhausted)?;
+                .ok_or(InterpreterError::IdentitySpaceExceeded)?;
             let alias_key = (closure_environment_key(&raw.id), capture.id.clone());
             let alias_binding = binding_ids.get(&alias_key).copied()
-                .ok_or(InterpreterError::IdentitySpaceExhausted)?;
+                .ok_or(InterpreterError::IdentitySpaceExceeded)?;
             captures.push(ImageCapture { alias_binding, source_binding, mode: capture.mode });
             runtime_captures.push(CaptureDefinition {
                 source: source_binding, alias: alias_binding, mode: capture.mode,
