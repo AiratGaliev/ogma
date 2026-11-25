@@ -839,16 +839,17 @@ impl ExecutableModule {
                             _ => return Err(InterpreterError::InvalidRegister(*register)),
                         },
                         CaptureMode::Value => {
-                            let visible_binding = frame.image.register_bindings.get(register)
-                                == Some(&capture.source_binding)
-                                || frame.image.captures.iter().enumerate().any(|(index, parent_capture)| {
-                                    parent_capture.alias_binding == capture.source_binding
-                                        && frame.image.artifact.entry_registers
-                                            .get(frame.image.parameter_count + index) == Some(register)
-                                });
-                            if !visible_binding || !matches!(
-                                read_register(frame, *register)?, RegisterValue::Value(_)
-                            ) {
+                            let actual = read_value(frame, *register)?;
+                            let expected = heap.load_binding(
+                                frame.activation.environment(),
+                                capture.source_binding,
+                            )?;
+                            let equal = heap.strict_equal(actual, expected)?
+                                || matches!(
+                                    (actual.as_number(), expected.as_number()),
+                                    (Some(left), Some(right)) if left.is_nan() && right.is_nan()
+                                );
+                            if !equal {
                                 return Err(InterpreterError::InvalidRegister(*register));
                             }
                         }
