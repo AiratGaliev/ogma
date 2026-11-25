@@ -699,7 +699,7 @@ mod tests {
             .expect("job uses its originating module");
         assert_eq!(report.outcome, JobPumpOutcome::Progress);
         assert_eq!(report.jobs_executed, 1);
-        assert_eq!(report.completion, None);
+        assert!(report.completion.is_none());
         assert_eq!(second.pending_promise_jobs(), 0);
         assert_eq!(second.heap_stats().external_memory_bytes, 0);
     }
