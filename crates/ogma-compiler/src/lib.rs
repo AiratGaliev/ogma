@@ -709,7 +709,7 @@ mod tests {
             ),
             (
                 "branch_and_loop",
-                "function sum(value) { let total = 0; while (value > 0) { total = total + value; value = 0; } if (total > 0) { return total; } return 0; } sum(3);",
+                "function sum(value) { let total = 0; while (value > 0) { total = total + value; value = 0; } if (total > 0) { total = total + 1; } return total; } sum(3);",
             ),
             (
                 "property_access",
