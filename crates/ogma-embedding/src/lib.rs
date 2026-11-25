@@ -17,15 +17,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
-use ogma_interpreter::{
-    CancellationToken, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
-    ExecutionOptions, ExecutionReport, Host, HostCallCompletion, HostCallContext, HostError,
-    InstructionLocation, InterpreterError,
+pub use ogma_interpreter::{
+    CancellationToken, ExecutionCompletion, ExecutionInterruption, ExecutionReport, Host,
+    HostCallCompletion, HostCallContext, HostError, ExecutableModule, InstructionLocation,
+    InterpreterError, NoHost,
 };
-use ogma_runtime::{
-    CollectionReport, Heap, HeapConfig, HeapError, HeapStats, HostHandle, ScopeToken, Value,
-    ValueType,
-};
+pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
+use ogma_interpreter::ExecutionOptions;
+use ogma_runtime::{Heap, HeapConfig, HostHandle, ScopeToken};
 
 /// ABI major version implemented by this crate.
 pub const ABI_VERSION: u16 = 1;
@@ -55,6 +54,7 @@ pub const ABI_FEATURES: u64 = FEATURE_OPAQUE_HANDLES
 const DESCRIPTOR_VERSION: u16 = 1;
 const MAX_HOST_NAME_BYTES: usize = 128;
 const MAX_HOST_ARGUMENTS: usize = 4096;
+const MAX_C_CALLBACK_HANDLES: usize = 4096;
 const KNOWN_EFFECTS: u32 = EFFECT_MAY_ALLOCATE
     | EFFECT_MAY_GC
     | EFFECT_MAY_THROW
@@ -251,6 +251,8 @@ pub struct EngineConfig {
     pub heap_quota_bytes: usize,
     /// Maximum size of one managed allocation in bytes.
     pub max_allocation_bytes: usize,
+    /// Maximum estimated active VM frame/register stack size per Runtime execution.
+    pub max_stack_bytes: usize,
     /// Maximum dispatched interpreter instructions per top-level execution.
     pub instruction_budget: u64,
     /// Maximum nested interpreter/host execution depth.
@@ -269,6 +271,7 @@ impl Default for EngineConfig {
         Self {
             heap_quota_bytes: 64 * 1024 * 1024,
             max_allocation_bytes: 16 * 1024 * 1024,
+            max_stack_bytes: 8 * 1024 * 1024,
             instruction_budget: 1_000_000,
             max_call_depth: 256,
             interrupt_poll_interval: 64,
@@ -285,6 +288,9 @@ impl EngineConfig {
         }
         if self.max_allocation_bytes == 0 || self.max_allocation_bytes > self.heap_quota_bytes {
             return Err(ConfigurationError::InvalidAllocationLimit);
+        }
+        if self.max_stack_bytes == 0 {
+            return Err(ConfigurationError::ZeroStackQuota);
         }
         if self.instruction_budget == 0 {
             return Err(ConfigurationError::ZeroInstructionBudget);
@@ -317,6 +323,8 @@ pub enum ConfigurationError {
     ZeroPollInterval,
     /// Pending-job capacity exceeds the supported configuration ceiling.
     PendingJobLimitTooLarge,
+    /// Stack quota must be positive.
+    ZeroStackQuota,
     /// Per-call instruction budget must be positive when supplied.
     InvalidExecutionFuel,
     /// Per-call call-depth limit must be positive when supplied.
@@ -359,6 +367,8 @@ impl Engine {
             owner_thread: thread::current().id(),
             config: self.config.clone(),
             heap,
+            abi_runtime: Rc::new(OgmaRuntime::new(id)),
+            next_context_id: 1,
             _thread_affinity: PhantomData,
         })
     }
@@ -373,6 +383,8 @@ pub struct Runtime {
     owner_thread: ThreadId,
     config: EngineConfig,
     heap: Heap,
+    abi_runtime: Rc<OgmaRuntime>,
+    next_context_id: u64,
     _thread_affinity: PhantomData<Rc<()>>,
 }
 
@@ -401,10 +413,19 @@ impl Runtime {
     /// from being created while this Context is alive.
     pub fn create_context(&mut self) -> Result<Context<'_>, RuntimeError> {
         self.ensure_owner_thread()?;
+        let context_id = self.next_context_id;
+        self.next_context_id = context_id
+            .checked_add(1)
+            .ok_or(RuntimeError::IdentitySpaceExhausted)?;
+        let context_handle = self.abi_runtime.context_handle(context_id);
+        let host_functions =
+            HostFunctionRegistry::new(Rc::clone(&self.abi_runtime), context_handle)
+                .map_err(RuntimeError::HostRegistry)?;
         Ok(Context {
             runtime: self,
             module: None,
-            host_functions: HostFunctionRegistry::new().map_err(RuntimeError::HostRegistry)?,
+            host_functions,
+            context_handle,
         })
     }
 
@@ -435,6 +456,8 @@ pub enum RuntimeError {
 pub struct ExecutionRequest {
     /// Optional per-call instruction budget override.
     pub instruction_budget: Option<u64>,
+    /// Optional per-call stack quota override.
+    pub max_stack_bytes: Option<usize>,
     /// Optional per-call nested-call depth override.
     pub max_call_depth: Option<u32>,
     /// Optional thread-safe cancellation token.
@@ -449,6 +472,9 @@ pub struct ExecutionRequest {
 
 impl ExecutionRequest {
     fn options(&self, config: &EngineConfig) -> Result<ExecutionOptions, ConfigurationError> {
+        if self.max_stack_bytes == Some(0) {
+            return Err(ConfigurationError::ZeroStackQuota);
+        }
         if self.instruction_budget == Some(0) {
             return Err(ConfigurationError::InvalidExecutionFuel);
         }
@@ -458,6 +484,7 @@ impl ExecutionRequest {
         Ok(ExecutionOptions {
             instruction_budget: self.instruction_budget.unwrap_or(config.instruction_budget),
             max_call_depth: self.max_call_depth.unwrap_or(config.max_call_depth),
+            max_stack_bytes: self.max_stack_bytes.unwrap_or(config.max_stack_bytes),
             interrupt_poll_interval: config.interrupt_poll_interval,
             cancellation: self.cancellation.clone(),
             deadline: self.deadline,
@@ -475,6 +502,7 @@ pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
     module: Option<ExecutableModule>,
     host_functions: HostFunctionRegistry,
+    context_handle: OgmaContextHandle,
 }
 
 impl Context<'_> {
@@ -596,6 +624,7 @@ impl Context<'_> {
             instructions_executed: report.instructions_executed,
             fuel_remaining: report.fuel_remaining,
             max_call_depth_reached: report.max_call_depth_reached,
+            max_stack_bytes_reached: report.max_stack_bytes_reached,
             last_location: report.last_location,
         })
     }
@@ -686,6 +715,11 @@ impl RootScope<'_> {
         self.heap.scope_root(token, value)
     }
 
+    /// Runs a full tracing collection while this root scope remains active.
+    pub fn collect(&mut self) -> Result<CollectionReport, HeapError> {
+        self.heap.collect()
+    }
+
     /// Closes the scope explicitly. Drop closes it if this method is not called.
     pub fn close(mut self) -> Result<(), HeapError> {
         let token = self.token.take().ok_or(HeapError::InvalidScope)?;
@@ -723,6 +757,8 @@ pub struct PersistentExecutionReport {
     pub fuel_remaining: u64,
     /// Maximum nested activation depth reached.
     pub max_call_depth_reached: u32,
+    /// Peak estimated active VM frame/register-stack bytes.
+    pub max_stack_bytes_reached: usize,
     /// Source location of the last dispatched instruction.
     pub last_location: Option<InstructionLocation>,
 }
@@ -784,11 +820,16 @@ impl HostFunctionDescriptor {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HostFunctionSlot {
-    registry_id: u64,
-    slot_index: u32,
-    slot_generation: u32,
-    abi_major: u16,
-    abi_minor: u16,
+    /// Identity of the owning host registry.
+    pub registry_id: u64,
+    /// Zero-based index in the registry slot table.
+    pub slot_index: u32,
+    /// Generation used to reject stale registrations.
+    pub slot_generation: u32,
+    /// ABI major version of the registration token.
+    pub abi_major: u16,
+    /// Minimum ABI minor version of the registration token.
+    pub abi_minor: u16,
     _thread_affinity: PhantomData<Rc<()>>,
 }
 
@@ -819,70 +860,129 @@ pub enum HostRegistrationError {
     RegistryIdentityExhausted,
 }
 
-/// C-compatible M1 host value representation for primitive values.
-///
-/// Managed strings, objects and functions remain opaque Runtime values and are
-/// not smuggled through this POD representation.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OgmaHostValue {
-    /// One of the OGMA_VALUE_* constants.
-    pub kind: u32,
-    /// Reserved; must be zero.
-    pub reserved: u32,
-    /// Boolean bit or binary64 bits, depending on kind.
-    pub payload: u64,
+/// Opaque owner-thread Runtime pointer supplied to C host callbacks.
+pub struct OgmaRuntime {
+    runtime_id: u64,
+    owner_thread: ThreadId,
+    active_heap: Cell<*mut Heap>,
+    active_context: Cell<OgmaContextHandle>,
+    next_handle_id: Cell<u64>,
+    active_handles: RefCell<HashMap<OgmaHandle, HostHandle>>,
+    handle_frames: RefCell<Vec<Vec<OgmaHandle>>>,
 }
 
-/// Host value kind for JavaScript undefined.
-pub const OGMA_VALUE_UNDEFINED: u32 = 0;
-/// Host value kind for JavaScript null.
-pub const OGMA_VALUE_NULL: u32 = 1;
-/// Host value kind for JavaScript Boolean.
-pub const OGMA_VALUE_BOOLEAN: u32 = 2;
-/// Host value kind for JavaScript Number.
-pub const OGMA_VALUE_NUMBER: u32 = 3;
+// SAFETY: OgmaRuntime is intentionally owner-thread-affine. All methods that
+// touch Cell/RefCell state and all exported callback helpers validate the
+// immutable owner_thread field before accessing that state. Non-owner callers
+// return WrongThread without touching the interior-mutability fields. The
+// unsafe C API requires the runtime pointer to remain alive during each call.
+unsafe impl Sync for OgmaRuntime {}
 
-/// Normal completion tag for OgmaCompletion.
+/// Fixed-size opaque handle for one Context in a Runtime.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct OgmaContextHandle {
+    opaque: [u64; 5],
+}
+
+/// Fixed-size opaque transient value handle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct OgmaHandle {
+    opaque: [u64; 5],
+}
+
+/// Fixed-size opaque temporary root-scope handle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct OgmaRootScopeHandle {
+    opaque: [u64; 5],
+}
+
+/// Fixed-size opaque persistent value handle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct OgmaPersistentHandle {
+    opaque: [u64; 5],
+}
+
+/// Fixed-size opaque host callback registration handle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct OgmaCallbackHandle {
+    opaque: [u64; 5],
+}
+
+/// Completion kind for a normal JavaScript return.
 pub const COMPLETION_NORMAL: u32 = 0;
-/// Throw completion tag for OgmaCompletion.
+/// Completion kind for a JavaScript throw.
 pub const COMPLETION_THROW: u32 = 1;
+/// Completion kind for a JavaScript return completion.
+pub const COMPLETION_RETURN: u32 = 2;
+/// Completion kind for a JavaScript break completion.
+pub const COMPLETION_BREAK: u32 = 3;
+/// Completion kind for a JavaScript continue completion.
+pub const COMPLETION_CONTINUE: u32 = 4;
 
-/// C-compatible host completion. Transport status remains separate.
+/// C-compatible completion carrying an opaque Runtime value.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OgmaCompletion {
-    /// COMPLETION_NORMAL or COMPLETION_THROW.
+    /// One of the COMPLETION_* tags.
     pub kind: u32,
     /// Reserved; must be zero.
     pub reserved: u32,
-    /// Primitive value payload.
-    pub value: OgmaHostValue,
+    /// Opaque completion value.
+    pub value: OgmaHandle,
 }
 
-/// Generic C-compatible synchronous host callback.
-pub type OgmaGenericHostCallback = unsafe extern "C-unwind" fn(
-    arguments: *const OgmaHostValue,
+/// Generic host callback from the canonical ABI-v1 host-call contract.
+pub type OgmaHostCallback = unsafe extern "C-unwind" fn(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    arguments: *const OgmaHandle,
     arguments_len: usize,
-    out_completion: *mut OgmaCompletion,
+    completion: *mut OgmaCompletion,
     user_data: *mut c_void,
 ) -> OgmaStatus;
 
-/// Fixed-signature C-compatible primitive thunk.
-///
-/// It is eligible only for a descriptor without allocation, GC, throw,
-/// suspension or re-entry effects. Generic fallback remains mandatory.
+/// Typed primitive (f64, f64) -> f64 callback.
 pub type OgmaPrimitiveF64Thunk = unsafe extern "C-unwind" fn(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
     left: f64,
     right: f64,
     out_result: *mut f64,
     user_data: *mut c_void,
 ) -> OgmaStatus;
 
-/// C-compatible host-function registration descriptor v1.
+/// Typed (OgmaHandle, OgmaHandle) -> f64 callback.
+pub type OgmaNumberHandleF64Thunk = unsafe extern "C-unwind" fn(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    left: OgmaHandle,
+    right: OgmaHandle,
+    out_result: *mut f64,
+    user_data: *mut c_void,
+) -> OgmaStatus;
+
+/// Generic host signature tag from the canonical ABI-v1 descriptor.
+pub const SIGNATURE_GENERIC: u32 = 0;
+/// Primitive f64 binary signature tag.
+pub const SIGNATURE_F64_BINARY: u32 = 1;
+/// Opaque number-handle binary signature tag.
+pub const SIGNATURE_NUMBER_HANDLE_BINARY: u32 = 2;
+/// Stable signature identity for generic host functions.
+pub const SIGNATURE_ID_GENERIC: u64 = 0;
+/// Stable signature identity for (f64, f64) -> f64.
+pub const SIGNATURE_ID_F64_BINARY: u64 = 0x1001;
+/// Stable signature identity for (OgmaHandle, OgmaHandle) -> f64.
+pub const SIGNATURE_ID_NUMBER_HANDLE_BINARY: u64 = 0x1002;
+
+/// Host-function descriptor with the exact canonical ABI-v1 field layout.
 ///
-/// The name is copied during registration. user_data remains host-owned and
-/// must remain valid until the registration is successfully unregistered.
+/// The inline name buffer and reserved fields intentionally match the M0
+/// ogma_host_dispatch.h contract; do not reorder or append fields.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct OgmaHostFunctionDescriptor {
@@ -892,28 +992,387 @@ pub struct OgmaHostFunctionDescriptor {
     pub descriptor_version: u16,
     /// Required ABI major.
     pub abi_major: u16,
-    /// Minimum ABI minor required by the descriptor.
+    /// Minimum ABI minor.
     pub abi_minor: u16,
     /// Reserved; must be zero.
     pub reserved: u16,
     /// Stable non-zero host function identity.
     pub function_id: u64,
-    /// Borrowed UTF-8 function name.
-    pub name: *const u8,
-    /// Name byte length.
-    pub name_len: usize,
-    /// SIGNATURE_GENERIC or SIGNATURE_F64_BINARY.
+    /// Inline UTF-8 function name.
+    pub name: [u8; 128],
+    /// Number of valid bytes in name.
+    pub name_len: u16,
+    /// Reserved; must be zero.
+    pub reserved_name: u16,
+    /// One of the SIGNATURE_* tags.
     pub signature: u32,
-    /// Host effect bitset.
+    /// Stable signature ID matching the signature tag.
+    pub signature_id: u64,
+    /// Declared host effect bitset.
     pub effects: u32,
-    /// Capability bitset checked on every invocation.
+    /// Reserved; must be zero.
+    pub reserved_effects: u32,
+    /// Capabilities required for every invocation.
     pub required_capabilities: u64,
-    /// Required generic callback fallback.
-    pub generic_callback: Option<OgmaGenericHostCallback>,
-    /// Optional fixed-signature primitive entry point.
+    /// Optional primitive f64 thunk.
     pub primitive_f64_thunk: Option<OgmaPrimitiveF64Thunk>,
-    /// Host-owned callback data.
+    /// Optional opaque number-handle thunk.
+    pub number_handle_f64_thunk: Option<OgmaNumberHandleF64Thunk>,
+    /// Required generic callback fallback.
+    pub generic_callback: Option<OgmaHostCallback>,
+    /// Host-owned callback data, valid until unregistration succeeds.
     pub user_data: *mut c_void,
+}
+
+impl OgmaRuntime {
+    fn new(runtime_id: u64) -> Self {
+        Self {
+            runtime_id,
+            owner_thread: thread::current().id(),
+            active_heap: Cell::new(std::ptr::null_mut()),
+            active_context: Cell::new(OgmaContextHandle::default()),
+            next_handle_id: Cell::new(1),
+            active_handles: RefCell::new(HashMap::new()),
+            handle_frames: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn context_handle(&self, context_id: u64) -> OgmaContextHandle {
+        OgmaContextHandle {
+            opaque: [self.runtime_id, context_id, ABI_VERSION as u64, ABI_MINOR as u64, 0],
+        }
+    }
+
+    fn enter_call(
+        self: &Rc<Self>,
+        heap: *mut Heap,
+        context: OgmaContextHandle,
+    ) -> Result<ActiveCContextGuard, HostError> {
+        if thread::current().id() != self.owner_thread {
+            return Err(HostError::Denied);
+        }
+        if heap.is_null() {
+            return Err(HostError::Denied);
+        }
+        let mut frames = self.handle_frames.borrow_mut();
+        frames
+            .try_reserve(1)
+            .map_err(|_| HostError::Denied)?;
+        frames.push(Vec::new());
+        drop(frames);
+        let previous_heap = self.active_heap.replace(heap);
+        let previous_context = self.active_context.replace(context);
+        Ok(ActiveCContextGuard {
+            runtime: Rc::clone(self),
+            heap,
+            previous_heap,
+            previous_context,
+        })
+    }
+
+    fn create_temp_handle(
+        &self,
+        heap: &mut Heap,
+        context: OgmaContextHandle,
+        value: Value,
+    ) -> Result<OgmaHandle, HostError> {
+        if self.active_context.get() != context {
+            return Err(HostError::Denied);
+        }
+        let id = self.next_handle_id.get();
+        let next_id = id.checked_add(1).ok_or(HostError::Denied)?;
+        {
+            let mut frames = self.handle_frames.borrow_mut();
+            let Some(frame) = frames.last_mut() else {
+                return Err(HostError::Denied);
+            };
+            if frame.len() >= MAX_C_CALLBACK_HANDLES {
+                return Err(HostError::Denied);
+            }
+            frame.try_reserve(1).map_err(|_| HostError::Denied)?;
+        }
+        self.active_handles
+            .borrow_mut()
+            .try_reserve(1)
+            .map_err(|_| HostError::Denied)?;
+        let root = heap.retain_host_value(value).map_err(HostError::Runtime)?;
+        let handle = OgmaHandle {
+            opaque: [self.runtime_id, context.opaque[1], id, 1, 0],
+        };
+        self.active_handles.borrow_mut().insert(handle, root);
+        self.handle_frames
+            .borrow_mut()
+            .last_mut()
+            .ok_or(HostError::Denied)?
+            .push(handle);
+        self.next_handle_id.set(next_id);
+        Ok(handle)
+    }
+
+    fn resolve_temp_handle(
+        &self,
+        heap: &Heap,
+        context: OgmaContextHandle,
+        handle: OgmaHandle,
+    ) -> Result<Value, HostError> {
+        if handle == OgmaHandle::default() {
+            return Ok(Value::undefined());
+        }
+        if self.active_context.get() != context {
+            return Err(HostError::Denied);
+        }
+        let root = self
+            .active_handles
+            .borrow()
+            .get(&handle)
+            .copied()
+            .ok_or(HostError::Denied)?;
+        heap.resolve_host_handle(root).map_err(HostError::Runtime)
+    }
+}
+
+struct ActiveCContextGuard {
+    runtime: Rc<OgmaRuntime>,
+    heap: *mut Heap,
+    previous_heap: *mut Heap,
+    previous_context: OgmaContextHandle,
+}
+
+impl Drop for ActiveCContextGuard {
+    fn drop(&mut self) {
+        let handles = self.runtime.handle_frames.borrow_mut().pop().unwrap_or_default();
+        if !self.heap.is_null() {
+            // SAFETY: this guard is scoped to the active interpreter callback.
+            // The HostCallContext keeps the Runtime heap exclusively borrowed,
+            // and the raw pointer was derived from that exclusive borrow.
+            let heap = unsafe { &mut *self.heap };
+            let mut roots = self.runtime.active_handles.borrow_mut();
+            for handle in handles {
+                if let Some(root) = roots.remove(&handle) {
+                    let _ = heap.release_host_handle(root);
+                }
+            }
+        }
+        self.runtime.active_heap.set(self.previous_heap);
+        self.runtime.active_context.set(self.previous_context);
+    }
+}
+
+unsafe fn active_c_heap<'a>(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+) -> Result<(&'a OgmaRuntime, &'a mut Heap), OgmaStatus> {
+    if runtime.is_null() {
+        return Err(OgmaStatus::INVALID_ARGUMENT);
+    }
+    // SAFETY: the caller supplies the Runtime pointer received in its callback.
+    let runtime = unsafe { &*runtime };
+    if thread::current().id() != runtime.owner_thread {
+        return Err(OgmaStatus::WRONG_THREAD);
+    }
+    if runtime.active_context.get() != context {
+        return Err(OgmaStatus::STALE_HANDLE);
+    }
+    let heap = runtime.active_heap.get();
+    if heap.is_null() {
+        return Err(OgmaStatus::BUSY);
+    }
+    // SAFETY: ActiveCContextGuard installs this pointer from the current
+    // exclusive HostCallContext heap borrow and resets it before the callback
+    // dispatch returns.
+    Ok((runtime, unsafe { &mut *heap }))
+}
+
+/// Creates a JavaScript Number during a C host callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_create_number(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    number: f64,
+    out_value: *mut OgmaHandle,
+) -> OgmaStatus {
+    if out_value.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let value = runtime
+            .create_temp_handle(heap, context, Value::number(number))
+            .map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_value.write(value) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
+/// Reads a JavaScript Number handle during a C host callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_get_number(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    value: OgmaHandle,
+    out_number: *mut f64,
+) -> OgmaStatus {
+    if out_number.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let value = runtime
+            .resolve_temp_handle(heap, context, value)
+            .map_err(|_| OgmaStatus::STALE_HANDLE)?;
+        let number = value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_number.write(number) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
+/// Creates a JavaScript Boolean during a C host callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_create_boolean(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    boolean: u8,
+    out_value: *mut OgmaHandle,
+) -> OgmaStatus {
+    if out_value.is_null() || boolean > 1 {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let value = runtime
+            .create_temp_handle(heap, context, Value::boolean(boolean == 1))
+            .map_err(|_| OgmaStatus::INTERNAL_ERROR)?;
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_value.write(value) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
+/// Reads a JavaScript Boolean handle during a C host callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_get_boolean(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    value: OgmaHandle,
+    out_boolean: *mut u8,
+) -> OgmaStatus {
+    if out_boolean.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let value = runtime
+            .resolve_temp_handle(heap, context, value)
+            .map_err(|_| OgmaStatus::STALE_HANDLE)?;
+        let boolean = value.as_boolean().ok_or(OgmaStatus::TYPE_MISMATCH)?;
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_boolean.write(u8::from(boolean)) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
+/// Converts an integral JavaScript Number to i32 with range and fraction checks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_get_i32(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    value: OgmaHandle,
+    out_integer: *mut i32,
+) -> OgmaStatus {
+    if out_integer.is_null() {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        let value = runtime
+            .resolve_temp_handle(heap, context, value)
+            .map_err(|_| OgmaStatus::STALE_HANDLE)?;
+        let number = value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
+        if !number.is_finite()
+            || number.fract() != 0.0
+            || number < f64::from(i32::MIN)
+            || number > f64::from(i32::MAX)
+        {
+            return Err(OgmaStatus::OUT_OF_RANGE);
+        }
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_integer.write(number as i32) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
+}
+
+/// Sums a borrowed array of JavaScript Number handles during a C callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ogma_context_sum_numbers(
+    runtime: *const OgmaRuntime,
+    context: OgmaContextHandle,
+    handles: *const OgmaHandle,
+    count: usize,
+    out_sum: *mut f64,
+) -> OgmaStatus {
+    if out_sum.is_null()
+        || (count != 0 && handles.is_null())
+        || count > MAX_C_CALLBACK_HANDLES
+    {
+        return OgmaStatus::INVALID_ARGUMENT;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: runtime/context are supplied by the active C callback.
+        let (runtime, heap) = unsafe { active_c_heap(runtime, context)? };
+        // SAFETY: the caller supplies a readable array for count elements.
+        let handles = if count == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(handles, count) }
+        };
+        let mut sum = 0.0;
+        for handle in handles {
+            let value = runtime
+                .resolve_temp_handle(heap, context, *handle)
+                .map_err(|_| OgmaStatus::STALE_HANDLE)?;
+            sum += value.as_number().ok_or(OgmaStatus::TYPE_MISMATCH)?;
+        }
+        // SAFETY: caller provided writable output storage.
+        unsafe { out_sum.write(sum) };
+        Ok::<_, OgmaStatus>(())
+    }));
+    match result {
+        Ok(Ok(())) => OgmaStatus::OK,
+        Ok(Err(status)) => status,
+        Err(_) => OgmaStatus::PANIC,
+    }
 }
 
 #[derive(Clone)]
@@ -933,9 +1392,11 @@ enum HostHandler {
 #[derive(Clone, Copy)]
 struct CHostHandler {
     signature: u32,
+    signature_id: u64,
     effects: u32,
-    generic_callback: OgmaGenericHostCallback,
+    generic_callback: OgmaHostCallback,
     primitive_f64_thunk: Option<OgmaPrimitiveF64Thunk>,
+    number_handle_f64_thunk: Option<OgmaNumberHandleF64Thunk>,
     user_data: *mut c_void,
 }
 
@@ -974,11 +1435,16 @@ struct RegistryInner {
 #[derive(Clone)]
 pub struct HostFunctionRegistry {
     inner: Rc<RegistryInner>,
+    abi_runtime: Rc<OgmaRuntime>,
+    context_handle: OgmaContextHandle,
 }
 
 impl HostFunctionRegistry {
     /// Creates an independent empty host-function table.
-    pub fn new() -> Result<Self, HostRegistrationError> {
+    pub fn new(
+        abi_runtime: Rc<OgmaRuntime>,
+        context_handle: OgmaContextHandle,
+    ) -> Result<Self, HostRegistrationError> {
         let id = NEXT_REGISTRY_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
@@ -993,6 +1459,8 @@ impl HostFunctionRegistry {
                 capabilities: Cell::new(0),
                 _thread_affinity: PhantomData,
             }),
+            abi_runtime,
+            context_handle,
         })
     }
 
@@ -1035,13 +1503,16 @@ impl HostFunctionRegistry {
         Ok(())
     }
 
-    /// Registers a C-compatible generic callback and optional primitive thunk.
+    /// Registers a C-compatible host function using the canonical M0 ABI-v1 descriptor.
+    ///
+    /// The fixed-size inline name, signature identifiers, opaque callback
+    /// handles and descriptor version are validated before publication.
     ///
     /// # Safety
     ///
-    /// descriptor.name must be readable for name_len bytes for this call.
-    /// user_data and callback pointers must remain valid until successful
-    /// unregistration. Callbacks must obey their declared ABI.
+    /// The generic callback and any selected typed thunk must remain valid
+    /// until successful unregistration. user_data must remain valid for the
+    /// same period. Callbacks must obey their declared C-unwind ABI.
     pub unsafe fn register_c(
         &self,
         descriptor: &OgmaHostFunctionDescriptor,
@@ -1052,28 +1523,39 @@ impl HostFunctionRegistry {
             || descriptor.abi_major != ABI_VERSION
             || descriptor.abi_minor > ABI_MINOR
             || descriptor.reserved != 0
+            || descriptor.reserved_name != 0
+            || descriptor.reserved_effects != 0
             || descriptor.function_id == 0
-            || descriptor.name.is_null()
             || descriptor.name_len == 0
-            || descriptor.name_len > MAX_HOST_NAME_BYTES
+            || usize::from(descriptor.name_len) > descriptor.name.len()
             || descriptor.effects & !KNOWN_EFFECTS != 0
             || descriptor.effects & EFFECT_MAY_SUSPEND != 0
             || descriptor.generic_callback.is_none()
         {
             return Err(HostRegistrationError::InvalidDescriptor);
         }
-        // SAFETY: the caller contract guarantees a readable name buffer.
-        let name_bytes =
-            unsafe { std::slice::from_raw_parts(descriptor.name, descriptor.name_len) };
+        let name_bytes = &descriptor.name[..usize::from(descriptor.name_len)];
         let name = std::str::from_utf8(name_bytes)
             .map_err(|_| HostRegistrationError::InvalidDescriptor)?;
         if name.as_bytes().contains(&0) {
             return Err(HostRegistrationError::InvalidDescriptor);
         }
         let signature_valid = match descriptor.signature {
-            SIGNATURE_GENERIC => descriptor.primitive_f64_thunk.is_none(),
+            SIGNATURE_GENERIC => {
+                descriptor.signature_id == SIGNATURE_ID_GENERIC
+                    && descriptor.primitive_f64_thunk.is_none()
+                    && descriptor.number_handle_f64_thunk.is_none()
+            }
             SIGNATURE_F64_BINARY => {
-                descriptor.primitive_f64_thunk.is_some()
+                descriptor.signature_id == SIGNATURE_ID_F64_BINARY
+                    && descriptor.primitive_f64_thunk.is_some()
+                    && descriptor.number_handle_f64_thunk.is_none()
+                    && descriptor.effects & COMPLEX_EFFECTS == 0
+            }
+            SIGNATURE_NUMBER_HANDLE_BINARY => {
+                descriptor.signature_id == SIGNATURE_ID_NUMBER_HANDLE_BINARY
+                    && descriptor.primitive_f64_thunk.is_none()
+                    && descriptor.number_handle_f64_thunk.is_some()
                     && descriptor.effects & COMPLEX_EFFECTS == 0
             }
             _ => false,
@@ -1089,11 +1571,13 @@ impl HostFunctionRegistry {
         };
         let handler = HostHandler::C(CHostHandler {
             signature: descriptor.signature,
+            signature_id: descriptor.signature_id,
             effects: descriptor.effects,
             generic_callback: descriptor
                 .generic_callback
                 .ok_or(HostRegistrationError::InvalidDescriptor)?,
             primitive_f64_thunk: descriptor.primitive_f64_thunk,
+            number_handle_f64_thunk: descriptor.number_handle_f64_thunk,
             user_data: descriptor.user_data,
         });
         self.insert(rust_descriptor, handler)
@@ -1309,7 +1793,19 @@ impl Host for HostFunctionRegistry {
                     Err(_) => Err(HostError::Panicked),
                 }
             }
-            HostHandler::C(handler) => invoke_c_handler(context, handler, arguments),
+            HostHandler::C(handler) => {
+                let heap = context.heap() as *mut Heap;
+                let _scope = self
+                    .abi_runtime
+                    .enter_call(heap, self.context_handle)?;
+                invoke_c_handler(
+                    &self.abi_runtime,
+                    self.context_handle,
+                    context,
+                    handler,
+                    arguments,
+                )
+            },
         }
     }
 }
@@ -1326,48 +1822,96 @@ fn throw_host_error(
 }
 
 fn invoke_c_handler(
+    runtime: &Rc<OgmaRuntime>,
+    context_handle: OgmaContextHandle,
     context: &mut HostCallContext<'_>,
     handler: CHostHandler,
     arguments: &[Value],
 ) -> Result<HostCallCompletion, HostError> {
+    let runtime_ptr = Rc::as_ptr(runtime);
+
     if handler.signature == SIGNATURE_F64_BINARY
+        && handler.signature_id == SIGNATURE_ID_F64_BINARY
         && handler.effects & COMPLEX_EFFECTS == 0
         && let (Some(thunk), [left, right]) = (handler.primitive_f64_thunk, arguments)
         && let (Some(left), Some(right)) = (left.as_number(), right.as_number())
     {
         let mut result = 0.0;
         let status = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: thunk validity and user_data lifetime are guaranteed by
-            // the unsafe registration contract.
-            unsafe { thunk(left, right, &mut result, handler.user_data) }
+            // SAFETY: descriptor validation pins callback/user_data lifetime;
+            // the ABI runtime and context handles are valid for this scope.
+            unsafe {
+                thunk(
+                    runtime_ptr,
+                    context_handle,
+                    left,
+                    right,
+                    &mut result,
+                    handler.user_data,
+                )
+            }
         }))
         .map_err(|_| HostError::Panicked)?;
         if status == OgmaStatus::OK {
             return Ok(HostCallCompletion::Normal(Value::number(result)));
         }
-        if status == OgmaStatus::TYPE_MISMATCH {
-            return throw_host_error(context, "TypeError: host thunk argument mismatch");
+        if status != OgmaStatus::TYPE_MISMATCH {
+            return callback_status_to_host_error(context, status);
         }
-        if status == OgmaStatus::OUT_OF_RANGE {
-            return throw_host_error(context, "RangeError: host thunk conversion failed");
-        }
-        return Err(HostError::Panicked);
+        // A type mismatch in the typed fast path deliberately falls back to
+        // the required generic callback instead of leaking a transport status.
     }
 
-    let converted = arguments
-        .iter()
-        .copied()
-        .map(encode_host_value)
-        .collect::<Result<Vec<_>, _>>()?;
+    if handler.signature == SIGNATURE_NUMBER_HANDLE_BINARY
+        && handler.signature_id == SIGNATURE_ID_NUMBER_HANDLE_BINARY
+        && handler.effects & COMPLEX_EFFECTS == 0
+        && let (Some(thunk), [left, right]) =
+            (handler.number_handle_f64_thunk, arguments)
+    {
+        let left_handle = runtime.create_temp_handle(context.heap(), context_handle, *left)?;
+        let right_handle = runtime.create_temp_handle(context.heap(), context_handle, *right)?;
+        let mut result = 0.0;
+        let status = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: descriptor validation pins callback/user_data lifetime;
+            // handles are rooted until this callback scope exits.
+            unsafe {
+                thunk(
+                    runtime_ptr,
+                    context_handle,
+                    left_handle,
+                    right_handle,
+                    &mut result,
+                    handler.user_data,
+                )
+            }
+        }))
+        .map_err(|_| HostError::Panicked)?;
+        if status == OgmaStatus::OK {
+            return Ok(HostCallCompletion::Normal(Value::number(result)));
+        }
+        if status != OgmaStatus::TYPE_MISMATCH {
+            return callback_status_to_host_error(context, status);
+        }
+        // Signature mismatch uses the generic callback as a checked fallback.
+    }
+
+    let mut handles = Vec::new();
+    handles
+        .try_reserve_exact(arguments.len())
+        .map_err(|_| HostError::Runtime(HeapError::AllocationFailed))?;
+    for argument in arguments {
+        handles.push(runtime.create_temp_handle(context.heap(), context_handle, *argument)?);
+    }
     let mut completion = OgmaCompletion::default();
     let status = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: callback validity and user_data lifetime are guaranteed by
-        // the unsafe registration contract. The slices and output pointer
-        // remain valid for the duration of this synchronous call.
+        // SAFETY: descriptor validation pins callback/user_data lifetime;
+        // the handles and completion remain alive for this synchronous call.
         unsafe {
             (handler.generic_callback)(
-                converted.as_ptr(),
-                converted.len(),
+                runtime_ptr,
+                context_handle,
+                handles.as_ptr(),
+                handles.len(),
                 &mut completion,
                 handler.user_data,
             )
@@ -1375,13 +1919,15 @@ fn invoke_c_handler(
     }))
     .map_err(|_| HostError::Panicked)?;
     if status != OgmaStatus::OK {
-        return Err(HostError::Panicked);
+        return callback_status_to_host_error(context, status);
     }
-    if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
+    if completion.reserved != 0
+        || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
     {
         return Err(HostError::Panicked);
     }
-    let value = decode_host_value(completion.value)?;
+    let value = runtime
+        .resolve_temp_handle(context.heap(), context_handle, completion.value)?;
     Ok(if completion.kind == COMPLETION_THROW {
         HostCallCompletion::Throw(value)
     } else {
@@ -1389,44 +1935,24 @@ fn invoke_c_handler(
     })
 }
 
-fn encode_host_value(value: Value) -> Result<OgmaHostValue, HostError> {
-    let encoded = match value.value_type() {
-        ValueType::Undefined => OgmaHostValue {
-            kind: OGMA_VALUE_UNDEFINED,
-            reserved: 0,
-            payload: 0,
-        },
-        ValueType::Null => OgmaHostValue {
-            kind: OGMA_VALUE_NULL,
-            reserved: 0,
-            payload: 0,
-        },
-        ValueType::Boolean => OgmaHostValue {
-            kind: OGMA_VALUE_BOOLEAN,
-            reserved: 0,
-            payload: u64::from(value.as_boolean().ok_or(HostError::Denied)?),
-        },
-        ValueType::Number => OgmaHostValue {
-            kind: OGMA_VALUE_NUMBER,
-            reserved: 0,
-            payload: value.as_number().ok_or(HostError::Denied)?.to_bits(),
-        },
-        ValueType::String | ValueType::Object | ValueType::Function => {
-            return Err(HostError::Runtime(HeapError::UnsupportedCoercion));
+fn callback_status_to_host_error(
+    context: &mut HostCallContext<'_>,
+    status: OgmaStatus,
+) -> Result<HostCallCompletion, HostError> {
+    match status {
+        OgmaStatus::TYPE_MISMATCH => {
+            throw_host_error(context, "TypeError: host callback argument mismatch")
         }
-    };
-    Ok(encoded)
-}
-
-fn decode_host_value(value: OgmaHostValue) -> Result<Value, HostError> {
-    if value.reserved != 0 {
-        return Err(HostError::Denied);
-    }
-    match value.kind {
-        OGMA_VALUE_UNDEFINED if value.payload == 0 => Ok(Value::undefined()),
-        OGMA_VALUE_NULL if value.payload == 0 => Ok(Value::null()),
-        OGMA_VALUE_BOOLEAN if value.payload <= 1 => Ok(Value::boolean(value.payload == 1)),
-        OGMA_VALUE_NUMBER => Ok(Value::number(f64::from_bits(value.payload))),
+        OgmaStatus::OUT_OF_RANGE => {
+            throw_host_error(context, "RangeError: host callback conversion failed")
+        }
+        OgmaStatus::STALE_HANDLE => {
+            throw_host_error(context, "ReferenceError: stale or foreign host handle")
+        }
+        OgmaStatus::WRONG_THREAD | OgmaStatus::BUSY | OgmaStatus::REENTRANCY_LIMIT => {
+            Err(HostError::Denied)
+        }
+        OgmaStatus::PANIC => Err(HostError::Panicked),
         _ => Err(HostError::Denied),
     }
 }
@@ -1587,6 +2113,229 @@ mod tests {
         ));
     }
 
+    unsafe extern "C-unwind" fn c_get_i32(
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        arguments: *const OgmaHandle,
+        arguments_len: usize,
+        out_completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if arguments.is_null() || out_completion.is_null() || arguments_len != 1 {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        // SAFETY: the dispatcher passes a readable array of arguments_len handles.
+        let argument = unsafe { *arguments };
+        let mut integer = 0_i32;
+        // SAFETY: Runtime/context are borrowed for this callback invocation.
+        let status = unsafe { ogma_context_get_i32(runtime, context, argument, &mut integer) };
+        if status != OgmaStatus::OK {
+            return status;
+        }
+        let mut value = OgmaHandle::default();
+        // SAFETY: Runtime/context are borrowed for this callback invocation.
+        let status = unsafe {
+            ogma_context_create_number(runtime, context, f64::from(integer), &mut value)
+        };
+        if status != OgmaStatus::OK {
+            return status;
+        }
+        // SAFETY: completion points to writable dispatcher-owned storage.
+        unsafe {
+            out_completion.write(OgmaCompletion {
+                kind: COMPLETION_NORMAL,
+                reserved: 0,
+                value,
+            })
+        };
+        OgmaStatus::OK
+    }
+
+    unsafe extern "C-unwind" fn c_boolean_echo(
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        arguments: *const OgmaHandle,
+        arguments_len: usize,
+        out_completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if arguments.is_null() || out_completion.is_null() || arguments_len != 1 {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        // SAFETY: the dispatcher supplies a readable array of argument handles.
+        let argument = unsafe { *arguments };
+        let mut boolean = 0_u8;
+        // SAFETY: the callback receives the active Runtime/Context pair.
+        let status =
+            unsafe { ogma_context_get_boolean(runtime, context, argument, &mut boolean) };
+        if status != OgmaStatus::OK {
+            return status;
+        }
+        let mut value = OgmaHandle::default();
+        // SAFETY: the callback receives the active Runtime/Context pair.
+        let status =
+            unsafe { ogma_context_create_boolean(runtime, context, boolean, &mut value) };
+        if status != OgmaStatus::OK {
+            return status;
+        }
+        // SAFETY: out_completion is writable dispatcher-owned storage.
+        unsafe {
+            out_completion.write(OgmaCompletion {
+                kind: COMPLETION_NORMAL,
+                reserved: 0,
+                value,
+            })
+        };
+        OgmaStatus::OK
+    }
+
+    unsafe extern "C-unwind" fn c_panics(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _arguments: *const OgmaHandle,
+        _arguments_len: usize,
+        _out_completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        panic!("C-unwind host callback panic must be contained");
+    }
+
+    #[test]
+    fn canonical_c_callback_reads_and_returns_boolean_values() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            84,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_boolean_echo,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: callback has static lifetime and no user data.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("register Boolean callback")
+        };
+        let report = context
+            .execute(
+                "fn_host_call",
+                &[Value::boolean(true)],
+                ExecutionRequest::default(),
+            )
+            .expect("C Boolean conversion roundtrip");
+        assert!(matches!(
+            report.completion,
+            ExecutionCompletion::Return(value) if value.as_boolean() == Some(true)
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn checked_c_number_to_i32_conversion_maps_fractional_values_to_throw() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            82,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_get_i32,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: callback has static lifetime and no user data.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("register C callback")
+        };
+        let report = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(31.5)],
+                ExecutionRequest::default(),
+            )
+            .expect("conversion errors are script Throw completions");
+        let ExecutionCompletion::Throw(message) = report.completion else {
+            panic!("fractional Number must fail checked i32 conversion");
+        };
+        let text = String::from_utf16(
+            &context.read_string_utf16(message).expect("RangeError string"),
+        )
+        .expect("valid RangeError text");
+        assert!(text.starts_with("RangeError:"));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn c_unwind_callback_panics_are_contained_before_returning_to_the_interpreter() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            83,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_panics,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: callback has static lifetime and no user data.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("register panicking C callback")
+        };
+        let result = context.execute(
+            "fn_host_call",
+            &[Value::number(1.0)],
+            ExecutionRequest::default(),
+        );
+        assert!(matches!(
+            result,
+            Err(ContextError::Interpreter(InterpreterError::HostCallbackPanicked))
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn abi_negotiation_c_entrypoint_validates_output_and_features() {
+        let null_status = unsafe {
+            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, FEATURE_CALLBACKS, std::ptr::null_mut())
+        };
+        assert_eq!(null_status, OgmaStatus::INVALID_ARGUMENT);
+
+        let mut version = OgmaAbiVersion::default();
+        let accepted = unsafe {
+            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, FEATURE_CALLBACKS, &mut version)
+        };
+        assert_eq!(accepted, OgmaStatus::OK);
+        assert_eq!(version, OgmaAbiVersion::current());
+
+        let rejected = unsafe {
+            ogma_abi_negotiate(ABI_VERSION, ABI_MINOR, 1_u64 << 63, &mut version)
+        };
+        assert_eq!(rejected, OgmaStatus::UNSUPPORTED_FEATURE);
+    }
+
     #[test]
     fn capability_denial_is_a_javascript_throw_completion() {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
@@ -1621,64 +2370,186 @@ mod tests {
     }
 
     unsafe extern "C-unwind" fn c_generic_echo(
-        arguments: *const OgmaHostValue,
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        arguments: *const OgmaHandle,
         arguments_len: usize,
         out_completion: *mut OgmaCompletion,
-        _user_data: *mut c_void,
+        user_data: *mut c_void,
     ) -> OgmaStatus {
         if arguments.is_null() || out_completion.is_null() || arguments_len != 1 {
             return OgmaStatus::INVALID_ARGUMENT;
         }
         // SAFETY: the host dispatcher supplies a readable slice for arguments_len.
         let argument = unsafe { *arguments };
-        if argument.kind != OGMA_VALUE_NUMBER || argument.reserved != 0 {
-            return OgmaStatus::TYPE_MISMATCH;
+        if !user_data.is_null() {
+            // SAFETY: the test host keeps this output slot alive until unregister.
+            unsafe { (user_data.cast::<OgmaHandle>()).write(argument) };
         }
-        let result = f64::from_bits(argument.payload) + 11.0;
+        let mut number = 0.0;
+        // SAFETY: callback receives its active Runtime and Context handles.
+        let read_status =
+            unsafe { ogma_context_get_number(runtime, context, argument, &mut number) };
+        if read_status != OgmaStatus::OK {
+            return read_status;
+        }
+        let mut result = OgmaHandle::default();
+        // SAFETY: callback receives its active Runtime and Context handles.
+        let create_status =
+            unsafe { ogma_context_create_number(runtime, context, number + 11.0, &mut result) };
+        if create_status != OgmaStatus::OK {
+            return create_status;
+        }
         let completion = OgmaCompletion {
             kind: COMPLETION_NORMAL,
             reserved: 0,
-            value: OgmaHostValue {
-                kind: OGMA_VALUE_NUMBER,
-                reserved: 0,
-                payload: result.to_bits(),
-            },
+            value: result,
         };
-        // SAFETY: the host dispatcher supplies a writable completion pointer.
+        // SAFETY: the host dispatcher supplies writable completion storage.
         unsafe { out_completion.write(completion) };
         OgmaStatus::OK
     }
 
+    unsafe extern "C-unwind" fn c_generic_two_args_unexpected(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _arguments: *const OgmaHandle,
+        _arguments_len: usize,
+        _out_completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        OgmaStatus::CALLBACK_ERROR
+    }
+
+    unsafe extern "C-unwind" fn c_primitive_add(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        left: f64,
+        right: f64,
+        out_result: *mut f64,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if out_result.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        // SAFETY: caller passes a writable f64 output slot.
+        unsafe { out_result.write(left + right) };
+        OgmaStatus::OK
+    }
+
+    unsafe extern "C-unwind" fn c_number_handle_add(
+        runtime: *const OgmaRuntime,
+        context: OgmaContextHandle,
+        left: OgmaHandle,
+        right: OgmaHandle,
+        out_result: *mut f64,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if out_result.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        let mut left_number = 0.0;
+        let mut right_number = 0.0;
+        // SAFETY: callback receives its active Runtime and Context handles.
+        let left_status =
+            unsafe { ogma_context_get_number(runtime, context, left, &mut left_number) };
+        if left_status != OgmaStatus::OK {
+            return left_status;
+        }
+        // SAFETY: callback receives its active Runtime and Context handles.
+        let right_status =
+            unsafe { ogma_context_get_number(runtime, context, right, &mut right_number) };
+        if right_status != OgmaStatus::OK {
+            return right_status;
+        }
+        // SAFETY: caller passes a writable f64 output slot.
+        unsafe { out_result.write(left_number + right_number) };
+        OgmaStatus::OK
+    }
+
+    fn host_call_two_args_artifacts() -> Vec<Vec<u8>> {
+        let document: FunctionDocument = from_str(include_str!(
+            "../../../tests/core-ir/fixtures/positive-host-call-two-args.json"
+        ))
+        .expect("two-argument host-call fixture");
+        ogma_compiler::bytecode::compile_functions(&[document])
+            .expect("two-argument Core IR fixture compiles to OGMB")
+            .into_iter()
+            .map(|function| function.artifact.bytes)
+            .collect()
+    }
+
+    fn c_host_descriptor(
+        name: &[u8],
+        function_id: u64,
+        signature: u32,
+        signature_id: u64,
+        primitive_f64_thunk: Option<OgmaPrimitiveF64Thunk>,
+        number_handle_f64_thunk: Option<OgmaNumberHandleF64Thunk>,
+        generic_callback: OgmaHostCallback,
+        user_data: *mut c_void,
+    ) -> OgmaHostFunctionDescriptor {
+        let mut inline_name = [0_u8; 128];
+        inline_name[..name.len()].copy_from_slice(name);
+        OgmaHostFunctionDescriptor {
+            struct_size: std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32,
+            descriptor_version: DESCRIPTOR_VERSION,
+            abi_major: ABI_VERSION,
+            abi_minor: ABI_MINOR,
+            reserved: 0,
+            function_id,
+            name: inline_name,
+            name_len: name.len() as u16,
+            reserved_name: 0,
+            signature,
+            signature_id,
+            effects: 0,
+            reserved_effects: 0,
+            required_capabilities: 0,
+            primitive_f64_thunk,
+            number_handle_f64_thunk,
+            generic_callback: Some(generic_callback),
+            user_data,
+        }
+    }
+
     #[test]
-    fn c_compatible_generic_thunk_runs_against_the_production_interpreter() {
+    fn canonical_c_abi_layouts_match_the_m0_contract() {
+        assert_eq!(std::mem::size_of::<OgmaAbiVersion>(), 24);
+        assert_eq!(std::mem::size_of::<OgmaContextHandle>(), 40);
+        assert_eq!(std::mem::size_of::<OgmaHandle>(), 40);
+        assert_eq!(std::mem::size_of::<OgmaRootScopeHandle>(), 40);
+        assert_eq!(std::mem::size_of::<OgmaPersistentHandle>(), 40);
+        assert_eq!(std::mem::size_of::<OgmaCallbackHandle>(), 40);
+        assert_eq!(std::mem::size_of::<OgmaCompletion>(), 48);
+        assert_eq!(std::mem::size_of::<OgmaHostFunctionDescriptor>(), 216);
+        assert_eq!(std::mem::size_of::<HostFunctionSlot>(), 24);
+    }
+
+    #[test]
+    fn canonical_c_callback_dispatches_opaque_handles_and_expires_them_after_return() {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
         context
             .load_module(host_call_artifacts())
             .expect("verified OGMB");
-        let name = b"benchmark.host.echo";
-        let descriptor = OgmaHostFunctionDescriptor {
-            struct_size: std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32,
-            descriptor_version: DESCRIPTOR_VERSION,
-            abi_major: ABI_VERSION,
-            abi_minor: ABI_MINOR,
-            reserved: 0,
-            function_id: 42,
-            name: name.as_ptr(),
-            name_len: name.len(),
-            signature: SIGNATURE_GENERIC,
-            effects: 0,
-            required_capabilities: 0,
-            generic_callback: Some(c_generic_echo),
-            primitive_f64_thunk: None,
-            user_data: std::ptr::null_mut(),
-        };
-        // SAFETY: name has static storage and the callback does not retain user_data.
+        let mut saved_argument = OgmaHandle::default();
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            42,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_generic_echo,
+            (&mut saved_argument as *mut OgmaHandle).cast(),
+        );
+        // SAFETY: callback has static lifetime and user_data is alive to unregister.
         let slot = unsafe {
             context
                 .register_c_host_function(&descriptor)
-                .expect("valid C ABI descriptor")
+                .expect("canonical ABI descriptor")
         };
         let report = context
             .execute(
@@ -1686,117 +2557,209 @@ mod tests {
                 &[Value::number(31.0)],
                 ExecutionRequest::default(),
             )
-            .expect("C-compatible callback executes");
+            .expect("C callback executes through the production Host registry");
         assert!(matches!(
             report.completion,
             ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
         ));
+
+        let mut ignored = 0.0;
+        // SAFETY: the Runtime pointer and context token belong to this Context.
+        let stale = unsafe {
+            ogma_context_get_number(
+                Rc::as_ptr(&context.runtime.abi_runtime),
+                context.context_handle,
+                saved_argument,
+                &mut ignored,
+            )
+        };
+        assert_eq!(stale, OgmaStatus::STALE_HANDLE);
         context
             .unregister_host_function(slot)
-            .expect("release C callback registration");
+            .expect("release callback registration");
     }
 
     #[test]
-    fn c_abi_primitive_entrypoint_checks_null_outputs_and_computes() {
-        let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, std::ptr::null_mut()) };
-        assert_eq!(status, OgmaStatus::INVALID_ARGUMENT);
-        let mut result = 0.0;
-        let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, &mut result) };
-        assert_eq!(status, OgmaStatus::OK);
-        assert_eq!(result, 4.0);
-        assert_eq!(std::mem::size_of::<HostFunctionSlot>(), 24);
-    }
-
-    unsafe extern "C-unwind" fn c_generic_echo(
-        arguments: *const OgmaHostValue,
-        arguments_len: usize,
-        out_completion: *mut OgmaCompletion,
-        _user_data: *mut c_void,
-    ) -> OgmaStatus {
-        if arguments.is_null() || out_completion.is_null() || arguments_len != 1 {
-            return OgmaStatus::INVALID_ARGUMENT;
-        }
-        // SAFETY: the host dispatcher supplies a readable slice for arguments_len.
-        let argument = unsafe { *arguments };
-        if argument.kind != OGMA_VALUE_NUMBER || argument.reserved != 0 {
-            return OgmaStatus::TYPE_MISMATCH;
-        }
-        let result = f64::from_bits(argument.payload) + 11.0;
-        let completion = OgmaCompletion {
-            kind: COMPLETION_NORMAL,
-            reserved: 0,
-            value: OgmaHostValue {
-                kind: OGMA_VALUE_NUMBER,
-                reserved: 0,
-                payload: result.to_bits(),
-            },
-        };
-        // SAFETY: the host dispatcher supplies a writable completion pointer.
-        unsafe { out_completion.write(completion) };
-        OgmaStatus::OK
-    }
-
-    #[test]
-    fn c_compatible_generic_thunk_runs_against_the_production_interpreter() {
+    fn canonical_primitive_thunk_dispatch_uses_the_typed_f64_path() {
         let engine = Engine::new(EngineConfig::default()).expect("valid config");
         let mut runtime = engine.create_runtime().expect("Runtime");
         let mut context = runtime.create_context().expect("Context");
         context
-            .load_module(host_call_artifacts())
-            .expect("verified OGMB");
-        let name = b"benchmark.host.echo";
-        let descriptor = OgmaHostFunctionDescriptor {
-            struct_size: std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32,
-            descriptor_version: DESCRIPTOR_VERSION,
-            abi_major: ABI_VERSION,
-            abi_minor: ABI_MINOR,
-            reserved: 0,
-            function_id: 42,
-            name: name.as_ptr(),
-            name_len: name.len(),
-            signature: SIGNATURE_GENERIC,
-            effects: 0,
-            required_capabilities: 0,
-            generic_callback: Some(c_generic_echo),
-            primitive_f64_thunk: None,
-            user_data: std::ptr::null_mut(),
-        };
-        // SAFETY: name has static storage and the callback does not retain user_data.
+            .load_module(host_call_two_args_artifacts())
+            .expect("verified two-argument OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            43,
+            SIGNATURE_F64_BINARY,
+            SIGNATURE_ID_F64_BINARY,
+            Some(c_primitive_add),
+            None,
+            c_generic_two_args_unexpected,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: static callbacks and null user_data satisfy the ABI contract.
         let slot = unsafe {
             context
                 .register_c_host_function(&descriptor)
-                .expect("valid C ABI descriptor")
+                .expect("valid typed descriptor")
         };
+        let report = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(19.0), Value::number(23.0)],
+                ExecutionRequest::default(),
+            )
+            .expect("typed primitive host call");
+        assert!(matches!(
+            report.completion,
+            ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn canonical_handle_thunk_uses_the_same_scoped_runtime_handles() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_two_args_artifacts())
+            .expect("verified two-argument OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            44,
+            SIGNATURE_NUMBER_HANDLE_BINARY,
+            SIGNATURE_ID_NUMBER_HANDLE_BINARY,
+            None,
+            Some(c_number_handle_add),
+            c_generic_two_args_unexpected,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: static callbacks and null user_data satisfy the ABI contract.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("valid handle-signature descriptor")
+        };
+        let report = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(19.0), Value::number(23.0)],
+                ExecutionRequest::default(),
+            )
+            .expect("typed opaque-handle host call");
+        assert!(matches!(
+            report.completion,
+            ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn invalid_c_descriptor_signature_and_reserved_fields_are_rejected() {
+        let engine = Engine::new(EngineConfig::default()).expect("Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let context = runtime.create_context().expect("Context");
+        let mut descriptor = c_host_descriptor(
+            b"host.invalid",
+            51,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_generic_echo,
+            std::ptr::null_mut(),
+        );
+        descriptor.signature_id = SIGNATURE_ID_F64_BINARY;
+        // SAFETY: the descriptor's callback and inline name remain valid.
+        assert_eq!(
+            unsafe { context.register_c_host_function(&descriptor) },
+            Err(HostRegistrationError::InvalidDescriptor)
+        );
+        descriptor.signature_id = SIGNATURE_ID_GENERIC;
+        descriptor.struct_size = descriptor.struct_size.saturating_sub(1);
+        // SAFETY: descriptor callbacks and inline name remain valid.
+        assert_eq!(
+            unsafe { context.register_c_host_function(&descriptor) },
+            Err(HostRegistrationError::InvalidDescriptor)
+        );
+        descriptor.struct_size = std::mem::size_of::<OgmaHostFunctionDescriptor>() as u32;
+        descriptor.reserved_effects = 1;
+        // SAFETY: the descriptor's callback and inline name remain valid.
+        assert_eq!(
+            unsafe { context.register_c_host_function(&descriptor) },
+            Err(HostRegistrationError::InvalidDescriptor)
+        );
+    }
+
+        #[test]
+    fn registered_rust_host_callback_reenters_the_same_runtime_context() {
+        let outer = host_call_artifacts();
+        let nested_document: FunctionDocument = from_str(include_str!(
+            "../../../tests/core-ir/fixtures/positive-ssa-branch.json"
+        ))
+        .expect("nested Core IR fixture");
+        let nested = ogma_compiler::bytecode::compile_functions(&[nested_document])
+            .expect("nested fixture compiles to OGMB")
+            .into_iter()
+            .map(|function| function.artifact.bytes)
+            .collect::<Vec<_>>();
+        let nested = ExecutableModule::load(nested).expect("nested module verifies");
+
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context.load_module(outer).expect("outer module verifies");
+        context
+            .register_host_function(
+                HostFunctionDescriptor::new(81, "benchmark.host.echo"),
+                move |call, _arguments| {
+                    let mut no_host = NoHost;
+                    match call
+                        .execute_nested(
+                            &nested,
+                            "fn0",
+                            &[Value::number(7.0), Value::number(7.0)],
+                            &mut no_host,
+                        )
+                        .map_err(|_| HostError::Panicked)?
+                    {
+                        ExecutionCompletion::Return(value) => {
+                            Ok(HostCallCompletion::Normal(value))
+                        }
+                        ExecutionCompletion::Throw(value) => {
+                            Ok(HostCallCompletion::Throw(value))
+                        }
+                        ExecutionCompletion::Interrupted(reason) => {
+                            Ok(HostCallCompletion::Interrupted(reason))
+                        }
+                    }
+                },
+            )
+            .expect("register re-entrant host callback");
+
         let report = context
             .execute(
                 "fn_host_call",
                 &[Value::number(31.0)],
                 ExecutionRequest::default(),
             )
-            .expect("C-compatible callback executes");
+            .expect("nested execution reuses the active Runtime");
+        assert_eq!(report.max_call_depth_reached, 2);
+        assert!(report.max_stack_bytes_reached > 0);
+        assert!(report.instructions_executed >= 4);
         assert!(matches!(
             report.completion,
-            ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+            ExecutionCompletion::Return(value) if value.as_number() == Some(7.0)
         ));
-        context
-            .unregister_host_function(slot)
-            .expect("release C callback registration");
     }
 
-    #[test]
-    fn c_abi_primitive_entrypoint_checks_null_outputs_and_computes() {
-        let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, std::ptr::null_mut()) };
-        assert_eq!(status, OgmaStatus::INVALID_ARGUMENT);
-        let mut result = 0.0;
-        let status = unsafe { ogma_primitive_add_f64(1.5, 2.5, &mut result) };
-        assert_eq!(status, OgmaStatus::OK);
-        assert_eq!(result, 4.0);
-        assert_eq!(std::mem::size_of::<HostFunctionSlot>(), 24);
-    }
-
-    #[test]
+#[test]
     fn host_registry_rejects_stale_slots_and_busy_unregistration() {
-        let registry = HostFunctionRegistry::new().expect("registry");
+        let engine = Engine::new(EngineConfig::default()).expect("Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let context = runtime.create_context().expect("Context");
+        let registry = context.host_function_registry();
         let descriptor = HostFunctionDescriptor::new(10, "host.test");
         let slot = registry
             .register(descriptor, |_call, _arguments| {
@@ -1813,7 +2776,88 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_unregistration_while_a_callback_is_active() {
+        let engine = Engine::new(EngineConfig::default()).expect("Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_artifacts())
+            .expect("verified OGMB");
+        let registry = context.host_function_registry();
+        let slot_cell = Rc::new(RefCell::new(None));
+        let callback_result = Rc::new(RefCell::new(None));
+        let callback_registry = registry.clone();
+        let callback_slot = Rc::clone(&slot_cell);
+        let callback_result_slot = Rc::clone(&callback_result);
+        let slot = registry
+            .register(
+                HostFunctionDescriptor::new(90, "benchmark.host.echo"),
+                move |_call, _arguments| {
+                    let slot = callback_slot
+                        .borrow()
+                        .expect("published callback slot before execution");
+                    *callback_result_slot.borrow_mut() =
+                        Some(callback_registry.unregister(slot).expect_err("active dispatch is busy"));
+                    Ok(HostCallCompletion::Normal(Value::number(42.0)))
+                },
+            )
+            .expect("register callback");
+        *slot_cell.borrow_mut() = Some(slot);
+
+        let report = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(1.0)],
+                ExecutionRequest::default(),
+            )
+            .expect("active callback returns normally");
+        assert!(matches!(
+            report.completion,
+            ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+        ));
+        assert_eq!(
+            *callback_result.borrow(),
+            Some(HostRegistrationError::Busy)
+        );
+        registry.unregister(slot).expect("unregister after dispatch");
+    }
+
+    #[test]
     fn engine_rejects_invalid_resource_configuration_before_runtime_creation() {
+        assert!(EngineConfig::default().validate().is_ok());
+        assert_eq!(EngineConfig::default().max_pending_jobs, 1024);
+        let invalid_heap = EngineConfig {
+            heap_quota_bytes: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_heap),
+            Err(ConfigurationError::ZeroHeapQuota)
+        ));
+        let invalid_fuel = EngineConfig {
+            instruction_budget: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_fuel),
+            Err(ConfigurationError::ZeroInstructionBudget)
+        ));
+        let invalid_poll = EngineConfig {
+            interrupt_poll_interval: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_poll),
+            Err(ConfigurationError::ZeroPollInterval)
+        ));
+        let invalid_jobs = EngineConfig {
+            max_pending_jobs: 1_048_577,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_jobs),
+            Err(ConfigurationError::PendingJobLimitTooLarge)
+        ));
         let invalid = EngineConfig {
             max_call_depth: 0,
             ..EngineConfig::default()
@@ -1821,6 +2865,14 @@ mod tests {
         assert!(matches!(
             Engine::new(invalid),
             Err(ConfigurationError::ZeroCallDepth)
+        ));
+        let invalid_stack = EngineConfig {
+            max_stack_bytes: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_stack),
+            Err(ConfigurationError::ZeroStackQuota)
         ));
         let invalid = EngineConfig {
             max_allocation_bytes: 2 * 1024 * 1024,
@@ -1831,6 +2883,161 @@ mod tests {
             Engine::new(invalid),
             Err(ConfigurationError::InvalidAllocationLimit)
         ));
+    }
+
+    #[test]
+    fn temporary_root_scope_keeps_values_alive_during_collection_then_releases_them() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let value = context.create_string("scoped value").expect("String");
+        let mut scope = context.open_root_scope().expect("root scope");
+        scope.root(value).expect("root the value");
+        scope.collect().expect("collect while scoped");
+        scope.close().expect("close root scope");
+
+        let text = context
+            .read_string_utf16(value)
+            .expect("value survived the scoped collection");
+        assert_eq!(String::from_utf16(&text).expect("valid text"), "scoped value");
+        context.collect().expect("collect after scope closure");
+        assert!(context.read_string_utf16(value).is_err());
+    }
+
+    #[test]
+    fn host_throw_completion_is_persisted_as_a_distinct_script_completion() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        context
+            .register_host_function(
+                HostFunctionDescriptor::new(77, "benchmark.host.echo"),
+                |_call, _arguments| {
+                    Ok(HostCallCompletion::Throw(Value::number(99.0)))
+                },
+            )
+            .expect("register throwing callback");
+
+        let report = context
+            .execute_persistent(
+                "fn_host_call",
+                &[Value::number(1.0)],
+                ExecutionRequest::default(),
+            )
+            .expect("throw is a normal interpreter completion");
+        let PersistentCompletion::Throw(handle) = report.completion else {
+            panic!("host Throw must remain distinct from Return");
+        };
+        assert_eq!(
+            context.resolve(handle).expect("persistent throw value").as_number(),
+            Some(99.0)
+        );
+        context.collect().expect("throw value survives forced GC");
+        assert_eq!(
+            context.resolve(handle).expect("persistent throw after GC").as_number(),
+            Some(99.0)
+        );
+        context.release(handle).expect("release persistent thrown value");
+    }
+
+    #[test]
+    fn c_callback_helpers_reject_wrong_thread_access_before_touching_the_heap() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let context = runtime.create_context().expect("Context");
+        let runtime_ptr = Rc::as_ptr(&context.runtime.abi_runtime) as usize;
+        let context_handle = context.context_handle;
+        let result = std::thread::spawn(move || {
+            let mut number = 0.0;
+            // SAFETY: pointer is kept alive by the joining parent thread; the
+            // C helper rejects the non-owner thread before accessing Runtime cells.
+            unsafe {
+                ogma_context_get_number(
+                    runtime_ptr as *const OgmaRuntime,
+                    context_handle,
+                    OgmaHandle::default(),
+                    &mut number,
+                )
+            }
+        })
+        .join()
+        .expect("wrong-thread helper call completes");
+        assert_eq!(result, OgmaStatus::WRONG_THREAD);
+    }
+
+    #[test]
+    fn execution_request_enforces_cancellation_and_deadline_at_entry() {
+        let engine = Engine::new(EngineConfig::default()).expect("Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(compile_source("function identity(value) { return value; }"))
+            .expect("verified compiled source");
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = context
+            .execute(
+                "identity",
+                &[Value::number(42.0)],
+                ExecutionRequest {
+                    cancellation: Some(cancellation),
+                    ..ExecutionRequest::default()
+                },
+            )
+            .expect("cancellation is an execution completion");
+        assert!(matches!(
+            cancelled.completion,
+            ExecutionCompletion::Interrupted(ExecutionInterruption::Cancelled)
+        ));
+        assert_eq!(cancelled.instructions_executed, 0);
+
+        let deadline = context
+            .execute(
+                "identity",
+                &[Value::number(42.0)],
+                ExecutionRequest {
+                    time_budget: Some(Duration::ZERO),
+                    ..ExecutionRequest::default()
+                },
+            )
+            .expect("expired deadline is an execution completion");
+        assert!(matches!(
+            deadline.completion,
+            ExecutionCompletion::Interrupted(ExecutionInterruption::DeadlineExceeded)
+        ));
+        assert_eq!(deadline.instructions_executed, 0);
+    }
+
+    #[test]
+    fn execution_request_rejects_zero_per_call_stack_fuel_and_depth_limits() {
+        let engine = Engine::new(EngineConfig::default()).expect("Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(compile_source("function identity(value) { return value; }"))
+            .expect("verified compiled source");
+
+        for request in [
+            ExecutionRequest {
+                max_stack_bytes: Some(0),
+                ..ExecutionRequest::default()
+            },
+            ExecutionRequest {
+                instruction_budget: Some(0),
+                ..ExecutionRequest::default()
+            },
+            ExecutionRequest {
+                max_call_depth: Some(0),
+                ..ExecutionRequest::default()
+            },
+        ] {
+            assert!(matches!(
+                context.execute("identity", &[Value::number(1.0)], request),
+                Err(ContextError::Configuration(_))
+            ));
+        }
     }
 
     #[test]
