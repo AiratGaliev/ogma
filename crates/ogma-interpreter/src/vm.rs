@@ -200,7 +200,10 @@ pub enum InterpreterError {
     /// Operation is outside the current synchronous M1 subset.
     UnsupportedOperation(&'static str),
     /// Host or artifact call-depth ceiling was exceeded.
-    CallDepthExceeded { limit: u32 },
+    CallDepthExceeded {
+        /// Maximum permitted active VM frame depth.
+        limit: u32,
+    },
     /// Invalid execution configuration.
     InvalidOptions(&'static str),
     /// Invalid branch target or VM continuation.
@@ -573,7 +576,7 @@ impl ExecutableModule {
             state.last_location = frame.image.location(instruction.offset);
             let force_poll = operation_needs_interrupt(&instruction.operation)
                 || state.instructions_executed == 0
-                || state.instructions_executed % u64::from(options.interrupt_poll_interval) == 0;
+                || state.instructions_executed.is_multiple_of(u64::from(options.interrupt_poll_interval));
             if let Some(reason) = state.poll(force_poll) {
                 frames.push(frame);
                 self.unwind_frames(heap, &mut frames)?;
@@ -626,7 +629,7 @@ impl ExecutableModule {
                     });
                     state.max_call_depth_reached = state.max_call_depth_reached.max(child.depth);
                     frames.push(frame);
-                    frames.push(child);
+                    frames.push(*child);
                 }
                 Ok(Step::Complete(completion)) => {
                     if let Err(error) = heap.close_scope(scope) {
@@ -699,6 +702,7 @@ impl ExecutableModule {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dispatch<H: Host>(
         &self,
         heap: &mut Heap,
@@ -1171,7 +1175,7 @@ impl ExecutableModule {
             }
         };
         Ok(Step::PushFrame {
-            child,
+            child: Box::new(child),
             pending_kind,
             destination,
         })
@@ -1688,7 +1692,7 @@ impl ExecutionState {
     }
 
     fn poll(&self, force: bool) -> Option<ExecutionInterruption> {
-        if !force && self.instructions_executed % self.poll_interval != 0 {
+        if !force && !self.instructions_executed.is_multiple_of(self.poll_interval) {
             return None;
         }
         if self
@@ -1823,7 +1827,7 @@ enum Step {
         back_edge: bool,
     },
     PushFrame {
-        child: VmFrame,
+        child: Box<VmFrame>,
         pending_kind: PendingKind,
         destination: u16,
     },
