@@ -172,14 +172,6 @@ fn executes_nested_function_calls_using_verified_function_table() {
                 may_throw: false,
             },
             RegisterInstruction {
-                operation: RegisterOperation::Unary {
-                    destination: 3,
-                    source: 0,
-                    operation: ogma_bytecode::UnaryOperation::Copy,
-                },
-                may_throw: false,
-            },
-            RegisterInstruction {
                 operation: RegisterOperation::Call {
                     destination: 4,
                     kind: CallKind::StoreBinding,
@@ -209,7 +201,7 @@ fn executes_nested_function_calls_using_verified_function_table() {
         vec![json!(1), json!("arg")],
         vec![parameter_binding],
         Vec::new(),
-        vec![json!({"binding":"arg","kind":"register","index":3})],
+        vec![json!({"binding":"arg","kind":"register","index":0})],
     );
     let caller = artifact(
         "main",
@@ -448,14 +440,6 @@ fn property_operations_use_the_shared_runtime_object_model() {
                 may_throw: false,
             },
             RegisterInstruction {
-                operation: RegisterOperation::Unary {
-                    destination: 1,
-                    source: 0,
-                    operation: ogma_bytecode::UnaryOperation::Copy,
-                },
-                may_throw: false,
-            },
-            RegisterInstruction {
                 operation: RegisterOperation::Constant {
                     destination: 3,
                     constant: 1,
@@ -475,7 +459,7 @@ fn property_operations_use_the_shared_runtime_object_model() {
                 operation: RegisterOperation::Call {
                     destination: 5,
                     kind: CallKind::GetProperty,
-                    sources: vec![1, 2],
+                    sources: vec![0, 2],
                 },
                 may_throw: true,
             },
@@ -484,7 +468,7 @@ fn property_operations_use_the_shared_runtime_object_model() {
         vec![json!("answer"), json!("object_arg")],
         vec![parameter],
         Vec::new(),
-        vec![location],
+        vec![json!({"binding":"object_arg","kind":"register","index":0})],
     );
 
     let module = ExecutableModule::load_one(&bytes).expect("verified property module");
@@ -505,6 +489,128 @@ fn property_operations_use_the_shared_runtime_object_model() {
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
         completion => panic!("expected property value, got {completion:?}"),
+    }
+}
+
+
+#[test]
+fn closures_capture_immutable_values_by_value() {
+    let child = artifact(
+        "read_snapshot",
+        "child_env",
+        Some("parent_env"),
+        0,
+        2,
+        1,
+        vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Unary {
+                    destination: 1,
+                    source: 0,
+                    operation: ogma_bytecode::UnaryOperation::Copy,
+                },
+                may_throw: false,
+            },
+            return_register(1),
+        ],
+        Vec::new(),
+        Vec::new(),
+        vec![json!({
+            "id": "snapshot_capture",
+            "source_environment": "parent_env",
+            "binding": "snapshot",
+            "name": "snapshot",
+            "mutable": false,
+            "semantic_type": "number",
+            "representation": "boxed",
+            "mode": "value"
+        })],
+        Vec::new(),
+    );
+    let parent = artifact(
+        "main",
+        "parent_env",
+        None,
+        0,
+        7,
+        6,
+        vec![
+            number_constant(0, 0),
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 1,
+                    constant: 1,
+                    kind: ConstantKind::BindingId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 2,
+                    kind: CallKind::StoreBinding,
+                    sources: vec![1, 0],
+                },
+                may_throw: true,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 3,
+                    constant: 2,
+                    kind: ConstantKind::FunctionId,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 4,
+                    kind: CallKind::MakeClosure,
+                    sources: vec![3, 0],
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 5,
+                    constant: 3,
+                    kind: ConstantKind::Undefined,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 6,
+                    kind: CallKind::JavaScript,
+                    sources: vec![4, 5],
+                },
+                may_throw: true,
+            },
+            return_register(6),
+        ],
+        vec![json!(42), json!("snapshot"), json!("read_snapshot"), JsonValue::Null],
+        vec![json!({
+            "id": "snapshot",
+            "name": "snapshot",
+            "kind": "const",
+            "mutable": false,
+            "semantic_type": "number",
+            "representation": "boxed"
+        })],
+        Vec::new(),
+        vec![json!({"binding":"snapshot","kind":"register","index":0})],
+    );
+
+    let module = ExecutableModule::load([parent, child]).expect("verified value-capture module");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let report = module.execute_without_host(
+        &mut heap,
+        "main",
+        &[],
+        ExecutionOptions::default(),
+    ).expect("execution report");
+
+    match report.completion {
+        ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
+        completion => panic!("expected captured immutable value, got {completion:?}"),
     }
 }
 
