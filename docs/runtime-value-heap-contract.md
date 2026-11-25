@@ -64,6 +64,9 @@ Callers must publish a managed value into an appropriate frame or scope before a
 
 - object-slot, per-cell header, persistent-handle, external-charge, frame and scope registries;
 - UTF-16 string payloads;
+- fixed object, array, function, lexical-environment and binding-cell payload
+  records, allocated separately from the compact managed-cell header;
+- object property arrays, lexical binding arrays and property-key atom storage;
 - object/function reference-edge arrays;
 - each root frame/scope reference array;
 - externally backed memory explicitly registered using `charge_external_memory`.
@@ -72,9 +75,22 @@ External memory charges have generation-checked tokens and must be released exac
 
 When an object, function or string allocation encounters aggregate quota pressure, the heap attempts one collection and retries. A single request above the configured maximum is rejected before a cell is published. Registry/edge growth and external charges fail closed when the quota is exhausted; they never publish a partially registered root or edge.
 
-The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters include slot-directory capacity, one separately allocated cell header for each live managed cell, UTF-16 payload capacity, edge/root/handle/frame registries, transient conversion buffers and registered external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
+The transient ASCII buffer used by primitive string-to-Number conversion is also reserved through the same quota-aware allocator and released when conversion finishes. Invalid non-ASCII numeric content returns NaN without constructing a temporary UTF-8 string. The byte counters include slot-directory capacity, one separately allocated cell header for each live managed cell, fixed object-model payload records, UTF-16 payload capacity,
+object property and lexical binding capacities, property-key atom capacities,
+edge/root/handle/frame registries, transient conversion buffers and registered
+external bytes. They are not process RSS and do not claim to account for allocator metadata, OS page rounding, fragmentation or unrelated allocations made by host code. Production footprint and representative interpreter workloads remain part of later measurement and integration work.
 
-## 6. Verification and boundaries
+## 6. Object-model extension
+
+OGM-44 adds the backend-neutral object, array, function and lexical-environment
+surface on top of this heap. Its descriptor, prototype, sparse-array, closure,
+call-root and accounting rules are defined in
+[runtime-object-model-contract.md](runtime-object-model-contract.md). The
+interpreter must consume these APIs rather than introduce parallel semantics.
+The Runtime contract does not claim that OGM-46 interpreter execution or
+ECMAScript conformance has been completed.
+
+## 7. Verification and boundaries
 
 The Runtime unit corpus covers number edge cases, strict/SameValue/SameValueZero semantics, UTF-16 surrogate preservation, primitive coercion, mark-sweep cycle reclamation, physical cell-address stability across slot-directory growth, all implemented root providers, LIFO violations, cross-Runtime identity, stale generation reuse, allocation limits, quota-triggered collection/retry, failed cell initialization cleanup, external charges and recovery after memory release.
 

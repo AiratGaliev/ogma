@@ -7,6 +7,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::value::{Value, ValueRepr};
 
+mod objects;
+use objects::{
+    ArrayData, BindingCellData, EnvironmentBinding, EnvironmentData, FunctionData, ObjectData,
+    OwnProperty,
+};
+pub use objects::{
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
+    CompletePropertyDescriptor, FunctionDefinition, FunctionId, FunctionKind, LexicalEnvironment,
+    PropertyDescriptor, PropertyKey,
+};
+
 static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Per-Runtime allocation policy.
@@ -93,6 +104,28 @@ pub enum HeapError {
     AccountingInvariant,
     /// The requested ECMAScript coercion is outside the current M1 subset.
     UnsupportedCoercion,
+    /// The property key token is invalid for this heap.
+    InvalidPropertyKey,
+    /// A property operation requires an object or function value.
+    NotObject,
+    /// The value is not a callable function object.
+    NotCallable,
+    /// An assignment is rejected by a non-writable descriptor.
+    ReadOnlyProperty,
+    /// A prototype chain contains a cycle.
+    PrototypeCycle,
+    /// An array length is not a valid uint32 length.
+    InvalidArrayLength,
+    /// Function metadata, captures or lexical identities are inconsistent.
+    InvalidFunctionDefinition,
+    /// A lexical binding is accessed before initialization.
+    UninitializedBinding,
+    /// A lexical binding identity is absent from the environment chain.
+    MissingBinding,
+    /// An immutable binding is assigned after initialization.
+    ImmutableBinding,
+    /// A lexical binding is initialized more than once.
+    AlreadyInitialized,
 }
 
 impl std::fmt::Display for HeapError {
@@ -228,8 +261,11 @@ pub struct CollectionReport {
 #[derive(Debug)]
 enum CellKind {
     String(Vec<u16>),
-    Object,
-    Function,
+    Object(Box<ObjectData>),
+    Array(Box<ArrayData>),
+    Function(Box<FunctionData>),
+    Environment(Box<EnvironmentData>),
+    BindingCell(Box<BindingCellData>),
 }
 
 #[derive(Debug)]
@@ -369,6 +405,7 @@ pub struct Heap {
     heap_id: u64,
     budget: HeapBudget,
     slots: Vec<HeapSlot>,
+    atoms: Vec<Vec<u16>>,
     free_slot_head: Option<u32>,
     mark_head: Option<u32>,
     frames: Vec<RootFrame>,
@@ -397,6 +434,7 @@ impl Heap {
             heap_id,
             budget: HeapBudget::new(config),
             slots: Vec::new(),
+            atoms: Vec::new(),
             free_slot_head: None,
             mark_head: None,
             frames: Vec::new(),
@@ -474,10 +512,10 @@ impl Heap {
 
     /// Allocates an ordinary object cell.
     pub fn allocate_object(&mut self) -> Result<Value, HeapError> {
-        match self.try_allocate_cell(CellKind::Object) {
+        match self.try_allocate_cell(CellKind::Object(Box::new(ObjectData::new()))) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Object)
+                self.try_allocate_cell(CellKind::Object(Box::new(ObjectData::new())))
                     .map(Value::from_object)
             }
             result => result.map(Value::from_object),
@@ -486,10 +524,10 @@ impl Heap {
 
     /// Allocates a callable object cell.
     pub fn allocate_function(&mut self) -> Result<Value, HeapError> {
-        match self.try_allocate_cell(CellKind::Function) {
+        match self.try_allocate_cell(CellKind::Function(Box::new(FunctionData::unbound()))) {
             Err(HeapError::QuotaExceeded { .. }) => {
                 self.collect()?;
-                self.try_allocate_cell(CellKind::Function)
+                self.try_allocate_cell(CellKind::Function(Box::new(FunctionData::unbound())))
                     .map(Value::from_function)
             }
             result => result.map(Value::from_function),
@@ -510,7 +548,7 @@ impl Heap {
             .kind
         {
             CellKind::String(units) => Ok(units),
-            CellKind::Object | CellKind::Function => Err(HeapError::InvalidObjectKind),
+            _ => Err(HeapError::InvalidObjectKind),
         }
     }
 
@@ -528,9 +566,8 @@ impl Heap {
             .cell
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
-        match &cell.kind {
-            CellKind::Object | CellKind::Function => {}
-            CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
+        if let CellKind::String(_) = &cell.kind {
+            return Err(HeapError::InvalidObjectKind);
         }
         reserve_vec(budget, &mut cell.edges, 1)?;
         cell.edges.push(child_ref);
@@ -547,9 +584,8 @@ impl Heap {
             .cell
             .as_mut()
             .ok_or(HeapError::StaleReference)?;
-        match &cell.kind {
-            CellKind::Object | CellKind::Function => {}
-            CellKind::String(_) => return Err(HeapError::InvalidObjectKind),
+        if let CellKind::String(_) = &cell.kind {
+            return Err(HeapError::InvalidObjectKind);
         }
         let position = cell
             .edges
@@ -881,17 +917,51 @@ impl Heap {
                 .checked_mul(std::mem::size_of::<GcRef>())
                 .ok_or(HeapError::SizeOverflow)?;
             let cell_bytes = std::mem::size_of::<HeapCell>();
-            let string_bytes = match &cell.kind {
+            let payload_bytes = match &cell.kind {
                 CellKind::String(units) => units
                     .capacity()
                     .checked_mul(std::mem::size_of::<u16>())
                     .ok_or(HeapError::SizeOverflow)?,
-                CellKind::Object | CellKind::Function => 0,
+                CellKind::Object(data) => std::mem::size_of::<ObjectData>()
+                    .checked_add(
+                        data.properties
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<OwnProperty>())
+                            .ok_or(HeapError::SizeOverflow)?,
+                    )
+                    .ok_or(HeapError::SizeOverflow)?,
+                CellKind::Array(data) => std::mem::size_of::<ArrayData>()
+                    .checked_add(
+                        data.object
+                            .properties
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<OwnProperty>())
+                            .ok_or(HeapError::SizeOverflow)?,
+                    )
+                    .ok_or(HeapError::SizeOverflow)?,
+                CellKind::Function(data) => std::mem::size_of::<FunctionData>()
+                    .checked_add(
+                        data.object
+                            .properties
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<OwnProperty>())
+                            .ok_or(HeapError::SizeOverflow)?,
+                    )
+                    .ok_or(HeapError::SizeOverflow)?,
+                CellKind::Environment(data) => std::mem::size_of::<EnvironmentData>()
+                    .checked_add(
+                        data.bindings
+                            .capacity()
+                            .checked_mul(std::mem::size_of::<EnvironmentBinding>())
+                            .ok_or(HeapError::SizeOverflow)?,
+                    )
+                    .ok_or(HeapError::SizeOverflow)?,
+                CellKind::BindingCell(_) => std::mem::size_of::<BindingCellData>(),
             };
             reclaimed_bytes = reclaimed_bytes
                 .checked_add(cell_bytes)
                 .and_then(|total| total.checked_add(edge_bytes))
-                .and_then(|total| total.checked_add(string_bytes))
+                .and_then(|total| total.checked_add(payload_bytes))
                 .ok_or(HeapError::SizeOverflow)?;
             let slot = &mut self.slots[slot_index];
             if let Some(next_generation) = slot.generation.checked_add(1) {
@@ -965,7 +1035,7 @@ impl Heap {
                     .kind
                 {
                     CellKind::String(units) => units,
-                    CellKind::Object | CellKind::Function => {
+                    _ => {
                         return Err(HeapError::InvalidObjectKind);
                     }
                 };
@@ -1149,7 +1219,7 @@ impl Heap {
             .kind
         {
             CellKind::String(units) => Ok(units),
-            CellKind::Object | CellKind::Function => Err(HeapError::InvalidObjectKind),
+            _ => Err(HeapError::InvalidObjectKind),
         }
     }
 
@@ -1237,15 +1307,29 @@ impl Heap {
     }
 }
 
+fn cell_payload_base_bytes(kind: &CellKind) -> usize {
+    match kind {
+        CellKind::String(_) => 0,
+        CellKind::Object(_) => std::mem::size_of::<ObjectData>(),
+        CellKind::Array(_) => std::mem::size_of::<ArrayData>(),
+        CellKind::Function(_) => std::mem::size_of::<FunctionData>(),
+        CellKind::Environment(_) => std::mem::size_of::<EnvironmentData>(),
+        CellKind::BindingCell(_) => std::mem::size_of::<BindingCellData>(),
+    }
+}
+
 fn allocate_cell_storage(
     budget: &mut HeapBudget,
     kind: CellKind,
 ) -> Result<CellStorage, HeapError> {
+    let payload_base_bytes = cell_payload_base_bytes(&kind);
+    budget.charge(payload_base_bytes)?;
     let mut storage = Vec::new();
     if let Err(error) = reserve_vec(budget, &mut storage, 1) {
         if let CellKind::String(units) = &kind {
             release_vec_capacity(budget, units)?;
         }
+        budget.release(payload_base_bytes)?;
         return Err(error);
     }
 
@@ -1715,7 +1799,9 @@ mod tests {
         let payload_bytes = 8;
         let quota = slot_bytes + cell_bytes + payload_bytes - 1;
         let mut runtime_heap = heap(quota, quota);
-        let _unrooted_object = runtime_heap.allocate_object().unwrap();
+        // An empty string consumes the old compact cell header but no payload.
+        // It provides quota pressure without assuming an object has no payload.
+        let _unrooted_string = runtime_heap.allocate_string_utf16(&[]).unwrap();
         assert_eq!(runtime_heap.stats().used_bytes, slot_bytes + cell_bytes);
 
         assert!(matches!(
@@ -1867,7 +1953,8 @@ mod tests {
     fn vector_growth_uses_minimum_capacity_when_quota_or_single_limit_is_tight() {
         let slot_bytes = std::mem::size_of::<HeapSlot>();
         let cell_bytes = std::mem::size_of::<HeapCell>();
-        let limit = slot_bytes * 3 + cell_bytes * 3;
+        let object_payload_bytes = std::mem::size_of::<ObjectData>();
+        let limit = slot_bytes * 3 + (cell_bytes + object_payload_bytes) * 3;
         let mut runtime_heap = heap(limit, slot_bytes * 3);
 
         let _first = runtime_heap.allocate_object().unwrap();

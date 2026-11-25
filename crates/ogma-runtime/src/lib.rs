@@ -45,6 +45,21 @@
 //! require_send_sync(heap.charge_external_memory(1).unwrap());
 //! ```
 //!
+//! ```compile_fail
+//! use ogma_runtime::{Heap, HeapConfig};
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! let mut heap = Heap::new(HeapConfig::default()).unwrap();
+//! require_send_sync(heap.intern_property_key("x").unwrap());
+//! ```
+//!
+//! ```compile_fail
+//! use ogma_runtime::{Heap, HeapConfig};
+//! fn require_send_sync<T: Send + Sync>(_: T) {}
+//! let mut heap = Heap::new(HeapConfig::default()).unwrap();
+//! let environment = heap.create_environment(None, &[]).unwrap();
+//! require_send_sync(environment);
+//! ```
+//!
 //! The heap and all public values/tokens share the same !Send/!Sync boundary.
 
 #![deny(missing_docs)]
@@ -53,7 +68,9 @@ mod heap;
 mod value;
 
 pub use heap::{
-    CollectionReport, ExternalMemoryCharge, FrameToken, Heap, HeapConfig, HeapError, HeapStats,
-    HostHandle, RootSnapshot, ScopeToken,
+    BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
+    CompletePropertyDescriptor, ExternalMemoryCharge, FrameToken, FunctionDefinition, FunctionId,
+    FunctionKind, Heap, HeapConfig, HeapError, HeapStats, HostHandle, LexicalEnvironment,
+    PropertyDescriptor, PropertyKey, RootSnapshot, ScopeToken,
 };
 pub use value::{Value, ValueType};
