@@ -345,7 +345,10 @@ pub fn encode_register_code(
                 return Err(vec![Diagnostic::new(
                     "call.kind_arity",
                     format!("$.instructions[{index}].sources"),
-                    format!("call kind {kind:?} does not accept {} source registers", sources.len()),
+                    format!(
+                        "call kind {kind:?} does not accept {} source registers",
+                        sources.len()
+                    ),
                 )]);
             }
             if sources.iter().copied().collect::<BTreeSet<_>>().len() != sources.len() {
@@ -420,7 +423,10 @@ pub fn encode_register_code(
                     return Err(vec![Diagnostic::new(
                         "call.kind_arity",
                         format!("$.instructions[{index}].sources"),
-                        format!("call kind {kind:?} does not accept {} source registers", sources.len()),
+                        format!(
+                            "call kind {kind:?} does not accept {} source registers",
+                            sources.len()
+                        ),
                     )]);
                 }
                 let unique: BTreeSet<u16> = sources.iter().copied().collect();
@@ -3339,11 +3345,14 @@ mod tests {
         artifact_manifest["metadata"]["environment"]["locations"] = json!([{
             "binding":"parameter_0","kind":"register","index":0
         }]);
-        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None)
-            .expect("build");
+        let bytes = build_ogmb_v1(artifact_manifest, &code, &[json!(1)], &[], None).expect("build");
         let errors = verify_register_artifact(&bytes, &[])
             .expect_err("parameter entry register is mandatory");
-        assert!(errors.iter().any(|item| item.code == "register.entry_arity"));
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "register.entry_arity")
+        );
     }
 
     #[test]
@@ -3599,7 +3608,11 @@ mod tests {
         .expect("build");
         let errors = verify_register_artifact(&bytes, &[])
             .expect_err("inexact integer Number payload must fail");
-        assert!(errors.iter().any(|item| item.code == "constant.kind_mismatch"));
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "constant.kind_mismatch")
+        );
     }
 
     #[test]
@@ -3655,7 +3668,11 @@ mod tests {
             .expect("build malformed entry layout");
         let errors = verify_register_artifact(&bytes, &[1])
             .expect_err("entry registers must follow canonical M1 prefix layout");
-        assert!(errors.iter().any(|item| item.code == "register.entry_layout"));
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "register.entry_layout")
+        );
     }
 
     #[test]

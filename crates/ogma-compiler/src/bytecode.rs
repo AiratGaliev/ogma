@@ -174,7 +174,9 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                 vec![diagnostic(
                     "bytecode.environment_parent_missing",
                     format!("$.function.{}.environment.parent", parent.id),
-                    format!("parent environment {environment_id:?} is absent from the compilation unit"),
+                    format!(
+                        "parent environment {environment_id:?} is absent from the compilation unit"
+                    ),
                 )]
             })?;
             parent_environment = owner.function.environment.parent.as_deref();
@@ -2237,9 +2239,11 @@ mod tests {
 
         let errors = compile_functions(&[owner, unrelated, child])
             .expect_err("capture must originate from a lexical ancestor");
-        assert!(errors
-            .iter()
-            .any(|item| item.code == "bytecode.capture_owner_not_ancestor"));
+        assert!(
+            errors
+                .iter()
+                .any(|item| item.code == "bytecode.capture_owner_not_ancestor")
+        );
     }
 
     #[test]
