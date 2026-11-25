@@ -514,7 +514,7 @@ impl ExecutionRequest {
 /// this Context. Managed values remain owned by the parent Runtime.
 pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
-    module: Option<ExecutableModule>,
+    module: Option<Rc<ExecutableModule>>,
     host_functions: HostFunctionRegistry,
 }
 
@@ -525,7 +525,7 @@ impl Context<'_> {
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
-        self.module = Some(ExecutableModule::load(artifacts)?);
+        self.module = Some(Rc::new(ExecutableModule::load(artifacts)?));
         Ok(())
     }
 

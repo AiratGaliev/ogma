@@ -5,6 +5,7 @@
 //! language/compatibility layers.
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use ogma_runtime::{ExternalMemoryCharge, HeapError, HostHandle};
 
@@ -22,7 +23,7 @@ pub(super) struct JobScheduler {
 }
 
 struct PendingJob {
-    module: ExecutableModule,
+    module: Rc<ExecutableModule>,
     callback: HostHandle,
     arguments: Vec<HostHandle>,
     host_functions: HostFunctionRegistry,
@@ -177,8 +178,8 @@ impl Context<'_> {
 
         let accounted_bytes = std::mem::size_of::<PendingJob>()
             .checked_add(
-                arguments
-                    .len()
+                argument_roots
+                    .capacity()
                     .checked_mul(std::mem::size_of::<HostHandle>())
                     .ok_or(JobQueueError::AllocationFailed)?,
             )

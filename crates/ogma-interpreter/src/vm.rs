@@ -402,7 +402,6 @@ pub struct ExecutableFunctionInfo {
 ///
 /// The loader accepts serialized bytes and re-runs verification. Caller-
 /// supplied decoded instructions and Core IR are never execution inputs.
-#[derive(Clone)]
 pub struct ExecutableModule {
     functions: BTreeMap<String, Rc<FunctionImage>>,
     runtime_functions: HashMap<u32, String>,
