@@ -326,19 +326,37 @@ impl ExecutableModule {
             binding_ids.insert(key, BindingId(numeric));
         }
 
+        let mut forwarded_capture_bindings =
+            HashMap::<(String, String, String), BindingId>::new();
+        for function in raw_functions.values() {
+            for capture in &function.captures {
+                let alias_key = (closure_environment_key(&function.id), capture.id.clone());
+                let alias = binding_ids.get(&alias_key).copied()
+                    .ok_or(InterpreterError::IdentitySpaceExceeded)?;
+                forwarded_capture_bindings.insert(
+                    (
+                        function.environment_id.clone(),
+                        capture.source_environment.clone(),
+                        capture.binding.clone(),
+                    ),
+                    alias,
+                );
+            }
+        }
+
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
-        for (index, (function_id, raw)) in raw_functions.iter().enumerate() {
+        for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
             let numeric = u32::try_from(index + 1)
                 .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let image = Rc::new(FunctionImage::build(
-                raw.clone(),
+                raw,
                 FunctionId(numeric),
                 &binding_ids,
-                &raw_functions,
+                &forwarded_capture_bindings,
             )?);
             runtime_functions.insert(numeric, function_id.clone());
-            functions.insert(function_id.clone(), image);
+            functions.insert(function_id, image);
         }
 
         for image in functions.values() {
@@ -959,10 +977,8 @@ impl ExecutableModule {
     }
 }
 
-#[derive(Clone)]
 struct RawBinding { id: String, kind: String }
 
-#[derive(Clone)]
 struct RawCapture {
     id: String,
     source_environment: String,
@@ -970,7 +986,6 @@ struct RawCapture {
     mode: CaptureMode,
 }
 
-#[derive(Clone)]
 struct RawFunction {
     artifact: VerifiedArtifact,
     id: String,
@@ -1151,7 +1166,7 @@ impl FunctionImage {
         raw: RawFunction,
         runtime_id: FunctionId,
         binding_ids: &HashMap<(String, String), BindingId>,
-        all_functions: &BTreeMap<String, RawFunction>,
+        forwarded_capture_bindings: &HashMap<(String, String, String), BindingId>,
     ) -> Result<Self, InterpreterError> {
         let mut locals = Vec::with_capacity(raw.bindings.len());
         let mut register_bindings = HashMap::new();
@@ -1191,21 +1206,16 @@ impl FunctionImage {
                 binding_ids.get(&source_key).copied()
                     .ok_or(InterpreterError::IdentitySpaceExceeded)?
             } else {
-                let parent = all_functions.values()
-                    .find(|function| function.environment_id == parent_environment)
+                let forwarded_key = (
+                    parent_environment.to_owned(),
+                    capture.source_environment.clone(),
+                    capture.binding.clone(),
+                );
+                forwarded_capture_bindings.get(&forwarded_key).copied()
                     .ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                        "missing parent function for lexical environment {parent_environment:?}"
-                    )))?;
-                let forwarded = parent.captures.iter().find(|item| {
-                    item.source_environment == capture.source_environment
-                        && item.binding == capture.binding
-                }).ok_or_else(|| InterpreterError::InvalidMetadata(format!(
-                    "parent function {:?} does not import captured binding {:?}",
-                    parent.id, capture.binding
-                )))?;
-                let alias_key = (closure_environment_key(&parent.id), forwarded.id.clone());
-                binding_ids.get(&alias_key).copied()
-                    .ok_or(InterpreterError::IdentitySpaceExceeded)?
+                        "parent environment {parent_environment:?} does not expose captured binding {:?}",
+                        capture.binding
+                    )))?
             };
             let alias_key = (closure_environment_key(&raw.id), capture.id.clone());
             let alias_binding = binding_ids.get(&alias_key).copied()
