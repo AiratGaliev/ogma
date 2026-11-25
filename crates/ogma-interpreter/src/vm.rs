@@ -80,6 +80,9 @@ pub struct ExecutionOptions {
     pub instruction_budget: u64,
     /// Host call-depth ceiling, further restricted by the artifact manifest.
     pub max_call_depth: u32,
+    /// Maximum estimated active VM frame/register-stack bytes, including nested
+    /// host re-entry on the same ExecutionState.
+    pub max_stack_bytes: usize,
     /// Maximum dispatches between ordinary cancellation/deadline polls.
     ///
     /// Function entry, call boundaries, loop back-edges and potentially
@@ -100,6 +103,7 @@ impl Default for ExecutionOptions {
         Self {
             instruction_budget: 1_000_000,
             max_call_depth: 256,
+            max_stack_bytes: 8 * 1024 * 1024,
             interrupt_poll_interval: 64,
             cancellation: None,
             deadline: None,
@@ -141,6 +145,8 @@ pub struct ExecutionReport {
     pub fuel_remaining: u64,
     /// Maximum VM call depth reached, including the entry frame.
     pub max_call_depth_reached: u32,
+    /// Peak estimated active VM frame/register-stack bytes.
+    pub max_stack_bytes_reached: usize,
     /// Source location of the last dispatched instruction.
     pub last_location: Option<InstructionLocation>,
 }
@@ -297,6 +303,13 @@ pub enum InterpreterError {
     CallDepthExceeded {
         /// Maximum permitted active VM frame depth.
         limit: u32,
+    },
+    /// The estimated active VM frame/register stack exceeded its configured quota.
+    StackQuotaExceeded {
+        /// Configured maximum active stack bytes.
+        limit_bytes: usize,
+        /// Required bytes at the attempted frame entry.
+        requested_bytes: usize,
     },
     /// Invalid execution configuration.
     InvalidOptions(&'static str),
@@ -596,6 +609,15 @@ impl ExecutableModule {
         if entry_depth > depth_limit {
             return Err(InterpreterError::CallDepthExceeded { limit: depth_limit });
         }
+        let base_stack_bytes = state.active_stack_bytes;
+        let frame_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        let requested_stack_bytes = base_stack_bytes.saturating_add(frame_stack_bytes);
+        if requested_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: requested_stack_bytes,
+            });
+        }
 
         let scope = heap.open_scope()?;
         let setup = (|| {
@@ -648,7 +670,13 @@ impl ExecutableModule {
             }
         };
         state.max_call_depth_reached = state.max_call_depth_reached.max(entry_depth);
-        self.run_loop(heap, host, options, state, vec![root_frame])
+        state.active_stack_bytes = requested_stack_bytes;
+        state.max_stack_bytes_reached = state
+            .max_stack_bytes_reached
+            .max(requested_stack_bytes);
+        let completion = self.run_loop(heap, host, options, state, vec![root_frame]);
+        state.active_stack_bytes = base_stack_bytes;
+        completion
     }
 
     /// Executes without granting host capabilities.
@@ -763,6 +791,21 @@ impl ExecutableModule {
                         kind: pending_kind,
                     });
                     state.max_call_depth_reached = state.max_call_depth_reached.max(child.depth);
+                    let requested_stack_bytes =
+                        state.active_stack_bytes.saturating_add(child.stack_bytes);
+                    if requested_stack_bytes > options.max_stack_bytes {
+                        heap.leave_function_call(child.activation)?;
+                        frames.push(frame);
+                        self.unwind_frames(heap, &mut frames)?;
+                        return Err(InterpreterError::StackQuotaExceeded {
+                            limit_bytes: options.max_stack_bytes,
+                            requested_bytes: requested_stack_bytes,
+                        });
+                    }
+                    state.active_stack_bytes = requested_stack_bytes;
+                    state.max_stack_bytes_reached = state
+                        .max_stack_bytes_reached
+                        .max(requested_stack_bytes);
                     frames.push(frame);
                     frames.push(*child);
                 }
@@ -792,6 +835,8 @@ impl ExecutableModule {
                         self.unwind_frames(heap, &mut frames)?;
                         return Err(error.into());
                     }
+                    state.active_stack_bytes =
+                        state.active_stack_bytes.saturating_sub(frame.stack_bytes);
                     match completion {
                         ExecutionCompletion::Return(value) => {
                             let Some(mut caller) = frames.pop() else {
@@ -1325,6 +1370,15 @@ impl ExecutableModule {
         if caller.depth >= call_limit {
             return Err(InterpreterError::CallDepthExceeded { limit: call_limit });
         }
+        let child_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        let requested_stack_bytes =
+            state.active_stack_bytes.saturating_add(child_stack_bytes);
+        if requested_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: requested_stack_bytes,
+            });
+        }
         let activation = heap.enter_function_call(
             callee,
             &image.definition,
@@ -1829,6 +1883,11 @@ fn validate_options(options: &ExecutionOptions) -> Result<(), InterpreterError> 
             "interrupt_poll_interval must be positive",
         ));
     }
+    if options.max_stack_bytes == 0 {
+        return Err(InterpreterError::InvalidOptions(
+            "max_stack_bytes must be positive",
+        ));
+    }
     if options
         .time_budget
         .is_some_and(|budget| Instant::now().checked_add(budget).is_none())
@@ -1848,6 +1907,8 @@ struct ExecutionState {
     deadline: Option<Instant>,
     poll_interval: u64,
     last_location: Option<InstructionLocation>,
+    active_stack_bytes: usize,
+    max_stack_bytes_reached: usize,
 }
 
 impl ExecutionState {
@@ -1872,6 +1933,8 @@ impl ExecutionState {
             deadline,
             poll_interval: u64::from(options.interrupt_poll_interval),
             last_location: None,
+            active_stack_bytes: 0,
+            max_stack_bytes_reached: 0,
         })
     }
 
@@ -1905,6 +1968,7 @@ impl ExecutionState {
             instructions_executed: self.instructions_executed,
             fuel_remaining: self.fuel_remaining,
             max_call_depth_reached: self.max_call_depth_reached,
+            max_stack_bytes_reached: self.max_stack_bytes_reached,
             last_location: self.last_location.clone(),
         }
     }
@@ -1929,9 +1993,22 @@ struct VmFrame {
     call_depth_limit: u32,
     entry_poll: bool,
     pending_call: Option<PendingCall>,
+    stack_bytes: usize,
 }
 
 impl VmFrame {
+    fn estimated_stack_bytes(image: &FunctionImage) -> usize {
+        let registers = image
+            .register_count
+            .saturating_mul(std::mem::size_of::<RegisterValue>());
+        let bindings = image.local_binding_ids.len().saturating_mul(
+            std::mem::size_of::<BindingId>() + std::mem::size_of::<usize>() * 2,
+        );
+        std::mem::size_of::<Self>()
+            .saturating_add(registers)
+            .saturating_add(bindings)
+    }
+
     fn new(
         heap: &mut Heap,
         image: Rc<FunctionImage>,
@@ -1984,6 +2061,7 @@ impl VmFrame {
             write_register_slot(&mut registers, register, value)?;
         }
         Ok(Self {
+            stack_bytes: Self::estimated_stack_bytes(&image),
             image: image.clone(),
             activation,
             function_value,
