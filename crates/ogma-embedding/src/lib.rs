@@ -76,11 +76,6 @@ pub const EFFECT_MAY_SUSPEND: u32 = 1 << 3;
 /// Host-function effect indicating that the callback may re-enter Ogma.
 pub const EFFECT_MAY_REENTER: u32 = 1 << 4;
 
-/// Stable host-function signature tag for dynamic argument conversion.
-pub const SIGNATURE_GENERIC: u32 = 0;
-/// Stable host-function signature tag for (f64, f64) -> f64.
-pub const SIGNATURE_F64_BINARY: u32 = 0x1001;
-
 /// Fixed-layout ABI-v1 version descriptor.
 ///
 /// The record is exactly 24 bytes. Future metadata must use a separate
