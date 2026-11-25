@@ -157,7 +157,10 @@ pub enum AbiNegotiationError {
     /// The required major differs or the requested minor is newer.
     IncompatibleVersion,
     /// The consumer requires feature bits not implemented by this Runtime.
-    UnsupportedFeatures { missing: u64 },
+    UnsupportedFeatures {
+        /// Bitset of required feature flags not provided by the current Runtime.
+        missing: u64,
+    },
 }
 
 /// Negotiates ABI major/minor and required feature bits.
@@ -348,7 +351,7 @@ impl Engine {
     /// Creates an independent owner-thread Runtime with its own heap and GC.
     pub fn create_runtime(&self) -> Result<Runtime, RuntimeError> {
         let id = NEXT_RUNTIME_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| RuntimeError::IdentitySpaceExhausted)?;
@@ -420,7 +423,6 @@ impl Runtime {
             runtime: self,
             module: None,
             host_functions,
-            context_handle,
         })
     }
 
@@ -497,7 +499,6 @@ pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
     module: Option<ExecutableModule>,
     host_functions: HostFunctionRegistry,
-    context_handle: OgmaContextHandle,
 }
 
 impl Context<'_> {
@@ -1191,6 +1192,12 @@ unsafe fn active_c_heap<'a>(
 ///
 /// Callback argument handles and values created through the C helpers remain
 /// rooted for the callback's lifetime and survive this collection.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context` must be its active Context handle. The call must occur on
+/// the Runtime owner thread. The pointer must remain valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_collect_unrooted(
     runtime: *const OgmaRuntime,
@@ -1210,6 +1217,12 @@ pub unsafe extern "C" fn ogma_context_collect_unrooted(
 }
 
 /// Creates a JavaScript Number during a C host callback.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context` must be its active Context handle. `out_value` must point
+/// to writable, properly aligned storage for one `OgmaHandle`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_create_number(
     runtime: *const OgmaRuntime,
@@ -1238,6 +1251,12 @@ pub unsafe extern "C" fn ogma_context_create_number(
 }
 
 /// Reads a JavaScript Number handle during a C host callback.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context`/ `value` must be handles from that callback. `out_number`
+/// must point to writable, properly aligned storage for one `f64`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_get_number(
     runtime: *const OgmaRuntime,
@@ -1267,6 +1286,12 @@ pub unsafe extern "C" fn ogma_context_get_number(
 }
 
 /// Creates a JavaScript Boolean during a C host callback.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context` must be its active Context handle. `out_value` must point
+/// to writable, properly aligned storage for one `OgmaHandle`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_create_boolean(
     runtime: *const OgmaRuntime,
@@ -1295,6 +1320,12 @@ pub unsafe extern "C" fn ogma_context_create_boolean(
 }
 
 /// Reads a JavaScript Boolean handle during a C host callback.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context`/ `value` must be handles from that callback. `out_boolean`
+/// must point to writable, properly aligned storage for one `u8`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_get_boolean(
     runtime: *const OgmaRuntime,
@@ -1324,6 +1355,12 @@ pub unsafe extern "C" fn ogma_context_get_boolean(
 }
 
 /// Converts an integral JavaScript Number to i32 with range and fraction checks.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context`/ `value` must be handles from that callback. `out_integer`
+/// must point to writable, properly aligned storage for one `i32`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_get_i32(
     runtime: *const OgmaRuntime,
@@ -1360,6 +1397,14 @@ pub unsafe extern "C" fn ogma_context_get_i32(
 }
 
 /// Sums a borrowed array of JavaScript Number handles during a C callback.
+///
+/// # Safety
+///
+/// `runtime` must be a live Runtime pointer passed to the current callback,
+/// and `context` and all non-null `handles` entries must be handles from that
+/// callback. When `count` is non-zero, `handles` must be readable for
+/// `count` elements. `out_sum` must point to writable, properly aligned
+/// storage for one `f64`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ogma_context_sum_numbers(
     runtime: *const OgmaRuntime,
@@ -1398,17 +1443,13 @@ pub unsafe extern "C" fn ogma_context_sum_numbers(
     }
 }
 
+type RustHostCallback =
+    dyn for<'a> Fn(&mut HostCallContext<'a>, &[Value]) -> Result<HostCallCompletion, HostError>
+        + 'static;
+
 #[derive(Clone)]
 enum HostHandler {
-    Rust(
-        Rc<
-            dyn for<'a> Fn(
-                    &mut HostCallContext<'a>,
-                    &[Value],
-                ) -> Result<HostCallCompletion, HostError>
-                + 'static,
-        >,
-    ),
+    Rust(Rc<RustHostCallback>),
     C(CHostHandler),
 }
 
@@ -1469,7 +1510,7 @@ impl HostFunctionRegistry {
         context_handle: OgmaContextHandle,
     ) -> Result<Self, HostRegistrationError> {
         let id = NEXT_REGISTRY_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| HostRegistrationError::RegistryIdentityExhausted)?;
@@ -2596,7 +2637,7 @@ mod tests {
         let stale = unsafe {
             ogma_context_get_number(
                 Rc::as_ptr(&context.runtime.abi_runtime),
-                context.context_handle,
+                context.host_functions.context_handle,
                 saved_argument,
                 &mut ignored,
             )
@@ -2985,7 +3026,7 @@ mod tests {
         let mut runtime = engine.create_runtime().expect("Runtime");
         let context = runtime.create_context().expect("Context");
         let runtime_ptr = Rc::as_ptr(&context.runtime.abi_runtime) as usize;
-        let context_handle = context.context_handle;
+        let context_handle = context.host_functions.context_handle;
         let result = std::thread::spawn(move || {
             let mut number = 0.0;
             // SAFETY: pointer is kept alive by the joining parent thread; the
