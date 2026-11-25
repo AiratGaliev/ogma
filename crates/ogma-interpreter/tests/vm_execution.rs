@@ -864,7 +864,6 @@ impl Host for RecordingHost {
     }
 }
 
-
 struct CancellingHost {
     token: CancellationToken,
 }
