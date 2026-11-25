@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 ogma-bytecode.workspace = true
 ogma-runtime.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
