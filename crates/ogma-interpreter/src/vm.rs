@@ -576,7 +576,9 @@ impl ExecutableModule {
             state.last_location = frame.image.location(instruction.offset);
             let force_poll = operation_needs_interrupt(&instruction.operation)
                 || state.instructions_executed == 0
-                || state.instructions_executed.is_multiple_of(u64::from(options.interrupt_poll_interval));
+                || state
+                    .instructions_executed
+                    .is_multiple_of(u64::from(options.interrupt_poll_interval));
             if let Some(reason) = state.poll(force_poll) {
                 frames.push(frame);
                 self.unwind_frames(heap, &mut frames)?;
@@ -1692,7 +1694,11 @@ impl ExecutionState {
     }
 
     fn poll(&self, force: bool) -> Option<ExecutionInterruption> {
-        if !force && !self.instructions_executed.is_multiple_of(self.poll_interval) {
+        if !force
+            && !self
+                .instructions_executed
+                .is_multiple_of(self.poll_interval)
+        {
             return None;
         }
         if self
