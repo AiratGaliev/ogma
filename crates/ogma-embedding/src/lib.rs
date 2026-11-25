@@ -2009,7 +2009,7 @@ fn invoke_c_handler(
     }
     if completion.reserved != 0 || !matches!(completion.kind, COMPLETION_NORMAL | COMPLETION_THROW)
     {
-        return Err(HostError::Panicked);
+        return Err(HostError::InvalidCompletion);
     }
     let value = runtime.resolve_temp_handle(context, context_handle, completion.value)?;
     Ok(if completion.kind == COMPLETION_THROW {
@@ -2034,10 +2034,11 @@ fn callback_status_to_host_error(
             throw_host_error(context, "ReferenceError: stale or foreign host handle")
         }
         OgmaStatus::WRONG_THREAD | OgmaStatus::BUSY | OgmaStatus::REENTRANCY_LIMIT => {
-            Err(HostError::Denied)
+            Err(HostError::CallbackFailed)
         }
         OgmaStatus::PANIC => Err(HostError::Panicked),
-        _ => Err(HostError::Denied),
+        OgmaStatus::INVALID_COMPLETION => Err(HostError::InvalidCompletion),
+        _ => Err(HostError::CallbackFailed),
     }
 }
 
@@ -2522,6 +2523,39 @@ mod tests {
         OgmaStatus::CALLBACK_ERROR
     }
 
+    unsafe extern "C-unwind" fn c_invalid_completion(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _arguments: *const OgmaHandle,
+        _arguments_len: usize,
+        out_completion: *mut OgmaCompletion,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        if out_completion.is_null() {
+            return OgmaStatus::INVALID_ARGUMENT;
+        }
+        // Return/Break/Continue are script completions, not valid host callback results.
+        unsafe {
+            out_completion.write(OgmaCompletion {
+                kind: COMPLETION_RETURN,
+                reserved: 0,
+                value: OgmaHandle::default(),
+            })
+        };
+        OgmaStatus::OK
+    }
+
+    unsafe extern "C-unwind" fn c_primitive_type_mismatch(
+        _runtime: *const OgmaRuntime,
+        _context: OgmaContextHandle,
+        _left: f64,
+        _right: f64,
+        _out_result: *mut f64,
+        _user_data: *mut c_void,
+    ) -> OgmaStatus {
+        OgmaStatus::TYPE_MISMATCH
+    }
+
     unsafe extern "C-unwind" fn c_primitive_add(
         _runtime: *const OgmaRuntime,
         _context: OgmaContextHandle,
@@ -2715,6 +2749,80 @@ mod tests {
         assert!(matches!(
             report.completion,
             ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn c_callback_transport_failure_is_not_reported_as_capability_denial() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(host_call_two_args_artifacts())
+            .expect("verified two-argument OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            45,
+            SIGNATURE_F64_BINARY,
+            SIGNATURE_ID_F64_BINARY,
+            Some(c_primitive_type_mismatch),
+            None,
+            c_generic_two_args_unexpected,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: both callbacks have static lifetime and user_data is null.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("valid typed descriptor")
+        };
+        let error = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(19.0), Value::number(23.0)],
+                ExecutionRequest::default(),
+            )
+            .expect_err("generic fallback reports its callback transport failure");
+        assert!(matches!(
+            error,
+            ContextError::Interpreter(InterpreterError::HostCallbackFailed)
+        ));
+        context.unregister_host_function(slot).expect("unregister");
+    }
+
+    #[test]
+    fn malformed_c_callback_completion_is_rejected_as_an_abi_error() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context.load_module(host_call_artifacts()).expect("verified OGMB");
+        let descriptor = c_host_descriptor(
+            b"benchmark.host.echo",
+            46,
+            SIGNATURE_GENERIC,
+            SIGNATURE_ID_GENERIC,
+            None,
+            None,
+            c_invalid_completion,
+            std::ptr::null_mut(),
+        );
+        // SAFETY: callback has static lifetime and user_data is null.
+        let slot = unsafe {
+            context
+                .register_c_host_function(&descriptor)
+                .expect("valid generic descriptor")
+        };
+        let error = context
+            .execute(
+                "fn_host_call",
+                &[Value::number(19.0)],
+                ExecutionRequest::default(),
+            )
+            .expect_err("script completions are invalid as C host callback results");
+        assert!(matches!(
+            error,
+            ContextError::Interpreter(InterpreterError::InvalidHostCompletion)
         ));
         context.unregister_host_function(slot).expect("unregister");
     }
