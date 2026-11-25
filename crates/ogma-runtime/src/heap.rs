@@ -423,6 +423,15 @@ pub struct Heap {
 }
 
 impl Heap {
+    /// Returns this heap's opaque process-local identity.
+    ///
+    /// The identity is intended for validating owner-runtime affinity across
+    /// embedding boundaries. It does not expose heap storage or object layout.
+    #[must_use]
+    pub const fn identity(&self) -> u64 {
+        self.heap_id
+    }
+
     /// Creates an empty Runtime heap with the supplied hard allocation limits.
     pub fn new(config: HeapConfig) -> Result<Self, HeapError> {
         let heap_id = NEXT_HEAP_ID
