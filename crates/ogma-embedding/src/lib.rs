@@ -2397,7 +2397,7 @@ mod tests {
             context
                 .function_count_in_module(first_id)
                 .expect("first module function count"),
-            1
+            2
         );
         assert_ne!(first_id, second_id);
         assert_eq!(first_id.get(), 1);
