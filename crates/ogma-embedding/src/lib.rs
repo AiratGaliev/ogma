@@ -589,7 +589,7 @@ impl Context<'_> {
         self.load_module_with_id(artifacts).map(|_| ())
     }
 
-    /// Loads a verified module and returns its stable Context-local identity.
+    /// Loads a verified module and returns its stable Runtime/Context-scoped identity.
     ///
     /// The module becomes the active target for `execute()` and remains
     /// addressable through `execute_in_module()` after later modules are
@@ -652,7 +652,10 @@ impl Context<'_> {
         &self,
         module_id: LoadedModuleId,
     ) -> Result<usize, ContextError> {
-        Ok(self.loaded_module_entry(module_id)?.executable.function_count())
+        Ok(self
+            .loaded_module_entry(module_id)?
+            .executable
+            .function_count())
     }
 
     /// Lists verified functions in any retained module in deterministic stable-ID order.
@@ -2434,10 +2437,15 @@ mod tests {
             panic!("expected a persistent return value");
         };
         assert_eq!(
-            context.resolve(persistent_value).expect("persistent value").as_number(),
+            context
+                .resolve(persistent_value)
+                .expect("persistent value")
+                .as_number(),
             Some(7.0)
         );
-        context.release(persistent_value).expect("release persistent value");
+        context
+            .release(persistent_value)
+            .expect("release persistent value");
 
         let missing_id = LoadedModuleId {
             runtime_id: first_id.runtime_id(),
