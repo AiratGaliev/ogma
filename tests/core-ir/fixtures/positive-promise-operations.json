@@ -1,0 +1,246 @@
+{
+  "contract": "ogma.core-ir",
+  "version": "1.0.0",
+  "function": {
+    "id": "fn_promise_operations",
+    "name": "promise_operations",
+    "parameters": [
+      {
+        "id": "value",
+        "kind": "value",
+        "semantic_type": "dynamic",
+        "representation": "boxed",
+        "name": "value",
+        "binding": "bind_value"
+      },
+      {
+        "id": "on_fulfilled",
+        "kind": "value",
+        "semantic_type": "function",
+        "representation": "function_ref",
+        "name": "onFulfilled",
+        "binding": "bind_on_fulfilled"
+      },
+      {
+        "id": "on_rejected",
+        "kind": "value",
+        "semantic_type": "function",
+        "representation": "function_ref",
+        "name": "onRejected",
+        "binding": "bind_on_rejected"
+      }
+    ],
+    "return": {
+      "semantic_type": "dynamic",
+      "representation": "boxed"
+    },
+    "source_files": [
+      {
+        "id": "src0",
+        "path": "fixtures/promise-operations.js",
+        "language": "javascript"
+      }
+    ],
+    "environment": {
+      "id": "env_promise",
+      "parent": null,
+      "bindings": [
+        {
+          "id": "bind_value",
+          "name": "value",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "dynamic",
+          "representation": "boxed"
+        },
+        {
+          "id": "bind_on_fulfilled",
+          "name": "onFulfilled",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "function",
+          "representation": "function_ref"
+        },
+        {
+          "id": "bind_on_rejected",
+          "name": "onRejected",
+          "kind": "parameter",
+          "mutable": true,
+          "semantic_type": "function",
+          "representation": "function_ref"
+        }
+      ]
+    },
+    "captures": [],
+    "entry_block": "entry",
+    "effect_entry": "e0",
+    "blocks": [
+      {
+        "id": "entry",
+        "parameters": [
+          {
+            "id": "e0",
+            "kind": "effect"
+          }
+        ],
+        "exception_parameter": null,
+        "instructions": [
+          {
+            "id": "resolve",
+            "op": "js.promise_resolve",
+            "operands": [
+              "value"
+            ],
+            "result": {
+              "id": "resolved",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 32
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e0",
+            "effect_out": "e1",
+            "exception": {
+              "kind": "propagate"
+            }
+          },
+          {
+            "id": "reject",
+            "op": "js.promise_reject",
+            "operands": [
+              "value"
+            ],
+            "result": {
+              "id": "rejected",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 32
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e1",
+            "effect_out": "e2",
+            "exception": {
+              "kind": "propagate"
+            }
+          },
+          {
+            "id": "then",
+            "op": "js.promise_then",
+            "operands": [
+              "resolved",
+              "on_fulfilled",
+              "on_rejected"
+            ],
+            "result": {
+              "id": "child",
+              "kind": "value",
+              "semantic_type": "dynamic",
+              "representation": "boxed"
+            },
+            "attributes": {},
+            "effects": {
+              "may_allocate": true,
+              "may_gc": true,
+              "may_throw": true,
+              "may_suspend": false,
+              "may_call_host": true,
+              "may_reenter": true,
+              "may_mutate_shape": true
+            },
+            "source": {
+              "origin": "user",
+              "file": "src0",
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 32
+              },
+              "scope": null,
+              "bindings": [],
+              "suspension": null,
+              "inline_chain": []
+            },
+            "effect_in": "e2",
+            "effect_out": "e3",
+            "exception": {
+              "kind": "propagate"
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "return",
+          "value": "child",
+          "source": {
+            "origin": "user",
+            "file": "src0",
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 32
+            },
+            "scope": null,
+            "bindings": [],
+            "suspension": null,
+            "inline_chain": []
+          }
+        }
+      }
+    ]
+  }
+}

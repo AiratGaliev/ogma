@@ -8,7 +8,7 @@
 #![deny(missing_docs)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -18,17 +18,18 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 mod jobs;
-use jobs::JobScheduler;
 pub use jobs::{JobPumpOutcome, JobPumpReport, JobQueueError, JobQueueState};
+use jobs::{JobScheduler, PendingJob};
 
-use ogma_interpreter::ExecutionOptions;
 pub use ogma_interpreter::{
     CancellationToken, ExecutableFunctionInfo, ExecutableModule, ExecutionCompletion,
     ExecutionInterruption, ExecutionReport, Host, HostCallCompletion, HostCallContext,
-    HostCallRoot, HostError, InstructionLocation, InterpreterError, NoHost,
+    HostCallRoot, HostError, InstructionLocation, InterpreterError, ModuleDescriptor, ModuleExport,
+    ModuleExportKind, ModuleImport, ModuleImportKind, NoHost, PromiseReaction,
 };
+use ogma_interpreter::{ExecutionOptions, ModuleBindingLink};
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
-use ogma_runtime::{Heap, HeapConfig, HostHandle, ScopeToken};
+use ogma_runtime::{Heap, HeapConfig, HostHandle, LexicalEnvironment, ScopeToken};
 
 /// ABI major version implemented by this crate.
 pub const ABI_VERSION: u16 = 1;
@@ -393,6 +394,7 @@ impl Engine {
             abi_runtime: Rc::new(OgmaRuntime::new(id)),
             next_context_id: 1,
             jobs: JobScheduler::default(),
+            module_graph_roots: Vec::new(),
             _thread_affinity: PhantomData,
         })
     }
@@ -410,6 +412,7 @@ pub struct Runtime {
     abi_runtime: Rc<OgmaRuntime>,
     next_context_id: u64,
     jobs: JobScheduler,
+    module_graph_roots: Vec<HostHandle>,
     _thread_affinity: PhantomData<Rc<()>>,
 }
 
@@ -438,6 +441,11 @@ impl Runtime {
     /// from being created while this Context is alive.
     pub fn create_context(&mut self) -> Result<Context<'_>, RuntimeError> {
         self.ensure_owner_thread()?;
+        for root in self.module_graph_roots.drain(..) {
+            self.heap
+                .release_host_handle(root)
+                .map_err(RuntimeError::Heap)?;
+        }
         let context_id = self.next_context_id;
         self.next_context_id = context_id
             .checked_add(1)
@@ -449,11 +457,13 @@ impl Runtime {
             self.heap.identity(),
         )
         .map_err(RuntimeError::HostRegistry)?;
+        host_functions.set_max_pending_jobs(self.config.max_pending_jobs);
         Ok(Context {
             runtime: self,
             context_id,
             module: None,
             loaded_modules: Vec::new(),
+            module_graph: None,
             host_functions,
         })
     }
@@ -560,6 +570,690 @@ struct LoadedModuleEntry {
     executable: Rc<ExecutableModule>,
 }
 
+/// One module returned by a host-owned source resolver.
+#[derive(Clone, Debug)]
+pub struct ResolvedModule {
+    /// Static module descriptor emitted by ogma-compiler.
+    pub descriptor: ModuleDescriptor,
+    /// Independently verified OGMB function artifacts belonging to this module.
+    pub artifacts: Vec<Vec<u8>>,
+}
+
+/// Host-selected module resolution and source loading boundary.
+///
+/// Ogma passes the referring canonical module ID and the original static
+/// specifier unchanged. The host may implement URL maps, virtual filesystems,
+/// application bundles or any other policy; the Runtime does not apply
+/// Node.js package or filesystem resolution rules.
+pub trait ModuleResolver {
+    /// Resolves one source specifier to a canonical module ID.
+    fn resolve(
+        &mut self,
+        referrer_module_id: &str,
+        specifier: &str,
+    ) -> Result<String, ModuleResolverError>;
+
+    /// Loads a previously resolved canonical module ID.
+    fn load(&mut self, module_id: &str) -> Result<ResolvedModule, ModuleResolverError>;
+}
+
+/// Failure returned by a host module resolver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleResolverError {
+    /// Human-readable host resolution or loading failure.
+    pub message: String,
+}
+
+impl ModuleResolverError {
+    /// Creates a resolver failure with an application-owned message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Module graph loading, linking or evaluation failure.
+#[derive(Debug)]
+pub enum ModuleGraphError {
+    /// Host resolver rejected or failed to load a module.
+    Resolver(ModuleResolverError),
+    /// Static module descriptor is inconsistent or outside the supported subset.
+    InvalidDescriptor(String),
+    /// A static import could not be linked to an export.
+    MissingExport {
+        /// Canonical dependency module that did not expose the requested name.
+        module_id: String,
+        /// Public export name that could not be resolved.
+        export_name: String,
+    },
+    /// Multiple star exports provide the same requested name.
+    AmbiguousExport {
+        /// Module whose star exports conflict.
+        module_id: String,
+        /// Public export name provided by multiple dependencies.
+        export_name: String,
+    },
+    /// Namespace imports/exports are not yet representable by the current Runtime object model.
+    UnsupportedNamespace {
+        /// Module containing the unsupported namespace declaration.
+        module_id: String,
+    },
+    /// The Context has already committed a different module graph.
+    GraphAlreadyInstantiated,
+    /// The bounded Runtime PromiseJobs queue rejected a newly scheduled reaction.
+    Jobs(JobQueueError),
+    /// A verified module or Runtime operation failed.
+    Interpreter(InterpreterError),
+    /// A managed heap operation failed.
+    Heap(HeapError),
+    /// A Context module registry operation failed.
+    Context(ContextError),
+}
+
+impl From<ModuleResolverError> for ModuleGraphError {
+    fn from(error: ModuleResolverError) -> Self {
+        Self::Resolver(error)
+    }
+}
+impl From<JobQueueError> for ModuleGraphError {
+    fn from(error: JobQueueError) -> Self {
+        Self::Jobs(error)
+    }
+}
+impl From<InterpreterError> for ModuleGraphError {
+    fn from(error: InterpreterError) -> Self {
+        Self::Interpreter(error)
+    }
+}
+impl From<HeapError> for ModuleGraphError {
+    fn from(error: HeapError) -> Self {
+        Self::Heap(error)
+    }
+}
+impl From<ContextError> for ModuleGraphError {
+    fn from(error: ContextError) -> Self {
+        Self::Context(error)
+    }
+}
+
+/// Observable outcome of one module's evaluation.
+#[derive(Clone, Copy, Debug)]
+pub enum ModuleEvaluationCompletion {
+    /// Module Program completed normally.
+    Evaluated,
+    /// Module Program threw; the thrown value remains persistently rooted.
+    Threw(PersistentHandle),
+    /// Module Program was interrupted by a host execution limit.
+    Interrupted(ExecutionInterruption),
+}
+
+/// One module evaluation result in dependency evaluation order.
+#[derive(Clone, Debug)]
+pub struct ModuleEvaluationRecord {
+    /// Canonical module identity.
+    pub module_id: String,
+    /// Observable module completion.
+    pub completion: ModuleEvaluationCompletion,
+    /// Number of VM instructions dispatched by this module Program.
+    pub instructions_executed: u64,
+}
+
+/// Result of loading/linking/evaluating one statically connected ESM graph.
+#[derive(Clone, Debug)]
+pub struct ModuleGraphReport {
+    /// Canonical root module identity.
+    pub entry_module_id: String,
+    /// Stable Context-scoped owner for the executable function table.
+    pub executable_id: LoadedModuleId,
+    /// Canonical module IDs successfully instantiated and linked.
+    pub modules_instantiated: Vec<String>,
+    /// Modules evaluated during this invocation, in dependency evaluation order.
+    pub evaluations: Vec<ModuleEvaluationRecord>,
+    /// True when the same graph/module cache was reused by this Context.
+    pub reused_module_cache: bool,
+    /// First dependency or entry module completion that failed evaluation.
+    pub failure: Option<String>,
+}
+
+/// State of one cached module instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModuleEvaluationState {
+    Linked,
+    Evaluating,
+    Evaluated,
+    Failed,
+}
+
+/// One module instance retained by the Context.
+struct ModuleInstance {
+    descriptor: ModuleDescriptor,
+    dependencies: Vec<String>,
+    environment: LexicalEnvironment,
+    entry_closure: HostHandle,
+    state: ModuleEvaluationState,
+    failure_module_id: Option<String>,
+}
+
+/// One Context-wide module graph and its shared executable function table.
+struct ModuleGraphRuntime {
+    executable_id: LoadedModuleId,
+    modules: HashMap<String, ModuleInstance>,
+    resolved_requests: HashMap<(String, String), String>,
+}
+
+fn validate_module_descriptor(
+    requested_id: &str,
+    package: &ResolvedModule,
+) -> Result<(), ModuleGraphError> {
+    let descriptor = &package.descriptor;
+    if descriptor.id != requested_id
+        || descriptor.id.is_empty()
+        || descriptor.id.len() > 4096
+        || descriptor.entry_function.is_empty()
+        || descriptor.environment.is_empty()
+        || package.artifacts.is_empty()
+    {
+        return Err(ModuleGraphError::InvalidDescriptor(format!(
+            "module descriptor identity, Program entry, environment or artifact list is invalid for {requested_id:?}"
+        )));
+    }
+    let mut import_bindings = std::collections::HashSet::new();
+    for import in &descriptor.imports {
+        match import.kind {
+            ModuleImportKind::SideEffect => {
+                if import.local_binding.is_some() || import.imported_name.is_some() {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "side-effect import in {requested_id:?} must not have local or imported binding names"
+                    )));
+                }
+            }
+            ModuleImportKind::Default | ModuleImportKind::Named => {
+                if import.local_binding.as_deref().is_none_or(str::is_empty)
+                    || import.imported_name.as_deref().is_none_or(str::is_empty)
+                {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "value import in {requested_id:?} requires local binding and imported name"
+                    )));
+                }
+                let binding = import.local_binding.as_deref().expect("checked above");
+                if !import_bindings.insert(binding.to_owned()) {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "duplicate import binding {binding:?} in {requested_id:?}"
+                    )));
+                }
+            }
+            ModuleImportKind::Namespace => {
+                if import.local_binding.as_deref().is_none_or(str::is_empty)
+                    || import.imported_name.is_some()
+                {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "namespace import in {requested_id:?} has invalid binding metadata"
+                    )));
+                }
+            }
+        }
+        if import.specifier.is_empty() || import.specifier.len() > 4096 {
+            return Err(ModuleGraphError::InvalidDescriptor(format!(
+                "module {requested_id:?} has an empty or oversized import specifier"
+            )));
+        }
+    }
+
+    let mut explicit_exports = std::collections::HashSet::new();
+    for export in &descriptor.exports {
+        if export.export_name.is_empty() || export.export_name.len() > 512 {
+            return Err(ModuleGraphError::InvalidDescriptor(format!(
+                "module {requested_id:?} has an empty or oversized export name"
+            )));
+        }
+        match export.kind {
+            ModuleExportKind::Local => {
+                if export.local_binding.as_deref().is_none_or(str::is_empty)
+                    || export.source.is_some()
+                    || export.imported_name.is_some()
+                {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "local export {:?} in {requested_id:?} has inconsistent metadata",
+                        export.export_name
+                    )));
+                }
+                if !explicit_exports.insert(export.export_name.clone()) {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "duplicate explicit export {:?} in {requested_id:?}",
+                        export.export_name
+                    )));
+                }
+            }
+            ModuleExportKind::ReExport => {
+                if export.source.as_deref().is_none_or(str::is_empty)
+                    || export.imported_name.as_deref().is_none_or(str::is_empty)
+                    || export.local_binding.is_some()
+                {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "named re-export {:?} in {requested_id:?} has inconsistent metadata",
+                        export.export_name
+                    )));
+                }
+                if !explicit_exports.insert(export.export_name.clone()) {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "duplicate explicit export {:?} in {requested_id:?}",
+                        export.export_name
+                    )));
+                }
+            }
+            ModuleExportKind::Star => {
+                if export.source.as_deref().is_none_or(str::is_empty)
+                    || export.imported_name.as_deref().is_none_or(str::is_empty)
+                    || export.local_binding.is_some()
+                {
+                    return Err(ModuleGraphError::InvalidDescriptor(format!(
+                        "star export in {requested_id:?} has inconsistent metadata"
+                    )));
+                }
+                if export.export_name != "*" {
+                    return Err(ModuleGraphError::UnsupportedNamespace {
+                        module_id: requested_id.to_owned(),
+                    });
+                }
+            }
+        }
+        if let Some(source) = &export.source
+            && (source.is_empty() || source.len() > 4096)
+        {
+            return Err(ModuleGraphError::InvalidDescriptor(format!(
+                "module {requested_id:?} has an empty or oversized re-export specifier"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn module_request_specifiers(descriptor: &ModuleDescriptor) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for specifier in descriptor
+        .imports
+        .iter()
+        .map(|item| item.specifier.as_str())
+        .chain(
+            descriptor
+                .exports
+                .iter()
+                .filter_map(|item| item.source.as_deref()),
+        )
+    {
+        if seen.insert(specifier.to_owned()) {
+            result.push(specifier.to_owned());
+        }
+    }
+    result
+}
+
+struct DiscoveredModuleGraph {
+    modules: HashMap<String, ResolvedModule>,
+    resolved_requests: HashMap<(String, String), String>,
+}
+
+fn discover_module_graph<R: ModuleResolver>(
+    entry_module_id: &str,
+    resolver: &mut R,
+) -> Result<DiscoveredModuleGraph, ModuleGraphError> {
+    let mut packages = HashMap::new();
+    let mut resolved_requests = HashMap::<(String, String), String>::new();
+    let mut pending = vec![entry_module_id.to_owned()];
+    while let Some(module_id) = pending.pop() {
+        if packages.contains_key(&module_id) {
+            continue;
+        }
+        let package = resolver.load(&module_id)?;
+        validate_module_descriptor(&module_id, &package)?;
+        let specifiers = module_request_specifiers(&package.descriptor);
+        packages.insert(module_id.clone(), package);
+
+        // Reverse push preserves declaration order during depth-first loading.
+        for specifier in specifiers.into_iter().rev() {
+            let dependency_id = match resolved_requests.get(&(module_id.clone(), specifier.clone()))
+            {
+                Some(id) => id.clone(),
+                None => {
+                    let id = resolver.resolve(&module_id, &specifier)?;
+                    if id.is_empty() || id.len() > 4096 {
+                        return Err(ModuleGraphError::InvalidDescriptor(format!(
+                            "resolver returned an empty or oversized canonical module ID for {module_id:?} -> {specifier:?}"
+                        )));
+                    }
+                    resolved_requests.insert((module_id.clone(), specifier), id.clone());
+                    id
+                }
+            };
+            if !packages.contains_key(&dependency_id) {
+                pending.push(dependency_id);
+            }
+        }
+    }
+    Ok(DiscoveredModuleGraph {
+        modules: packages,
+        resolved_requests,
+    })
+}
+
+fn resolved_module_dependencies(
+    module_id: &str,
+    descriptor: &ModuleDescriptor,
+    resolved_requests: &HashMap<(String, String), String>,
+) -> Vec<String> {
+    let mut dependencies = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for specifier in module_request_specifiers(descriptor) {
+        if let Some(id) = resolved_requests.get(&(module_id.to_owned(), specifier))
+            && seen.insert(id.clone())
+        {
+            dependencies.push(id.clone());
+        }
+    }
+    dependencies
+}
+
+fn resolve_module_export(
+    module_id: &str,
+    export_name: &str,
+    packages: &HashMap<String, ResolvedModule>,
+    resolved_requests: &HashMap<(String, String), String>,
+    visited: &mut std::collections::HashSet<(String, String)>,
+) -> Result<Option<(String, String)>, ModuleGraphError> {
+    if export_name == "default" && !visited.insert((module_id.to_owned(), export_name.to_owned())) {
+        return Ok(None);
+    }
+    if export_name != "default" && !visited.insert((module_id.to_owned(), export_name.to_owned())) {
+        return Ok(None);
+    }
+    let package = packages.get(module_id).ok_or_else(|| {
+        ModuleGraphError::InvalidDescriptor(format!("missing linked module {module_id:?}"))
+    })?;
+
+    let explicit: Vec<_> = package
+        .descriptor
+        .exports
+        .iter()
+        .filter(|export| {
+            export.export_name == export_name
+                && matches!(
+                    export.kind,
+                    ModuleExportKind::Local | ModuleExportKind::ReExport
+                )
+        })
+        .collect();
+    if explicit.len() > 1 {
+        return Err(ModuleGraphError::InvalidDescriptor(format!(
+            "module {module_id:?} contains duplicate explicit export {export_name:?}"
+        )));
+    }
+    if let Some(export) = explicit.first() {
+        return match export.kind {
+            ModuleExportKind::Local => Ok(Some((
+                module_id.to_owned(),
+                export.local_binding.clone().expect("descriptor validated"),
+            ))),
+            ModuleExportKind::ReExport => {
+                let specifier = export.source.as_deref().expect("descriptor validated");
+                let dependency = resolved_requests
+                    .get(&(module_id.to_owned(), specifier.to_owned()))
+                    .ok_or_else(|| {
+                        ModuleGraphError::InvalidDescriptor(format!(
+                            "re-export {export_name:?} from {module_id:?} was not resolved"
+                        ))
+                    })?;
+                let imported = export
+                    .imported_name
+                    .as_deref()
+                    .expect("descriptor validated");
+                resolve_module_export(dependency, imported, packages, resolved_requests, visited)
+            }
+            ModuleExportKind::Star => unreachable!("star exports are not explicit"),
+        };
+    }
+
+    if export_name == "default" {
+        return Ok(None);
+    }
+    let mut matches = Vec::new();
+    for export in package
+        .descriptor
+        .exports
+        .iter()
+        .filter(|export| export.kind == ModuleExportKind::Star && export.export_name == "*")
+    {
+        let specifier = export.source.as_deref().expect("descriptor validated");
+        let Some(dependency) = resolved_requests.get(&(module_id.to_owned(), specifier.to_owned()))
+        else {
+            continue;
+        };
+        if let Some(target) = resolve_module_export(
+            dependency,
+            export_name,
+            packages,
+            resolved_requests,
+            visited,
+        )? && !matches.contains(&target)
+        {
+            matches.push(target);
+        }
+    }
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(ModuleGraphError::AmbiguousExport {
+            module_id: module_id.to_owned(),
+            export_name: export_name.to_owned(),
+        }),
+    }
+}
+
+fn resolve_graph_export(
+    module_id: &str,
+    export_name: &str,
+    modules: &HashMap<String, ModuleInstance>,
+    resolved_requests: &HashMap<(String, String), String>,
+    visited: &mut std::collections::HashSet<(String, String)>,
+) -> Result<Option<(String, String)>, ModuleGraphError> {
+    if !visited.insert((module_id.to_owned(), export_name.to_owned())) {
+        return Ok(None);
+    }
+    let instance = modules.get(module_id).ok_or_else(|| {
+        ModuleGraphError::InvalidDescriptor(format!("missing linked module {module_id:?}"))
+    })?;
+
+    let explicit: Vec<_> = instance
+        .descriptor
+        .exports
+        .iter()
+        .filter(|export| {
+            export.export_name == export_name
+                && matches!(
+                    export.kind,
+                    ModuleExportKind::Local | ModuleExportKind::ReExport
+                )
+        })
+        .collect();
+    if explicit.len() > 1 {
+        return Err(ModuleGraphError::InvalidDescriptor(format!(
+            "module {module_id:?} contains duplicate explicit export {export_name:?}"
+        )));
+    }
+    if let Some(export) = explicit.first() {
+        return match export.kind {
+            ModuleExportKind::Local => Ok(Some((
+                module_id.to_owned(),
+                export.local_binding.clone().expect("descriptor validated"),
+            ))),
+            ModuleExportKind::ReExport => {
+                let specifier = export.source.as_deref().expect("descriptor validated");
+                let dependency = resolved_requests
+                    .get(&(module_id.to_owned(), specifier.to_owned()))
+                    .ok_or_else(|| {
+                        ModuleGraphError::InvalidDescriptor(format!(
+                            "re-export {export_name:?} from {module_id:?} was not resolved"
+                        ))
+                    })?;
+                let imported = export
+                    .imported_name
+                    .as_deref()
+                    .expect("descriptor validated");
+                resolve_graph_export(dependency, imported, modules, resolved_requests, visited)
+            }
+            ModuleExportKind::Star => unreachable!("star exports are handled below"),
+        };
+    }
+
+    if export_name == "default" {
+        return Ok(None);
+    }
+    let stars: Vec<_> = instance
+        .descriptor
+        .exports
+        .iter()
+        .filter(|export| export.kind == ModuleExportKind::Star && export.export_name == "*")
+        .collect();
+    let mut matches = Vec::new();
+    for export in stars {
+        let specifier = export.source.as_deref().expect("descriptor validated");
+        let Some(dependency) = resolved_requests.get(&(module_id.to_owned(), specifier.to_owned()))
+        else {
+            continue;
+        };
+        let mut branch_visited = visited.clone();
+        if let Some(target) = resolve_graph_export(
+            dependency,
+            export_name,
+            modules,
+            resolved_requests,
+            &mut branch_visited,
+        )? && !matches.contains(&target)
+        {
+            matches.push(target);
+        }
+    }
+    match matches.len() {
+        0 => Ok(None),
+        1 => Ok(matches.pop()),
+        _ => Err(ModuleGraphError::AmbiguousExport {
+            module_id: module_id.to_owned(),
+            export_name: export_name.to_owned(),
+        }),
+    }
+}
+
+fn evaluate_module_recursive(
+    executable: &ExecutableModule,
+    heap: &mut Heap,
+    host: &mut HostFunctionRegistry,
+    graph: &mut ModuleGraphRuntime,
+    module_id: &str,
+    options: &ExecutionOptions,
+    records: &mut Vec<ModuleEvaluationRecord>,
+) -> Result<Option<String>, ModuleGraphError> {
+    let (state, dependencies, cached_failure) = {
+        let instance = graph.modules.get(module_id).ok_or_else(|| {
+            ModuleGraphError::InvalidDescriptor(format!("missing module instance {module_id:?}"))
+        })?;
+        (
+            instance.state,
+            instance.dependencies.clone(),
+            instance.failure_module_id.clone(),
+        )
+    };
+    match state {
+        ModuleEvaluationState::Evaluated => return Ok(None),
+        ModuleEvaluationState::Evaluating => return Ok(None), // Supported ESM cycle back-edge.
+        ModuleEvaluationState::Failed => {
+            return Ok(cached_failure.or_else(|| Some(module_id.to_owned())));
+        }
+        ModuleEvaluationState::Linked => {}
+    }
+    graph
+        .modules
+        .get_mut(module_id)
+        .expect("validated above")
+        .state = ModuleEvaluationState::Evaluating;
+
+    for dependency in dependencies {
+        if let Some(failed_module) =
+            evaluate_module_recursive(executable, heap, host, graph, &dependency, options, records)?
+        {
+            let instance = graph
+                .modules
+                .get_mut(module_id)
+                .expect("module remains cached");
+            instance.state = ModuleEvaluationState::Failed;
+            instance.failure_module_id = Some(failed_module.clone());
+            return Ok(Some(failed_module));
+        }
+    }
+
+    let (entry_function, environment, entry_closure) = {
+        let instance = graph.modules.get(module_id).expect("module remains cached");
+        (
+            instance.descriptor.entry_function.clone(),
+            instance.environment,
+            instance.entry_closure,
+        )
+    };
+    let callee = heap.resolve_host_handle(entry_closure)?;
+    let report = executable.execute_in_environment(
+        heap,
+        &entry_function,
+        callee,
+        environment,
+        host,
+        options.clone(),
+    )?;
+    match report.completion {
+        ExecutionCompletion::Return(_) => {
+            graph
+                .modules
+                .get_mut(module_id)
+                .expect("module remains cached")
+                .state = ModuleEvaluationState::Evaluated;
+            records.push(ModuleEvaluationRecord {
+                module_id: module_id.to_owned(),
+                completion: ModuleEvaluationCompletion::Evaluated,
+                instructions_executed: report.instructions_executed,
+            });
+            Ok(None)
+        }
+        ExecutionCompletion::Throw(value) => {
+            let report_root = heap.retain_host_value(value)?;
+            let instance = graph
+                .modules
+                .get_mut(module_id)
+                .expect("module remains cached");
+            instance.state = ModuleEvaluationState::Failed;
+            instance.failure_module_id = Some(module_id.to_owned());
+            records.push(ModuleEvaluationRecord {
+                module_id: module_id.to_owned(),
+                completion: ModuleEvaluationCompletion::Threw(PersistentHandle(report_root)),
+                instructions_executed: report.instructions_executed,
+            });
+            Ok(Some(module_id.to_owned()))
+        }
+        ExecutionCompletion::Interrupted(reason) => {
+            let instance = graph
+                .modules
+                .get_mut(module_id)
+                .expect("module remains cached");
+            instance.state = ModuleEvaluationState::Failed;
+            instance.failure_module_id = Some(module_id.to_owned());
+            records.push(ModuleEvaluationRecord {
+                module_id: module_id.to_owned(),
+                completion: ModuleEvaluationCompletion::Interrupted(reason),
+                instructions_executed: report.instructions_executed,
+            });
+            Ok(Some(module_id.to_owned()))
+        }
+    }
+}
+
 /// A loaded execution Context borrowing one Runtime.
 ///
 /// Module metadata, host-function registration and capabilities are scoped to
@@ -571,6 +1265,7 @@ pub struct Context<'runtime> {
     context_id: u64,
     module: Option<Rc<ExecutableModule>>,
     loaded_modules: Vec<LoadedModuleEntry>,
+    module_graph: Option<ModuleGraphRuntime>,
     host_functions: HostFunctionRegistry,
 }
 
@@ -617,6 +1312,9 @@ impl Context<'_> {
             sequence: numeric_id,
         };
         let module = Rc::new(ExecutableModule::load(artifacts)?);
+        self.host_functions
+            .register_module_owner(Rc::clone(&module))
+            .map_err(InterpreterError::Runtime)?;
         self.module = Some(Rc::clone(&module));
         self.loaded_modules.push(LoadedModuleEntry {
             id,
@@ -752,17 +1450,19 @@ impl Context<'_> {
         let options = request
             .options(&self.runtime.config)
             .map_err(ContextError::Configuration)?;
-        let module = self.module.as_ref().ok_or(ContextError::ModuleNotLoaded)?;
+        let module = Rc::clone(self.module.as_ref().ok_or(ContextError::ModuleNotLoaded)?);
         let mut host = self.host_functions.clone();
-        module
-            .execute(
-                &mut self.runtime.heap,
-                entry_function_id,
-                arguments,
-                &mut host,
-                options,
-            )
-            .map_err(ContextError::Interpreter)
+        self.refresh_promise_reaction_capacity(&host);
+        let result = module.execute(
+            &mut self.runtime.heap,
+            entry_function_id,
+            arguments,
+            &mut host,
+            options,
+        );
+        self.flush_pending_promise_reactions_for(&host)
+            .map_err(ContextError::JobQueue)?;
+        result.map_err(ContextError::Interpreter)
     }
 
     /// Executes a function from any retained module by stable module and function IDs.
@@ -781,15 +1481,17 @@ impl Context<'_> {
             .map_err(ContextError::Configuration)?;
         let module = Rc::clone(&self.loaded_module_entry(module_id)?.executable);
         let mut host = self.host_functions.clone();
-        module
-            .execute(
-                &mut self.runtime.heap,
-                entry_function_id,
-                arguments,
-                &mut host,
-                options,
-            )
-            .map_err(ContextError::Interpreter)
+        self.refresh_promise_reaction_capacity(&host);
+        let result = module.execute(
+            &mut self.runtime.heap,
+            entry_function_id,
+            arguments,
+            &mut host,
+            options,
+        );
+        self.flush_pending_promise_reactions_for(&host)
+            .map_err(ContextError::JobQueue)?;
+        result.map_err(ContextError::Interpreter)
     }
 
     /// Executes a function by stable OGMB ID and immediately promotes its completion.
@@ -851,6 +1553,282 @@ impl Context<'_> {
             max_stack_bytes_reached: report.max_stack_bytes_reached,
             last_location: report.last_location,
         })
+    }
+
+    /// Loads, links and evaluates a static ESM dependency graph on this Runtime.
+    ///
+    /// The host resolver exclusively owns module ID and source resolution.
+    /// All graph nodes are instantiated before any module body runs, then
+    /// named/default import bindings are linked as read-only live aliases.
+    /// Cycles are handled by the module evaluation state machine.
+    ///
+    /// Namespace imports/exports and dynamic import are rejected explicitly;
+    /// CommonJS and Node.js package resolution are not part of this contract.
+    pub fn evaluate_module_graph<R: ModuleResolver>(
+        &mut self,
+        entry_module_id: &str,
+        resolver: &mut R,
+        request: ExecutionRequest,
+    ) -> Result<ModuleGraphReport, ModuleGraphError> {
+        if entry_module_id.is_empty() || entry_module_id.len() > 4096 {
+            return Err(ModuleGraphError::InvalidDescriptor(
+                "entry module ID must contain 1..=4096 UTF-8 bytes".to_owned(),
+            ));
+        }
+        let options = request
+            .options(&self.runtime.config)
+            .map_err(ContextError::Configuration)?;
+
+        let reused = self.module_graph.is_some();
+        if self.module_graph.is_none() {
+            let mut temporary_roots = Vec::new();
+            let graph_build = (|| -> Result<(), ModuleGraphError> {
+                let discovered = discover_module_graph(entry_module_id, resolver)?;
+                let packages = discovered.modules;
+                let resolved_requests = discovered.resolved_requests;
+                let mut module_ids: Vec<_> = packages.keys().cloned().collect();
+                module_ids.sort();
+
+                let mut all_artifacts = Vec::new();
+                for module_id in &module_ids {
+                    let package = packages.get(module_id).expect("module ID from map");
+                    all_artifacts.extend(package.artifacts.iter().cloned());
+                }
+                let executable_id = self.load_module_with_id(all_artifacts)?;
+                let executable = Rc::clone(&self.loaded_module_entry(executable_id)?.executable);
+
+                self.runtime
+                    .module_graph_roots
+                    .try_reserve(module_ids.len())
+                    .map_err(|_| ModuleGraphError::Heap(HeapError::AllocationFailed))?;
+                temporary_roots
+                    .try_reserve_exact(module_ids.len())
+                    .map_err(|_| ModuleGraphError::Heap(HeapError::AllocationFailed))?;
+                let mut instances = HashMap::<String, ModuleInstance>::new();
+                for module_id in &module_ids {
+                    let package = packages.get(module_id).expect("module ID from map");
+                    let (entry_closure, environment) = executable.instantiate_module_entry(
+                        &mut self.runtime.heap,
+                        &package.descriptor.entry_function,
+                    )?;
+                    let root = self
+                        .runtime
+                        .heap
+                        .retain_host_value(entry_closure)
+                        .map_err(ModuleGraphError::Heap)?;
+                    temporary_roots.push(root);
+                    instances.insert(
+                        module_id.clone(),
+                        ModuleInstance {
+                            descriptor: package.descriptor.clone(),
+                            dependencies: resolved_module_dependencies(
+                                module_id,
+                                &package.descriptor,
+                                &resolved_requests,
+                            ),
+                            environment,
+                            entry_closure: root,
+                            state: ModuleEvaluationState::Linked,
+                            failure_module_id: None,
+                        },
+                    );
+                }
+
+                // Link the entire graph only after every module environment exists.
+                for module_id in &module_ids {
+                    let package = packages.get(module_id).expect("module ID from map");
+                    let importer = instances.get(module_id).expect("instantiated module");
+                    for import in &package.descriptor.imports {
+                        match import.kind {
+                            ModuleImportKind::SideEffect => continue,
+                            ModuleImportKind::Namespace => {
+                                return Err(ModuleGraphError::UnsupportedNamespace {
+                                    module_id: module_id.clone(),
+                                });
+                            }
+                            ModuleImportKind::Default | ModuleImportKind::Named => {}
+                        }
+                        let local_binding = import.local_binding.as_deref().ok_or_else(|| {
+                            ModuleGraphError::InvalidDescriptor(format!(
+                                "module {module_id:?} import {:?} has no local binding identity",
+                                import.specifier
+                            ))
+                        })?;
+                        let imported_name = import.imported_name.as_deref().ok_or_else(|| {
+                            ModuleGraphError::InvalidDescriptor(format!(
+                                "module {module_id:?} import {:?} has no imported name",
+                                import.specifier
+                            ))
+                        })?;
+                        let dependency_id = resolved_requests
+                            .get(&(module_id.clone(), import.specifier.clone()))
+                            .ok_or_else(|| {
+                                ModuleGraphError::InvalidDescriptor(format!(
+                                    "module {module_id:?} import {:?} was not resolved",
+                                    import.specifier
+                                ))
+                            })?;
+                        let mut visited = std::collections::HashSet::new();
+                        let target = resolve_module_export(
+                            dependency_id,
+                            imported_name,
+                            &packages,
+                            &resolved_requests,
+                            &mut visited,
+                        )?
+                        .ok_or_else(|| {
+                            ModuleGraphError::MissingExport {
+                                module_id: dependency_id.clone(),
+                                export_name: imported_name.to_owned(),
+                            }
+                        })?;
+                        let exporter = instances
+                            .get(&target.0)
+                            .expect("export source instantiated");
+                        executable.link_import_binding(
+                            &mut self.runtime.heap,
+                            ModuleBindingLink {
+                                importer_environment_id: &importer.descriptor.environment,
+                                importer_binding_id: local_binding,
+                                importer_environment: importer.environment,
+                                exporter_environment_id: &exporter.descriptor.environment,
+                                exporter_binding_id: &target.1,
+                                exporter_environment: exporter.environment,
+                            },
+                        )?;
+                    }
+                }
+
+                self.runtime
+                    .module_graph_roots
+                    .extend(temporary_roots.iter().copied());
+                self.module_graph = Some(ModuleGraphRuntime {
+                    executable_id,
+                    modules: instances,
+                    resolved_requests,
+                });
+                Ok(())
+            })();
+            if let Err(error) = graph_build {
+                for root in temporary_roots {
+                    let _ = self.runtime.heap.release_host_handle(root);
+                }
+                return Err(error);
+            }
+        }
+
+        let executable_id = self
+            .module_graph
+            .as_ref()
+            .expect("graph initialized above")
+            .executable_id;
+        if !self
+            .module_graph
+            .as_ref()
+            .expect("graph initialized above")
+            .modules
+            .contains_key(entry_module_id)
+        {
+            return Err(ModuleGraphError::GraphAlreadyInstantiated);
+        }
+        let executable = Rc::clone(&self.loaded_module_entry(executable_id)?.executable);
+        let mut host = self.host_functions.clone();
+        self.refresh_promise_reaction_capacity(&host);
+        let mut evaluations = Vec::new();
+        let evaluation = {
+            let graph = self.module_graph.as_mut().expect("graph initialized above");
+            evaluate_module_recursive(
+                &executable,
+                &mut self.runtime.heap,
+                &mut host,
+                graph,
+                entry_module_id,
+                &options,
+                &mut evaluations,
+            )
+        };
+        self.flush_pending_promise_reactions_for(&host)?;
+        let failure = evaluation?;
+
+        let graph = self.module_graph.as_ref().expect("graph initialized above");
+        let mut modules_instantiated: Vec<_> = graph.modules.keys().cloned().collect();
+        modules_instantiated.sort();
+        Ok(ModuleGraphReport {
+            entry_module_id: entry_module_id.to_owned(),
+            executable_id,
+            modules_instantiated,
+            evaluations,
+            reused_module_cache: reused,
+            failure,
+        })
+    }
+
+    /// Reads a linked module export and promotes the value to a persistent host root.
+    ///
+    /// Named re-exports and star exports are resolved through the cached module
+    /// graph. Namespace exports are rejected until a namespace exotic object
+    /// implementation exists.
+    pub fn read_module_export(
+        &mut self,
+        module_id: &str,
+        export_name: &str,
+    ) -> Result<PersistentHandle, ModuleGraphError> {
+        let graph = self
+            .module_graph
+            .as_ref()
+            .ok_or(ModuleGraphError::GraphAlreadyInstantiated)?;
+        let mut visited = std::collections::HashSet::new();
+        let (owner_id, binding_id) = resolve_graph_export(
+            module_id,
+            export_name,
+            &graph.modules,
+            &graph.resolved_requests,
+            &mut visited,
+        )?
+        .ok_or_else(|| ModuleGraphError::MissingExport {
+            module_id: module_id.to_owned(),
+            export_name: export_name.to_owned(),
+        })?;
+        let instance = graph
+            .modules
+            .get(&owner_id)
+            .expect("resolved module exists");
+        let executable = Rc::clone(&self.loaded_module_entry(graph.executable_id)?.executable);
+        let value = executable.read_module_binding(
+            &self.runtime.heap,
+            &instance.descriptor.environment,
+            &binding_id,
+            instance.environment,
+        )?;
+        self.persist(value).map_err(ModuleGraphError::Heap)
+    }
+
+    /// Reads a module-local binding by its stable compiler binding ID.
+    ///
+    /// This is intended for embedders and integration tests that inspect
+    /// imported bindings directly; ordinary applications should use exports.
+    pub fn read_module_binding(
+        &mut self,
+        module_id: &str,
+        binding_id: &str,
+    ) -> Result<PersistentHandle, ModuleGraphError> {
+        let graph = self
+            .module_graph
+            .as_ref()
+            .ok_or(ModuleGraphError::GraphAlreadyInstantiated)?;
+        let instance = graph.modules.get(module_id).ok_or_else(|| {
+            ModuleGraphError::InvalidDescriptor(format!(
+                "unknown instantiated module {module_id:?}"
+            ))
+        })?;
+        let executable = Rc::clone(&self.loaded_module_entry(graph.executable_id)?.executable);
+        let value = executable.read_module_binding(
+            &self.runtime.heap,
+            &instance.descriptor.environment,
+            binding_id,
+            instance.environment,
+        )?;
+        self.persist(value).map_err(ModuleGraphError::Heap)
     }
 
     /// Allocates an ECMAScript string from UTF-8 host text.
@@ -1000,6 +1978,8 @@ pub enum ContextError {
     Interpreter(InterpreterError),
     /// Heap operation failed while promoting a completion.
     Heap(HeapError),
+    /// A PromiseJob reaction could not be transferred to the Runtime queue.
+    JobQueue(JobQueueError),
 }
 
 /// Rust host-function descriptor. IDs are stable within ABI major 1.
@@ -1735,6 +2715,14 @@ struct RegistryInner {
 
 /// Cloneable, owner-thread typed host-function registry.
 ///
+struct QueuedPromiseReaction {
+    callback: Option<HostHandle>,
+    argument: HostHandle,
+    child: HostHandle,
+    rejected: bool,
+    accounting: ogma_runtime::ExternalMemoryCharge,
+}
+
 /// Registry lookups are snapshotted and all table borrows are released before
 /// user code executes.
 #[derive(Clone)]
@@ -1743,6 +2731,9 @@ pub struct HostFunctionRegistry {
     abi_runtime: Rc<OgmaRuntime>,
     context_handle: OgmaContextHandle,
     heap_identity: u64,
+    pending_promise_reactions: Rc<RefCell<VecDeque<QueuedPromiseReaction>>>,
+    module_owners: Rc<RefCell<Vec<Rc<ExecutableModule>>>>,
+    max_pending_jobs: Cell<usize>,
 }
 
 impl HostFunctionRegistry {
@@ -1769,7 +2760,108 @@ impl HostFunctionRegistry {
             abi_runtime,
             context_handle,
             heap_identity,
+            pending_promise_reactions: Rc::new(RefCell::new(VecDeque::new())),
+            module_owners: Rc::new(RefCell::new(Vec::new())),
+            max_pending_jobs: Cell::new(1024),
         })
+    }
+
+    pub(crate) fn set_max_pending_jobs(&self, maximum: usize) {
+        self.max_pending_jobs.set(maximum);
+    }
+
+    fn register_module_owner(&self, module: Rc<ExecutableModule>) -> Result<(), HeapError> {
+        let mut owners = self.module_owners.borrow_mut();
+        if owners.iter().any(|owner| Rc::ptr_eq(owner, &module)) {
+            return Ok(());
+        }
+        owners
+            .try_reserve(1)
+            .map_err(|_| HeapError::AllocationFailed)?;
+        owners.push(module);
+        Ok(())
+    }
+
+    fn take_promise_reactions(&self) -> VecDeque<QueuedPromiseReaction> {
+        std::mem::take(&mut *self.pending_promise_reactions.borrow_mut())
+    }
+
+    fn pending_promise_reaction_count(&self) -> usize {
+        self.pending_promise_reactions.borrow().len()
+    }
+
+    fn cancel_promise_reactions(&self, heap: &mut Heap) -> Result<usize, HeapError> {
+        let pending = self.take_promise_reactions();
+        let count = pending.len();
+        let mut first_error = None;
+        for reaction in pending {
+            if let Err(error) = release_queued_promise_reaction(heap, reaction) {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(count), Err)
+    }
+
+    fn queue_promise_reaction(
+        &self,
+        heap: &mut Heap,
+        reaction: PromiseReaction,
+    ) -> Result<(), HostError> {
+        let callback_value = if reaction.rejected {
+            reaction.on_rejected
+        } else {
+            reaction.on_fulfilled
+        };
+        let mut queue = self.pending_promise_reactions.borrow_mut();
+        let capacity = self.max_pending_jobs.get();
+        if queue.len() >= capacity {
+            return Err(HostError::CallbackFailed);
+        }
+        queue
+            .try_reserve(1)
+            .map_err(|_| HostError::Runtime(HeapError::AllocationFailed))?;
+        let accounting = heap
+            .charge_external_memory(std::mem::size_of::<QueuedPromiseReaction>())
+            .map_err(HostError::Runtime)?;
+        let callback = match callback_value {
+            Some(value) => match heap.retain_host_value(value) {
+                Ok(root) => Some(root),
+                Err(error) => {
+                    let _ = heap.release_external_memory(accounting);
+                    return Err(HostError::Runtime(error));
+                }
+            },
+            None => None,
+        };
+        let argument = match heap.retain_host_value(reaction.argument) {
+            Ok(root) => root,
+            Err(error) => {
+                if let Some(root) = callback {
+                    let _ = heap.release_host_handle(root);
+                }
+                let _ = heap.release_external_memory(accounting);
+                return Err(HostError::Runtime(error));
+            }
+        };
+        let child = match heap.retain_host_value(reaction.child) {
+            Ok(root) => root,
+            Err(error) => {
+                let _ = heap.release_host_handle(argument);
+                if let Some(root) = callback {
+                    let _ = heap.release_host_handle(root);
+                }
+                let _ = heap.release_external_memory(accounting);
+                return Err(HostError::Runtime(error));
+            }
+        };
+        queue.push_back(QueuedPromiseReaction {
+            callback,
+            argument,
+            child,
+            rejected: reaction.rejected,
+            accounting,
+        });
+        Ok(())
     }
 
     /// Updates the capabilities checked on every call through this registry.
@@ -2069,6 +3161,14 @@ impl Drop for DispatchGuard {
 }
 
 impl Host for HostFunctionRegistry {
+    fn enqueue_promise_job(
+        &mut self,
+        heap: &mut Heap,
+        reaction: PromiseReaction,
+    ) -> Result<(), HostError> {
+        self.queue_promise_reaction(heap, reaction)
+    }
+
     fn call(
         &mut self,
         _heap: &mut Heap,
@@ -2264,6 +3364,147 @@ fn callback_status_to_host_error(
 }
 
 /// Validated, loaded Rust execution facade for one Runtime.
+impl Context<'_> {
+    fn refresh_promise_reaction_capacity(&self, registry: &HostFunctionRegistry) {
+        registry.set_max_pending_jobs(
+            self.runtime
+                .config
+                .max_pending_jobs
+                .saturating_sub(self.runtime.jobs.queue.len()),
+        );
+    }
+
+    fn flush_pending_promise_reactions(&mut self) -> Result<usize, JobQueueError> {
+        let registry = self.host_functions.clone();
+        self.refresh_promise_reaction_capacity(&registry);
+        self.flush_pending_promise_reactions_for(&registry)
+    }
+
+    /// Transfers reactions staged by this or an earlier Context into Runtime FIFO.
+    ///
+    /// The registry retains its executable-module owners, so callbacks created
+    /// by a job remain resolvable after the Context that originally loaded them
+    /// has been dropped.
+    fn flush_pending_promise_reactions_for(
+        &mut self,
+        registry: &HostFunctionRegistry,
+    ) -> Result<usize, JobQueueError> {
+        let mut pending = registry.pending_promise_reactions.borrow_mut();
+        let mut enqueued = 0;
+
+        while !pending.is_empty() {
+            if self.runtime.jobs.state == JobQueueState::Shutdown {
+                let mut first_error = None;
+                while let Some(reaction) = pending.pop_front() {
+                    if let Err(error) =
+                        release_queued_promise_reaction(&mut self.runtime.heap, reaction)
+                    {
+                        first_error.get_or_insert(error);
+                    }
+                }
+                return match first_error {
+                    Some(error) => Err(JobQueueError::Heap(error)),
+                    None => Err(JobQueueError::ShuttingDown),
+                };
+            }
+
+            let capacity = self.runtime.config.max_pending_jobs;
+            if self.runtime.jobs.queue.len() >= capacity {
+                break;
+            }
+            self.runtime
+                .jobs
+                .queue
+                .try_reserve(1)
+                .map_err(|_| JobQueueError::AllocationFailed)?;
+
+            let reaction = pending.front().expect("non-empty reaction queue");
+            let module = if let Some(callback_root) = reaction.callback {
+                let callback = match self.runtime.heap.resolve_host_handle(callback_root) {
+                    Ok(callback) => callback,
+                    Err(error) => {
+                        let reaction = pending.pop_front().expect("front reaction exists");
+                        let _ = release_queued_promise_reaction(&mut self.runtime.heap, reaction);
+                        return Err(JobQueueError::Heap(error));
+                    }
+                };
+                let owners = registry.module_owners.borrow();
+                let mut owner = None;
+                for candidate in owners.iter().rev() {
+                    match candidate.contains_callable(&self.runtime.heap, callback) {
+                        Ok(true) => {
+                            owner = Some(Rc::clone(candidate));
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            drop(owners);
+                            let reaction = pending.pop_front().expect("front reaction exists");
+                            let _ =
+                                release_queued_promise_reaction(&mut self.runtime.heap, reaction);
+                            return Err(JobQueueError::Interpreter(error));
+                        }
+                    }
+                }
+                drop(owners);
+                match owner {
+                    Some(module) => Some(module),
+                    None => {
+                        let reaction = pending.pop_front().expect("front reaction exists");
+                        let _ = release_queued_promise_reaction(&mut self.runtime.heap, reaction);
+                        return Err(JobQueueError::InvalidCallback);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let mut arguments = Vec::new();
+            arguments
+                .try_reserve_exact(1)
+                .map_err(|_| JobQueueError::AllocationFailed)?;
+            arguments.push(reaction.argument);
+
+            // All fallible preparation is complete. Only now transfer roots
+            // and external-memory accounting into the Runtime dispatch queue.
+            let reaction = pending.pop_front().expect("front reaction exists");
+            self.runtime.jobs.queue.push_back(PendingJob {
+                module,
+                callback: reaction.callback,
+                arguments,
+                promise_child: Some(reaction.child),
+                promise_rejected: reaction.rejected,
+                host_functions: registry.clone(),
+                accounting: reaction.accounting,
+            });
+            enqueued += 1;
+        }
+
+        Ok(enqueued)
+    }
+}
+
+fn release_queued_promise_reaction(
+    heap: &mut Heap,
+    reaction: QueuedPromiseReaction,
+) -> Result<(), HeapError> {
+    let mut first_error = None;
+    if let Some(callback) = reaction.callback
+        && let Err(error) = heap.release_host_handle(callback)
+    {
+        first_error.get_or_insert(error);
+    }
+    for root in [reaction.argument, reaction.child] {
+        if let Err(error) = heap.release_host_handle(root) {
+            first_error.get_or_insert(error);
+        }
+    }
+    if let Err(error) = heap.release_external_memory(reaction.accounting) {
+        first_error.get_or_insert(error);
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2302,6 +3543,534 @@ mod tests {
             .into_iter()
             .map(|function| function.artifact.bytes)
             .collect()
+    }
+
+    fn compile_esm(module_id: &str, source_text: &str) -> ResolvedModule {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(module_id, "memory:///module.mjs", None, source_text)
+            .expect("valid module source");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ogma_frontend::ParseGoal::Module,
+                mode: ogma_frontend::ParseMode::Sloppy,
+            },
+        )
+        .expect("module parses");
+        let compiled = compile_to_bytecode(&parsed).expect("module compiles");
+        ResolvedModule {
+            descriptor: compiled.module.expect("Module goal descriptor"),
+            artifacts: compiled
+                .functions
+                .into_iter()
+                .map(|function| function.artifact.bytes)
+                .collect(),
+        }
+    }
+
+    struct MemoryModuleResolver {
+        modules: HashMap<String, ResolvedModule>,
+        requests: HashMap<(String, String), String>,
+    }
+
+    impl ModuleResolver for MemoryModuleResolver {
+        fn resolve(
+            &mut self,
+            referrer_module_id: &str,
+            specifier: &str,
+        ) -> Result<String, ModuleResolverError> {
+            self.requests
+                .get(&(referrer_module_id.to_owned(), specifier.to_owned()))
+                .cloned()
+                .ok_or_else(|| {
+                    ModuleResolverError::new(format!(
+                        "unmapped module request {referrer_module_id:?} -> {specifier:?}"
+                    ))
+                })
+        }
+
+        fn load(&mut self, module_id: &str) -> Result<ResolvedModule, ModuleResolverError> {
+            self.modules
+                .get(module_id)
+                .cloned()
+                .ok_or_else(|| ModuleResolverError::new(format!("unknown module {module_id:?}")))
+        }
+    }
+
+    #[test]
+    fn esm_ambiguous_star_export_releases_temporary_module_roots() {
+        let entry = compile_esm(
+            "entry",
+            "import { value } from 'barrel'; export const observed = value;",
+        );
+        let barrel = compile_esm("barrel", "export * from 'left'; export * from 'right';");
+        let left = compile_esm("left", "export const value = 1;");
+        let right = compile_esm("right", "export const value = 2;");
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("barrel".to_owned(), barrel),
+                ("left".to_owned(), left),
+                ("right".to_owned(), right),
+            ]),
+            requests: HashMap::from([
+                (
+                    ("entry".to_owned(), "barrel".to_owned()),
+                    "barrel".to_owned(),
+                ),
+                (("barrel".to_owned(), "left".to_owned()), "left".to_owned()),
+                (
+                    ("barrel".to_owned(), "right".to_owned()),
+                    "right".to_owned(),
+                ),
+            ]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let initial_live_objects = context.heap_stats().live_objects;
+
+        let error = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect_err("conflicting star exports must fail during linking");
+        assert!(matches!(
+            error,
+            ModuleGraphError::AmbiguousExport { module_id, export_name }
+                if module_id == "barrel" && export_name == "value"
+        ));
+
+        context.collect().expect("collect failed graph instances");
+        assert_eq!(
+            context.heap_stats().live_objects,
+            initial_live_objects,
+            "all temporary module entry closures must be released on link failure"
+        );
+        assert_eq!(
+            context.heap_stats().external_memory_bytes,
+            0,
+            "failed linking must not leak persistent root accounting"
+        );
+    }
+
+    #[test]
+    fn esm_thrown_dependency_is_reported_and_failure_is_cached() {
+        let dependency = compile_esm("dependency", "export const value = 17; throw 23;");
+        let entry = compile_esm(
+            "entry",
+            "import { value } from 'dependency'; export const observed = value;",
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("dependency".to_owned(), dependency),
+            ]),
+            requests: HashMap::from([(
+                ("entry".to_owned(), "dependency".to_owned()),
+                "dependency".to_owned(),
+            )]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        let report = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("a thrown module completion is reported, not a linker error");
+        assert_eq!(report.failure.as_deref(), Some("dependency"));
+        assert_eq!(report.evaluations.len(), 1);
+        let thrown = match report.evaluations[0].completion {
+            ModuleEvaluationCompletion::Threw(value) => value,
+            completion => panic!("expected thrown dependency completion, got {completion:?}"),
+        };
+        assert_eq!(
+            context
+                .resolve(thrown)
+                .expect("persistent throw value")
+                .as_number(),
+            Some(23.0)
+        );
+
+        let cached = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("cached failure is deterministic");
+        assert!(cached.reused_module_cache);
+        assert!(cached.evaluations.is_empty());
+        assert_eq!(cached.failure.as_deref(), Some("dependency"));
+        context.release(thrown).expect("release thrown completion");
+    }
+
+    #[test]
+    fn esm_default_named_and_star_reexports_resolve_to_live_bindings() {
+        let dependency = compile_esm(
+            "dependency",
+            "export const named = 41; export const defaultValue = 9;",
+        );
+        let barrel = compile_esm(
+            "barrel",
+            "export { defaultValue as default } from 'dependency'; export { named as alias } from 'dependency'; export * from 'dependency';",
+        );
+        let entry = compile_esm(
+            "entry",
+            "import primary, { alias, named } from 'barrel'; export const total = primary + alias + named;",
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("barrel".to_owned(), barrel),
+                ("dependency".to_owned(), dependency),
+            ]),
+            requests: HashMap::from([
+                (
+                    ("entry".to_owned(), "barrel".to_owned()),
+                    "barrel".to_owned(),
+                ),
+                (
+                    ("barrel".to_owned(), "dependency".to_owned()),
+                    "dependency".to_owned(),
+                ),
+            ]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        let report = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("default and named re-exports link");
+        assert_eq!(report.failure, None);
+        assert_eq!(
+            report
+                .evaluations
+                .iter()
+                .map(|record| record.module_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dependency", "barrel", "entry"]
+        );
+        let total = context
+            .read_module_export("entry", "total")
+            .expect("read total export");
+        assert_eq!(
+            context.resolve(total).expect("resolve total").as_number(),
+            Some(91.0)
+        );
+        context.release(total).expect("release total root");
+    }
+
+    #[test]
+    fn esm_graph_resolves_links_live_imports_evaluates_dependencies_and_caches() {
+        let dependency = compile_esm("dependency", "export const value = 41;");
+        let importer = compile_esm(
+            "entry",
+            "import { value } from 'dependency'; export const observed = value + 1;",
+        );
+        let imported_binding = importer.descriptor.imports[0]
+            .local_binding
+            .clone()
+            .expect("named import local binding");
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("dependency".to_owned(), dependency),
+                ("entry".to_owned(), importer),
+            ]),
+            requests: HashMap::from([(
+                ("entry".to_owned(), "dependency".to_owned()),
+                "dependency".to_owned(),
+            )]),
+        };
+
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let report = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("ESM graph links and evaluates");
+        assert_eq!(report.modules_instantiated.len(), 2);
+        assert_eq!(
+            report
+                .evaluations
+                .iter()
+                .map(|record| record.module_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dependency", "entry"]
+        );
+        assert_eq!(report.failure, None);
+        let observed = context
+            .read_module_export("entry", "observed")
+            .expect("read exported module binding");
+        assert_eq!(
+            context
+                .resolve(observed)
+                .expect("persistent export")
+                .as_number(),
+            Some(42.0)
+        );
+        context.release(observed).expect("release export root");
+
+        let imported = context
+            .read_module_binding("entry", &imported_binding)
+            .expect("read imported live binding");
+        assert_eq!(
+            context
+                .resolve(imported)
+                .expect("persistent import")
+                .as_number(),
+            Some(41.0)
+        );
+        context.release(imported).expect("release import root");
+
+        let cached = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("cached graph evaluation");
+        assert!(cached.reused_module_cache);
+        assert!(cached.evaluations.is_empty());
+        assert_eq!(cached.modules_instantiated.len(), 2);
+    }
+
+    #[test]
+    fn promise_self_scheduling_yields_at_total_budget_and_cancels_bounded_work() {
+        let entry = compile_esm(
+            "entry",
+            r#"
+                export let count = 0;
+                function spin() {
+                    count = count + 1;
+                    Promise.resolve().then(spin);
+                }
+                Promise.resolve().then(spin);
+            "#,
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig {
+            max_pending_jobs: 2,
+            max_jobs_per_pump: 2,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("start self-scheduling Promise chain");
+        let report = context
+            .run_promise_jobs_until_idle(Some(5))
+            .expect("run under a bounded total-work budget");
+        assert_eq!(report.outcome, crate::JobPumpOutcome::BudgetExhausted);
+        assert_eq!(report.jobs_executed, 5);
+        assert_eq!(context.pending_promise_jobs(), 1);
+
+        let count = context
+            .read_module_export("entry", "count")
+            .expect("read bounded callback count");
+        assert_eq!(
+            context
+                .resolve(count)
+                .expect("resolve callback count")
+                .as_number(),
+            Some(5.0)
+        );
+        context.release(count).expect("release count root");
+
+        assert_eq!(
+            context
+                .cancel_pending_promise_jobs()
+                .expect("cancel remaining self-scheduled job"),
+            1
+        );
+        assert_eq!(context.pending_promise_jobs(), 0);
+        context.collect().expect("collect cancelled Promise chain");
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn esm_promise_jobs_preserve_fifo_order_and_nested_reactions() {
+        let entry = compile_esm(
+            "entry",
+            r#"
+                export let order = "";
+                const resolved = Promise.resolve(0);
+                resolved.then(function() {
+                    order = order + "1";
+                    Promise.resolve(0).then(function() {
+                        order = order + "3";
+                    });
+                });
+                Promise.resolve(0).then(function() {
+                    order = order + "2";
+                });
+            "#,
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig {
+            max_jobs_per_pump: 1,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("evaluate ESM with Promise jobs");
+        assert_eq!(context.pending_promise_jobs(), 2);
+
+        let first_turn = context
+            .pump_promise_jobs(None)
+            .expect("run first bounded PromiseJobs turn");
+        assert_eq!(first_turn.outcome, crate::JobPumpOutcome::BudgetExhausted);
+        assert_eq!(first_turn.jobs_executed, 1);
+        assert_eq!(
+            context.pending_promise_jobs(),
+            2,
+            "the nested reaction must be appended after the already queued second reaction"
+        );
+
+        let drained = context
+            .run_promise_jobs_until_idle(Some(2))
+            .expect("drain remaining FIFO reactions");
+        assert_eq!(drained.outcome, crate::JobPumpOutcome::Progress);
+        assert_eq!(drained.jobs_executed, 2);
+        assert_eq!(context.pending_promise_jobs(), 0);
+
+        let order = context
+            .read_module_export("entry", "order")
+            .expect("read Promise callback side effects");
+        let value = context.resolve(order).expect("resolve exported order");
+        let units = context
+            .read_string_utf16(value)
+            .expect("Promise order is a string");
+        assert_eq!(String::from_utf16(&units).expect("valid UTF-16"), "123");
+        context.release(order).expect("release order root");
+    }
+
+    #[test]
+    fn promise_reactions_from_previous_context_are_pumped_by_the_runtime() {
+        let entry = compile_esm(
+            "entry",
+            r#"
+                Promise.resolve().then(function() {
+                    Promise.resolve().then(function() {});
+                });
+            "#,
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig {
+            max_jobs_per_pump: 1,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+
+        {
+            let mut context = runtime.create_context().expect("first Context");
+            context
+                .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+                .expect("evaluate module and stage its Promise reaction");
+            assert_eq!(context.pending_promise_jobs(), 1);
+        }
+
+        let mut context = runtime
+            .create_context()
+            .expect("create a new Context on the same Runtime");
+        assert_eq!(context.pending_promise_jobs(), 1);
+
+        let first_turn = context
+            .pump_promise_jobs(None)
+            .expect("dispatch callback retained by previous Context");
+        assert_eq!(first_turn.jobs_executed, 1);
+        assert_eq!(
+            context.pending_promise_jobs(),
+            1,
+            "the nested reaction must be transferred from the previous registry"
+        );
+
+        let second_turn = context
+            .pump_promise_jobs(None)
+            .expect("dispatch nested reaction");
+        assert_eq!(second_turn.jobs_executed, 1);
+        assert_eq!(context.pending_promise_jobs(), 0);
+        context
+            .collect()
+            .expect("collect unreachable settled Promise objects");
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn esm_graph_instantiates_entire_cycle_before_evaluating_either_module() {
+        let first = compile_esm(
+            "first",
+            "import { second } from 'second'; export function readSecond() { return second; } export const first = 1;",
+        );
+        let second = compile_esm(
+            "second",
+            "import { first } from 'first'; export function readFirst() { return first; } export const second = 2;",
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("first".to_owned(), first), ("second".to_owned(), second)]),
+            requests: HashMap::from([
+                (
+                    ("first".to_owned(), "second".to_owned()),
+                    "second".to_owned(),
+                ),
+                (
+                    ("second".to_owned(), "first".to_owned()),
+                    "first".to_owned(),
+                ),
+            ]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let report = context
+            .evaluate_module_graph("first", &mut resolver, ExecutionRequest::default())
+            .expect("cyclic ESM graph links before any Program executes");
+        assert_eq!(report.failure, None);
+        assert_eq!(report.modules_instantiated.len(), 2);
+        assert_eq!(report.evaluations.len(), 2);
+        assert!(
+            report
+                .evaluations
+                .iter()
+                .any(|item| item.module_id == "first")
+        );
+        assert!(
+            report
+                .evaluations
+                .iter()
+                .any(|item| item.module_id == "second")
+        );
+        let first_export = context
+            .read_module_export("first", "first")
+            .expect("first cyclic export");
+        let second_export = context
+            .read_module_export("second", "second")
+            .expect("second cyclic export");
+        assert_eq!(
+            context
+                .resolve(first_export)
+                .expect("first value")
+                .as_number(),
+            Some(1.0)
+        );
+        assert_eq!(
+            context
+                .resolve(second_export)
+                .expect("second value")
+                .as_number(),
+            Some(2.0)
+        );
+        context.release(first_export).expect("release first");
+        context.release(second_export).expect("release second");
     }
 
     #[test]

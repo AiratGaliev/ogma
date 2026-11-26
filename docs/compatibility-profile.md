@@ -2,11 +2,11 @@
 
 - **Profile ID:** ogma-compatibility-profile
 - **Profile version:** 1.0.0
-- **Status:** M0 decision baseline; target contract, not an implementation claim
+- **Status:** target compatibility contract with implementation status for the delivered M1 subset
 - **Baseline captured:** 2026-11-16
 - **Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
 
-This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. The Rust workspace and initial JavaScript parser frontend now exist; the ECMAScript Runtime, runtime execution adapter, Node.js host layer and module resolver are not yet implemented. Parser availability does not imply runtime or full ECMAScript conformance.
+This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. The Rust workspace, Oxc frontend, synchronous interpreter, Runtime and embedding API now exist. OGM-48 adds a deliberately partial static ESM graph loader and a minimal Promise/PromiseJobs path. The Node.js host adapter, Node package resolver and runtime Test262 execution adapter remain unimplemented; these M1 slices do not imply full ECMAScript or Node.js conformance.
 
 ## 1. Compatibility claims and status vocabulary
 
@@ -33,7 +33,7 @@ A feature must never be labelled supported merely because a parser accepts its s
 
 The architecture's `implemented` state is published as **supported** in this profile: both mean that the declared behaviour is implemented and has passed its required tests. The architecture's `host-provided` label describes ownership/provisioning, not conformance; it is represented by the required host-capability and provider columns, and it does not by itself mean that an API is supported.
 
-**Current implementation status:** the Rust workspace and OGM-41 JavaScript parser/source-diagnostics frontend are implemented. The parser exposes a real parse-only adapter and a bounded Fast-CI smoke against the pinned supplementary parser corpus. The parser-only conformance runner readiness is **ready**; the execution adapter remains **not_implemented**. Full parser-corpus results are not inferred from the bounded smoke. Runtime capabilities, Node APIs and module resolution remain **deferred** until their own implementations and tests are delivered. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
+**Current implementation status:** the Rust workspace includes the OGM-41 Oxc JavaScript parser/source-diagnostics frontend, OGM-46 synchronous interpreter, and the OGM-48 M1 static ESM and PromiseJobs subset. The parser exposes a real parse-only adapter and a bounded Fast-CI smoke against the pinned supplementary parser corpus. The parser-only conformance runner readiness is **ready**; the Test262 execution adapter remains **not_implemented**. Full parser-corpus results are not inferred from the bounded smoke. ESM and Promise rows below are **partial** only for their explicitly enumerated M1 subsets. Node package resolution, Node scheduling APIs and broad ECMAScript semantics remain **deferred** or **unsupported** as listed. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
 
 ## 2. ECMAScript baseline
 
@@ -67,8 +67,8 @@ The normative language reference is ECMAScript 2026, but the first executable ru
 | Objects, arrays and property operations | Object/array creation, property access and mutation, descriptors, prototypes and observable property semantics needed by the selected subset | deferred | Test262 built-ins/Object/Array/property tests |
 | Control flow and exceptions | Branches, loops, calls, throw, try/catch/finally, abrupt completion and completion propagation | deferred | Test262 language/statement/exception tests |
 | Classes | Class declarations/expressions, constructors, methods, inheritance and private elements are staged after the minimal function/object proof | deferred | Test262 language/class tests |
-| ESM | Static import/export, module records, linking/instantiation/evaluation, live bindings and cyclic graphs | deferred | Test262 module-code tests plus resolver fixtures |
-| Promise jobs | Promise semantics and a host-pumped ECMAScript job queue with observable microtask checkpoints | deferred | Test262 Promise/async tests and scheduler fixtures |
+| ESM | Static import/export subset, host-pluggable source resolver, module identity/cache, instantiation, live named/default imports, local/re-export/star exports, dependency evaluation and cycles | partial ? namespace imports/exports, dynamic import, top-level await, Node resolution and broader early-error coverage are excluded | OGM-48 embedding ESM graph fixtures; full Test262 module-code execution remains unavailable |
+| Promise jobs | Promise.resolve/reject/then/catch subset, Promise reaction FIFO, returned-Promise adoption and host-driven bounded pump | partial ? no general thenables, constructor/executor, finally, async/await, queueMicrotask, unhandled-rejection policy or Node event loop | OGM-48 Promise heap, scheduler and ESM integration fixtures; full Test262 Promise/async execution remains unavailable |
 | Dynamic source | eval and new Function must preserve ECMAScript scope semantics; runtime-compiled code uses interpreter/bytecode | deferred | Test262 eval/Function tests and interpreter regressions |
 | RegExp, BigInt, ArrayBuffer and TypedArray | Required runtime built-ins from the QuickJS-NG-derived initial implementation direction; each built-in has an independent feature/test state | deferred | Test262 built-ins/RegExp/BigInt/TypedArray tests |
 | Generators, async functions and async generators | Full suspension, resumption, completion and abrupt-completion semantics | deferred | Test262 generator/async tests |
@@ -345,6 +345,8 @@ The initial package-manager baseline is **pnpm 12.18.0** with **pnpm-lock.yaml l
 ### 5.4. Resolver precedence, diagnostics and module identity
 
 The Node package resolver is a compatibility-policy adapter over the generic ModuleLoader contract. It is not part of ECMAScript Core and must not make the shared Runtime depend on Node.js concepts.
+
+OGM-48 implements the lower-level generic boundary as ModuleResolver plus ResolvedModule/ModuleDescriptor in ogma-embedding/ogma-bytecode. The host maps the original static specifier and referrer ID to a canonical module ID, then supplies verified artifacts and static linking metadata. This M1 resolver does not implement the package.json rules in this section; the Node package adapter remains deferred. See [Module Graph Contract](module-graph-contract.md).
 
 A resolution request is defined by the specifier, referrer/package scope, active mode (`import` or `require`), explicitly enabled compatibility conditions and the host-provided package/module manifest. The host supplies package graph and filesystem/VFS access through an explicit capability. The resolver must not acquire ambient filesystem or network access. Its result identifies a canonical module resource and format (ESM, CommonJS or registered host module), or returns a structured diagnostic. Generic ModuleLoader primitives own module records, graph linking, instantiation, evaluation and language-level module identity.
 

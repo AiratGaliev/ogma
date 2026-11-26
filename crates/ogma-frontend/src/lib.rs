@@ -24,8 +24,10 @@ use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 mod syntax;
 pub use syntax::{
     ResolvedSyntaxFunction, ResolvedSyntaxProgram, SyntaxAssignmentTarget, SyntaxBinaryOperator,
-    SyntaxDeclarator, SyntaxExpression, SyntaxForInitializer, SyntaxLiteral, SyntaxMemberKey,
-    SyntaxStatement, SyntaxUnaryOperator, SyntaxUpdateOperator, SyntaxVariableKind,
+    SyntaxDeclarator, SyntaxExport, SyntaxExportKind, SyntaxExpression, SyntaxForInitializer,
+    SyntaxImport, SyntaxImportKind, SyntaxLiteral, SyntaxMemberKey, SyntaxModule,
+    SyntaxModuleUnsupported, SyntaxStatement, SyntaxUnaryOperator, SyntaxUpdateOperator,
+    SyntaxVariableKind,
 };
 
 /// Stable identity for one source file within a compilation/debugging session.
@@ -326,6 +328,55 @@ impl Default for ParseRequestOptions {
     }
 }
 
+fn module_identity_prefix(source: &SourceFile) -> String {
+    let digest = sha256_hex(source.id().as_str().as_bytes());
+    format!("m{}_", &digest[..16])
+}
+
+fn qualify_module_id(prefix: &str, value: &str) -> String {
+    format!("{prefix}{value}")
+}
+
+fn namespace_module_semantics(snapshot: &mut SemanticSnapshot, prefix: &str) {
+    for scope in &mut snapshot.scopes {
+        scope.id = qualify_module_id(prefix, &scope.id);
+        scope.parent = scope
+            .parent
+            .as_deref()
+            .map(|value| qualify_module_id(prefix, value));
+    }
+    snapshot.root_scope = qualify_module_id(prefix, &snapshot.root_scope);
+    for binding in &mut snapshot.bindings {
+        binding.id = qualify_module_id(prefix, &binding.id);
+        binding.scope = qualify_module_id(prefix, &binding.scope);
+    }
+    for reference in &mut snapshot.references {
+        reference.scope = qualify_module_id(prefix, &reference.scope);
+        reference.binding = reference
+            .binding
+            .as_deref()
+            .map(|value| qualify_module_id(prefix, value));
+    }
+    for function in &mut snapshot.functions {
+        function.id = qualify_module_id(prefix, &function.id);
+        function.scope = qualify_module_id(prefix, &function.scope);
+        function.parent_function_scope = function
+            .parent_function_scope
+            .as_deref()
+            .map(|value| qualify_module_id(prefix, value));
+        function.parameters = function
+            .parameters
+            .iter()
+            .map(|value| qualify_module_id(prefix, value))
+            .collect();
+        function.captures = function
+            .captures
+            .iter()
+            .map(|value| qualify_module_id(prefix, value))
+            .collect();
+    }
+}
+
 /// Parses JavaScript and runs Oxc's syntax/early-error semantic pass.
 ///
 /// Every parser or early-error diagnostic with error severity rejects the
@@ -362,7 +413,7 @@ pub fn parse<'a>(
     }
 
     let mut diagnostics = parser_diagnostics;
-    let semantic = if options.goal == ParseGoal::Script && options.mode == ParseMode::Strict {
+    let mut semantic = if options.goal == ParseGoal::Script && options.mode == ParseMode::Strict {
         // Validate strict Script grammar in a temporary source while retaining
         // a separate semantic result attached to the caller's original AST.
         let (strict_text, mapping) = strict_script_source(source, program.hashbang.as_ref());
@@ -433,7 +484,12 @@ pub fn parse<'a>(
         build_semantic_snapshot(&program, source, &semantic_result.semantic)
     };
 
-    let syntax = syntax::build_syntax_program(&program, source, &semantic);
+    let mut syntax = syntax::build_syntax_program(&program, source, &semantic);
+    if options.goal == ParseGoal::Module {
+        let prefix = module_identity_prefix(source);
+        namespace_module_semantics(&mut semantic, &prefix);
+        syntax::namespace_syntax_program(&mut syntax, &prefix);
+    }
     let source_has_strict_directive = program
         .directives
         .iter()
@@ -937,6 +993,107 @@ mod tests {
         .expect("valid module should parse");
         assert_eq!(parsed.goal, ParseGoal::Module);
         assert!(parsed.is_strict);
+    }
+
+    #[test]
+    fn module_syntax_projects_static_imports_exports_and_reexports() {
+        let allocator = Allocator::default();
+        let source = source(
+            r#"
+                import defaultValue, { value as localValue } from "./dependency.js";
+                import "./side-effect.js";
+                export const result = localValue;
+                export { defaultValue as default };
+                export { remote as alias } from "./reexport.js";
+                export * from "./all.js";
+            "#,
+        );
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ParseGoal::Module,
+                mode: ParseMode::Sloppy,
+            },
+        )
+        .expect("valid static ESM declarations should parse");
+
+        assert!(parsed.syntax.module.unsupported.is_empty());
+        assert_eq!(parsed.syntax.module.imports.len(), 3);
+        assert_eq!(parsed.syntax.module.exports.len(), 4);
+
+        let default_import = parsed
+            .syntax
+            .module
+            .imports
+            .iter()
+            .find(|item| item.kind == super::SyntaxImportKind::Default)
+            .expect("default import");
+        assert_eq!(default_import.source, "./dependency.js");
+        assert_eq!(default_import.imported.as_deref(), Some("default"));
+        assert_eq!(default_import.local.as_deref(), Some("defaultValue"));
+        assert!(default_import.binding.is_some());
+
+        let named_import = parsed
+            .syntax
+            .module
+            .imports
+            .iter()
+            .find(|item| item.kind == super::SyntaxImportKind::Named)
+            .expect("named import");
+        assert_eq!(named_import.imported.as_deref(), Some("value"));
+        assert_eq!(named_import.local.as_deref(), Some("localValue"));
+        assert!(named_import.binding.is_some());
+
+        let side_effect = parsed
+            .syntax
+            .module
+            .imports
+            .iter()
+            .find(|item| item.kind == super::SyntaxImportKind::SideEffect)
+            .expect("side-effect import");
+        assert_eq!(side_effect.source, "./side-effect.js");
+        assert!(side_effect.binding.is_none());
+
+        let local_export = parsed
+            .syntax
+            .module
+            .exports
+            .iter()
+            .find(|item| item.exported == "result")
+            .expect("local declaration export");
+        assert_eq!(local_export.local.as_deref(), Some("result"));
+        assert!(local_export.binding.is_some());
+
+        let default_export = parsed
+            .syntax
+            .module
+            .exports
+            .iter()
+            .find(|item| item.exported == "default")
+            .expect("local named default export");
+        assert!(default_export.binding.is_some());
+
+        let reexport = parsed
+            .syntax
+            .module
+            .exports
+            .iter()
+            .find(|item| item.exported == "alias")
+            .expect("named re-export");
+        assert_eq!(reexport.source.as_deref(), Some("./reexport.js"));
+        assert_eq!(reexport.imported.as_deref(), Some("remote"));
+        assert!(reexport.binding.is_none());
+
+        let star = parsed
+            .syntax
+            .module
+            .exports
+            .iter()
+            .find(|item| item.kind == super::SyntaxExportKind::Star)
+            .expect("star export");
+        assert_eq!(star.exported, "*");
+        assert_eq!(star.source.as_deref(), Some("./all.js"));
     }
 
     #[test]

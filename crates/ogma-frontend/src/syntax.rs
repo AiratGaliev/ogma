@@ -378,11 +378,93 @@ pub struct ResolvedSyntaxFunction {
     pub has_private_self_name: bool,
 }
 
+/// Import form supported by the static M1 module resolver.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyntaxImportKind {
+    /// Side-effect-only import statement.
+    SideEffect,
+    /// Default import.
+    Default,
+    /// Named import.
+    Named,
+    /// Namespace import.
+    Namespace,
+}
+
+/// One statically declared module import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyntaxImport {
+    /// Source specifier passed unchanged to the host resolver.
+    pub source: String,
+    /// Export name; absent for namespace and side-effect imports.
+    pub imported: Option<String>,
+    /// Local identifier spelling; absent for side-effect imports.
+    pub local: Option<String>,
+    /// Oxc-resolved local lexical binding identity.
+    pub binding: Option<String>,
+    /// Syntactic import form.
+    pub kind: SyntaxImportKind,
+    /// Original source range.
+    pub span: SourceSpan,
+}
+
+/// Export declaration form.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyntaxExportKind {
+    /// Export of a local lexical binding.
+    Local,
+    /// Named re-export from another module.
+    ReExport,
+    /// Star export or namespace re-export.
+    Star,
+}
+
+/// One statically declared module export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyntaxExport {
+    /// Public export name, or star for an unaliased star export.
+    pub exported: String,
+    /// Local source binding name, when exported from this module.
+    pub local: Option<String>,
+    /// Local source binding identity, when exported from this module.
+    pub binding: Option<String>,
+    /// Source specifier for re-exports.
+    pub source: Option<String>,
+    /// Imported name for a named re-export; star denotes namespace export.
+    pub imported: Option<String>,
+    /// Export declaration form.
+    pub kind: SyntaxExportKind,
+    /// Original source range.
+    pub span: SourceSpan,
+}
+
+/// Static module syntax that is valid JavaScript but outside the declared M1 subset.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyntaxModuleUnsupported {
+    /// Stable syntax category.
+    pub syntax: String,
+    /// Original source range.
+    pub span: SourceSpan,
+}
+
+/// Owned static module declaration metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SyntaxModule {
+    /// Imports in source order.
+    pub imports: Vec<SyntaxImport>,
+    /// Exports in source order.
+    pub exports: Vec<SyntaxExport>,
+    /// Fail-closed module constructs outside the supported M1 subset.
+    pub unsupported: Vec<SyntaxModuleUnsupported>,
+}
+
 /// Owned syntax transport. The compiler turns it into canonical Core IR v1.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResolvedSyntaxProgram {
     /// Program unit followed by nested function units in source order.
     pub functions: Vec<ResolvedSyntaxFunction>,
+    /// Static import/export declarations for Module goal source.
+    pub module: SyntaxModule,
 }
 
 fn scope_id(scope: ScopeId) -> String {
@@ -733,6 +815,32 @@ fn variable_declaration(
     (declaration_kind(node.kind), declarations, span)
 }
 
+fn syntax_declaration(
+    node: &ast::Declaration<'_>,
+    semantic: &SemanticSnapshot,
+    source: &SourceFile,
+) -> SyntaxStatement {
+    let ast_span = node.span();
+    let span = source.span(ast_span.start as usize, ast_span.end as usize);
+    match node {
+        ast::Declaration::VariableDeclaration(declaration) => {
+            let (kind, declarations, span) = variable_declaration(declaration, semantic, source);
+            SyntaxStatement::Variable {
+                kind,
+                declarations,
+                span,
+            }
+        }
+        ast::Declaration::FunctionDeclaration(function) => {
+            function_declaration(function, semantic, source)
+        }
+        _ => SyntaxStatement::Unsupported {
+            syntax: format!("declaration:{:?}", std::mem::discriminant(node)),
+            span,
+        },
+    }
+}
+
 fn syntax_statement(
     node: &ast::Statement<'_>,
     semantic: &SemanticSnapshot,
@@ -761,6 +869,20 @@ fn syntax_statement(
             }
         }
         S::FunctionDeclaration(function) => function_declaration(function, semantic, source),
+        S::ImportDeclaration(_)
+        | S::ExportNamedDeclaration(_)
+        | S::ExportFromDeclaration(_)
+        | S::ExportAllDeclaration(_) => SyntaxStatement::Empty { span },
+        S::ExportDeclaration(export) => syntax_declaration(&export.declaration, semantic, source),
+        S::ExportDefaultDeclaration(export) => match &export.declaration {
+            ast::ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                function_declaration(function, semantic, source)
+            }
+            _ => SyntaxStatement::Unsupported {
+                syntax: "default_export_expression_or_class".to_owned(),
+                span,
+            },
+        },
         S::ExpressionStatement(expression_statement) => SyntaxStatement::Expression {
             expression: expression(&expression_statement.expression, semantic, source),
             span,
@@ -967,6 +1089,527 @@ impl<'a> Visit<'a> for FunctionCollector<'_> {
     }
 }
 
+fn module_export_name(name: &ast::ModuleExportName<'_>) -> Option<String> {
+    match name {
+        ast::ModuleExportName::IdentifierName(identifier) => {
+            Some(identifier.name.as_str().to_owned())
+        }
+        ast::ModuleExportName::IdentifierReference(identifier) => {
+            Some(identifier.name.as_str().to_owned())
+        }
+        ast::ModuleExportName::StringLiteral(literal) => literal.value.as_str().map(str::to_owned),
+    }
+}
+
+fn module_reference_binding(
+    name: &ast::ModuleExportName<'_>,
+    semantic: &SemanticSnapshot,
+    source: &SourceFile,
+) -> Option<String> {
+    let ast::ModuleExportName::IdentifierReference(identifier) = name else {
+        return None;
+    };
+    let span = source.span(identifier.span.start as usize, identifier.span.end as usize);
+    semantic
+        .references
+        .iter()
+        .find(|reference| {
+            reference.span.start_byte == span.start_byte && reference.span.end_byte == span.end_byte
+        })
+        .and_then(|reference| reference.binding.clone())
+}
+
+fn module_source_specifier(literal: &ast::StringLiteral<'_>) -> Option<String> {
+    literal.value.as_str().map(str::to_owned)
+}
+
+fn build_syntax_module(
+    program: &Program<'_>,
+    semantic: &SemanticSnapshot,
+    source: &SourceFile,
+) -> SyntaxModule {
+    use ast::Statement as S;
+    let mut module = SyntaxModule::default();
+
+    for statement in &program.body {
+        match statement {
+            S::ImportDeclaration(import) => {
+                let span = source.span(import.span.start as usize, import.span.end as usize);
+                let Some(specifier) = module_source_specifier(&import.source) else {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "module_specifier_with_lone_surrogate".to_owned(),
+                        span,
+                    });
+                    continue;
+                };
+                if import.phase.is_some()
+                    || import.with_clause.is_some()
+                    || import.import_kind != ast::ImportOrExportKind::Value
+                {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "import_phase_attributes_or_type_only".to_owned(),
+                        span,
+                    });
+                    continue;
+                }
+                let Some(specifiers) = &import.specifiers else {
+                    module.imports.push(SyntaxImport {
+                        source: specifier,
+                        imported: None,
+                        local: None,
+                        binding: None,
+                        kind: SyntaxImportKind::SideEffect,
+                        span,
+                    });
+                    continue;
+                };
+                if specifiers.is_empty() {
+                    module.imports.push(SyntaxImport {
+                        source: specifier.clone(),
+                        imported: None,
+                        local: None,
+                        binding: None,
+                        kind: SyntaxImportKind::SideEffect,
+                        span,
+                    });
+                }
+                for item in specifiers {
+                    match item {
+                        ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(item) => {
+                            module.imports.push(SyntaxImport {
+                                source: specifier.clone(),
+                                imported: Some("default".to_owned()),
+                                local: Some(item.local.name.as_str().to_owned()),
+                                binding: binding_id(item.local.symbol_id.get()),
+                                kind: SyntaxImportKind::Default,
+                                span: source.span(item.span.start as usize, item.span.end as usize),
+                            });
+                        }
+                        ast::ImportDeclarationSpecifier::ImportNamespaceSpecifier(item) => {
+                            module.imports.push(SyntaxImport {
+                                source: specifier.clone(),
+                                imported: None,
+                                local: Some(item.local.name.as_str().to_owned()),
+                                binding: binding_id(item.local.symbol_id.get()),
+                                kind: SyntaxImportKind::Namespace,
+                                span: source.span(item.span.start as usize, item.span.end as usize),
+                            });
+                        }
+                        ast::ImportDeclarationSpecifier::ImportSpecifier(item) => {
+                            let item_span =
+                                source.span(item.span.start as usize, item.span.end as usize);
+                            if item.import_kind != ast::ImportOrExportKind::Value {
+                                module.unsupported.push(SyntaxModuleUnsupported {
+                                    syntax: "type_only_import_specifier".to_owned(),
+                                    span: item_span,
+                                });
+                                continue;
+                            }
+                            let Some(imported) = module_export_name(&item.imported) else {
+                                module.unsupported.push(SyntaxModuleUnsupported {
+                                    syntax: "import_name_with_lone_surrogate".to_owned(),
+                                    span: item_span,
+                                });
+                                continue;
+                            };
+                            module.imports.push(SyntaxImport {
+                                source: specifier.clone(),
+                                imported: Some(imported),
+                                local: Some(item.local.name.as_str().to_owned()),
+                                binding: binding_id(item.local.symbol_id.get()),
+                                kind: SyntaxImportKind::Named,
+                                span: item_span,
+                            });
+                        }
+                    }
+                }
+            }
+            S::ExportDeclaration(export) => {
+                let span = source.span(export.span.start as usize, export.span.end as usize);
+                match &export.declaration {
+                    ast::Declaration::VariableDeclaration(declaration) => {
+                        for item in &declaration.declarations {
+                            let item_span =
+                                source.span(item.span.start as usize, item.span.end as usize);
+                            if let ast::BindingPattern::BindingIdentifier(identifier) = &item.id {
+                                let name = identifier.name.as_str().to_owned();
+                                module.exports.push(SyntaxExport {
+                                    exported: name.clone(),
+                                    local: Some(name),
+                                    binding: binding_id(identifier.symbol_id.get()),
+                                    source: None,
+                                    imported: None,
+                                    kind: SyntaxExportKind::Local,
+                                    span: item_span,
+                                });
+                            } else {
+                                module.unsupported.push(SyntaxModuleUnsupported {
+                                    syntax: "destructured_export_declaration".to_owned(),
+                                    span: item_span,
+                                });
+                            }
+                        }
+                    }
+                    ast::Declaration::FunctionDeclaration(function) => {
+                        let item_span =
+                            source.span(function.span.start as usize, function.span.end as usize);
+                        if let Some(identifier) = &function.id {
+                            let name = identifier.name.as_str().to_owned();
+                            module.exports.push(SyntaxExport {
+                                exported: name.clone(),
+                                local: Some(name),
+                                binding: binding_id(identifier.symbol_id.get()),
+                                source: None,
+                                imported: None,
+                                kind: SyntaxExportKind::Local,
+                                span: item_span,
+                            });
+                        } else {
+                            module.unsupported.push(SyntaxModuleUnsupported {
+                                syntax: "anonymous_exported_function".to_owned(),
+                                span: item_span,
+                            });
+                        }
+                    }
+                    _ => module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "unsupported_exported_declaration".to_owned(),
+                        span,
+                    }),
+                }
+            }
+            S::ExportNamedDeclaration(export) => {
+                let span = source.span(export.span.start as usize, export.span.end as usize);
+                if export.export_kind != ast::ImportOrExportKind::Value {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "type_only_export".to_owned(),
+                        span,
+                    });
+                    continue;
+                }
+                for item in &export.specifiers {
+                    let item_span = source.span(item.span.start as usize, item.span.end as usize);
+                    if item.export_kind != ast::ImportOrExportKind::Value {
+                        module.unsupported.push(SyntaxModuleUnsupported {
+                            syntax: "type_only_export_specifier".to_owned(),
+                            span: item_span,
+                        });
+                        continue;
+                    }
+                    let (Some(exported), Some(local)) = (
+                        module_export_name(&item.exported),
+                        module_export_name(&item.local),
+                    ) else {
+                        module.unsupported.push(SyntaxModuleUnsupported {
+                            syntax: "export_name_with_lone_surrogate".to_owned(),
+                            span: item_span,
+                        });
+                        continue;
+                    };
+                    module.exports.push(SyntaxExport {
+                        exported,
+                        local: Some(local),
+                        binding: module_reference_binding(&item.local, semantic, source),
+                        source: None,
+                        imported: None,
+                        kind: SyntaxExportKind::Local,
+                        span: item_span,
+                    });
+                }
+            }
+            S::ExportFromDeclaration(export) => {
+                let span = source.span(export.span.start as usize, export.span.end as usize);
+                let Some(specifier) = module_source_specifier(&export.source) else {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "module_specifier_with_lone_surrogate".to_owned(),
+                        span,
+                    });
+                    continue;
+                };
+                if export.with_clause.is_some()
+                    || export.export_kind != ast::ImportOrExportKind::Value
+                {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "reexport_attributes_or_type_only".to_owned(),
+                        span,
+                    });
+                    continue;
+                }
+                for item in &export.specifiers {
+                    let item_span = source.span(item.span.start as usize, item.span.end as usize);
+                    if item.export_kind != ast::ImportOrExportKind::Value {
+                        module.unsupported.push(SyntaxModuleUnsupported {
+                            syntax: "type_only_reexport_specifier".to_owned(),
+                            span: item_span,
+                        });
+                        continue;
+                    }
+                    let (Some(exported), Some(imported)) = (
+                        module_export_name(&item.exported),
+                        module_export_name(&item.local),
+                    ) else {
+                        module.unsupported.push(SyntaxModuleUnsupported {
+                            syntax: "reexport_name_with_lone_surrogate".to_owned(),
+                            span: item_span,
+                        });
+                        continue;
+                    };
+                    module.exports.push(SyntaxExport {
+                        exported,
+                        local: None,
+                        binding: None,
+                        source: Some(specifier.clone()),
+                        imported: Some(imported),
+                        kind: SyntaxExportKind::ReExport,
+                        span: item_span,
+                    });
+                }
+            }
+            S::ExportAllDeclaration(export) => {
+                let span = source.span(export.span.start as usize, export.span.end as usize);
+                let Some(specifier) = module_source_specifier(&export.source) else {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "module_specifier_with_lone_surrogate".to_owned(),
+                        span,
+                    });
+                    continue;
+                };
+                if export.with_clause.is_some()
+                    || export.export_kind != ast::ImportOrExportKind::Value
+                {
+                    module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "export_all_attributes_or_type_only".to_owned(),
+                        span,
+                    });
+                    continue;
+                }
+                let exported = match &export.exported {
+                    Some(name) => match module_export_name(name) {
+                        Some(name) => name,
+                        None => {
+                            module.unsupported.push(SyntaxModuleUnsupported {
+                                syntax: "namespace_export_name_with_lone_surrogate".to_owned(),
+                                span,
+                            });
+                            continue;
+                        }
+                    },
+                    None => "*".to_owned(),
+                };
+                module.exports.push(SyntaxExport {
+                    exported,
+                    local: None,
+                    binding: None,
+                    source: Some(specifier),
+                    imported: Some("*".to_owned()),
+                    kind: SyntaxExportKind::Star,
+                    span,
+                });
+            }
+            S::ExportDefaultDeclaration(export) => {
+                let span = source.span(export.span.start as usize, export.span.end as usize);
+                match &export.declaration {
+                    ast::ExportDefaultDeclarationKind::FunctionDeclaration(function)
+                        if function.id.is_some() =>
+                    {
+                        let identifier = function.id.as_ref().expect("guarded above");
+                        let local = identifier.name.as_str().to_owned();
+                        module.exports.push(SyntaxExport {
+                            exported: "default".to_owned(),
+                            local: Some(local),
+                            binding: binding_id(identifier.symbol_id.get()),
+                            source: None,
+                            imported: None,
+                            kind: SyntaxExportKind::Local,
+                            span,
+                        });
+                    }
+                    _ => module.unsupported.push(SyntaxModuleUnsupported {
+                        syntax: "default_export_expression_or_anonymous_declaration".to_owned(),
+                        span,
+                    }),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    module
+}
+
+fn qualify_id(prefix: &str, value: &mut String) {
+    *value = format!("{prefix}{value}");
+}
+
+fn qualify_optional(prefix: &str, value: &mut Option<String>) {
+    if let Some(value) = value {
+        qualify_id(prefix, value);
+    }
+}
+
+fn namespace_member_key(key: &mut SyntaxMemberKey, prefix: &str) {
+    if let SyntaxMemberKey::Computed(expression) = key {
+        namespace_expression(expression, prefix);
+    }
+}
+
+fn namespace_assignment_target(target: &mut SyntaxAssignmentTarget, prefix: &str) {
+    match target {
+        SyntaxAssignmentTarget::Identifier { binding, .. } => qualify_optional(prefix, binding),
+        SyntaxAssignmentTarget::Member { object, key, .. } => {
+            namespace_expression(object, prefix);
+            namespace_member_key(key, prefix);
+        }
+        SyntaxAssignmentTarget::Unsupported { .. } => {}
+    }
+}
+
+fn namespace_expression(expression: &mut SyntaxExpression, prefix: &str) {
+    match expression {
+        SyntaxExpression::Literal { .. } | SyntaxExpression::Unsupported { .. } => {}
+        SyntaxExpression::Identifier { binding, .. } => qualify_optional(prefix, binding),
+        SyntaxExpression::Binary { left, right, .. } => {
+            namespace_expression(left, prefix);
+            namespace_expression(right, prefix);
+        }
+        SyntaxExpression::Unary { argument, .. }
+        | SyntaxExpression::Parenthesized {
+            expression: argument,
+            ..
+        } => {
+            namespace_expression(argument, prefix);
+        }
+        SyntaxExpression::Call {
+            callee, arguments, ..
+        } => {
+            namespace_expression(callee, prefix);
+            for argument in arguments {
+                namespace_expression(argument, prefix);
+            }
+        }
+        SyntaxExpression::Member { object, key, .. } => {
+            namespace_expression(object, prefix);
+            namespace_member_key(key, prefix);
+        }
+        SyntaxExpression::Assign { target, value, .. } => {
+            namespace_assignment_target(target, prefix);
+            namespace_expression(value, prefix);
+        }
+        SyntaxExpression::Update { target, .. } => namespace_assignment_target(target, prefix),
+        SyntaxExpression::Function {
+            function, captures, ..
+        } => {
+            qualify_id(prefix, function);
+            for capture in captures {
+                qualify_id(prefix, capture);
+            }
+        }
+    }
+}
+
+fn namespace_declarators(declarations: &mut [SyntaxDeclarator], prefix: &str) {
+    for declaration in declarations {
+        qualify_optional(prefix, &mut declaration.binding);
+        if let Some(initializer) = &mut declaration.initializer {
+            namespace_expression(initializer, prefix);
+        }
+    }
+}
+
+fn namespace_statement(statement: &mut SyntaxStatement, prefix: &str) {
+    match statement {
+        SyntaxStatement::Block { scope, body, .. } => {
+            qualify_optional(prefix, scope);
+            for child in body {
+                namespace_statement(child, prefix);
+            }
+        }
+        SyntaxStatement::Variable { declarations, .. } => {
+            namespace_declarators(declarations, prefix);
+        }
+        SyntaxStatement::FunctionDeclaration {
+            function, binding, ..
+        } => {
+            qualify_id(prefix, function);
+            qualify_optional(prefix, binding);
+        }
+        SyntaxStatement::Expression { expression, .. } => namespace_expression(expression, prefix),
+        SyntaxStatement::If {
+            test,
+            consequent,
+            alternate,
+            ..
+        } => {
+            namespace_expression(test, prefix);
+            namespace_statement(consequent, prefix);
+            if let Some(alternate) = alternate {
+                namespace_statement(alternate, prefix);
+            }
+        }
+        SyntaxStatement::While { test, body, .. } => {
+            namespace_expression(test, prefix);
+            namespace_statement(body, prefix);
+        }
+        SyntaxStatement::For {
+            scope,
+            initializer,
+            test,
+            update,
+            body,
+            ..
+        } => {
+            qualify_optional(prefix, scope);
+            if let Some(initializer) = initializer {
+                match initializer {
+                    SyntaxForInitializer::Variable { declarations, .. } => {
+                        namespace_declarators(declarations, prefix);
+                    }
+                    SyntaxForInitializer::Expression(expression) => {
+                        namespace_expression(expression, prefix);
+                    }
+                }
+            }
+            if let Some(test) = test {
+                namespace_expression(test, prefix);
+            }
+            if let Some(update) = update {
+                namespace_expression(update, prefix);
+            }
+            namespace_statement(body, prefix);
+        }
+        SyntaxStatement::Return { value, .. } => {
+            if let Some(value) = value {
+                namespace_expression(value, prefix);
+            }
+        }
+        SyntaxStatement::Throw { value, .. } => namespace_expression(value, prefix),
+        SyntaxStatement::Empty { .. } | SyntaxStatement::Unsupported { .. } => {}
+    }
+}
+
+/// Applies a stable source-derived namespace to module-local compiler identities.
+pub(crate) fn namespace_syntax_program(program: &mut ResolvedSyntaxProgram, prefix: &str) {
+    for function in &mut program.functions {
+        qualify_id(prefix, &mut function.id);
+        qualify_id(prefix, &mut function.scope);
+        qualify_optional(prefix, &mut function.parent_function_scope);
+        for parameter in &mut function.parameters {
+            qualify_id(prefix, parameter);
+        }
+        for capture in &mut function.captures {
+            qualify_id(prefix, capture);
+        }
+        for statement in &mut function.body {
+            namespace_statement(statement, prefix);
+        }
+    }
+    for import in &mut program.module.imports {
+        qualify_optional(prefix, &mut import.binding);
+    }
+    for export in &mut program.module.exports {
+        qualify_optional(prefix, &mut export.binding);
+    }
+}
+
 /// Projects an Oxc AST into the frontend-owned M1 syntax transport.
 pub(crate) fn build_syntax_program(
     program: &Program<'_>,
@@ -977,6 +1620,7 @@ pub(crate) fn build_syntax_program(
         .functions
         .iter()
         .find(|function| function.id == "fn_program");
+    let module = build_syntax_module(program, semantic, source);
     let program_span = source.span(0, source.text().len());
     let program_body = program
         .body
@@ -1013,5 +1657,5 @@ pub(crate) fn build_syntax_program(
         )
     });
     functions.extend(collector.functions);
-    ResolvedSyntaxProgram { functions }
+    ResolvedSyntaxProgram { functions, module }
 }

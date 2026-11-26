@@ -181,6 +181,17 @@
     {
       "path": "tests/core-ir/fixtures/positive-dynamic-environment-store.json",
       "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/positive-promise-operations.json",
+      "expect": "accepted"
+    },
+    {
+      "path": "tests/core-ir/fixtures/negative-promise-arity.json",
+      "expect": "rejected",
+      "diagnostics": [
+        "operation.operand_count"
+      ]
     }
   ]
 }

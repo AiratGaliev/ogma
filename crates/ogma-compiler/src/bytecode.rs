@@ -6,6 +6,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+pub use ogma_bytecode::{
+    ModuleDescriptor, ModuleExport, ModuleExportKind, ModuleImport, ModuleImportKind,
+};
+
 use ogma_bytecode::{
     BinaryOperation, CallKind, ConstantKind, Diagnostic, RegisterInstruction, RegisterOperation,
     UnaryOperation, VerifiedArtifact, build_ogmb_v1, encode_register_code, sha256_hex,
@@ -51,6 +55,8 @@ pub struct CompiledFunction {
 pub struct CompiledBytecodeModule {
     /// Compiled functions in canonical Core IR document order.
     pub functions: Vec<CompiledFunction>,
+    /// Static ESM descriptor; absent for Script goal compilation.
+    pub module: Option<ModuleDescriptor>,
 }
 
 /// Lowers verified function documents into independently verified OGMB v1 files.
@@ -69,6 +75,16 @@ pub fn compile_functions(
         })
         .collect();
     let mut captured_cells = HashMap::<String, std::collections::BTreeSet<String>>::new();
+    for document in documents {
+        for binding in &document.function.environment.bindings {
+            if binding.kind == BindingKind::Import {
+                captured_cells
+                    .entry(document.function.id.clone())
+                    .or_default()
+                    .insert(binding.id.clone());
+            }
+        }
+    }
     for child in documents {
         for capture in &child.function.captures {
             if capture.mode == CaptureMode::Cell {
@@ -226,7 +242,12 @@ fn validate_module_references(documents: &[FunctionDocument]) -> Result<(), Vec<
                 || capture.semantic_type != source_binding.semantic_type
                 || capture.representation != source_binding.representation
                 || (capture.mutable && capture.mode != CaptureMode::Cell)
-                || (!capture.mutable && capture.mode != CaptureMode::Value)
+                || (!capture.mutable
+                    && source_binding.kind == BindingKind::Import
+                    && capture.mode != CaptureMode::Cell)
+                || (!capture.mutable
+                    && source_binding.kind != BindingKind::Import
+                    && capture.mode != CaptureMode::Value)
             {
                 return Err(vec![diagnostic(
                     "bytecode.capture_metadata_mismatch",
@@ -432,11 +453,11 @@ fn compile_function_with_cells(
         {
             binding_registers.insert(binding.id.clone(), allocator.allocate()?);
         }
-        if matches!(binding.kind, BindingKind::Catch | BindingKind::Import) {
+        if binding.kind == BindingKind::Catch {
             return Err(vec![diagnostic(
                 "bytecode.binding_unsupported",
                 format!("$.function.environment.bindings[{}]", binding.id),
-                "catch and import bindings are outside the current synchronous M1 register profile",
+                "catch bindings are outside the current synchronous M1 register profile",
             )]);
         }
     }
@@ -1230,11 +1251,11 @@ fn emit_binding_initializers(
     output: &mut Vec<PlannedInstruction>,
 ) -> Result<(), Vec<Diagnostic>> {
     for binding in &function.environment.bindings {
-        if matches!(binding.kind, BindingKind::Catch | BindingKind::Import) {
+        if binding.kind == BindingKind::Catch {
             return Err(vec![diagnostic(
                 "bytecode.binding_unsupported",
                 "$.function.environment.bindings",
-                "catch and import binding initialization is outside the M1 register profile",
+                "catch binding initialization is outside the M1 register profile",
             )]);
         }
 
@@ -1244,10 +1265,11 @@ fn emit_binding_initializers(
         // below then perform parameter/var/declaration initialization.
         let kind = match binding.kind {
             BindingKind::Var => ConstantKind::Undefined,
-            BindingKind::Let | BindingKind::Const | BindingKind::Parameter => {
-                ConstantKind::Uninitialized
-            }
-            BindingKind::Catch | BindingKind::Import => unreachable!("rejected above"),
+            BindingKind::Let
+            | BindingKind::Const
+            | BindingKind::Parameter
+            | BindingKind::Import => ConstantKind::Uninitialized,
+            BindingKind::Catch => unreachable!("rejected above"),
         };
         let destination = binding_registers.get(&binding.id).copied().ok_or_else(|| {
             vec![diagnostic(
@@ -1536,6 +1558,34 @@ fn lower_instruction(
                 CallKind::JavaScript
             } else {
                 CallKind::Construct
+            };
+            emit!(
+                RegisterOperation::Call {
+                    destination,
+                    kind,
+                    sources
+                },
+                may_throw,
+                source
+            );
+        }
+        "js.promise_resolve" | "js.promise_reject" | "js.promise_then" => {
+            let sources = unique_registers(
+                instruction
+                    .operands
+                    .iter()
+                    .map(|operand| reg(operand))
+                    .collect::<Result<Vec<_>, _>>()?,
+                allocator,
+                &source,
+                &mut output,
+            )?;
+            let destination = required_destination(destination, &instruction.id)?;
+            let kind = match instruction.op.as_str() {
+                "js.promise_resolve" => CallKind::PromiseResolve,
+                "js.promise_reject" => CallKind::PromiseReject,
+                "js.promise_then" => CallKind::PromiseThen,
+                _ => unreachable!("matched Promise intrinsic"),
             };
             emit!(
                 RegisterOperation::Call {

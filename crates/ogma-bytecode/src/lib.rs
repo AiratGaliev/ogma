@@ -26,6 +26,77 @@ const MAX_SECTIONS: usize = 64;
 const MAX_ALIGNMENT: u32 = 64;
 const REQUIRED_SECTIONS: [u32; 4] = [1, 2, 3, 4];
 
+/// Static import form in a compiled ESM module descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleImportKind {
+    /// Side-effect-only static import.
+    SideEffect,
+    /// Default import.
+    Default,
+    /// Named import.
+    Named,
+    /// Namespace import.
+    Namespace,
+}
+
+/// One static import in a compiled module descriptor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleImport {
+    /// Original module request specifier. Resolution is delegated to the host.
+    pub specifier: String,
+    /// Imported name; absent for namespace and side-effect imports.
+    pub imported_name: Option<String>,
+    /// Local binding identity, absent for side-effect imports.
+    pub local_binding: Option<String>,
+    /// Syntactic import form.
+    pub kind: ModuleImportKind,
+}
+
+/// Static export form in a compiled ESM module descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleExportKind {
+    /// Local binding exported by this module.
+    Local,
+    /// Named re-export from another module.
+    ReExport,
+    /// Star export or namespace re-export.
+    Star,
+}
+
+/// One static export in a compiled module descriptor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleExport {
+    /// Public export name.
+    pub export_name: String,
+    /// Local binding identity, when exported from this module.
+    pub local_binding: Option<String>,
+    /// Source module request for re-exports.
+    pub source: Option<String>,
+    /// Imported name for re-exports; star denotes all non-default names.
+    pub imported_name: Option<String>,
+    /// Syntactic export form.
+    pub kind: ModuleExportKind,
+}
+
+/// Source identity and static linking metadata for one ESM compilation unit.
+///
+/// The module ID is caller-controlled and canonical within the host resolver.
+/// This descriptor deliberately contains no filesystem, package.json or Node.js
+/// resolution assumptions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleDescriptor {
+    /// Canonical identity supplied through SourceFile::id.
+    pub id: String,
+    /// Stable Program function ID used for module evaluation.
+    pub entry_function: String,
+    /// Program lexical environment that owns top-level bindings.
+    pub environment: String,
+    /// Static imports in source order.
+    pub imports: Vec<ModuleImport>,
+    /// Static exports in source order.
+    pub exports: Vec<ModuleExport>,
+}
+
 type ParsedContainer = (Value, Vec<u8>, Vec<Value>, Vec<Value>, Option<Value>);
 
 const OP_CONSTANT: u8 = 0x31;
@@ -191,6 +262,12 @@ pub enum CallKind {
     MakeCell = 10,
     /// Store a value through a local lexical binding slot.
     StoreBinding = 11,
+    /// ECMAScript Promise.resolve(value).
+    PromiseResolve = 12,
+    /// ECMAScript Promise.reject(reason).
+    PromiseReject = 13,
+    /// ECMAScript Promise.prototype.then(onFulfilled, onRejected).
+    PromiseThen = 14,
 }
 
 impl CallKind {
@@ -208,6 +285,9 @@ impl CallKind {
             9 => Self::StoreCapture,
             10 => Self::MakeCell,
             11 => Self::StoreBinding,
+            12 => Self::PromiseResolve,
+            13 => Self::PromiseReject,
+            14 => Self::PromiseThen,
             _ => return None,
         })
     }
@@ -218,8 +298,11 @@ impl CallKind {
             Self::Host | Self::MakeClosure => (1..=1025).contains(&count),
             Self::GetProperty | Self::GetElement => count == 2,
             Self::SetProperty | Self::SetElement => count == 3,
-            Self::LoadCapture | Self::MakeCell => count == 1,
+            Self::LoadCapture | Self::MakeCell | Self::PromiseResolve | Self::PromiseReject => {
+                count == 1
+            }
             Self::StoreCapture | Self::StoreBinding => count == 2,
+            Self::PromiseThen => count == 3,
         }
     }
 }
@@ -2309,7 +2392,6 @@ fn validate_metadata(metadata: &Value) -> Result<(), Vec<Diagnostic>> {
             || name.len() > 512
             || mutable.is_none()
             || (mutable == Some(true) && mode != "cell")
-            || (mutable == Some(false) && mode != "value")
             || !matches!(mode, "cell" | "value")
             || !valid_semantic_representation(semantic_type, representation)
         {
@@ -3851,6 +3933,9 @@ mod tests {
             (CallKind::StoreCapture, 1),
             (CallKind::MakeCell, 2),
             (CallKind::StoreBinding, 1),
+            (CallKind::PromiseResolve, 2),
+            (CallKind::PromiseReject, 2),
+            (CallKind::PromiseThen, 2),
         ];
         for (kind, count) in invalid {
             let sources = (0..count).map(|index| index as u16).collect();
@@ -3864,6 +3949,23 @@ mod tests {
             }])
             .expect_err("kind-specific source arity must be rejected");
             assert!(errors.iter().any(|item| item.code == "call.kind_arity"));
+        }
+
+        for (kind, count) in [
+            (CallKind::PromiseResolve, 1usize),
+            (CallKind::PromiseReject, 1),
+            (CallKind::PromiseThen, 3),
+        ] {
+            let sources = (0..count).map(|index| index as u16).collect();
+            encode_register_code(&[RegisterInstruction {
+                operation: RegisterOperation::Call {
+                    destination: 0,
+                    kind,
+                    sources,
+                },
+                may_throw: true,
+            }])
+            .expect("registered Promise call arity must be accepted");
         }
 
         let mut code = vec![OP_CALL, 1];

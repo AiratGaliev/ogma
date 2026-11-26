@@ -13,22 +13,24 @@ use ogma_runtime::{ExternalMemoryCharge, HeapError, HostHandle};
 use crate::{
     ConfigurationError, Context, ExecutableModule, ExecutionCompletion, ExecutionInterruption,
     ExecutionRequest, HostFunctionRegistry, InterpreterError, PersistentCompletion,
-    PersistentHandle,
+    PersistentHandle, Value,
 };
 
 #[derive(Default)]
 pub(super) struct JobScheduler {
-    queue: VecDeque<PendingJob>,
-    state: JobQueueState,
-    pumping: bool,
+    pub(super) queue: VecDeque<PendingJob>,
+    pub(super) state: JobQueueState,
+    pub(super) pumping: bool,
 }
 
-struct PendingJob {
-    module: Rc<ExecutableModule>,
-    callback: HostHandle,
-    arguments: Vec<HostHandle>,
-    host_functions: HostFunctionRegistry,
-    accounting: ExternalMemoryCharge,
+pub(super) struct PendingJob {
+    pub(super) module: Option<Rc<ExecutableModule>>,
+    pub(super) callback: Option<HostHandle>,
+    pub(super) arguments: Vec<HostHandle>,
+    pub(super) promise_child: Option<HostHandle>,
+    pub(super) promise_rejected: bool,
+    pub(super) host_functions: HostFunctionRegistry,
+    pub(super) accounting: ExternalMemoryCharge,
 }
 
 /// Lifecycle state of the Runtime's ECMAScript job queue.
@@ -150,7 +152,7 @@ impl Context<'_> {
             return Err(JobQueueError::ShuttingDown);
         }
         let capacity = self.runtime.config.max_pending_jobs;
-        if self.runtime.jobs.queue.len() >= capacity {
+        if self.pending_promise_jobs() >= capacity {
             return Err(JobQueueError::QueueFull { capacity });
         }
         if arguments.len() > crate::MAX_HOST_ARGUMENTS {
@@ -216,9 +218,11 @@ impl Context<'_> {
         }
 
         self.runtime.jobs.queue.push_back(PendingJob {
-            module,
-            callback: callback_root,
+            module: Some(module),
+            callback: Some(callback_root),
             arguments: argument_roots,
+            promise_child: None,
+            promise_rejected: false,
             host_functions: self.host_functions.clone(),
             accounting,
         });
@@ -314,7 +318,7 @@ impl Context<'_> {
             }
         }
 
-        let outcome = if self.runtime.jobs.queue.is_empty() {
+        let outcome = if self.pending_promise_jobs() == 0 {
             JobPumpOutcome::Progress
         } else {
             JobPumpOutcome::BudgetExhausted
@@ -329,6 +333,10 @@ impl Context<'_> {
     ) -> Result<JobPumpReport, JobQueueError> {
         let mut jobs_executed = 0;
         while jobs_executed < budget {
+            // Promise reactions produced by synchronous Context/module
+            // evaluation are staged by the shared Host registry. Transfer
+            // them before observing Idle or dispatching the next FIFO entry.
+            self.flush_pending_promise_reactions()?;
             let Some(job) = self.runtime.jobs.queue.pop_front() else {
                 let outcome = if jobs_executed == 0 {
                     JobPumpOutcome::Idle
@@ -338,13 +346,6 @@ impl Context<'_> {
                 return Ok(JobPumpReport::new(outcome, jobs_executed));
             };
 
-            let callback = match self.runtime.heap.resolve_host_handle(job.callback) {
-                Ok(value) => value,
-                Err(error) => {
-                    let _ = release_job_roots(&mut self.runtime.heap, job);
-                    return Err(JobQueueError::Heap(error));
-                }
-            };
             let arguments = match job
                 .arguments
                 .iter()
@@ -357,26 +358,177 @@ impl Context<'_> {
                     return Err(JobQueueError::Heap(error));
                 }
             };
+
             let options = request
                 .options(&self.runtime.config)
                 .map_err(JobQueueError::Configuration)?;
-            let mut host = job.host_functions.clone();
-            let execution = job.module.execute_callable(
-                &mut self.runtime.heap,
-                callback,
-                &arguments,
-                &mut host,
-                options,
-            );
-            let report = match execution {
-                Ok(report) => report,
-                Err(error) => {
+            let job_host_functions = job.host_functions.clone();
+            self.refresh_promise_reaction_capacity(&job_host_functions);
+            let mut host = job_host_functions.clone();
+
+            let (completion, instructions_executed) = if let Some(callback_root) = job.callback {
+                let callback = match self.runtime.heap.resolve_host_handle(callback_root) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = release_job_roots(&mut self.runtime.heap, job);
+                        return Err(JobQueueError::Heap(error));
+                    }
+                };
+                let Some(module) = job.module.as_ref() else {
                     let _ = release_job_roots(&mut self.runtime.heap, job);
-                    return Err(JobQueueError::Interpreter(error));
+                    return Err(JobQueueError::Interpreter(
+                        InterpreterError::InvalidMetadata(
+                            "callable PromiseJob is missing its executable module".to_owned(),
+                        ),
+                    ));
+                };
+                let execution = match module.execute_callable(
+                    &mut self.runtime.heap,
+                    callback,
+                    &arguments,
+                    &mut host,
+                    options,
+                ) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let _ = release_job_roots(&mut self.runtime.heap, job);
+                        self.flush_pending_promise_reactions_for(&job_host_functions)?;
+                        return Err(JobQueueError::Interpreter(error));
+                    }
+                };
+                (execution.completion, execution.instructions_executed)
+            } else {
+                if job.promise_child.is_none() || arguments.len() != 1 {
+                    let _ = release_job_roots(&mut self.runtime.heap, job);
+                    return Err(JobQueueError::Interpreter(
+                        InterpreterError::InvalidMetadata(
+                            "Promise reaction job must have one argument and a child Promise"
+                                .to_owned(),
+                        ),
+                    ));
                 }
+                let value = arguments[0];
+                let completion = if job.promise_rejected {
+                    ExecutionCompletion::Throw(value)
+                } else {
+                    ExecutionCompletion::Return(value)
+                };
+                (completion, 0)
             };
 
-            match report.completion {
+            if let Some(child_root) = job.promise_child {
+                let child = match self.runtime.heap.resolve_host_handle(child_root) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = release_job_roots(&mut self.runtime.heap, job);
+                        return Err(JobQueueError::Heap(error));
+                    }
+                };
+                match completion {
+                    ExecutionCompletion::Return(value) => {
+                        if self.runtime.heap.is_promise(value) {
+                            let reactions = match self.runtime.heap.promise_forward_to(value, child)
+                            {
+                                Ok(reactions) => reactions,
+                                Err(error) => {
+                                    let _ = release_job_roots(&mut self.runtime.heap, job);
+                                    return Err(JobQueueError::Heap(error));
+                                }
+                            };
+                            for reaction in reactions {
+                                if let Err(error) =
+                                    host.queue_promise_reaction(&mut self.runtime.heap, reaction)
+                                {
+                                    let _ = release_job_roots(&mut self.runtime.heap, job);
+                                    return Err(map_promise_reaction_error(error));
+                                }
+                            }
+                        } else {
+                            let reactions = match self
+                                .runtime
+                                .heap
+                                .settle_promise(child, ogma_runtime::PromiseState::Fulfilled(value))
+                            {
+                                Ok(reactions) => reactions,
+                                Err(error) => {
+                                    let _ = release_job_roots(&mut self.runtime.heap, job);
+                                    return Err(JobQueueError::Heap(error));
+                                }
+                            };
+                            for reaction in reactions {
+                                if let Err(error) =
+                                    host.queue_promise_reaction(&mut self.runtime.heap, reaction)
+                                {
+                                    let _ = release_job_roots(&mut self.runtime.heap, job);
+
+                                    return Err(map_promise_reaction_error(error));
+                                }
+                            }
+                        }
+                    }
+                    ExecutionCompletion::Throw(reason) => {
+                        let reactions = match self
+                            .runtime
+                            .heap
+                            .settle_promise(child, ogma_runtime::PromiseState::Rejected(reason))
+                        {
+                            Ok(reactions) => reactions,
+                            Err(error) => {
+                                let _ = release_job_roots(&mut self.runtime.heap, job);
+                                return Err(JobQueueError::Heap(error));
+                            }
+                        };
+                        for reaction in reactions {
+                            if let Err(error) =
+                                host.queue_promise_reaction(&mut self.runtime.heap, reaction)
+                            {
+                                let _ = release_job_roots(&mut self.runtime.heap, job);
+
+                                return Err(map_promise_reaction_error(error));
+                            }
+                        }
+                    }
+                    ExecutionCompletion::Interrupted(reason) => {
+                        if instructions_executed == 0 && job.callback.is_some() {
+                            self.runtime.jobs.queue.push_front(job);
+                            return Ok(JobPumpReport {
+                                outcome: JobPumpOutcome::Interrupted,
+                                jobs_executed,
+                                completion: None,
+                                interruption: Some(reason),
+                            });
+                        }
+                        let reactions = self.runtime.heap.settle_promise(
+                            child,
+                            ogma_runtime::PromiseState::Rejected(Value::undefined()),
+                        )?;
+                        for reaction in reactions {
+                            if let Err(error) =
+                                host.queue_promise_reaction(&mut self.runtime.heap, reaction)
+                            {
+                                let _ = release_job_roots(&mut self.runtime.heap, job);
+                                return Err(map_promise_reaction_error(error));
+                            }
+                        }
+                        release_job_roots(&mut self.runtime.heap, job)?;
+                        jobs_executed += 1;
+                        self.flush_pending_promise_reactions_for(&job_host_functions)?;
+                        return Ok(JobPumpReport {
+                            outcome: JobPumpOutcome::Interrupted,
+                            jobs_executed,
+                            completion: None,
+                            interruption: Some(reason),
+                        });
+                    }
+                }
+
+                release_job_roots(&mut self.runtime.heap, job)?;
+                jobs_executed += 1;
+                self.flush_pending_promise_reactions_for(&job_host_functions)?;
+                continue;
+            }
+
+            match completion {
                 ExecutionCompletion::Return(_) => {
                     release_job_roots(&mut self.runtime.heap, job)?;
                     jobs_executed += 1;
@@ -391,6 +543,7 @@ impl Context<'_> {
                     };
                     release_job_roots(&mut self.runtime.heap, job)?;
                     jobs_executed += 1;
+                    self.flush_pending_promise_reactions_for(&job_host_functions)?;
                     return Ok(JobPumpReport {
                         outcome: JobPumpOutcome::JobThrew,
                         jobs_executed,
@@ -399,9 +552,7 @@ impl Context<'_> {
                     });
                 }
                 ExecutionCompletion::Interrupted(reason) => {
-                    if report.instructions_executed == 0 {
-                        // Interruption before the first instruction leaves the
-                        // callback pending; preserve its FIFO position and roots.
+                    if instructions_executed == 0 {
                         self.runtime.jobs.queue.push_front(job);
                         return Ok(JobPumpReport {
                             outcome: JobPumpOutcome::Interrupted,
@@ -412,6 +563,7 @@ impl Context<'_> {
                     }
                     release_job_roots(&mut self.runtime.heap, job)?;
                     jobs_executed += 1;
+                    self.flush_pending_promise_reactions_for(&job_host_functions)?;
                     return Ok(JobPumpReport {
                         outcome: JobPumpOutcome::Interrupted,
                         jobs_executed,
@@ -420,9 +572,10 @@ impl Context<'_> {
                     });
                 }
             }
+            self.flush_pending_promise_reactions_for(&job_host_functions)?;
         }
 
-        let outcome = if self.runtime.jobs.queue.is_empty() {
+        let outcome = if self.pending_promise_jobs() == 0 {
             JobPumpOutcome::Progress
         } else {
             JobPumpOutcome::BudgetExhausted
@@ -454,6 +607,15 @@ impl Context<'_> {
             }
             cancelled += 1;
         }
+        match self
+            .host_functions
+            .cancel_promise_reactions(&mut self.runtime.heap)
+        {
+            Ok(reactions) => cancelled += reactions,
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
         first_error.map_or(Ok(cancelled), |error| Err(JobQueueError::Heap(error)))
     }
 
@@ -470,7 +632,11 @@ impl Context<'_> {
     /// Returns the number of callbacks currently waiting in the FIFO queue.
     #[must_use]
     pub fn pending_promise_jobs(&self) -> usize {
-        self.runtime.jobs.queue.len()
+        self.runtime
+            .jobs
+            .queue
+            .len()
+            .saturating_add(self.host_functions.pending_promise_reaction_count())
     }
 
     /// Returns the current job-queue lifecycle state.
@@ -507,6 +673,27 @@ fn normalize_execution_request(
     Ok(request)
 }
 
+fn map_promise_reaction_error(error: crate::HostError) -> JobQueueError {
+    match error {
+        crate::HostError::Runtime(error) => JobQueueError::Heap(error),
+        crate::HostError::Denied => JobQueueError::Interpreter(
+            InterpreterError::HostCapabilityDenied("PromiseJob enqueue".to_owned()),
+        ),
+        crate::HostError::WrongRuntime => {
+            JobQueueError::Interpreter(InterpreterError::HostRuntimeMismatch)
+        }
+        crate::HostError::Throw(_) | crate::HostError::InvalidCompletion => {
+            JobQueueError::Interpreter(InterpreterError::InvalidHostCompletion)
+        }
+        crate::HostError::Panicked => {
+            JobQueueError::Interpreter(InterpreterError::HostCallbackPanicked)
+        }
+        crate::HostError::CallbackFailed => {
+            JobQueueError::Interpreter(InterpreterError::HostCallbackFailed)
+        }
+    }
+}
+
 fn release_job_roots(heap: &mut crate::Heap, job: PendingJob) -> Result<(), HeapError> {
     let mut first_error = None;
     for root in job.arguments {
@@ -514,7 +701,14 @@ fn release_job_roots(heap: &mut crate::Heap, job: PendingJob) -> Result<(), Heap
             first_error.get_or_insert(error);
         }
     }
-    if let Err(error) = heap.release_host_handle(job.callback) {
+    if let Some(root) = job.callback
+        && let Err(error) = heap.release_host_handle(root)
+    {
+        first_error.get_or_insert(error);
+    }
+    if let Some(root) = job.promise_child
+        && let Err(error) = heap.release_host_handle(root)
+    {
         first_error.get_or_insert(error);
     }
     if let Err(error) = heap.release_external_memory(job.accounting) {
@@ -569,6 +763,29 @@ mod tests {
     }
 
     #[test]
+    fn reentrant_job_pump_is_rejected_without_consuming_work() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        context.runtime.jobs.pumping = true;
+        assert!(matches!(
+            context.pump_promise_jobs(None),
+            Err(JobQueueError::ReentrantPump)
+        ));
+        assert_eq!(context.pending_promise_jobs(), 0);
+        context.runtime.jobs.pumping = false;
+
+        assert_eq!(
+            context
+                .pump_promise_jobs(None)
+                .expect("pump after re-entry")
+                .outcome,
+            JobPumpOutcome::Idle
+        );
+    }
+
+    #[test]
     fn queue_is_bounded_and_releases_roots_on_cancellation() {
         let engine = Engine::new(EngineConfig {
             max_pending_jobs: 1,
@@ -594,6 +811,67 @@ mod tests {
         assert_eq!(context.heap_stats().external_memory_bytes, 0);
         context.collect().expect("collect after releasing roots");
         assert!(context.heap_stats().live_objects < live_before_cancel);
+    }
+
+    #[test]
+    fn runtime_pending_job_capacity_includes_staged_promise_reactions() {
+        let engine = Engine::new(EngineConfig {
+            max_pending_jobs: 2,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .load_module(compile_source(
+                "function factory() { return function() { return 1; }; } \
+                 function schedule() { \
+                     Promise.resolve(0).then(function() {}); \
+                     Promise.resolve(0).then(function() {}); \
+                 }",
+            ))
+            .expect("load producer module");
+        let functions = context.functions().expect("function metadata");
+        let factory = functions
+            .iter()
+            .find(|function| function.name == "factory")
+            .expect("factory");
+        let schedule = functions
+            .iter()
+            .find(|function| function.name == "schedule")
+            .expect("schedule");
+        let callback = match context
+            .execute(&factory.id, &[], ExecutionRequest::default())
+            .expect("create generic callback")
+            .completion
+        {
+            ExecutionCompletion::Return(value)
+                if value.value_type() == ogma_runtime::ValueType::Function =>
+            {
+                value
+            }
+            completion => panic!("expected callback function, got {completion:?}"),
+        };
+
+        context
+            .enqueue_promise_job(callback, &[])
+            .expect("occupy one Runtime queue slot");
+        let result = context.execute(&schedule.id, &[], ExecutionRequest::default());
+        assert!(matches!(
+            result,
+            Err(crate::ContextError::Interpreter(
+                InterpreterError::HostCallbackFailed
+            ))
+        ));
+        assert_eq!(
+            context.pending_promise_jobs(),
+            2,
+            "Runtime FIFO and staged reactions must share the configured capacity"
+        );
+        assert!(matches!(
+            context.enqueue_promise_job(callback, &[]),
+            Err(JobQueueError::QueueFull { capacity: 2 })
+        ));
     }
 
     #[test]

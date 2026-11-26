@@ -11,8 +11,11 @@ pub mod bytecode;
 pub mod lowering;
 pub mod semantic;
 
+use bytecode::{ModuleDescriptor, ModuleExport, ModuleExportKind, ModuleImport, ModuleImportKind};
 use ogma_core_ir::{CONTRACT_ID, FunctionDocument};
-use ogma_frontend::{ParseDiagnostic, ParsedProgram};
+use ogma_frontend::{
+    ParseDiagnostic, ParseGoal, ParsedProgram, SyntaxExportKind, SyntaxImportKind,
+};
 
 /// Canonical Core IR contract consumed by the compiler pipeline.
 pub const CORE_IR_CONTRACT_ID: &str = CONTRACT_ID;
@@ -29,6 +32,8 @@ pub struct CompiledModule {
     pub functions: Vec<FunctionDocument>,
     /// Non-fatal frontend diagnostics retained from parsing.
     pub frontend_diagnostics: Vec<ParseDiagnostic>,
+    /// Static ESM linking metadata for Module goal source.
+    pub module: Option<ModuleDescriptor>,
 }
 
 /// Failure during semantic analysis or canonical Core IR lowering.
@@ -50,14 +55,73 @@ pub enum CompileFailure {
 /// compiler-owned semantic model, then emits and verifies canonical Core IR v1
 /// documents. It does not execute code or emit bytecode.
 pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFailure> {
+    if parsed.goal == ParseGoal::Module && !parsed.syntax.module.unsupported.is_empty() {
+        return Err(CompileFailure::Lowering(
+            parsed
+                .syntax
+                .module
+                .unsupported
+                .iter()
+                .map(|item| lowering::LoweringDiagnostic {
+                    code: "lowering.unsupported_module_declaration",
+                    function: "<module>".to_owned(),
+                    span: Some(item.span),
+                    message: format!(
+                        "module declaration {:?} is outside the supported M1 ESM subset",
+                        item.syntax
+                    ),
+                })
+                .collect(),
+        ));
+    }
     let semantic =
         semantic::analyze(parsed.source, &parsed.semantic).map_err(CompileFailure::Semantic)?;
     let functions = lowering::lower(parsed.source, &semantic, &parsed.syntax)
         .map_err(CompileFailure::Lowering)?;
+    let module = (parsed.goal == ParseGoal::Module).then(|| ModuleDescriptor {
+        id: parsed.source.id().as_str().to_owned(),
+        entry_function: parsed.syntax.functions[0].id.clone(),
+        environment: parsed.semantic.root_scope.clone(),
+        imports: parsed
+            .syntax
+            .module
+            .imports
+            .iter()
+            .map(|item| ModuleImport {
+                specifier: item.source.clone(),
+                imported_name: item.imported.clone(),
+                local_binding: item.binding.clone(),
+                kind: match item.kind {
+                    SyntaxImportKind::SideEffect => ModuleImportKind::SideEffect,
+                    SyntaxImportKind::Default => ModuleImportKind::Default,
+                    SyntaxImportKind::Named => ModuleImportKind::Named,
+                    SyntaxImportKind::Namespace => ModuleImportKind::Namespace,
+                },
+            })
+            .collect(),
+        exports: parsed
+            .syntax
+            .module
+            .exports
+            .iter()
+            .map(|item| ModuleExport {
+                export_name: item.exported.clone(),
+                local_binding: item.binding.clone(),
+                source: item.source.clone(),
+                imported_name: item.imported.clone(),
+                kind: match item.kind {
+                    SyntaxExportKind::Local => ModuleExportKind::Local,
+                    SyntaxExportKind::ReExport => ModuleExportKind::ReExport,
+                    SyntaxExportKind::Star => ModuleExportKind::Star,
+                },
+            })
+            .collect(),
+    });
     Ok(CompiledModule {
         semantic,
         functions,
         frontend_diagnostics: parsed.diagnostics.clone(),
+        module,
     })
 }
 
@@ -88,7 +152,10 @@ impl CompiledModule {
 
         let functions =
             bytecode::compile_functions(&self.functions).map_err(CompileFailure::Bytecode)?;
-        Ok(bytecode::CompiledBytecodeModule { functions })
+        Ok(bytecode::CompiledBytecodeModule {
+            functions,
+            module: self.module.clone(),
+        })
     }
 }
 
@@ -845,5 +912,91 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn module_descriptors_are_stable_and_namespace_function_and_binding_identities() {
+        fn compile_module(id: &str, text: &str) -> bytecode::CompiledBytecodeModule {
+            let allocator = Allocator::default();
+            let source = SourceFile::new(id, "memory:///module.mjs".to_owned(), None, text)
+                .expect("source is valid");
+            let parsed = parse(
+                &allocator,
+                &source,
+                ParseRequestOptions {
+                    goal: ParseGoal::Module,
+                    mode: ogma_frontend::ParseMode::Sloppy,
+                },
+            )
+            .expect("module parses");
+            compile_to_bytecode(&parsed).expect("module compiles")
+        }
+
+        let first = compile_module("module:first", "export const value = 1;");
+        let second = compile_module("module:second", "export const value = 2;");
+        let first_descriptor = first.module.as_ref().expect("ESM descriptor");
+        let second_descriptor = second.module.as_ref().expect("ESM descriptor");
+
+        assert_eq!(first_descriptor.id, "module:first");
+        assert_eq!(second_descriptor.id, "module:second");
+        assert_ne!(
+            first_descriptor.entry_function,
+            second_descriptor.entry_function
+        );
+        assert_ne!(first_descriptor.environment, second_descriptor.environment);
+        assert_ne!(
+            first_descriptor.exports[0].local_binding,
+            second_descriptor.exports[0].local_binding
+        );
+        assert_eq!(first_descriptor.exports[0].export_name, "value");
+        assert_eq!(second_descriptor.exports[0].export_name, "value");
+    }
+
+    #[test]
+    fn compiles_import_bindings_and_closure_captures_as_live_references() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "module:consumer",
+            "memory:///consumer.mjs",
+            None,
+            "import { value } from './dependency.mjs'; function read() { return value; } read();",
+        )
+        .expect("source is valid");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ogma_frontend::ParseGoal::Module,
+                mode: ogma_frontend::ParseMode::Sloppy,
+            },
+        )
+        .expect("static ESM syntax parses");
+
+        let compiled = compile(&parsed)
+            .expect("module import binding should be represented in compiler semantics");
+        let imported = compiled
+            .semantic
+            .bindings
+            .iter()
+            .find(|binding| binding.ir.kind == ogma_core_ir::BindingKind::Import)
+            .expect("import binding exists in the Program environment");
+        assert!(!imported.ir.mutable);
+
+        let reader = compiled
+            .semantic
+            .functions
+            .iter()
+            .find(|function| function.name == "read")
+            .expect("reader function exists");
+        let capture = reader
+            .captures
+            .iter()
+            .find(|capture| capture.binding == imported.ir.id)
+            .expect("reader captures imported binding");
+        assert!(!capture.mutable);
+        assert_eq!(capture.mode, ogma_core_ir::CaptureMode::Cell);
+
+        compiled
+            .emit_bytecode()
+            .expect("OGMB emitter preserves read-only live import captures");
     }
 }

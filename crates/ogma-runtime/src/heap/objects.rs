@@ -286,7 +286,15 @@ pub(super) struct EnvironmentBinding {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum BindingStorage {
     Cell(GcRef),
-    Value { value: Value, initialized: bool },
+    Value {
+        value: Value,
+        initialized: bool,
+    },
+    /// Read-only live alias to another lexical binding (for ESM imports).
+    Alias {
+        environment: GcRef,
+        binding: BindingId,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -955,7 +963,16 @@ impl Heap {
         environment: LexicalEnvironment,
         binding: BindingId,
     ) -> Result<Value, HeapError> {
-        match self.resolve_binding_storage(environment.reference, binding)? {
+        self.load_binding_recursive(environment.reference, binding, self.slots.len())
+    }
+
+    fn load_binding_recursive(
+        &self,
+        environment: GcRef,
+        binding: BindingId,
+        remaining_aliases: usize,
+    ) -> Result<Value, HeapError> {
+        match self.resolve_binding_storage(environment, binding)? {
             BindingStorage::Value { value, initialized } => {
                 if initialized {
                     Ok(value)
@@ -976,7 +993,97 @@ impl Heap {
                     _ => Err(HeapError::AccountingInvariant),
                 }
             }
+            BindingStorage::Alias {
+                environment,
+                binding,
+            } => {
+                if remaining_aliases == 0 {
+                    return Err(HeapError::BindingAliasCycle);
+                }
+                self.load_binding_recursive(environment, binding, remaining_aliases - 1)
+            }
         }
+    }
+
+    /// Links an uninitialized immutable binding to an exporter binding.
+    ///
+    /// The alias is read-only even when the target is mutable. Reads resolve
+    /// the target on every access, preserving ECMAScript live import semantics.
+    /// The importing environment owns a traced edge to the exporter environment.
+    pub fn link_binding_alias(
+        &mut self,
+        environment: LexicalEnvironment,
+        binding: BindingId,
+        target_environment: LexicalEnvironment,
+        target_binding: BindingId,
+    ) -> Result<(), HeapError> {
+        let (owner, position) = self.find_environment_binding(environment.reference, binding)?;
+        let owner_reference = self.environment_reference_at(owner)?;
+        let source_storage = match &self.slots[owner]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
+            CellKind::Environment(data) => data.bindings[position].storage,
+            _ => return Err(HeapError::InvalidObjectKind),
+        };
+        match source_storage {
+            BindingStorage::Value {
+                initialized: false, ..
+            } => {}
+            BindingStorage::Alias { .. } => return Err(HeapError::AlreadyInitialized),
+            _ => return Err(HeapError::InvalidFunctionDefinition),
+        }
+
+        // Resolve the complete alias chain before publishing the new edge.
+        // This catches both direct self-links and longer cycles.
+        let mut current_environment = target_environment.reference;
+        let mut current_binding = target_binding;
+        let mut resolved_target = false;
+        for _ in 0..=self.slots.len() {
+            if current_environment == owner_reference && current_binding == binding {
+                return Err(HeapError::BindingAliasCycle);
+            }
+            match self.resolve_binding_storage(current_environment, current_binding)? {
+                BindingStorage::Alias {
+                    environment,
+                    binding,
+                } => {
+                    current_environment = environment;
+                    current_binding = binding;
+                }
+                BindingStorage::Cell(_) | BindingStorage::Value { .. } => {
+                    resolved_target = true;
+                    break;
+                }
+            }
+        }
+        if !resolved_target {
+            return Err(HeapError::BindingAliasCycle);
+        }
+
+        self.add_edge_ref(owner_reference, target_environment.reference)?;
+        self.environment_data_mut(owner)?.bindings[position].storage = BindingStorage::Alias {
+            environment: target_environment.reference,
+            binding: target_binding,
+        };
+        Ok(())
+    }
+
+    fn environment_reference_at(&self, index: usize) -> Result<GcRef, HeapError> {
+        let slot = self.slots.get(index).ok_or(HeapError::StaleReference)?;
+        if !matches!(
+            slot.cell.as_ref().ok_or(HeapError::StaleReference)?.kind,
+            CellKind::Environment(_)
+        ) {
+            return Err(HeapError::InvalidObjectKind);
+        }
+        Ok(GcRef {
+            heap_id: self.heap_id,
+            index: u32::try_from(index).map_err(|_| HeapError::HeapCapacityExceeded)?,
+            generation: slot.generation,
+        })
     }
 
     /// Stores into an already initialized mutable binding; use initialize_binding for TDZ slots.
@@ -1085,8 +1192,56 @@ impl Heap {
                     *initialized = true;
                 }
             }
+            BindingStorage::Alias { .. } => return Err(HeapError::ImmutableBinding),
         }
         Ok(value)
+    }
+
+    /// Creates a module Program closure bound directly to its persistent module environment.
+    ///
+    /// Unlike ordinary closures, a module entry must retain the complete
+    /// instantiated environment (including top-level lexical slots and live
+    /// import aliases), not a copied environment containing only captures.
+    pub fn create_module_closure(
+        &mut self,
+        definition: &FunctionDefinition,
+        environment: LexicalEnvironment,
+    ) -> Result<Value, HeapError> {
+        if !definition.parameters.is_empty() || !definition.captures.is_empty() {
+            return Err(HeapError::InvalidFunctionDefinition);
+        }
+        let environment_index = self.validate_ref(environment.reference)?;
+        if !matches!(
+            &self.slots[environment_index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
+            CellKind::Environment(_)
+        ) {
+            return Err(HeapError::InvalidObjectKind);
+        }
+        let scope = self.open_scope()?;
+        let result = (|| {
+            self.scope_root_environment(scope, environment)?;
+            let function = self.allocate_cell_with_retry(|| {
+                CellKind::Function(Box::new(FunctionData::closure(
+                    definition.id,
+                    environment.reference,
+                    definition.kind,
+                    definition.strict,
+                    Value::undefined(),
+                )))
+            })?;
+            self.scope_root_reference(scope, function)?;
+            self.add_edge_ref(function, environment.reference)?;
+            Ok(Value::from_function(function))
+        })();
+        self.close_scope(scope)?;
+        if result.is_err() {
+            self.collect()?;
+        }
+        result
     }
 
     /// Creates a traced function object with explicit cell/value captures.
@@ -1164,6 +1319,20 @@ impl Heap {
                         BindingStorage::Cell(reference)
                     }
                     (
+                        CaptureMode::Cell,
+                        BindingStorage::Alias {
+                            environment,
+                            binding,
+                        },
+                    ) => {
+                        self.scope_root_reference(scope, environment)?;
+                        self.add_edge_ref(closure_ref, environment)?;
+                        BindingStorage::Alias {
+                            environment,
+                            binding,
+                        }
+                    }
+                    (
                         CaptureMode::Value,
                         BindingStorage::Value {
                             value,
@@ -1223,6 +1392,26 @@ impl Heap {
             .kind
         {
             CellKind::Function(data) => data.id.ok_or(HeapError::NotCallable),
+            _ => Err(HeapError::NotCallable),
+        }
+    }
+
+    /// Returns whether a closure is bound to the supplied lexical environment.
+    pub fn closure_matches_environment(
+        &self,
+        callee: Value,
+        expected_function: FunctionId,
+        environment: LexicalEnvironment,
+    ) -> Result<bool, HeapError> {
+        let index = self.function_index(callee)?;
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
+            CellKind::Function(function) => Ok(function.id == Some(expected_function)
+                && function.closure_environment == Some(environment.reference)),
             _ => Err(HeapError::NotCallable),
         }
     }
@@ -1328,6 +1517,72 @@ impl Heap {
                 frame,
                 environment,
                 function_id,
+                this_value,
+            })
+        })();
+        if result.is_err() {
+            self.leave_frame(frame)?;
+        }
+        result
+    }
+
+    /// Enters a module Program using its pre-instantiated module lexical environment.
+    ///
+    /// Unlike an ordinary function call, module evaluation must not create a
+    /// fresh child environment: imported bindings and top-level lexical slots
+    /// are instantiated and linked before dependency evaluation begins.
+    pub fn enter_function_call_in_environment(
+        &mut self,
+        callee: Value,
+        definition: &FunctionDefinition,
+        environment: LexicalEnvironment,
+        this_argument: Value,
+        global_this: Value,
+    ) -> Result<CallActivation, HeapError> {
+        if !definition.parameters.is_empty() {
+            return Err(HeapError::InvalidFunctionDefinition);
+        }
+        let function_index = self.function_index(callee)?;
+        let function = match &self.slots[function_index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
+            CellKind::Function(function) => function,
+            _ => return Err(HeapError::NotCallable),
+        };
+        if function.id != Some(definition.id)
+            || function.closure_environment != Some(environment.reference)
+        {
+            return Err(HeapError::InvalidFunctionDefinition);
+        }
+        let this_value = match function.kind {
+            FunctionKind::Arrow => function.lexical_this,
+            FunctionKind::Ordinary if function.strict => this_argument,
+            FunctionKind::Ordinary if this_argument.is_null() || this_argument.is_undefined() => {
+                global_this
+            }
+            FunctionKind::Ordinary
+                if matches!(
+                    this_argument.value_type(),
+                    ValueType::Object | ValueType::Function
+                ) =>
+            {
+                this_argument
+            }
+            FunctionKind::Ordinary => return Err(HeapError::UnsupportedCoercion),
+        };
+        self.validate_value(this_value)?;
+        let frame = self.enter_frame()?;
+        let result = (|| {
+            self.frame_root(frame, callee)?;
+            self.frame_root(frame, this_value)?;
+            self.frame_root_environment(frame, environment)?;
+            Ok(CallActivation {
+                frame,
+                environment,
+                function_id: definition.id,
                 this_value,
             })
         })();
@@ -1591,6 +1846,298 @@ impl Heap {
             .properties
             .iter()
             .position(|property| property.key as usize == key))
+    }
+
+    fn allocate_promise_record(&mut self, state: super::PromiseState) -> Result<Value, HeapError> {
+        self.promises
+            .try_reserve(1)
+            .map_err(|_| HeapError::AllocationFailed)?;
+        let value = self.allocate_object()?;
+        let reference = value.gc_ref().ok_or(HeapError::AccountingInvariant)?;
+        let accounting = self.charge_external_memory(std::mem::size_of::<super::PromiseRecord>())?;
+        if self
+            .promises
+            .insert(
+                reference,
+                super::PromiseRecord {
+                    state,
+                    reactions: Vec::new(),
+                    accounting,
+                },
+            )
+            .is_some()
+        {
+            let _ = self.release_external_memory(accounting);
+            return Err(HeapError::AccountingInvariant);
+        }
+        Ok(value)
+    }
+
+    /// Allocates an already fulfilled Promise for an ordinary JavaScript value.
+    pub fn promise_resolve(&mut self, value: Value) -> Result<Value, HeapError> {
+        if let Some(reference) = value.gc_ref()
+            && self.promises.contains_key(&reference)
+        {
+            return Ok(value);
+        }
+        let promise = self.allocate_promise_record(super::PromiseState::Fulfilled(value))?;
+        let index = self.object_index(promise)?;
+        self.add_value_edge(index, value)?;
+        Ok(promise)
+    }
+
+    /// Allocates an already rejected Promise.
+    pub fn promise_reject(&mut self, reason: Value) -> Result<Value, HeapError> {
+        let promise = self.allocate_promise_record(super::PromiseState::Rejected(reason))?;
+        let index = self.object_index(promise)?;
+        self.add_value_edge(index, reason)?;
+        Ok(promise)
+    }
+
+    /// Returns true when a value is a Runtime-managed Promise object.
+    #[must_use]
+    pub fn is_promise(&self, value: Value) -> bool {
+        value
+            .gc_ref()
+            .is_some_and(|reference| self.promises.contains_key(&reference))
+    }
+
+    /// Returns the current state of a Promise.
+    pub fn promise_state(&self, promise: Value) -> Result<super::PromiseState, HeapError> {
+        let reference = promise.gc_ref().ok_or(HeapError::NotObject)?;
+        self.promises
+            .get(&reference)
+            .map(|record| record.state)
+            .ok_or(HeapError::NotObject)
+    }
+
+    /// Creates a child Promise and attaches fulfillment/rejection reactions.
+    ///
+    /// If the source is already settled, the returned reaction must be queued
+    /// by the embedding Host. Pending sources retain the reaction until settlement.
+    pub fn promise_then(
+        &mut self,
+        promise: Value,
+        on_fulfilled: Option<Value>,
+        on_rejected: Option<Value>,
+    ) -> Result<(Value, Option<super::PromiseReaction>), HeapError> {
+        let source = promise.gc_ref().ok_or(HeapError::NotObject)?;
+        let state = self
+            .promises
+            .get(&source)
+            .map(|record| record.state)
+            .ok_or(HeapError::NotObject)?;
+        let child = self.allocate_promise_record(super::PromiseState::Pending)?;
+
+        match state {
+            super::PromiseState::Pending => {
+                let child_index = self.object_index(child)?;
+                self.add_value_edge(child_index, promise)?;
+                let source_index = self.validate_ref(source)?;
+                if let Some(callback) = on_fulfilled {
+                    self.add_value_edge(source_index, callback)?;
+                }
+                if let Some(callback) = on_rejected {
+                    self.add_value_edge(source_index, callback)?;
+                }
+                self.add_value_edge(source_index, child)?;
+
+                let accounting =
+                    self.charge_external_memory(std::mem::size_of::<super::PromiseReaction>())?;
+                let reserve_failed = self
+                    .promises
+                    .get_mut(&source)
+                    .ok_or(HeapError::NotObject)?
+                    .reactions
+                    .try_reserve(1)
+                    .is_err();
+                if reserve_failed {
+                    self.release_external_memory(accounting)?;
+                    return Err(HeapError::AllocationFailed);
+                }
+                self.promises
+                    .get_mut(&source)
+                    .ok_or(HeapError::NotObject)?
+                    .reactions
+                    .push(super::ChargedPromiseReaction {
+                        reaction: super::PromiseReaction {
+                            on_fulfilled,
+                            on_rejected,
+                            argument: Value::undefined(),
+                            child,
+                            rejected: false,
+                        },
+                        accounting,
+                    });
+                Ok((child, None))
+            }
+            super::PromiseState::Fulfilled(argument) => Ok((
+                child,
+                Some(super::PromiseReaction {
+                    on_fulfilled,
+                    on_rejected,
+                    argument,
+                    child,
+                    rejected: false,
+                }),
+            )),
+            super::PromiseState::Rejected(argument) => Ok((
+                child,
+                Some(super::PromiseReaction {
+                    on_fulfilled,
+                    on_rejected,
+                    argument,
+                    child,
+                    rejected: true,
+                }),
+            )),
+        }
+    }
+
+    /// Adopts another Promise's eventual state into a pending target Promise.
+    ///
+    /// The source retains the target through a reaction record, so the target
+    /// remains reachable until settlement. If the source is already settled,
+    /// a reaction is returned for the host to enqueue as a microtask.
+    pub fn promise_forward_to(
+        &mut self,
+        source: Value,
+        target: Value,
+    ) -> Result<Vec<super::PromiseReaction>, HeapError> {
+        let source_ref = source.gc_ref().ok_or(HeapError::NotObject)?;
+        let target_ref = target.gc_ref().ok_or(HeapError::NotObject)?;
+        if source_ref == target_ref {
+            return Err(HeapError::InvalidObjectKind);
+        }
+        let source_state = self
+            .promises
+            .get(&source_ref)
+            .map(|record| record.state)
+            .ok_or(HeapError::NotObject)?;
+        let target_state = self
+            .promises
+            .get(&target_ref)
+            .map(|record| record.state)
+            .ok_or(HeapError::NotObject)?;
+        if !matches!(target_state, super::PromiseState::Pending) {
+            return Ok(Vec::new());
+        }
+        match source_state {
+            super::PromiseState::Pending => {
+                let source_index = self.validate_ref(source_ref)?;
+                self.add_value_edge(source_index, target)?;
+                let target_index = self.validate_ref(target_ref)?;
+                self.add_value_edge(target_index, source)?;
+
+                let accounting =
+                    self.charge_external_memory(std::mem::size_of::<super::PromiseReaction>())?;
+                let reserve_failed = self
+                    .promises
+                    .get_mut(&source_ref)
+                    .ok_or(HeapError::NotObject)?
+                    .reactions
+                    .try_reserve(1)
+                    .is_err();
+                if reserve_failed {
+                    self.release_external_memory(accounting)?;
+                    return Err(HeapError::AllocationFailed);
+                }
+                self.promises
+                    .get_mut(&source_ref)
+                    .ok_or(HeapError::NotObject)?
+                    .reactions
+                    .push(super::ChargedPromiseReaction {
+                        reaction: super::PromiseReaction {
+                            on_fulfilled: None,
+                            on_rejected: None,
+                            argument: Value::undefined(),
+                            child: target,
+                            rejected: false,
+                        },
+                        accounting,
+                    });
+                Ok(Vec::new())
+            }
+            super::PromiseState::Fulfilled(argument) => Ok(vec![super::PromiseReaction {
+                on_fulfilled: None,
+                on_rejected: None,
+                argument,
+                child: target,
+                rejected: false,
+            }]),
+            super::PromiseState::Rejected(argument) => Ok(vec![super::PromiseReaction {
+                on_fulfilled: None,
+                on_rejected: None,
+                argument,
+                child: target,
+                rejected: true,
+            }]),
+        }
+    }
+
+    /// Settles a pending Promise and returns reactions in registration order.
+    ///
+    /// Repeated settlement attempts are ignored. The caller must enqueue each
+    /// returned reaction as a PromiseJob before another GC safepoint.
+    pub fn settle_promise(
+        &mut self,
+        promise: Value,
+        state: super::PromiseState,
+    ) -> Result<Vec<super::PromiseReaction>, HeapError> {
+        if matches!(state, super::PromiseState::Pending) {
+            return Err(HeapError::InvalidObjectKind);
+        }
+        let reference = promise.gc_ref().ok_or(HeapError::NotObject)?;
+        let current = self
+            .promises
+            .get(&reference)
+            .map(|record| record.state)
+            .ok_or(HeapError::NotObject)?;
+        if !matches!(current, super::PromiseState::Pending) {
+            return Ok(Vec::new());
+        }
+        let value = match state {
+            super::PromiseState::Fulfilled(value) | super::PromiseState::Rejected(value) => value,
+            super::PromiseState::Pending => unreachable!("checked above"),
+        };
+        let index = self.validate_ref(reference)?;
+        self.add_value_edge(index, value)?;
+        let (reactions, retired, charges) = {
+            let record = self
+                .promises
+                .get_mut(&reference)
+                .ok_or(HeapError::NotObject)?;
+            record.state = state;
+            let charged = std::mem::take(&mut record.reactions);
+            let mut reactions = Vec::with_capacity(charged.len());
+            let mut retired = Vec::with_capacity(charged.len());
+            let mut charges = Vec::with_capacity(charged.len());
+            for item in charged {
+                reactions.push(super::PromiseReaction {
+                    argument: value,
+                    rejected: matches!(state, super::PromiseState::Rejected(_)),
+                    ..item.reaction
+                });
+                retired.push(item.reaction);
+                charges.push(item.accounting);
+            }
+            (reactions, retired, charges)
+        };
+        for reaction in retired {
+            self.remove_value_edge(index, reaction.child)?;
+            let child_index = self.object_index(reaction.child)?;
+            self.remove_value_edge(child_index, promise)?;
+            if let Some(callback) = reaction.on_fulfilled {
+                self.remove_value_edge(index, callback)?;
+            }
+            if let Some(callback) = reaction.on_rejected {
+                self.remove_value_edge(index, callback)?;
+            }
+        }
+        for charge in charges {
+            self.release_external_memory(charge)?;
+        }
+        Ok(reactions)
     }
 
     fn add_value_edge(&mut self, parent_index: usize, value: Value) -> Result<(), HeapError> {
@@ -2724,6 +3271,247 @@ mod tests {
                 .as_number(),
             Some(3.0)
         );
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn imported_binding_alias_is_live_and_read_only() {
+        let mut heap = heap();
+        let roots = heap.open_scope().unwrap();
+        let exporter = heap
+            .create_environment(
+                None,
+                &[BindingDefinition::mutable(
+                    BindingId(1),
+                    Value::number(10.0),
+                )],
+            )
+            .unwrap();
+        heap.scope_root_environment(roots, exporter).unwrap();
+        let importer = heap
+            .create_environment(
+                None,
+                &[BindingDefinition::uninitialized(BindingId(2), false)],
+            )
+            .unwrap();
+        heap.scope_root_environment(roots, importer).unwrap();
+
+        heap.link_binding_alias(importer, BindingId(2), exporter, BindingId(1))
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(importer, BindingId(2))
+                .unwrap()
+                .as_number(),
+            Some(10.0)
+        );
+        heap.store_binding(exporter, BindingId(1), Value::number(11.0))
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(importer, BindingId(2))
+                .unwrap()
+                .as_number(),
+            Some(11.0)
+        );
+        assert!(matches!(
+            heap.store_binding(importer, BindingId(2), Value::number(12.0)),
+            Err(HeapError::ImmutableBinding)
+        ));
+        assert!(matches!(
+            heap.initialize_binding(importer, BindingId(2), Value::number(12.0)),
+            Err(HeapError::ImmutableBinding)
+        ));
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn imported_binding_alias_survives_gc_and_remains_live_through_closure_capture() {
+        let mut heap = heap();
+
+        // The importer is rooted by the outer scope. The exporter is rooted
+        // only by a nested scope that is closed after the alias is installed.
+        let importer_roots = heap.open_scope().unwrap();
+        let importer = heap
+            .create_environment(
+                None,
+                &[BindingDefinition::uninitialized(BindingId(2), false)],
+            )
+            .unwrap();
+        heap.scope_root_environment(importer_roots, importer)
+            .unwrap();
+
+        let exporter_roots = heap.open_scope().unwrap();
+        let exporter = heap
+            .create_environment(
+                None,
+                &[BindingDefinition::mutable(
+                    BindingId(1),
+                    Value::number(20.0),
+                )],
+            )
+            .unwrap();
+        heap.scope_root_environment(exporter_roots, exporter)
+            .unwrap();
+        heap.link_binding_alias(importer, BindingId(2), exporter, BindingId(1))
+            .unwrap();
+        heap.close_scope(exporter_roots).unwrap();
+        heap.collect().unwrap();
+
+        let definition = FunctionDefinition {
+            id: FunctionId(90),
+            parameters: Vec::new(),
+            locals: Vec::new(),
+            captures: vec![CaptureDefinition {
+                source: BindingId(2),
+                alias: BindingId(10),
+                mode: CaptureMode::Cell,
+            }],
+            kind: FunctionKind::Ordinary,
+            strict: true,
+        };
+        let closure = heap
+            .create_closure(&definition, importer, Value::undefined())
+            .unwrap();
+        heap.scope_root(importer_roots, closure).unwrap();
+        heap.collect().unwrap();
+
+        let activation = heap
+            .enter_function_call(
+                closure,
+                &definition,
+                Value::undefined(),
+                &[],
+                Value::undefined(),
+            )
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(activation.environment(), BindingId(10))
+                .unwrap()
+                .as_number(),
+            Some(20.0)
+        );
+        heap.store_binding(exporter, BindingId(1), Value::number(21.0))
+            .unwrap();
+        assert_eq!(
+            heap.load_binding(activation.environment(), BindingId(10))
+                .unwrap()
+                .as_number(),
+            Some(21.0)
+        );
+        heap.leave_function_call(activation).unwrap();
+        heap.close_scope(importer_roots).unwrap();
+    }
+
+    #[test]
+    fn promise_settlement_releases_pending_reaction_edges() {
+        let mut heap = heap();
+        let source = heap
+            .allocate_promise_record(super::super::PromiseState::Pending)
+            .unwrap();
+        let (child, reaction) = heap.promise_then(source, None, None).unwrap();
+        assert!(reaction.is_none());
+
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, child).unwrap();
+        let pending_accounting = heap.stats().external_memory_bytes;
+        assert!(pending_accounting > 0);
+        heap.collect().unwrap();
+        assert!(
+            heap.is_promise(source),
+            "the pending child retains its source"
+        );
+
+        let reactions = heap
+            .settle_promise(
+                source,
+                super::super::PromiseState::Fulfilled(Value::number(7.0)),
+            )
+            .unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(
+            heap.stats().external_memory_bytes,
+            pending_accounting - std::mem::size_of::<super::super::PromiseReaction>()
+        );
+
+        heap.collect().unwrap();
+        assert!(
+            !heap.is_promise(source),
+            "a settled child must not retain its source"
+        );
+        assert!(heap.is_promise(child));
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn promise_adoption_releases_bidirectional_edges_after_source_settles() {
+        let mut heap = heap();
+        let source = heap
+            .allocate_promise_record(super::super::PromiseState::Pending)
+            .unwrap();
+        let target = heap
+            .allocate_promise_record(super::super::PromiseState::Pending)
+            .unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, target).unwrap();
+
+        assert!(heap.promise_forward_to(source, target).unwrap().is_empty());
+        let pending_accounting = heap.stats().external_memory_bytes;
+        assert!(pending_accounting > 0);
+        heap.collect().unwrap();
+        assert!(
+            heap.is_promise(source),
+            "the adopting promise retains the source"
+        );
+
+        let reactions = heap
+            .settle_promise(
+                source,
+                super::super::PromiseState::Fulfilled(Value::number(9.0)),
+            )
+            .unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(
+            heap.stats().external_memory_bytes,
+            pending_accounting - std::mem::size_of::<super::super::PromiseReaction>()
+        );
+
+        heap.collect().unwrap();
+        assert!(
+            !heap.is_promise(source),
+            "settlement removes the adoption links"
+        );
+        assert!(heap.is_promise(target));
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn imported_binding_alias_cycles_are_rejected_before_publication() {
+        let mut heap = heap();
+        let environment = heap
+            .create_environment(
+                None,
+                &[
+                    BindingDefinition::uninitialized(BindingId(1), false),
+                    BindingDefinition::uninitialized(BindingId(2), false),
+                ],
+            )
+            .unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root_environment(roots, environment).unwrap();
+
+        heap.link_binding_alias(environment, BindingId(1), environment, BindingId(2))
+            .unwrap();
+        assert_eq!(
+            heap.link_binding_alias(environment, BindingId(2), environment, BindingId(1)),
+            Err(HeapError::BindingAliasCycle)
+        );
+        assert!(matches!(
+            heap.load_binding(environment, BindingId(1)),
+            Err(HeapError::UninitializedBinding)
+        ));
+        assert!(matches!(
+            heap.load_binding(environment, BindingId(2)),
+            Err(HeapError::UninitializedBinding)
+        ));
         heap.close_scope(roots).unwrap();
     }
 

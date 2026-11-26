@@ -9,10 +9,17 @@
 
 mod vm;
 
+pub use ogma_runtime::PromiseReaction;
+
+pub use ogma_bytecode::{
+    ModuleDescriptor, ModuleExport, ModuleExportKind, ModuleImport, ModuleImportKind,
+};
+
 pub use vm::{
     CancellationToken, ExecutableFunctionInfo, ExecutableModule, ExecutionCompletion,
     ExecutionInterruption, ExecutionOptions, ExecutionReport, Host, HostCallCompletion,
-    HostCallContext, HostCallRoot, HostError, InstructionLocation, InterpreterError, NoHost,
+    HostCallContext, HostCallRoot, HostError, InstructionLocation, InterpreterError,
+    ModuleBindingLink, NoHost,
 };
 
 /// OGMB container version consumed by the interpreter.
