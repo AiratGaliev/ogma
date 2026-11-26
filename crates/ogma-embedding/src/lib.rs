@@ -637,6 +637,34 @@ impl Context<'_> {
         self.loaded_modules.last().map(|entry| entry.id)
     }
 
+    fn loaded_module_entry(
+        &self,
+        module_id: LoadedModuleId,
+    ) -> Result<&LoadedModuleEntry, ContextError> {
+        self.loaded_modules
+            .iter()
+            .find(|entry| entry.id == module_id)
+            .ok_or(ContextError::LoadedModuleNotFound(module_id))
+    }
+
+    /// Returns the number of verified functions in a retained module.
+    pub fn function_count_in_module(
+        &self,
+        module_id: LoadedModuleId,
+    ) -> Result<usize, ContextError> {
+        Ok(self.loaded_module_entry(module_id)?.executable.function_count())
+    }
+
+    /// Lists verified functions in any retained module in deterministic stable-ID order.
+    ///
+    /// Use the returned function ID with execute_in_module(); names are descriptive only.
+    pub fn functions_in_module(
+        &self,
+        module_id: LoadedModuleId,
+    ) -> Result<Vec<ExecutableFunctionInfo>, ContextError> {
+        Ok(self.loaded_module_entry(module_id)?.executable.functions())
+    }
+
     /// Returns the number of verified functions in the active module.
     #[must_use]
     pub fn function_count(&self) -> usize {
@@ -748,12 +776,7 @@ impl Context<'_> {
         let options = request
             .options(&self.runtime.config)
             .map_err(ContextError::Configuration)?;
-        let module = self
-            .loaded_modules
-            .iter()
-            .find(|entry| entry.id == module_id)
-            .map(|entry| Rc::clone(&entry.executable))
-            .ok_or(ContextError::LoadedModuleNotFound(module_id))?;
+        let module = Rc::clone(&self.loaded_module_entry(module_id)?.executable);
         let mut host = self.host_functions.clone();
         module
             .execute(
@@ -2350,23 +2373,24 @@ mod tests {
         let first_id = context
             .load_module_with_id(compile_source("function answer() { return 7; }"))
             .expect("first module");
-        let first_function = context
-            .functions()
-            .expect("first module functions")
-            .into_iter()
-            .find(|function| function.name == "answer")
-            .expect("first answer function");
-
         let second_id = context
             .load_module_with_id(compile_source("function answer() { return 9; }"))
             .expect("second module");
+        let first_functions = context
+            .functions_in_module(first_id)
+            .expect("first module functions remain addressable");
+        let first_function = first_functions
+            .iter()
+            .find(|function| function.name == "answer")
+            .expect("first answer function");
         let second_function = context
             .functions()
-            .expect("second module functions")
+            .expect("active module functions")
             .into_iter()
             .find(|function| function.name == "answer")
             .expect("second answer function");
 
+        assert_eq!(context.function_count_in_module(first_id), Ok(1));
         assert_ne!(first_id, second_id);
         assert_eq!(first_id.get(), 1);
         assert_eq!(second_id.get(), 2);
@@ -2393,6 +2417,23 @@ mod tests {
             ExecutionCompletion::Return(value) if value.as_number() == Some(7.0)
         ));
 
+        let persistent = context
+            .execute_persistent_in_module(
+                first_id,
+                &first_function.id,
+                &[],
+                ExecutionRequest::default(),
+            )
+            .expect("persistent execution in earlier module");
+        let PersistentCompletion::Return(persistent_value) = persistent.completion else {
+            panic!("expected a persistent return value");
+        };
+        assert_eq!(
+            context.resolve(persistent_value).expect("persistent value").as_number(),
+            Some(7.0)
+        );
+        context.release(persistent_value).expect("release persistent value");
+
         let missing_id = LoadedModuleId {
             runtime_id: first_id.runtime_id(),
             context_id: first_id.context_id(),
@@ -2405,6 +2446,10 @@ mod tests {
                 &[],
                 ExecutionRequest::default()
             ),
+            Err(ContextError::LoadedModuleNotFound(id)) if id == missing_id
+        ));
+        assert!(matches!(
+            context.functions_in_module(missing_id),
             Err(ContextError::LoadedModuleNotFound(id)) if id == missing_id
         ));
 
