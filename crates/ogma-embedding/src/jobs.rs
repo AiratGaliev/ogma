@@ -791,11 +791,13 @@ mod tests {
             crate::InterpreterError::ModuleLimitExceeded { limit: 1 }
         ));
         assert_eq!(context.loaded_module_count(), 1);
-        assert!(context
-            .functions()
-            .expect("active module remains available")
-            .iter()
-            .any(|function| function.name == "factory"));
+        assert!(
+            context
+                .functions()
+                .expect("active module remains available")
+                .iter()
+                .any(|function| function.name == "factory")
+        );
     }
 
     #[test]
