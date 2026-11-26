@@ -8,9 +8,11 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
+
+static NEXT_RUNTIME_FUNCTION_ID: AtomicU64 = AtomicU64::new(1);
 
 use ogma_bytecode::{
     ArtifactJsonValue as JsonValue, BinaryOperation, CallKind, ConstantKind,
@@ -414,6 +416,16 @@ impl ExecutableModule {
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
+        Self::load_with_function_id_range(artifacts)
+    }
+
+    fn load_with_function_id_range<I, B>(
+        artifacts: I,
+    ) -> Result<Self, InterpreterError>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
         let mut raw_functions = BTreeMap::<String, RawFunction>::new();
         for bytes in artifacts {
             let verified = verify_register_artifact_from_manifest(bytes.as_ref())
@@ -539,11 +551,22 @@ impl ExecutableModule {
             }
         }
 
+        let function_count = u64::try_from(raw_functions.len())
+            .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+        let first_function_id = NEXT_RUNTIME_FUNCTION_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let next = current.checked_add(function_count)?;
+                (next <= u64::from(u32::MAX) + 1).then_some(next)
+            })
+            .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
         for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
-            let numeric =
-                u32::try_from(index + 1).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let offset = u64::try_from(index)
+                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let numeric = u32::try_from(first_function_id + offset)
+                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let image = Rc::new(FunctionImage::build(
                 raw,
                 FunctionId(numeric),

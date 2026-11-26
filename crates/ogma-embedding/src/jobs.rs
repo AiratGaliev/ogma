@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::time::Instant;
 
 use ogma_runtime::{ExternalMemoryCharge, HeapError, HostHandle};
 
@@ -254,6 +255,10 @@ impl Context<'_> {
         if self.runtime.jobs.pumping {
             return Err(JobQueueError::ReentrantPump);
         }
+        let request = normalize_execution_request(request);
+        request
+            .options(&self.runtime.config)
+            .map_err(JobQueueError::Configuration)?;
 
         self.runtime.jobs.pumping = true;
         let result = self.pump_promise_jobs_inner(budget, &request);
@@ -283,6 +288,10 @@ impl Context<'_> {
             Some(budget) => budget,
             None => self.runtime.config.max_pending_jobs.max(1),
         };
+        let request = normalize_execution_request(request);
+        request
+            .options(&self.runtime.config)
+            .map_err(JobQueueError::Configuration)?;
 
         let mut jobs_executed = 0;
         while jobs_executed < total_budget {
@@ -340,13 +349,9 @@ impl Context<'_> {
                     return Err(JobQueueError::Heap(error));
                 }
             };
-            let options = match request.options(&self.runtime.config) {
-                Ok(options) => options,
-                Err(error) => {
-                    let _ = release_job_roots(&mut self.runtime.heap, job);
-                    return Err(JobQueueError::Configuration(error));
-                }
-            };
+            let options = request
+                .options(&self.runtime.config)
+                .map_err(JobQueueError::Configuration)?;
             let mut host = job.host_functions.clone();
             let execution = job.module.execute_callable(
                 &mut self.runtime.heap,
@@ -386,6 +391,17 @@ impl Context<'_> {
                     });
                 }
                 ExecutionCompletion::Interrupted(reason) => {
+                    if report.instructions_executed == 0 {
+                        // Interruption before the first instruction leaves the
+                        // callback pending; preserve its FIFO position and roots.
+                        self.runtime.jobs.queue.push_front(job);
+                        return Ok(JobPumpReport {
+                            outcome: JobPumpOutcome::Interrupted,
+                            jobs_executed,
+                            completion: None,
+                            interruption: Some(reason),
+                        });
+                    }
                     release_job_roots(&mut self.runtime.heap, job)?;
                     jobs_executed += 1;
                     return Ok(JobPumpReport {
@@ -465,6 +481,19 @@ impl JobPumpReport {
             interruption: None,
         }
     }
+}
+
+fn normalize_execution_request(mut request: ExecutionRequest) -> ExecutionRequest {
+    if let Some(time_budget) = request.time_budget.take()
+        && let Some(budget_deadline) = Instant::now().checked_add(time_budget)
+    {
+        request.deadline = Some(
+            request
+                .deadline
+                .map_or(budget_deadline, |deadline| deadline.min(budget_deadline)),
+        );
+    }
+    request
 }
 
 fn release_job_roots(heap: &mut crate::Heap, job: PendingJob) -> Result<(), HeapError> {
@@ -731,9 +760,95 @@ mod tests {
             report.interruption,
             Some(crate::ExecutionInterruption::Cancelled)
         );
-        assert_eq!(report.jobs_executed, 1);
+        assert_eq!(report.jobs_executed, 0);
+        assert_eq!(context.pending_promise_jobs(), 1);
+        assert!(context.heap_stats().external_memory_bytes > 0);
+
+        let resumed = context.pump_promise_jobs(None).expect("resume pending job");
+        assert_eq!(resumed.outcome, JobPumpOutcome::Progress);
+        assert_eq!(resumed.jobs_executed, 1);
         assert_eq!(context.pending_promise_jobs(), 0);
         assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn invalid_execution_request_does_not_consume_a_queued_job() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 1; }; }",
+        );
+        context.enqueue_promise_job(callback, &[]).expect("enqueue");
+
+        let error = context
+            .pump_promise_jobs_with_request(
+                None,
+                ExecutionRequest {
+                    instruction_budget: Some(0),
+                    ..ExecutionRequest::default()
+                },
+            )
+            .expect_err("zero fuel must be rejected before queue mutation");
+        assert!(matches!(
+            error,
+            JobQueueError::Configuration(crate::ConfigurationError::InvalidExecutionFuel)
+        ));
+        assert_eq!(context.pending_promise_jobs(), 1);
+        assert!(context.heap_stats().external_memory_bytes > 0);
+    }
+
+    #[test]
+    fn zero_time_budget_keeps_the_unstarted_job_for_a_later_pump() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 1; }; }",
+        );
+        context.enqueue_promise_job(callback, &[]).expect("enqueue");
+
+        let report = context
+            .run_promise_jobs_until_idle_with_request(
+                Some(1),
+                ExecutionRequest {
+                    time_budget: Some(std::time::Duration::ZERO),
+                    ..ExecutionRequest::default()
+                },
+            )
+            .expect("deadline is a normal interruption");
+        assert_eq!(report.outcome, JobPumpOutcome::Interrupted);
+        assert_eq!(report.jobs_executed, 0);
+        assert_eq!(context.pending_promise_jobs(), 1);
+
+        let resumed = context.pump_promise_jobs(None).expect("resume pending job");
+        assert_eq!(resumed.outcome, JobPumpOutcome::Progress);
+        assert_eq!(resumed.jobs_executed, 1);
+    }
+
+    #[test]
+    fn queued_callable_from_another_module_is_rejected_even_when_ids_overlap() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut first = runtime.create_context().expect("first Context");
+        let foreign_callback = load_callback(
+            &mut first,
+            "function factory() { return function() { return 1; }; }",
+        );
+        let mut second = runtime.create_context().expect("second Context");
+        second
+            .load_module(compile_source(
+                "function factory() { return function() { return 2; }; }",
+            ))
+            .expect("load a distinct module");
+
+        assert!(matches!(
+            second.enqueue_promise_job(foreign_callback, &[]),
+            Err(JobQueueError::InvalidCallback)
+        ));
+        assert_eq!(second.pending_promise_jobs(), 0);
     }
 
     #[test]
