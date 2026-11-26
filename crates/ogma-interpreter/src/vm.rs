@@ -419,9 +419,7 @@ impl ExecutableModule {
         Self::load_with_function_id_range(artifacts)
     }
 
-    fn load_with_function_id_range<I, B>(
-        artifacts: I,
-    ) -> Result<Self, InterpreterError>
+    fn load_with_function_id_range<I, B>(artifacts: I) -> Result<Self, InterpreterError>
     where
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
@@ -563,8 +561,8 @@ impl ExecutableModule {
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
         for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
-            let offset = u64::try_from(index)
-                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let offset =
+                u64::try_from(index).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let numeric = u32::try_from(first_function_id + offset)
                 .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let image = Rc::new(FunctionImage::build(
