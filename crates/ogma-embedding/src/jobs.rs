@@ -102,6 +102,8 @@ pub enum JobQueueError {
     },
     /// A pump budget must be positive.
     InvalidPumpBudget,
+    /// The relative time budget cannot be represented as a monotonic deadline.
+    TimeBudgetOutOfRange,
     /// A pump call was re-entered for the same Runtime.
     ReentrantPump,
     /// A heap/root operation failed.
@@ -255,7 +257,7 @@ impl Context<'_> {
         if self.runtime.jobs.pumping {
             return Err(JobQueueError::ReentrantPump);
         }
-        let request = normalize_execution_request(request);
+        let request = normalize_execution_request(request)?;
         request
             .options(&self.runtime.config)
             .map_err(JobQueueError::Configuration)?;
@@ -483,17 +485,20 @@ impl JobPumpReport {
     }
 }
 
-fn normalize_execution_request(mut request: ExecutionRequest) -> ExecutionRequest {
-    if let Some(time_budget) = request.time_budget.take()
-        && let Some(budget_deadline) = Instant::now().checked_add(time_budget)
-    {
+fn normalize_execution_request(
+    mut request: ExecutionRequest,
+) -> Result<ExecutionRequest, JobQueueError> {
+    if let Some(time_budget) = request.time_budget.take() {
+        let budget_deadline = Instant::now()
+            .checked_add(time_budget)
+            .ok_or(JobQueueError::TimeBudgetOutOfRange)?;
         request.deadline = Some(
             request
                 .deadline
                 .map_or(budget_deadline, |deadline| deadline.min(budget_deadline)),
         );
     }
-    request
+    Ok(request)
 }
 
 fn release_job_roots(heap: &mut crate::Heap, job: PendingJob) -> Result<(), HeapError> {
@@ -794,6 +799,31 @@ mod tests {
         assert!(matches!(
             error,
             JobQueueError::Configuration(crate::ConfigurationError::InvalidExecutionFuel)
+        ));
+        assert_eq!(context.pending_promise_jobs(), 1);
+        assert!(context.heap_stats().external_memory_bytes > 0);
+    }
+
+    #[test]
+    fn unrepresentable_time_budget_does_not_consume_a_queued_job() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 1; }; }",
+        );
+        context.enqueue_promise_job(callback, &[]).expect("enqueue");
+
+        assert!(matches!(
+            context.pump_promise_jobs_with_request(
+                None,
+                ExecutionRequest {
+                    time_budget: Some(std::time::Duration::MAX),
+                    ..ExecutionRequest::default()
+                },
+            ),
+            Err(JobQueueError::TimeBudgetOutOfRange)
         ));
         assert_eq!(context.pending_promise_jobs(), 1);
         assert!(context.heap_stats().external_memory_bytes > 0);
