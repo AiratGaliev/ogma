@@ -522,6 +522,27 @@ impl ExecutionRequest {
     }
 }
 
+/// Stable identity of one verified module retained by a Context.
+///
+/// IDs are local to their Context, start at 1 and are never reused during that
+/// Context's lifetime. Use this token to execute an older loaded module after
+/// another module has become the active convenience target.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct LoadedModuleId(u32);
+
+impl LoadedModuleId {
+    /// Returns the one-based numeric identity for diagnostics and host maps.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+struct LoadedModuleEntry {
+    id: LoadedModuleId,
+    executable: Rc<ExecutableModule>,
+}
+
 /// A loaded execution Context borrowing one Runtime.
 ///
 /// Module metadata, host-function registration and capabilities are scoped to
@@ -531,7 +552,7 @@ impl ExecutionRequest {
 pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
     module: Option<Rc<ExecutableModule>>,
-    loaded_modules: Vec<Rc<ExecutableModule>>,
+    loaded_modules: Vec<LoadedModuleEntry>,
     host_functions: HostFunctionRegistry,
 }
 
@@ -547,6 +568,22 @@ impl Context<'_> {
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
+        self.load_module_with_id(artifacts).map(|_| ())
+    }
+
+    /// Loads a verified module and returns its stable Context-local identity.
+    ///
+    /// The module becomes the active target for `execute()` and remains
+    /// addressable through `execute_in_module()` after later modules are
+    /// loaded. The registry is bounded by EngineConfig.max_loaded_modules.
+    pub fn load_module_with_id<I, B>(
+        &mut self,
+        artifacts: I,
+    ) -> Result<LoadedModuleId, InterpreterError>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
         let limit = self.runtime.config.max_loaded_modules;
         if self.loaded_modules.len() >= limit {
             return Err(InterpreterError::ModuleLimitExceeded { limit });
@@ -554,16 +591,28 @@ impl Context<'_> {
         self.loaded_modules
             .try_reserve(1)
             .map_err(|_| InterpreterError::Runtime(HeapError::AllocationFailed))?;
+        let numeric_id = u32::try_from(self.loaded_modules.len() + 1)
+            .map_err(|_| InterpreterError::ModuleLimitExceeded { limit })?;
+        let id = LoadedModuleId(numeric_id);
         let module = Rc::new(ExecutableModule::load(artifacts)?);
         self.module = Some(Rc::clone(&module));
-        self.loaded_modules.push(module);
-        Ok(())
+        self.loaded_modules.push(LoadedModuleEntry {
+            id,
+            executable: module,
+        });
+        Ok(id)
     }
 
     /// Returns the number of verified modules retained by this Context.
     #[must_use]
     pub fn loaded_module_count(&self) -> usize {
         self.loaded_modules.len()
+    }
+
+    /// Returns the identity of the most recently loaded module, if any.
+    #[must_use]
+    pub fn latest_loaded_module_id(&self) -> Option<LoadedModuleId> {
+        self.loaded_modules.last().map(|entry| entry.id)
     }
 
     /// Returns the number of verified functions in the active module.
@@ -663,6 +712,38 @@ impl Context<'_> {
             .map_err(ContextError::Interpreter)
     }
 
+    /// Executes a function from any retained module by stable module and function IDs.
+    ///
+    /// This uses the same Runtime heap and host-function registry as the active
+    /// module. The module ID is returned by load_module_with_id().
+    pub fn execute_in_module(
+        &mut self,
+        module_id: LoadedModuleId,
+        entry_function_id: &str,
+        arguments: &[Value],
+        request: ExecutionRequest,
+    ) -> Result<ExecutionReport, ContextError> {
+        let options = request
+            .options(&self.runtime.config)
+            .map_err(ContextError::Configuration)?;
+        let module = self
+            .loaded_modules
+            .iter()
+            .find(|entry| entry.id == module_id)
+            .map(|entry| Rc::clone(&entry.executable))
+            .ok_or(ContextError::LoadedModuleNotFound(module_id))?;
+        let mut host = self.host_functions.clone();
+        module
+            .execute(
+                &mut self.runtime.heap,
+                entry_function_id,
+                arguments,
+                &mut host,
+                options,
+            )
+            .map_err(ContextError::Interpreter)
+    }
+
     /// Executes a function by stable OGMB ID and immediately promotes its completion.
     ///
     /// Use the function ID returned by `functions()`, not its source-level name.
@@ -675,6 +756,36 @@ impl Context<'_> {
         request: ExecutionRequest,
     ) -> Result<PersistentExecutionReport, ContextError> {
         let report = self.execute(entry_function_id, arguments, request)?;
+        let completion = match report.completion {
+            ExecutionCompletion::Return(value) => {
+                PersistentCompletion::Return(self.persist(value).map_err(ContextError::Heap)?)
+            }
+            ExecutionCompletion::Throw(value) => {
+                PersistentCompletion::Throw(self.persist(value).map_err(ContextError::Heap)?)
+            }
+            ExecutionCompletion::Interrupted(reason) => PersistentCompletion::Interrupted(reason),
+        };
+        Ok(PersistentExecutionReport {
+            completion,
+            instructions_executed: report.instructions_executed,
+            fuel_remaining: report.fuel_remaining,
+            max_call_depth_reached: report.max_call_depth_reached,
+            max_stack_bytes_reached: report.max_stack_bytes_reached,
+            last_location: report.last_location,
+        })
+    }
+
+    /// Executes a function in a retained module and promotes its completion.
+    ///
+    /// The returned values remain rooted until Context::release() is called.
+    pub fn execute_persistent_in_module(
+        &mut self,
+        module_id: LoadedModuleId,
+        entry_function_id: &str,
+        arguments: &[Value],
+        request: ExecutionRequest,
+    ) -> Result<PersistentExecutionReport, ContextError> {
+        let report = self.execute_in_module(module_id, entry_function_id, arguments, request)?;
         let completion = match report.completion {
             ExecutionCompletion::Return(value) => {
                 PersistentCompletion::Return(self.persist(value).map_err(ContextError::Heap)?)
@@ -833,6 +944,8 @@ pub struct PersistentExecutionReport {
 pub enum ContextError {
     /// No verified module has been loaded.
     ModuleNotLoaded,
+    /// The requested module ID is not retained by this Context.
+    LoadedModuleNotFound(LoadedModuleId),
     /// Per-execution configuration is invalid.
     Configuration(ConfigurationError),
     /// Interpreter rejected loading or execution.
@@ -2204,6 +2317,64 @@ mod tests {
         );
         context.release(result).expect("release root");
         assert!(context.resolve(result).is_err());
+    }
+
+    #[test]
+    fn loaded_modules_have_stable_ids_and_can_execute_on_the_same_runtime() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid config");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        let first_id = context
+            .load_module_with_id(compile_source("function answer() { return 7; }"))
+            .expect("first module");
+        let first_function = context
+            .functions()
+            .expect("first module functions")
+            .into_iter()
+            .find(|function| function.name == "answer")
+            .expect("first answer function");
+
+        let second_id = context
+            .load_module_with_id(compile_source("function answer() { return 9; }"))
+            .expect("second module");
+        let second_function = context
+            .functions()
+            .expect("second module functions")
+            .into_iter()
+            .find(|function| function.name == "answer")
+            .expect("second answer function");
+
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_id.get(), 1);
+        assert_eq!(second_id.get(), 2);
+        assert_eq!(context.latest_loaded_module_id(), Some(second_id));
+
+        let active = context
+            .execute(&second_function.id, &[], ExecutionRequest::default())
+            .expect("active module execution");
+        assert!(matches!(
+            active.completion,
+            ExecutionCompletion::Return(value) if value.as_number() == Some(9.0)
+        ));
+
+        let earlier = context
+            .execute_in_module(first_id, &first_function.id, &[], ExecutionRequest::default())
+            .expect("execute earlier module in the same Runtime");
+        assert!(matches!(
+            earlier.completion,
+            ExecutionCompletion::Return(value) if value.as_number() == Some(7.0)
+        ));
+
+        assert!(matches!(
+            context.execute_in_module(
+                LoadedModuleId(99),
+                &first_function.id,
+                &[],
+                ExecutionRequest::default()
+            ),
+            Err(ContextError::LoadedModuleNotFound(LoadedModuleId(99)))
+        ));
     }
 
     #[test]

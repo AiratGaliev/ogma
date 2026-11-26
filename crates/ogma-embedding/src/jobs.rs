@@ -165,8 +165,11 @@ impl Context<'_> {
         }
         let mut owner = None;
         for candidate in self.loaded_modules.iter().rev() {
-            if candidate.contains_callable(&self.runtime.heap, callback)? {
-                owner = Some(Rc::clone(candidate));
+            if candidate
+                .executable
+                .contains_callable(&self.runtime.heap, callback)?
+            {
+                owner = Some(Rc::clone(&candidate.executable));
                 break;
             }
         }
