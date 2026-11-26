@@ -451,6 +451,7 @@ impl Runtime {
         .map_err(RuntimeError::HostRegistry)?;
         Ok(Context {
             runtime: self,
+            context_id,
             module: None,
             loaded_modules: Vec::new(),
             host_functions,
@@ -528,13 +529,29 @@ impl ExecutionRequest {
 /// Context's lifetime. Use this token to execute an older loaded module after
 /// another module has become the active convenience target.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct LoadedModuleId(u32);
+pub struct LoadedModuleId {
+    runtime_id: u64,
+    context_id: u64,
+    sequence: u32,
+}
 
 impl LoadedModuleId {
     /// Returns the one-based numeric identity for diagnostics and host maps.
     #[must_use]
     pub const fn get(self) -> u32 {
-        self.0
+        self.sequence
+    }
+
+    /// Returns the owning Runtime identity.
+    #[must_use]
+    pub const fn runtime_id(self) -> u64 {
+        self.runtime_id
+    }
+
+    /// Returns the owning Context identity within the Runtime.
+    #[must_use]
+    pub const fn context_id(self) -> u64 {
+        self.context_id
     }
 }
 
@@ -551,6 +568,7 @@ struct LoadedModuleEntry {
 /// is dropped. Managed values remain owned by the parent Runtime.
 pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
+    context_id: u64,
     module: Option<Rc<ExecutableModule>>,
     loaded_modules: Vec<LoadedModuleEntry>,
     host_functions: HostFunctionRegistry,
@@ -593,7 +611,11 @@ impl Context<'_> {
             .map_err(|_| InterpreterError::Runtime(HeapError::AllocationFailed))?;
         let numeric_id = u32::try_from(self.loaded_modules.len() + 1)
             .map_err(|_| InterpreterError::ModuleLimitExceeded { limit })?;
-        let id = LoadedModuleId(numeric_id);
+        let id = LoadedModuleId {
+            runtime_id: self.runtime.id,
+            context_id: self.context_id,
+            sequence: numeric_id,
+        };
         let module = Rc::new(ExecutableModule::load(artifacts)?);
         self.module = Some(Rc::clone(&module));
         self.loaded_modules.push(LoadedModuleEntry {
@@ -2366,14 +2388,36 @@ mod tests {
             ExecutionCompletion::Return(value) if value.as_number() == Some(7.0)
         ));
 
+        let missing_id = LoadedModuleId {
+            runtime_id: runtime.id,
+            context_id: context.context_id,
+            sequence: 99,
+        };
         assert!(matches!(
             context.execute_in_module(
-                LoadedModuleId(99),
+                missing_id,
                 &first_function.id,
                 &[],
                 ExecutionRequest::default()
             ),
-            Err(ContextError::LoadedModuleNotFound(LoadedModuleId(99)))
+            Err(ContextError::LoadedModuleNotFound(id)) if id == missing_id
+        ));
+
+        drop(context);
+        let mut another_context = runtime.create_context().expect("second Context");
+        let other_context_id = another_context
+            .load_module_with_id(compile_source("function answer() { return 7; }"))
+            .expect("same module in second Context");
+        assert_eq!(other_context_id.get(), first_id.get());
+        assert_ne!(other_context_id, first_id);
+        assert!(matches!(
+            another_context.execute_in_module(
+                first_id,
+                &first_function.id,
+                &[],
+                ExecutionRequest::default()
+            ),
+            Err(ContextError::LoadedModuleNotFound(id)) if id == first_id
         ));
     }
 
