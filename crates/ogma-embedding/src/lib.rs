@@ -2381,7 +2381,12 @@ mod tests {
         ));
 
         let earlier = context
-            .execute_in_module(first_id, &first_function.id, &[], ExecutionRequest::default())
+            .execute_in_module(
+                first_id,
+                &first_function.id,
+                &[],
+                ExecutionRequest::default(),
+            )
             .expect("execute earlier module in the same Runtime");
         assert!(matches!(
             earlier.completion,
