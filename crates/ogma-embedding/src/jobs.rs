@@ -160,14 +160,17 @@ impl Context<'_> {
             });
         }
 
-        let module = self
-            .module
-            .as_ref()
-            .ok_or(JobQueueError::ModuleNotLoaded)?
-            .clone();
-        if !module.contains_callable(&self.runtime.heap, callback)? {
-            return Err(JobQueueError::InvalidCallback);
+        if self.loaded_modules.is_empty() {
+            return Err(JobQueueError::ModuleNotLoaded);
         }
+        let mut owner = None;
+        for candidate in self.loaded_modules.iter().rev() {
+            if candidate.contains_callable(&self.runtime.heap, callback)? {
+                owner = Some(Rc::clone(candidate));
+                break;
+            }
+        }
+        let module = owner.ok_or(JobQueueError::InvalidCallback)?;
 
         self.runtime
             .jobs
@@ -736,6 +739,63 @@ mod tests {
         assert!(report.completion.is_none());
         assert_eq!(second.pending_promise_jobs(), 0);
         assert_eq!(second.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn callbacks_from_earlier_loaded_modules_remain_schedulable() {
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 7; }; }",
+        );
+        assert_eq!(context.loaded_module_count(), 1);
+
+        context
+            .load_module(compile_source("function unrelated() { return 9; }"))
+            .expect("load a second verified module");
+        assert_eq!(context.loaded_module_count(), 2);
+
+        context
+            .enqueue_promise_job(callback, &[])
+            .expect("callback owner is the first loaded module");
+        let report = context
+            .pump_promise_jobs(None)
+            .expect("dispatch callback from first module");
+        assert_eq!(report.outcome, JobPumpOutcome::Progress);
+        assert_eq!(report.jobs_executed, 1);
+        assert_eq!(context.pending_promise_jobs(), 0);
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn module_registry_limit_rejects_extra_modules_without_replacing_active_module() {
+        let engine = Engine::new(EngineConfig {
+            max_loaded_modules: 1,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let _callback = load_callback(
+            &mut context,
+            "function factory() { return function() { return 7; }; }",
+        );
+        assert_eq!(context.loaded_module_count(), 1);
+        let error = context
+            .load_module(compile_source("function unrelated() { return 9; }"))
+            .expect_err("module capacity is enforced");
+        assert!(matches!(
+            error,
+            crate::InterpreterError::ModuleLimitExceeded { limit: 1 }
+        ));
+        assert_eq!(context.loaded_module_count(), 1);
+        assert!(context
+            .functions()
+            .expect("active module remains available")
+            .iter()
+            .any(|function| function.name == "factory"));
     }
 
     #[test]

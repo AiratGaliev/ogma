@@ -129,12 +129,13 @@ The exact Rust enum layout is deliberately not frozen here.
 
 The current Rust implementation is a bounded, host-driven callback-queue substrate in `ogma-embedding`:
 
-- `EngineConfig.max_pending_jobs` limits admitted jobs; `EngineConfig.max_jobs_per_pump` caps each pump turn.
-- `Context::enqueue_promise_job` accepts a verified callable Function and arguments. It retains the originating `ExecutableModule`, host-function registry, callback and argument roots until dispatch or cancellation.
+- `EngineConfig.max_loaded_modules` bounds the number of verified modules retained by one Context; `max_pending_jobs` limits admitted jobs and `max_jobs_per_pump` caps each pump turn.
+- Repeated `Context::load_module` calls register independent verified modules in the same Context. The most recently loaded module is the direct execution target, while earlier modules remain eligible callback owners. `Context::loaded_module_count` exposes the retained module count.
+- `Context::enqueue_promise_job` accepts a verified callable Function owned by any module registered in that Context. It retains the exact originating `ExecutableModule`, host-function registry, callback and argument roots until dispatch or cancellation.
 - `Context::pump_promise_jobs` dispatches one bounded FIFO turn. `pump_promise_jobs_with_request` applies the existing interpreter cancellation/deadline/fuel policy at ordinary VM safepoints.
 - `Context::run_promise_jobs_until_idle` performs multiple bounded turns under a separate total-work budget. Its request-aware variant applies the same execution policy to each job.
 - Pause/resume retains pending jobs. Queue cancellation and shutdown release persistent roots and external-memory accounting exactly once. A thrown completion is returned as a persistent handle owned by the caller.
-- Function identities are unique across executable modules loaded in the process, so a callback created by one module cannot be accepted by another module merely because their local function-table indices happen to match.
+- Function identities are unique across executable modules loaded in the process. Queue admission resolves the owner by that identity across the Context's registered modules, so a callback from an earlier module remains valid after a later module is loaded; a function from an unregistered module is still rejected.
 - An invalid execution request is rejected before queue mutation. A deadline/cancellation observed before a job's first VM instruction leaves that job at the front of the queue with its roots retained; an interruption after execution has started is not retried because user code may already have produced side effects.
 - A relative time budget supplied to a pump is converted once to an absolute monotonic deadline and is shared by every job in that pump/run-until-idle call.
 

@@ -375,6 +375,11 @@ pub enum InterpreterError {
     InvalidControlFlow(u32),
     /// Stable Runtime identity space was exhausted.
     IdentitySpaceExceeded,
+    /// The Context already retains its configured maximum number of modules.
+    ModuleLimitExceeded {
+        /// Maximum number of modules retained by one Context.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for InterpreterError {

@@ -261,6 +261,8 @@ pub struct EngineConfig {
     pub max_call_depth: u32,
     /// Maximum ordinary instruction dispatches between cooperative polls.
     pub interrupt_poll_interval: u32,
+    /// Maximum number of verified executable modules retained by one Context.
+    pub max_loaded_modules: usize,
     /// Capacity reserved for the host-driven pending-job scheduler.
     ///
     /// M1 synchronous execution does not enqueue jobs. OGM-48 supplies the
@@ -279,6 +281,7 @@ impl Default for EngineConfig {
             instruction_budget: 1_000_000,
             max_call_depth: 256,
             interrupt_poll_interval: 64,
+            max_loaded_modules: 256,
             max_pending_jobs: 1024,
             max_jobs_per_pump: 64,
         }
@@ -306,6 +309,12 @@ impl EngineConfig {
         if self.interrupt_poll_interval == 0 {
             return Err(ConfigurationError::ZeroPollInterval);
         }
+        if self.max_loaded_modules == 0 {
+            return Err(ConfigurationError::ZeroLoadedModuleLimit);
+        }
+        if self.max_loaded_modules > 4096 {
+            return Err(ConfigurationError::LoadedModuleLimitTooLarge);
+        }
         if self.max_pending_jobs > 1_048_576 {
             return Err(ConfigurationError::PendingJobLimitTooLarge);
         }
@@ -329,6 +338,10 @@ pub enum ConfigurationError {
     ZeroCallDepth,
     /// Cooperative poll interval must be positive.
     ZeroPollInterval,
+    /// Per-Context executable-module capacity must be positive.
+    ZeroLoadedModuleLimit,
+    /// Per-Context executable-module capacity exceeds 4,096.
+    LoadedModuleLimitTooLarge,
     /// Pending-job capacity exceeds the supported configuration ceiling.
     PendingJobLimitTooLarge,
     /// The per-pump job budget must be within 1..=1,048,576.
@@ -439,6 +452,7 @@ impl Runtime {
         Ok(Context {
             runtime: self,
             module: None,
+            loaded_modules: Vec::new(),
             host_functions,
         })
     }
@@ -511,25 +525,48 @@ impl ExecutionRequest {
 /// A loaded execution Context borrowing one Runtime.
 ///
 /// Module metadata, host-function registration and capabilities are scoped to
-/// this Context. Managed values remain owned by the parent Runtime.
+/// this Context. The most recently loaded module is the direct execution target;
+/// all verified modules remain registered as callback owners until the Context
+/// is dropped. Managed values remain owned by the parent Runtime.
 pub struct Context<'runtime> {
     runtime: &'runtime mut Runtime,
     module: Option<Rc<ExecutableModule>>,
+    loaded_modules: Vec<Rc<ExecutableModule>>,
     host_functions: HostFunctionRegistry,
 }
 
 impl Context<'_> {
-    /// Loads and verifies serialized OGMB artifacts into this Context.
+    /// Loads and verifies another OGMB module into this Context.
+    ///
+    /// The most recently loaded module becomes the direct execution target.
+    /// Previously loaded modules remain registered as owners for queued
+    /// callbacks, up to EngineConfig.max_loaded_modules, until this Context
+    /// is dropped. Pending jobs retain their own module owner after that.
     pub fn load_module<I, B>(&mut self, artifacts: I) -> Result<(), InterpreterError>
     where
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
     {
-        self.module = Some(Rc::new(ExecutableModule::load(artifacts)?));
+        let limit = self.runtime.config.max_loaded_modules;
+        if self.loaded_modules.len() >= limit {
+            return Err(InterpreterError::ModuleLimitExceeded { limit });
+        }
+        self.loaded_modules
+            .try_reserve(1)
+            .map_err(|_| InterpreterError::Runtime(HeapError::AllocationFailed))?;
+        let module = Rc::new(ExecutableModule::load(artifacts)?);
+        self.module = Some(Rc::clone(&module));
+        self.loaded_modules.push(module);
         Ok(())
     }
 
-    /// Returns the number of verified functions in the loaded module.
+    /// Returns the number of verified modules retained by this Context.
+    #[must_use]
+    pub fn loaded_module_count(&self) -> usize {
+        self.loaded_modules.len()
+    }
+
+    /// Returns the number of verified functions in the active module.
     #[must_use]
     pub fn function_count(&self) -> usize {
         self.module
@@ -3105,6 +3142,7 @@ mod tests {
     #[test]
     fn engine_rejects_invalid_resource_configuration_before_runtime_creation() {
         assert!(EngineConfig::default().validate().is_ok());
+        assert_eq!(EngineConfig::default().max_loaded_modules, 256);
         assert_eq!(EngineConfig::default().max_pending_jobs, 1024);
         assert_eq!(EngineConfig::default().max_jobs_per_pump, 64);
         let invalid_heap = EngineConfig {
@@ -3130,6 +3168,22 @@ mod tests {
         assert!(matches!(
             Engine::new(invalid_poll),
             Err(ConfigurationError::ZeroPollInterval)
+        ));
+        let invalid_module_limit = EngineConfig {
+            max_loaded_modules: 0,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(invalid_module_limit),
+            Err(ConfigurationError::ZeroLoadedModuleLimit)
+        ));
+        let oversized_module_limit = EngineConfig {
+            max_loaded_modules: 4097,
+            ..EngineConfig::default()
+        };
+        assert!(matches!(
+            Engine::new(oversized_module_limit),
+            Err(ConfigurationError::LoadedModuleLimitTooLarge)
         ));
         let invalid_jobs = EngineConfig {
             max_pending_jobs: 1_048_577,
