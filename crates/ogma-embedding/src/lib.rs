@@ -2390,7 +2390,12 @@ mod tests {
             .find(|function| function.name == "answer")
             .expect("second answer function");
 
-        assert_eq!(context.function_count_in_module(first_id), Ok(1));
+        assert_eq!(
+            context
+                .function_count_in_module(first_id)
+                .expect("first module function count"),
+            1
+        );
         assert_ne!(first_id, second_id);
         assert_eq!(first_id.get(), 1);
         assert_eq!(second_id.get(), 2);
