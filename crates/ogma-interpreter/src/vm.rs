@@ -552,7 +552,7 @@ impl ExecutableModule {
         let function_count = u64::try_from(raw_functions.len())
             .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
         let first_function_id = NEXT_RUNTIME_FUNCTION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 let next = current.checked_add(function_count)?;
                 (next <= u64::from(u32::MAX) + 1).then_some(next)
             })
