@@ -290,7 +290,7 @@ impl Context<'_> {
             Some(budget) => budget,
             None => self.runtime.config.max_pending_jobs.max(1),
         };
-        let request = normalize_execution_request(request);
+        let request = normalize_execution_request(request)?;
         request
             .options(&self.runtime.config)
             .map_err(JobQueueError::Configuration)?;
