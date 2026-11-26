@@ -2394,8 +2394,8 @@ mod tests {
         ));
 
         let missing_id = LoadedModuleId {
-            runtime_id: runtime.id,
-            context_id: context.context_id,
+            runtime_id: first_id.runtime_id(),
+            context_id: first_id.context_id(),
             sequence: 99,
         };
         assert!(matches!(
