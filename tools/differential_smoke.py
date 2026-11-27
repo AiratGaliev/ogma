@@ -11,7 +11,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from tools import test_runner
+import test_runner
 
 QUICKJS_REVISION_KEY = "quickjs-ng"
 

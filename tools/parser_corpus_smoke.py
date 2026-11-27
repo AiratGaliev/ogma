@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from tools import test_runner
+import test_runner
 
 CASES = (
     ("pass/005dc7dff71d4b97.js", "parsed", "script", "005dc7dff71d4b97.js", "pass"),

@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from tools import test_runner
+import test_runner
 
 
 def main() -> int:
