@@ -3931,34 +3931,61 @@ mod tests {
     fn esm_mutable_promise_aliases_fail_with_an_explicit_compiler_diagnostic() {
         let fixtures = [
             (
+                "promise-finally",
+                "Promise.resolve(0).finally(function() {});",
+                "lowering.promise_finally_unsupported",
+            ),
+            (
+                "queue-microtask",
+                "queueMicrotask(function() {});",
+                "lowering.node_scheduler_unsupported",
+            ),
+            (
+                "node-next-tick",
+                "process.nextTick(function() {});",
+                "lowering.node_scheduler_unsupported",
+            ),
+            (
+                "node-set-timeout",
+                "setTimeout(function() {}, 0);",
+                "lowering.node_scheduler_unsupported",
+            ),
+            (
+                "promise-constructor",
+                "new Promise(function(resolve) {});",
+                "lowering.unsupported_expression",
+            ),
+            (
                 "mutable-let",
                 "let pending = Promise.resolve(0); pending.then(function() {});",
+                "lowering.mutable_promise_alias_unsupported",
             ),
             (
                 "mutable-var",
                 "var pending = Promise.resolve(0); pending.catch(function() {});",
+                "lowering.mutable_promise_alias_unsupported",
             ),
             (
                 "mutable-assignment",
                 "let pending; pending = Promise.resolve(0); pending.then(function() {});",
+                "lowering.mutable_promise_alias_unsupported",
             ),
             (
                 "mutable-branch",
                 "let pending = Promise.resolve(0); if (true) { pending = 1; } pending.then(function() {});",
+                "lowering.mutable_promise_alias_unsupported",
             ),
         ];
 
-        for (module_id, source) in fixtures {
+        for (module_id, source, expected_code) in fixtures {
             let failure = compile_esm_failure(module_id, source);
             assert!(
                 matches!(
                     &failure,
                     ogma_compiler::CompileFailure::Lowering(diagnostics)
-                        if diagnostics.iter().any(|item| {
-                            item.code == "lowering.mutable_promise_alias_unsupported"
-                        })
+                        if diagnostics.iter().any(|item| item.code == expected_code)
                 ),
-                "mutable alias fixture {module_id:?} must fail closed: {failure:?}"
+                "unsupported fixture {module_id:?} must fail with {expected_code:?}: {failure:?}"
             );
         }
     }
