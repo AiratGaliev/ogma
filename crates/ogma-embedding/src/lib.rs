@@ -3952,7 +3952,7 @@ mod tests {
             let failure = compile_esm_failure(module_id, source);
             assert!(
                 matches!(
-                    failure,
+                    &failure,
                     ogma_compiler::CompileFailure::Lowering(diagnostics)
                         if diagnostics.iter().any(|item| {
                             item.code == "lowering.mutable_promise_alias_unsupported"
