@@ -343,7 +343,7 @@ pub(crate) fn read_unit(
         );
     }
 
-    validate_resolved_requests(manifest)?;
+    validate_resolved_requests(&manifest)?;
     let mut dependency_ids = HashSet::new();
     let mut dependencies = Vec::with_capacity(manifest.dependencies.len());
     for dependency in &manifest.dependencies {
