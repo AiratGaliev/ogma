@@ -7,9 +7,11 @@ import argparse
 import json
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
-PINNED_REVISION = "0e808c74fbec780646434cad17bb22dc52461003"
+from tools import test_runner
+
 CASES = (
     ("pass/005dc7dff71d4b97.js", "parsed", "script", "005dc7dff71d4b97.js", "pass"),
     ("pass-explicit/005dc7dff71d4b97.js", "parsed", "script", "005dc7dff71d4b97.js", "pass-explicit"),
@@ -121,28 +123,34 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--adapter", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path, default=Path("conformance/baseline.json"))
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--junit", type=Path)
     args = parser.parse_args()
 
+    baseline = test_runner.load_baseline(args.baseline)
+    pinned = test_runner._pinned_source(baseline, "test262-parser-tests")
     corpus = args.corpus.resolve(strict=True)
-    revision = subprocess.run(
-        ["git", "-C", str(corpus), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if revision != PINNED_REVISION:
-        raise RuntimeError(
-            f"parser corpus revision mismatch: expected {PINNED_REVISION}, got {revision}"
-        )
+    test_runner._load_and_check_revision(corpus, pinned["revision"], "test262-parser-tests")
+    revision = pinned["revision"]
 
     fingerprints: dict[str, str] = {}
     passed = 0
     rejected = 0
+    results: list[dict] = []
     for case, response in zip(CASES, run_cases(args.adapter, corpus), strict=True):
         if case[1] == "parsed":
             passed += 1
         else:
             rejected += 1
+        results.append({
+            "id": case[0],
+            "status": "PASS",
+            "expected": case[1],
+            "actual": response.get("outcome"),
+            "phase": response.get("phase"),
+            "normalizedAstSha256": response.get("normalizedAstSha256"),
+        })
         if case[3] is not None:
             fingerprint = response.get("normalizedAstSha256")
             if (
@@ -156,6 +164,35 @@ def main() -> int:
             if previous != fingerprint:
                 raise RuntimeError(f"{case[0]}: pass/pass-explicit AST fingerprint mismatch")
 
+    report = {
+        "schemaVersion": 1,
+        "suite": "test262-parser-tests",
+        "source": pinned,
+        "adapter": str(args.adapter.resolve()),
+        "cases": results,
+        "summary": {
+            "total": len(results),
+            "PASS": len(results),
+            "parsed": passed,
+            "rejected": rejected,
+            "astEquivalencePairs": len(fingerprints),
+        },
+    }
+    if args.report:
+        test_runner.write_json(args.report, report)
+    if args.junit:
+        suite = ET.Element(
+            "testsuite",
+            name="ogma-pinned-parser-smoke",
+            tests=str(len(results)),
+            failures="0",
+            errors="0",
+            skipped="0",
+        )
+        for item in results:
+            ET.SubElement(suite, "testcase", name=item["id"], classname="ogma.parser")
+        args.junit.parent.mkdir(parents=True, exist_ok=True)
+        ET.ElementTree(suite).write(args.junit, encoding="utf-8", xml_declaration=True)
     print(
         f"Ogma parser corpus smoke passed: {passed} valid, {rejected} rejected, "
         f"{len(fingerprints)} AST equivalence pairs; revision {revision}"

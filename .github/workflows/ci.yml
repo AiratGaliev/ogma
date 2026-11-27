@@ -129,13 +129,50 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Read immutable conformance revisions
+        id: conformance-pins
+        if: hashFiles('Cargo.toml') != ''
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import os
+          baseline = json.loads(Path("conformance/baseline.json").read_text(encoding="utf-8"))
+          pins = baseline["repositories"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"parser_tests={pins['test262-parser-tests']['revision']}\n")
+              output.write(f"test262={pins['test262']['revision']}\n")
+              output.write(f"quickjs_ng={pins['quickjs-ng']['revision']}\n")
+          PY
+
       - name: Checkout pinned TC39 parser corpus
         if: hashFiles('Cargo.toml') != ''
         uses: actions/checkout@v4
         with:
           repository: tc39/test262-parser-tests
-          ref: 0e808c74fbec780646434cad17bb22dc52461003
+          ref: ${{ steps.conformance-pins.outputs.parser_tests }}
           path: .artifacts/test262-parser-tests
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout pinned TC39 Test262 runtime smoke
+        if: hashFiles('Cargo.toml') != ''
+        uses: actions/checkout@v4
+        with:
+          repository: tc39/test262
+          ref: ${{ steps.conformance-pins.outputs.test262 }}
+          path: .artifacts/test262
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout pinned QuickJS-NG differential oracle
+        if: hashFiles('Cargo.toml') != ''
+        uses: actions/checkout@v4
+        with:
+          repository: quickjs-ng/quickjs
+          ref: ${{ steps.conformance-pins.outputs.quickjs_ng }}
+          path: .artifacts/quickjs-ng
           fetch-depth: 1
           persist-credentials: false
 
@@ -157,7 +194,48 @@ jobs:
         run: |
           python tools/parser_corpus_smoke.py \
             --corpus .artifacts/test262-parser-tests \
-            --adapter target/debug/ogma-parser-adapter
+            --adapter target/debug/ogma-parser-adapter \
+            --report .artifacts/evidence/parser-smoke.json \
+            --junit .artifacts/evidence/parser-smoke.xml
+
+      - name: Build OGM production Test262 Runtime adapter
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo build --locked --package ogma-cli --bin ogma-test262-adapter
+
+      - name: Run bounded pinned Test262 M1 Runtime smoke through Ogma
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          python tools/runtime_corpus_smoke.py \
+            --corpus .artifacts/test262 \
+            --adapter target/debug/ogma-test262-adapter \
+            --report .artifacts/evidence/runtime-smoke.json \
+            --junit .artifacts/evidence/runtime-smoke.xml
+
+      - name: Build pinned QuickJS-NG differential oracle
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          cmake -S .artifacts/quickjs-ng -B .artifacts/quickjs-ng/build \
+            -DCMAKE_BUILD_TYPE=Release -DQJS_BUILD_EXAMPLES=OFF
+          cmake --build .artifacts/quickjs-ng/build --target qjs_exe -j2
+
+      - name: Run bounded differential smoke against pinned QuickJS-NG
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          python tools/differential_smoke.py \
+            --adapter target/debug/ogma-test262-adapter \
+            --reference .artifacts/quickjs-ng/build/qjs \
+            --reference-root .artifacts/quickjs-ng \
+            --report .artifacts/evidence/differential-smoke.json \
+            --junit .artifacts/evidence/differential-smoke.xml
+
+      - name: Upload bounded M1 conformance evidence
+        if: always() && hashFiles('Cargo.toml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-m1-conformance-smoke
+          path: .artifacts/evidence/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Verify interpreter-only dependency boundary
         if: hashFiles('Cargo.toml') != ''
