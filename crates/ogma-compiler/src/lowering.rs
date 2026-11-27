@@ -1605,8 +1605,7 @@ impl<'a> FunctionCompiler<'a> {
                     ..
                 } = callee.as_ref()
                     && method == "finally"
-                    && (self.is_promise_expression(object)
-                        || self.is_mutable_promise_alias(object))
+                    && (self.is_promise_expression(object) || self.is_mutable_promise_alias(object))
                 {
                     return self.fail(
                         "lowering.promise_finally_unsupported",
