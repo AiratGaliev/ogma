@@ -432,7 +432,6 @@ fn runtime_throw_and_instruction_budget_have_distinct_exit_codes() {
         "1",
     ]);
     assert_eq!(stack_limit.status.code(), Some(7));
-
 }
 
 #[test]
