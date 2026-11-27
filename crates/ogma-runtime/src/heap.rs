@@ -2144,6 +2144,39 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_handle_and_scope_sequences_preserve_roots_across_collection() {
+        let mut runtime_heap = heap(64 * 1024, 8192);
+        let mut seed = 0x0ddc_0ffe_e15e_beefu64;
+        for _ in 0..96 {
+            seed = seed
+                .wrapping_mul(2_862_933_555_777_941_757)
+                .wrapping_add(3_037_000_493);
+            let value = runtime_heap.allocate_object().expect("managed object");
+            let handle = runtime_heap
+                .retain_host_value(value)
+                .expect("persistent handle");
+            let scope = runtime_heap.open_scope().expect("temporary root scope");
+            runtime_heap.scope_root(scope, value).expect("temporary root");
+            runtime_heap.collect().expect("collect while both roots are live");
+            assert!(runtime_heap.strict_equal(
+                runtime_heap.resolve_host_handle(handle).expect("live handle"),
+                value
+            ).expect("object identity comparison"));
+            runtime_heap.close_scope(scope).expect("close scope");
+            runtime_heap.collect().expect("collect with persistent handle only");
+            assert!(runtime_heap.strict_equal(
+                runtime_heap.resolve_host_handle(handle).expect("persistent handle survives"),
+                value
+            ).expect("object identity comparison"));
+            runtime_heap.release_host_handle(handle).expect("release handle");
+            runtime_heap.collect().expect("collect after final root is released");
+        }
+        assert_eq!(runtime_heap.stats().live_objects, 0);
+        assert_eq!(runtime_heap.root_snapshot().persistent_host_roots, 0);
+        let _ = seed;
+    }
+
+    #[test]
     fn root_scopes_preserve_values_through_nested_callback_style_collection() {
         let mut heap = heap(8192, 2048);
         let callback_value = heap.allocate_object().unwrap();

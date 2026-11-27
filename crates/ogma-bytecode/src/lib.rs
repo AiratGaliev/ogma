@@ -3634,6 +3634,34 @@ mod tests {
     }
 
     #[test]
+    fn verifier_rejects_every_truncated_prefix_of_a_valid_artifact() {
+        let instructions = vec![
+            RegisterInstruction {
+                operation: RegisterOperation::Constant {
+                    destination: 0,
+                    constant: 0,
+                    kind: ConstantKind::Number,
+                },
+                may_throw: false,
+            },
+            RegisterInstruction {
+                operation: RegisterOperation::Return { source: 0 },
+                may_throw: false,
+            },
+        ];
+        let code = encode_register_code(&instructions).expect("encode register code");
+        let bytes = build_ogmb_v1(manifest(2, 1), &code, &[json!(42)], &[], None)
+            .expect("build valid OGMB artifact");
+        verify_register_artifact(&bytes, &[]).expect("full artifact verifies");
+        for length in 0..bytes.len() {
+            assert!(
+                verify_register_artifact(&bytes[..length], &[]).is_err(),
+                "truncated artifact prefix of {length} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn sha256_matches_known_vectors() {
         assert_eq!(
             sha256_hex(b""),
