@@ -448,8 +448,9 @@ impl Heap {
             let function = self.allocate_cell_with_retry(|| {
                 CellKind::Function(Box::new(FunctionData::host(token)))
             })?;
-            self.scope_root(scope, function)?;
-            self.retain_host_value(function)
+            let value = Value::from_function(function);
+            self.scope_root(scope, value)?;
+            self.retain_host_value(value)
         })();
         let cleanup = self.close_scope(scope);
         match (result, cleanup) {
