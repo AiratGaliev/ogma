@@ -2114,7 +2114,11 @@ fn unique_qualified_source_id(
 ) -> Result<String, DebuggerError> {
     let mut nonce = 0_u32;
     loop {
-        let candidate = qualified_source_id_with_nonce(function_id, local_id, nonce);
+        let candidate = if nonce == 0 {
+            qualified_source_id(function_id, local_id)
+        } else {
+            qualified_source_id_with_nonce(function_id, local_id, nonce)
+        };
         if !reserved.contains(&candidate) && assigned.insert(candidate.clone()) {
             return Ok(candidate);
         }
