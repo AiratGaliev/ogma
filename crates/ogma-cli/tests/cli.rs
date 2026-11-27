@@ -500,7 +500,7 @@ fn promise_job_capacity_is_enforced_by_the_production_runtime() {
     let artifact = directory.path().join("promise-capacity.ogmb");
     fs::write(
         &source,
-        "Promise.resolve(0).then(function () {});\\nPromise.resolve(1).then(function () {});\\n",
+        "Promise.resolve(0).then(function () {});\nPromise.resolve(1).then(function () {});\n",
     )
     .expect("write Promise queue capacity source");
 
