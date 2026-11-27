@@ -222,7 +222,11 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
     ));
     assert_eq!(calls.get(), 1);
-    assert_eq!(method_receivers.get(), 1, "method calls preserve their receiver");
+    assert_eq!(
+        method_receivers.get(),
+        1,
+        "method calls preserve their receiver"
+    );
     assert_eq!(undefined_receivers.get(), 0);
 
     let scheduled = context
@@ -242,7 +246,11 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(calls.get(), 2);
     assert_eq!(method_receivers.get(), 1);
-    assert_eq!(undefined_receivers.get(), 1, "PromiseJobs use an undefined receiver");
+    assert_eq!(
+        undefined_receivers.get(),
+        1,
+        "PromiseJobs use an undefined receiver"
+    );
 
     context.set_capabilities(0);
     let receiver = context
@@ -308,7 +316,10 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let stale_job_pump = context
         .pump_promise_jobs(None)
         .expect("stale PromiseJob is rejected without aborting the pump");
-    assert_eq!(stale_job_pump.outcome, ogma_embedding::JobPumpOutcome::Progress);
+    assert_eq!(
+        stale_job_pump.outcome,
+        ogma_embedding::JobPumpOutcome::Progress
+    );
     assert_eq!(stale_job_pump.jobs_executed, 1);
     assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(
