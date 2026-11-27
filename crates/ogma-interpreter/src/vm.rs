@@ -8,9 +8,11 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
+
+static NEXT_RUNTIME_FUNCTION_ID: AtomicU64 = AtomicU64::new(1);
 
 use ogma_bytecode::{
     ArtifactJsonValue as JsonValue, BinaryOperation, CallKind, ConstantKind,
@@ -19,8 +21,8 @@ use ogma_bytecode::{
 };
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
-    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, ScopeToken, Value,
-    ValueType,
+    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, LexicalEnvironment,
+    PromiseReaction, ScopeToken, Value, ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
@@ -193,6 +195,19 @@ pub trait Host {
     ) -> Result<HostCallCompletion, HostError> {
         self.call(context.heap, capability, arguments)
             .map(HostCallCompletion::Normal)
+    }
+
+    /// Queues a settled Promise reaction as a host-driven ECMAScript PromiseJob.
+    ///
+    /// Embedders that implement the PromiseJobs contract override this method.
+    /// The default rejects the intrinsic operation rather than running a
+    /// reaction synchronously and violating ECMAScript microtask ordering.
+    fn enqueue_promise_job(
+        &mut self,
+        _heap: &mut Heap,
+        _reaction: PromiseReaction,
+    ) -> Result<(), HostError> {
+        Err(HostError::CallbackFailed)
     }
 }
 
@@ -373,6 +388,11 @@ pub enum InterpreterError {
     InvalidControlFlow(u32),
     /// Stable Runtime identity space was exhausted.
     IdentitySpaceExceeded,
+    /// The Context already retains its configured maximum number of modules.
+    ModuleLimitExceeded {
+        /// Maximum number of modules retained by one Context.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for InterpreterError {
@@ -398,6 +418,23 @@ pub struct ExecutableFunctionInfo {
     pub name: String,
 }
 
+/// The importer and exporter binding identities used to link one ESM import.
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleBindingLink<'a> {
+    /// Canonical module environment ID that owns the import slot.
+    pub importer_environment_id: &'a str,
+    /// Canonical binding ID of the local import slot.
+    pub importer_binding_id: &'a str,
+    /// Pre-instantiated importer lexical environment.
+    pub importer_environment: LexicalEnvironment,
+    /// Canonical module environment ID that owns the exported slot.
+    pub exporter_environment_id: &'a str,
+    /// Canonical binding ID of the exported slot.
+    pub exporter_binding_id: &'a str,
+    /// Pre-instantiated exporter lexical environment.
+    pub exporter_environment: LexicalEnvironment,
+}
+
 /// Immutable collection of independently verified OGMB function artifacts.
 ///
 /// The loader accepts serialized bytes and re-runs verification. Caller-
@@ -405,11 +442,20 @@ pub struct ExecutableFunctionInfo {
 pub struct ExecutableModule {
     functions: BTreeMap<String, Rc<FunctionImage>>,
     runtime_functions: HashMap<u32, String>,
+    binding_ids: HashMap<(String, String), BindingId>,
 }
 
 impl ExecutableModule {
     /// Loads one or more serialized OGMB function artifacts.
     pub fn load<I, B>(artifacts: I) -> Result<Self, InterpreterError>
+    where
+        I: IntoIterator<Item = B>,
+        B: AsRef<[u8]>,
+    {
+        Self::load_with_function_id_range(artifacts)
+    }
+
+    fn load_with_function_id_range<I, B>(artifacts: I) -> Result<Self, InterpreterError>
     where
         I: IntoIterator<Item = B>,
         B: AsRef<[u8]>,
@@ -471,13 +517,25 @@ impl ExecutableModule {
                         ))
                     })?;
                 let owner = &raw_functions[owner_id];
-                if !owner
+                let source_binding = owner
                     .bindings
                     .iter()
-                    .any(|binding| binding.id == capture.binding)
-                {
+                    .find(|binding| binding.id == capture.binding)
+                    .ok_or_else(|| {
+                        InterpreterError::InvalidMetadata(format!(
+                            "capture {:?} refers to missing binding {:?}",
+                            capture.id, capture.binding
+                        ))
+                    })?;
+                let capture_mode_valid = match source_binding.kind.as_str() {
+                    "var" | "let" | "parameter" => capture.mode == CaptureMode::Cell,
+                    "const" => capture.mode == CaptureMode::Value,
+                    "import" => capture.mode == CaptureMode::Cell,
+                    _ => false,
+                };
+                if !capture_mode_valid {
                     return Err(InterpreterError::InvalidMetadata(format!(
-                        "capture {:?} refers to missing binding {:?}",
+                        "capture {:?} has a storage mode incompatible with source binding {:?}",
                         capture.id, capture.binding
                     )));
                 }
@@ -539,11 +597,22 @@ impl ExecutableModule {
             }
         }
 
+        let function_count = u64::try_from(raw_functions.len())
+            .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+        let first_function_id = NEXT_RUNTIME_FUNCTION_ID
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                let next = current.checked_add(function_count)?;
+                (next <= u64::from(u32::MAX) + 1).then_some(next)
+            })
+            .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+
         let mut runtime_functions = HashMap::new();
         let mut functions = BTreeMap::new();
         for (index, (function_id, raw)) in raw_functions.into_iter().enumerate() {
-            let numeric =
-                u32::try_from(index + 1).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let offset =
+                u64::try_from(index).map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
+            let numeric = u32::try_from(first_function_id + offset)
+                .map_err(|_| InterpreterError::IdentitySpaceExceeded)?;
             let image = Rc::new(FunctionImage::build(
                 raw,
                 FunctionId(numeric),
@@ -585,6 +654,7 @@ impl ExecutableModule {
         Ok(Self {
             functions,
             runtime_functions,
+            binding_ids,
         })
     }
 
@@ -662,6 +732,304 @@ impl ExecutableModule {
             1,
         )?;
         Ok(state.report(completion))
+    }
+
+    /// Executes a callable Function value using this module's verified function table.
+    ///
+    /// Unlike execute(), this preserves the closure environment stored in the
+    /// supplied Function value. It is used by the host-driven job pump to invoke
+    /// queued callbacks without creating a second Runtime.
+    pub fn execute_callable<H: Host>(
+        &self,
+        heap: &mut Heap,
+        callee: Value,
+        arguments: &[Value],
+        host: &mut H,
+        options: ExecutionOptions,
+    ) -> Result<ExecutionReport, InterpreterError> {
+        validate_options(&options)?;
+        let function_id = heap.function_id(callee)?;
+        let entry_id = self.runtime_functions.get(&function_id.0).ok_or_else(|| {
+            InterpreterError::MissingFunction(format!("runtime function {}", function_id.0))
+        })?;
+        let image = self
+            .functions
+            .get(entry_id)
+            .cloned()
+            .ok_or_else(|| InterpreterError::MissingFunction(entry_id.clone()))?;
+        let depth_limit = options.max_call_depth.min(image.max_call_depth);
+        let frame_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        if frame_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: frame_stack_bytes,
+            });
+        }
+
+        let mut state = ExecutionState::new(&options)?;
+        let scope = heap.open_scope()?;
+        let setup = (|| {
+            // Root inputs before activation allocations can collect.
+            heap.scope_root(scope, callee)?;
+            for argument in arguments {
+                heap.scope_root(scope, *argument)?;
+            }
+            heap.scope_root(scope, options.global_this)?;
+            heap.enter_function_call(
+                callee,
+                &image.definition,
+                Value::undefined(),
+                arguments,
+                options.global_this,
+            )
+        })();
+        let activation = match setup {
+            Ok(activation) => activation,
+            Err(error) => {
+                let _ = heap.close_scope(scope);
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = heap.close_scope(scope) {
+            let _ = heap.leave_function_call(activation);
+            return Err(error.into());
+        }
+
+        let root_frame =
+            match VmFrame::new(heap, image, activation, callee, arguments, 1, depth_limit) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let _ = heap.leave_function_call(activation);
+                    return Err(error);
+                }
+            };
+        state.max_call_depth_reached = 1;
+        state.active_stack_bytes = frame_stack_bytes;
+        state.max_stack_bytes_reached = frame_stack_bytes;
+        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame]);
+        state.active_stack_bytes = 0;
+        completion.map(|completion| state.report(completion))
+    }
+
+    /// Instantiates a module Program closure and its persistent lexical environment.
+    ///
+    /// All top-level bindings are created uninitialized (except explicit
+    /// variable initializers). The host must link import aliases before
+    /// calling execute_in_environment().
+    pub fn instantiate_module_entry(
+        &self,
+        heap: &mut Heap,
+        entry_function_id: &str,
+    ) -> Result<(Value, LexicalEnvironment), InterpreterError> {
+        let image = self
+            .functions
+            .get(entry_function_id)
+            .ok_or_else(|| InterpreterError::MissingFunction(entry_function_id.to_owned()))?;
+        if !image.captures.is_empty() || !image.definition.parameters.is_empty() {
+            return Err(InterpreterError::InvalidMetadata(
+                "module entry function cannot have parameters or lexical captures".to_owned(),
+            ));
+        }
+        let scope = heap.open_scope()?;
+        let environment = match heap.create_environment(None, &image.definition.locals) {
+            Ok(environment) => environment,
+            Err(error) => {
+                let _ = heap.close_scope(scope);
+                return Err(InterpreterError::InvalidMetadata(format!(
+                    "module environment instantiation failed: {error:?}; local bindings: {:?}",
+                    image
+                        .definition
+                        .locals
+                        .iter()
+                        .map(|binding| binding.id.0)
+                        .collect::<Vec<_>>()
+                )));
+            }
+        };
+        heap.scope_root_environment(scope, environment)?;
+        let closure = match heap.create_module_closure(&image.definition, environment) {
+            Ok(closure) => closure,
+            Err(error) => {
+                let _ = heap.close_scope(scope);
+                return Err(InterpreterError::InvalidMetadata(format!(
+                    "module Program closure creation failed: {error:?}; function ID: {:?}; locals: {:?}; captures: {:?}",
+                    image.definition.id,
+                    image
+                        .definition
+                        .locals
+                        .iter()
+                        .map(|binding| binding.id.0)
+                        .collect::<Vec<_>>(),
+                    image.definition.captures
+                )));
+            }
+        };
+        heap.scope_root(scope, closure)?;
+        heap.close_scope(scope)?;
+        Ok((closure, environment))
+    }
+
+    /// Reads one module lexical binding by its canonical environment and binding IDs.
+    pub fn read_module_binding(
+        &self,
+        heap: &Heap,
+        environment_id: &str,
+        binding_id: &str,
+        environment: LexicalEnvironment,
+    ) -> Result<Value, InterpreterError> {
+        let binding = self
+            .binding_ids
+            .get(&(environment_id.to_owned(), binding_id.to_owned()))
+            .copied()
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "missing module binding {environment_id:?}/{binding_id:?}"
+                ))
+            })?;
+        Ok(heap.load_binding(environment, binding)?)
+    }
+
+    /// Links an import slot to the exporter slot using a read-only live alias.
+    pub fn link_import_binding(
+        &self,
+        heap: &mut Heap,
+        link: ModuleBindingLink<'_>,
+    ) -> Result<(), InterpreterError> {
+        let importer = self
+            .binding_ids
+            .get(&(
+                link.importer_environment_id.to_owned(),
+                link.importer_binding_id.to_owned(),
+            ))
+            .copied()
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "missing importer binding {:?}/{:?}",
+                    link.importer_environment_id, link.importer_binding_id
+                ))
+            })?;
+        let exporter = self
+            .binding_ids
+            .get(&(
+                link.exporter_environment_id.to_owned(),
+                link.exporter_binding_id.to_owned(),
+            ))
+            .copied()
+            .ok_or_else(|| {
+                InterpreterError::InvalidMetadata(format!(
+                    "missing exporter binding {:?}/{:?}",
+                    link.exporter_environment_id, link.exporter_binding_id
+                ))
+            })?;
+        heap.link_binding_alias(
+            link.importer_environment,
+            importer,
+            link.exporter_environment,
+            exporter,
+        )
+        .map_err(|error| {
+            InterpreterError::InvalidMetadata(format!(
+                "module import alias linking failed: {error:?}"
+            ))
+        })?;
+        Ok(())
+    }
+
+    /// Evaluates a module Program in its pre-instantiated module environment.
+    pub fn execute_in_environment<H: Host>(
+        &self,
+        heap: &mut Heap,
+        entry_function_id: &str,
+        callee: Value,
+        environment: LexicalEnvironment,
+        host: &mut H,
+        options: ExecutionOptions,
+    ) -> Result<ExecutionReport, InterpreterError> {
+        validate_options(&options)?;
+        let image = self
+            .functions
+            .get(entry_function_id)
+            .cloned()
+            .ok_or_else(|| InterpreterError::MissingFunction(entry_function_id.to_owned()))?;
+        let function_id = heap.function_id(callee)?;
+        if self
+            .runtime_functions
+            .get(&function_id.0)
+            .map(String::as_str)
+            != Some(entry_function_id)
+        {
+            return Err(InterpreterError::InvalidMetadata(
+                "module entry closure does not match the selected Program function".to_owned(),
+            ));
+        }
+        let depth_limit = options.max_call_depth.min(image.max_call_depth);
+        let frame_stack_bytes = VmFrame::estimated_stack_bytes(&image);
+        if frame_stack_bytes > options.max_stack_bytes {
+            return Err(InterpreterError::StackQuotaExceeded {
+                limit_bytes: options.max_stack_bytes,
+                requested_bytes: frame_stack_bytes,
+            });
+        }
+
+        if !image.definition.parameters.is_empty() {
+            return Err(InterpreterError::InvalidMetadata(format!(
+                "module Program function unexpectedly declares {} parameters",
+                image.definition.parameters.len()
+            )));
+        }
+        if !heap.closure_matches_environment(callee, image.definition.id, environment)? {
+            return Err(InterpreterError::InvalidMetadata(
+                "module Program closure is not bound to its instantiated lexical environment"
+                    .to_owned(),
+            ));
+        }
+        let mut state = ExecutionState::new(&options)?;
+        let scope = heap.open_scope()?;
+        let setup = (|| {
+            heap.scope_root(scope, callee)?;
+            heap.scope_root(scope, options.global_this)?;
+            heap.enter_function_call_in_environment(
+                callee,
+                &image.definition,
+                environment,
+                Value::undefined(),
+                options.global_this,
+            )
+        })();
+        let activation = match setup {
+            Ok(activation) => activation,
+            Err(error) => {
+                let _ = heap.close_scope(scope);
+                return Err(InterpreterError::InvalidMetadata(format!(
+                    "module Program activation failed: {error:?}"
+                )));
+            }
+        };
+        if let Err(error) = heap.close_scope(scope) {
+            let _ = heap.leave_function_call(activation);
+            return Err(error.into());
+        }
+        let root_frame = match VmFrame::new(heap, image, activation, callee, &[], 1, depth_limit) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = heap.leave_function_call(activation);
+                return Err(InterpreterError::InvalidMetadata(format!(
+                    "module Program VM frame creation failed: {error:?}"
+                )));
+            }
+        };
+        state.max_call_depth_reached = 1;
+        state.active_stack_bytes = frame_stack_bytes;
+        state.max_stack_bytes_reached = frame_stack_bytes;
+        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame]);
+        state.active_stack_bytes = 0;
+        completion.map(|completion| state.report(completion))
+    }
+
+    /// Returns whether a Function value belongs to this verified module.
+    pub fn contains_callable(&self, heap: &Heap, callee: Value) -> Result<bool, InterpreterError> {
+        let function_id = heap.function_id(callee)?;
+        Ok(self.runtime_functions.contains_key(&function_id.0))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1256,6 +1624,62 @@ impl ExecutableModule {
                     }
                 }
             }
+            CallKind::PromiseResolve => {
+                let value = read_value(frame, sources[0])?;
+                let promise = heap.promise_resolve(value)?;
+                heap.scope_root(scope, promise)?;
+                write_register(frame, destination, RegisterValue::Value(promise))?;
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
+            }
+            CallKind::PromiseReject => {
+                let reason = read_value(frame, sources[0])?;
+                let promise = heap.promise_reject(reason)?;
+                heap.scope_root(scope, promise)?;
+                write_register(frame, destination, RegisterValue::Value(promise))?;
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
+            }
+            CallKind::PromiseThen => {
+                let promise = read_value(frame, sources[0])?;
+                let fulfilled = read_value(frame, sources[1])?;
+                let rejected = read_value(frame, sources[2])?;
+                let on_fulfilled = if fulfilled.value_type() == ValueType::Function {
+                    Some(fulfilled)
+                } else {
+                    None
+                };
+                let on_rejected = if rejected.value_type() == ValueType::Function {
+                    Some(rejected)
+                } else {
+                    None
+                };
+                let (child, reaction) = heap.promise_then(promise, on_fulfilled, on_rejected)?;
+                heap.scope_root(scope, child)?;
+                if let Some(reaction) = reaction {
+                    host.enqueue_promise_job(heap, reaction)
+                        .map_err(|error| match error {
+                            HostError::Runtime(error) => InterpreterError::Runtime(error),
+                            HostError::Denied => InterpreterError::HostCapabilityDenied(
+                                "PromiseJob enqueue".to_owned(),
+                            ),
+                            HostError::WrongRuntime => InterpreterError::HostRuntimeMismatch,
+                            HostError::Panicked => InterpreterError::HostCallbackPanicked,
+                            HostError::CallbackFailed => InterpreterError::HostCallbackFailed,
+                            HostError::Throw(_) => InterpreterError::InvalidHostCompletion,
+                            HostError::InvalidCompletion => InterpreterError::InvalidHostCompletion,
+                        })?;
+                }
+                write_register(frame, destination, RegisterValue::Value(child))?;
+                Ok(Step::Continue {
+                    next_pc: frame.pc + 1,
+                    back_edge: false,
+                })
+            }
             CallKind::GetProperty | CallKind::GetElement => {
                 let object = read_value(frame, sources[0])?;
                 let key = read_value(frame, sources[1])?;
@@ -1585,9 +2009,9 @@ impl RawFunction {
                 )));
             }
             let kind = required_string(binding.get("kind"), "environment binding kind")?;
-            if !matches!(kind, "var" | "let" | "const" | "parameter") {
+            if !matches!(kind, "var" | "let" | "const" | "parameter" | "import") {
                 return Err(InterpreterError::UnsupportedOperation(
-                    "catch/import lexical binding",
+                    "unsupported lexical binding kind",
                 ));
             }
             let mutable = binding
@@ -1598,7 +2022,7 @@ impl RawFunction {
                         "binding {binding_id:?} has no mutability metadata"
                     ))
                 })?;
-            if (kind == "const") == mutable {
+            if (matches!(kind, "const" | "import")) == mutable {
                 return Err(InterpreterError::InvalidMetadata(format!(
                     "binding {binding_id:?} has inconsistent kind/mutability metadata"
                 )));
@@ -1638,7 +2062,7 @@ impl RawFunction {
                     ))
                 })?;
             let mode = match required_string(capture.get("mode"), "capture mode")? {
-                "cell" if mutable => CaptureMode::Cell,
+                "cell" => CaptureMode::Cell,
                 "value" if !mutable => CaptureMode::Value,
                 _ => {
                     return Err(InterpreterError::InvalidMetadata(format!(
@@ -1766,8 +2190,10 @@ impl FunctionImage {
                     BindingDefinition::mutable(id, Value::undefined())
                 }
                 "let" | "parameter" => BindingDefinition::uninitialized(id, true),
-                "const" => {
-                    const_binding_ids.insert(id);
+                "const" | "import" => {
+                    if binding.kind == "const" {
+                        const_binding_ids.insert(id);
+                    }
                     BindingDefinition::uninitialized(id, false)
                 }
                 _ => {

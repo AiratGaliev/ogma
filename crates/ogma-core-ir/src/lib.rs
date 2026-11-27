@@ -727,7 +727,9 @@ fn operation_effects(op: &str) -> Option<Effects> {
         "js.constant" | "js.to_boolean" | "js.strict_equal" | "js.typeof" => Some(E::default()),
         "js.add" | "js.less_than" | "js.greater_than" | "js.get_property" | "js.set_property"
         | "js.get_element" | "js.set_element" | "js.call" | "js.construct" | "js.to_number"
-        | "js.to_string" => Some(dynamic),
+        | "js.to_string" | "js.promise_resolve" | "js.promise_reject" | "js.promise_then" => {
+            Some(dynamic)
+        }
         "env.load" | "env.store" => Some(E {
             may_throw: true,
             ..E::default()
@@ -771,6 +773,8 @@ fn operation_arity(op: &str) -> Option<(usize, Option<usize>)> {
         "js.set_property" | "js.get_element" => Some((2, Some(2))),
         "js.set_element" => Some((3, Some(3))),
         "js.call" | "js.construct" => Some((2, None)),
+        "js.promise_resolve" | "js.promise_reject" => Some((1, Some(1))),
+        "js.promise_then" => Some((3, Some(3))),
         "host.call" => Some((0, None)),
         "env.store" => Some((1, Some(1))),
         _ => None,
@@ -1176,13 +1180,6 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 "mutable captures require cell mode",
             ));
         }
-        if !capture.mutable && capture.mode != CaptureMode::Value {
-            errors.push(Diagnostic::new(
-                "closure.capture_mode",
-                format!("{path}.mode"),
-                "immutable captures require value mode",
-            ));
-        }
         if !valid_representation(capture.semantic_type, capture.representation) {
             errors.push(Diagnostic::new(
                 "representation.unsupported",
@@ -1482,7 +1479,10 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                 }
                 let expected_type = match instruction.op.as_str() {
                     "js.add" | "js.get_property" | "js.get_element" | "js.call"
-                    | "js.construct" | "host.call" | "async.await" => Some(SemanticType::Dynamic),
+                    | "js.construct" | "js.promise_resolve" | "js.promise_reject"
+                    | "js.promise_then" | "host.call" | "async.await" => {
+                        Some(SemanticType::Dynamic)
+                    }
                     "js.to_boolean" | "js.strict_equal" | "js.less_than" | "js.greater_than" => {
                         Some(SemanticType::Boolean)
                     }
@@ -1773,7 +1773,7 @@ pub fn verify_document(document: &FunctionDocument) -> Vec<Diagnostic> {
                                 CaptureMode::Value
                             }
                         } else if let Some(binding_info) = bindings.get(binding) {
-                            if binding_info.mutable {
+                            if binding_info.mutable || binding_info.kind == BindingKind::Import {
                                 CaptureMode::Cell
                             } else {
                                 CaptureMode::Value

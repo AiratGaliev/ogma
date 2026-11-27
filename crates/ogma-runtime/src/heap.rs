@@ -1,5 +1,6 @@
 //! Non-moving, generation-checked Runtime heap and explicit root providers.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -126,6 +127,8 @@ pub enum HeapError {
     ImmutableBinding,
     /// A lexical binding is initialized more than once.
     AlreadyInitialized,
+    /// A module binding alias chain contains a cycle.
+    BindingAliasCycle,
 }
 
 impl std::fmt::Display for HeapError {
@@ -135,6 +138,43 @@ impl std::fmt::Display for HeapError {
 }
 
 impl std::error::Error for HeapError {}
+
+/// Observable ECMAScript Promise state.
+#[derive(Clone, Copy, Debug)]
+pub enum PromiseState {
+    /// The promise has not been settled.
+    Pending,
+    /// The promise has been fulfilled with a value.
+    Fulfilled(Value),
+    /// The promise has been rejected with a value.
+    Rejected(Value),
+}
+
+/// One Promise reaction scheduled as an ECMAScript PromiseJob.
+#[derive(Clone, Copy, Debug)]
+pub struct PromiseReaction {
+    /// Optional callable for fulfillment; absent means identity.
+    pub on_fulfilled: Option<Value>,
+    /// Optional callable for rejection; absent means throw-through.
+    pub on_rejected: Option<Value>,
+    /// Value passed to the selected reaction.
+    pub argument: Value,
+    /// Promise returned by the then operation.
+    pub child: Value,
+    /// Whether the source promise was rejected.
+    pub rejected: bool,
+}
+
+struct ChargedPromiseReaction {
+    reaction: PromiseReaction,
+    accounting: ExternalMemoryCharge,
+}
+
+struct PromiseRecord {
+    state: PromiseState,
+    reactions: Vec<ChargedPromiseReaction>,
+    accounting: ExternalMemoryCharge,
+}
 
 /// Internal object identity. It is never exposed through the host API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -414,6 +454,7 @@ pub struct Heap {
     free_host_head: Option<u32>,
     external_slots: Vec<ExternalSlot>,
     free_external_head: Option<u32>,
+    promises: HashMap<GcRef, PromiseRecord>,
     next_root_serial: u64,
     allocations: u64,
     reclaimed_objects: u64,
@@ -452,6 +493,7 @@ impl Heap {
             free_host_head: None,
             external_slots: Vec::new(),
             free_external_head: None,
+            promises: HashMap::new(),
             next_root_serial: 1,
             allocations: 0,
             reclaimed_objects: 0,
@@ -916,10 +958,22 @@ impl Heap {
                 continue;
             }
 
+            let generation = self.slots[slot_index].generation;
             let cell = self.slots[slot_index]
                 .cell
                 .take()
                 .ok_or(HeapError::AccountingInvariant)?;
+            let object_reference = GcRef {
+                heap_id: self.heap_id,
+                index: u32::try_from(slot_index).map_err(|_| HeapError::HeapCapacityExceeded)?,
+                generation,
+            };
+            if let Some(record) = self.promises.remove(&object_reference) {
+                self.release_external_memory(record.accounting)?;
+                for reaction in record.reactions {
+                    self.release_external_memory(reaction.accounting)?;
+                }
+            }
             let edge_bytes = cell
                 .edges
                 .capacity()

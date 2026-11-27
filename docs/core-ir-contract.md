@@ -102,6 +102,9 @@ The operation name identifies language/runtime semantics, never a backend opcode
 | `js.set_element` | `[object, key, value]` | assigned value's type/representation | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.call` | `[callee, thisArg, ...arguments]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.construct` | `[constructor, newTarget, ...arguments]` | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.promise_resolve` | [`value`]; returns an existing same-Runtime Ogma Promise or creates a fulfilled Promise | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.promise_reject` | [`reason`]; creates a rejected Promise | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
+| `js.promise_then` | [`promise, onFulfilled, onRejected`]; absent handlers are represented by `undefined`; returns a child Promise | `dynamic/boxed` | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.to_boolean` | `[value]` | boolean | none |
 | `js.to_number` | `[value]` | number | allocate, GC, throw, host call, re-enter, mutate shape |
 | `js.to_string` | `[value]` | string | allocate, GC, throw, host call, re-enter, mutate shape |
@@ -114,7 +117,7 @@ The operation name identifies language/runtime semantics, never a backend opcode
 | `async.await` | `[awaitable]` | `dynamic/boxed` | allocate, GC, throw, suspend |
 | `js.throw` | `[exceptionValue]` | no result | throw |
 
-The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` and `<`/`>` comparisons can invoke `ToPrimitive`, call user code and allocate strings. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
+The minimum summaries are conservative lower bounds, not exact effect summaries. Producers may set additional flags, but may not omit an effect that the operation can exhibit. In particular, generic property access/calls can invoke accessors, proxies, user code and host-backed objects; generic `+` and `<`/`>` comparisons can invoke `ToPrimitive`, call user code and allocate strings. Promise operations allocate managed Promise values and enqueue user callbacks through the host-owned PromiseJobs queue; `js.promise_then` must preserve FIFO reaction order and the child Promise must adopt a Promise returned by its selected reaction. The current M1 subset resolves an existing Promise from the same Runtime and adopts returned Ogma Promises; it does not claim general thenable assimilation, a Promise constructor/executor, `finally`, unhandled-rejection reporting or timers. A backend may use a narrower operation only after a separate proof/guard with a correct generic fallback.
 
 `js.call` explicitly carries the receiver (`thisArg`) and `js.construct` explicitly carries `newTarget`; backends must not reconstruct these from syntax or guess them from the callee. Computed property keys use `js.get_element`/`js.set_element`; named property operations carry an explicit string key. `host.call` names a capability-bound host symbol, not an arbitrary native address.
 
@@ -208,11 +211,11 @@ The corpus manifest defines expected acceptance/rejection and, for negative case
 
 The verifier checks JSON Schema structure plus semantic invariants: stable ID references, declaration-kind/mutability consistency, canonical literal payload encodings, unique capture/suspension identities, supported operations and operand counts, operation attribute contracts, effect lower bounds and token continuity, required exception flow, valid CFG/reachability/instruction-level dominance, block-argument arity/types, handler shape, closure/environment references, source identity/spans/binding/scope/suspension metadata and function returns. Both the Rust and Python verifier entrypoints reject duplicate JSON object keys at any nesting level, non-finite JSON numbers and malformed attribute payloads without crashing.
 
-The fixture corpus contains 29 cases (8 accepted and 21 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source and async-suspension examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions and malformed operation attributes. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
+The fixture corpus contains 31 cases (9 accepted and 22 rejected). It includes positive SSA/branch, dynamic JS exception/effect, closure/capture/source, async-suspension, host-call and Promise-operation examples; negative malformed CFG, instruction-level exceptional dominance, edge-type, under-reported effects, unsupported representation, missing exception-flow, invalid source spans/IDs, mutability mismatches, literal payloads, duplicate captures/suspensions, malformed operation attributes and invalid Promise arity. The corpus is a focused contract regression suite, not an ECMAScript conformance suite, optimizer proof, runtime fuzz campaign or backend equivalence test.
 
 ## 10. Compatibility and change policy
 
-- Update the schema, this document, verifier and fixtures together for any v1 contract change.
+- Update the schema, this document, verifier and fixtures together for any v1 contract change. Promise operation additions are part of the M1 Core IR v1.0.0 implementation profile; older consumers that do not recognize these operation identifiers must reject the document rather than silently ignore them.
 - Keep existing v1 semantics stable. Do not reuse an existing operation name with different ECMAScript behaviour or weaken an effect/exception guarantee.
 - Add a fixture for every newly supported semantic case and a negative fixture for every newly rejected malformed case.
 - An additional operation/representation/effect semantic that old consumers may not safely ignore requires an explicit compatibility decision; do not silently extend the operation registry.

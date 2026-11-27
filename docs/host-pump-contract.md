@@ -2,11 +2,11 @@
 
 - **Contract ID:** ogma-host-pump-contract
 - **Contract version:** 1.0.0
-- **Status:** M0 architectural contract and reference proof; not a Runtime implementation
+- **Status:** normative scheduling contract; M0 Node reference proof plus OGM-48 M1 implementation of a bounded host-driven callback/PromiseJobs pump and the declared ESM/Promise subset. Node scheduling adapters remain deferred.
 - **Node reference:** 26.13.0, source commit 18b32a3b1552e199a01f1a8d9fd64aa756d3b75b
 - **Authority:** this document defines the host-pump and scheduling contract; [Compatibility Profile](compatibility-profile.md) remains the source of truth for compatibility claims and feature status.
 
-The contract follows the authoritative [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.8, 11 and 20.6. It is an implementation-facing M0 decision. It does not claim that an Ogma Runtime, Node adapter or public Rust API already exists.
+The contract follows the authoritative [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a), especially sections 8.8, 11 and 20.6. It is an implementation-facing semantic decision. OGM-47 provides the production M1 Runtime and Rust embedding API. OGM-48 adds a deliberately limited ECMAScript Promise/PromiseJobs implementation, static ESM graph loading and linking, and the bounded host pump described below. This does not implement the optional Node scheduling adapter or claim full Promise/ECMAScript conformance.
 
 ## 1. Goals and non-goals
 
@@ -124,6 +124,23 @@ The semantic outcome set is:
 | Shutdown | The Runtime is terminal and cannot accept work. |
 
 The exact Rust enum layout is deliberately not frozen here.
+
+### 4.4 Current M1 implementation boundary (OGM-48)
+
+OGM-48 implements the following M1 execution path in the production workspace:
+
+- A host-owned ModuleResolver receives the referring canonical module ID and the original static specifier unchanged. The host supplies the resolution/loading policy; the Runtime does not consult package.json, filesystem paths, Node conditions or node: built-ins.
+- Context::evaluate_module_graph discovers the static dependency graph, validates descriptors, creates every module environment before linking any import, links default/named imports as read-only live aliases, then evaluates dependencies before importers. Module records are cached per Context; cycles use explicit Linking/Evaluating/Evaluated/Failed state. Local exports, default/named imports, named re-exports, star exports, side-effect imports, missing/ambiguous export diagnostics and evaluation failure are represented explicitly.
+- Namespace imports/exports and dynamic import are rejected with an explicit unsupported-module diagnostic. Top-level await is not implemented. CommonJS and Node package resolution are outside this core resolver contract.
+- The Runtime heap owns Promise records and pending/fulfilled/rejected state. The M1 source/compiler subset lowers Promise.resolve(value), Promise.reject(reason), promise.then(onFulfilled, onRejected) and promise.catch(onRejected) to dedicated Core IR and OGMB call kinds. Reactions registered before settlement are retained in registration order; settlement queues them for the shared host pump.
+- The current Promise subset resolves an existing Promise from the same Runtime, creates fulfilled/rejected Promises for non-Promise values/reasons, and returns a child Promise from then/catch. A child adopts an Ogma Promise returned by its callback. Source lowering recognizes direct Promise expressions and immutable const aliases; mutable bindings statically assigned a recognized Promise fail with an explicit diagnostic because the current compiler does not perform control-flow-aware Promise type merging. Promise-valued parameters and function returns are not inferred in this M1 slice. General thenable assimilation, Promise constructor/executor, finally, async functions/await, queueMicrotask and unhandled-rejection reporting are not implemented.
+- Promise reactions created during synchronous script or ESM evaluation are staged with callback/argument/child persistent roots, transferred to the Runtime FIFO before the pump can report Idle, and included in pending_promise_jobs. Both staging and dispatch are bounded by EngineConfig.max_pending_jobs; each pump turn is capped by max_jobs_per_pump. A full Runtime FIFO leaves already-staged reactions retained in FIFO order for a later bounded turn.
+- Context::enqueue_promise_job remains available for a host-supplied verified Function owned by any module registered in that Context. It retains the originating ExecutableModule, host-function registry, callback and argument roots until dispatch or cancellation.
+- Context::pump_promise_jobs and pump_promise_jobs_with_request dispatch bounded FIFO work and apply the interpreter cancellation/deadline/fuel policy. Context::run_promise_jobs_until_idle and its request-aware variant execute multiple bounded turns under a separate total-work budget.
+- Pause/resume retains pending jobs. Cancellation and shutdown release roots and external-memory accounting from both the Runtime dispatch queue and staged Promise-reaction queue. Shutdown is terminal. A thrown callback completion is returned as a persistent handle owned by the caller.
+- The same Runtime heap, module registry and host-function registry are used by synchronous module evaluation and Promise reaction callbacks. Re-entrant pumping is rejected; normal host re-entry uses the existing guarded interpreter execution path.
+
+The M1 queue is an ECMAScript PromiseJobs queue, not a Node event-loop implementation. process.nextTick, timers, setImmediate, I/O phase scheduling, Node rejection events and Node checkpoint priority remain with the later Node compatibility adapter. The callback pump and minimal Promise/ESM fixtures are focused M1 regression coverage; they are not a full Test262, Node differential or ECMAScript conformance claim. Consult [Module Graph Contract](module-graph-contract.md) for exact ESM syntax and resolver boundaries, and [Compatibility Profile](compatibility-profile.md) for feature status.
 
 ## 5. Fairness and lifecycle
 

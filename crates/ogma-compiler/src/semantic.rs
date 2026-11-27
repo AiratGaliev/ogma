@@ -355,7 +355,7 @@ pub fn analyze(
                 mutable: ir_binding.mutable,
                 semantic_type: ir_binding.semantic_type,
                 representation: ir_binding.representation,
-                mode: if ir_binding.mutable {
+                mode: if ir_binding.mutable || ir_binding.kind == BindingKind::Import {
                     CaptureMode::Cell
                 } else {
                     CaptureMode::Value

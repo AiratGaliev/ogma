@@ -372,6 +372,8 @@ struct FunctionCompiler<'a> {
     captures_by_binding: HashMap<String, Capture>,
     const_initializers: HashMap<String, SyntaxExpression>,
     const_values: HashMap<String, ValueRef>,
+    promise_bindings: HashSet<String>,
+    unsupported_mutable_promise_bindings: HashSet<String>,
     hoisted_functions: HashSet<String>,
     blocks: Vec<BasicBlock>,
     current: Option<usize>,
@@ -468,15 +470,18 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             };
             if binding.ir.kind == BindingKind::Import {
-                return Err(diag(
-                    syntax,
-                    "lowering.live_import_capture_unsupported",
-                    Some(binding.declaration),
-                    format!(
-                        "capture of live import binding {:?} cannot be represented by Core IR v1 value captures",
-                        binding.ir.name
-                    ),
-                ));
+                if capture.mode != CaptureMode::Cell || binding.ir.mutable {
+                    return Err(diag(
+                        syntax,
+                        "lowering.import_capture_mode",
+                        Some(binding.declaration),
+                        format!(
+                            "import binding {:?} must be captured as a read-only live reference",
+                            binding.ir.name
+                        ),
+                    ));
+                }
+                continue;
             }
             if binding.ir.kind == BindingKind::Const {
                 if capture.mode != CaptureMode::Value || binding.ir.mutable {
@@ -536,6 +541,8 @@ impl<'a> FunctionCompiler<'a> {
             captures_by_binding,
             const_initializers,
             const_values: HashMap::new(),
+            promise_bindings: HashSet::new(),
+            unsupported_mutable_promise_bindings: HashSet::new(),
             hoisted_functions: HashSet::new(),
             blocks: Vec::new(),
             current: None,
@@ -1161,16 +1168,6 @@ impl<'a> FunctionCompiler<'a> {
         let mut source_bindings = Vec::with_capacity(child.captures.len());
         for capture in &child.captures {
             let alias = if let Some(binding) = self.local_bindings.get(&capture.binding) {
-                if binding.kind == BindingKind::Import {
-                    return self.fail(
-                        "lowering.live_import_capture_unsupported",
-                        Some(span),
-                        format!(
-                            "capturing live import binding {:?} would freeze its value at closure creation",
-                            binding.name
-                        ),
-                    );
-                }
                 let Some(source_binding) = self
                     .semantic_module
                     .bindings
@@ -1183,7 +1180,19 @@ impl<'a> FunctionCompiler<'a> {
                         format!("no source metadata for captured binding {:?}", binding.id),
                     );
                 };
-                if binding.kind == BindingKind::Const {
+                if binding.kind == BindingKind::Import {
+                    if capture.mode != CaptureMode::Cell {
+                        return self.fail(
+                            "lowering.import_capture_mode",
+                            Some(span),
+                            format!(
+                                "import binding {:?} must remain a live reference",
+                                binding.name
+                            ),
+                        );
+                    }
+                    binding.id.clone()
+                } else if binding.kind == BindingKind::Const {
                     if capture.mode != CaptureMode::Value {
                         return self.fail(
                             "lowering.const_capture_mode",
@@ -1270,6 +1279,57 @@ impl<'a> FunctionCompiler<'a> {
                 "closure.create produced no function value",
             )
         })
+    }
+
+    fn is_mutable_promise_alias(&self, expression: &SyntaxExpression) -> bool {
+        match expression {
+            SyntaxExpression::Parenthesized { expression, .. } => {
+                self.is_mutable_promise_alias(expression)
+            }
+            SyntaxExpression::Identifier {
+                binding: Some(binding),
+                ..
+            } => self.unsupported_mutable_promise_bindings.contains(binding),
+            _ => false,
+        }
+    }
+
+    fn is_promise_expression(&self, expression: &SyntaxExpression) -> bool {
+        match expression {
+            SyntaxExpression::Parenthesized { expression, .. } => {
+                self.is_promise_expression(expression)
+            }
+            SyntaxExpression::Identifier {
+                binding: Some(binding),
+                ..
+            } => self.promise_bindings.contains(binding),
+            SyntaxExpression::Call { callee, .. } => match callee.as_ref() {
+                SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } if matches!(
+                    object.as_ref(),
+                    SyntaxExpression::Identifier {
+                        name,
+                        binding: None,
+                        ..
+                    } if name == "Promise"
+                ) && matches!(method.as_str(), "resolve" | "reject") =>
+                {
+                    true
+                }
+                SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } if matches!(method.as_str(), "then" | "catch") => {
+                    self.is_promise_expression(object)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     fn emit_expression(
@@ -1476,6 +1536,180 @@ impl<'a> FunctionCompiler<'a> {
                 arguments,
                 span,
             } => {
+                let static_promise_method = match callee.as_ref() {
+                    SyntaxExpression::Member {
+                        object,
+                        key: SyntaxMemberKey::Static(name),
+                        ..
+                    } if matches!(
+                        object.as_ref(),
+                        SyntaxExpression::Identifier {
+                            name: object_name,
+                            binding: None,
+                            ..
+                        } if object_name == "Promise"
+                    ) =>
+                    {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                };
+                if let Some(method @ ("resolve" | "reject")) = static_promise_method {
+                    let value = if let Some(argument) = arguments.first() {
+                        self.emit_expression(argument)?
+                    } else {
+                        self.emit_undefined("materialize missing Promise static-method argument")?
+                    };
+                    let operation = if method == "resolve" {
+                        "js.promise_resolve"
+                    } else {
+                        "js.promise_reject"
+                    };
+                    return self
+                        .emit_instruction(
+                            operation,
+                            vec![value.id],
+                            Some(ValueType::DYNAMIC),
+                            BTreeMap::new(),
+                            dynamic_effects(),
+                            self.user_source(*span, Vec::new()),
+                        )?
+                        .ok_or_else(|| {
+                            diag(
+                                self.syntax,
+                                "lowering.promise_result",
+                                Some(*span),
+                                "Promise intrinsic produced no value",
+                            )
+                        });
+                }
+
+                if let SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } = callee.as_ref()
+                    && matches!(method.as_str(), "then" | "catch")
+                    && self.is_mutable_promise_alias(object)
+                {
+                    return self.fail(
+                        "lowering.mutable_promise_alias_unsupported",
+                        Some(*span),
+                        "M1 Promise intrinsics accept direct Promise expressions and immutable const aliases; mutable Promise aliases require control-flow-aware type tracking",
+                    );
+                }
+
+                if let SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } = callee.as_ref()
+                    && method == "finally"
+                    && (self.is_promise_expression(object) || self.is_mutable_promise_alias(object))
+                {
+                    return self.fail(
+                        "lowering.promise_finally_unsupported",
+                        Some(*span),
+                        "Promise.prototype.finally is outside the supported M1 Promise subset",
+                    );
+                }
+
+                if matches!(
+                    callee.as_ref(),
+                    SyntaxExpression::Identifier {
+                        name,
+                        binding: None,
+                        ..
+                    } if matches!(
+                        name.as_str(),
+                        "queueMicrotask" | "setTimeout" | "setInterval" | "setImmediate"
+                    )
+                ) {
+                    return self.fail(
+                        "lowering.node_scheduler_unsupported",
+                        Some(*span),
+                        "Node/host scheduling APIs are outside the ECMAScript PromiseJobs core",
+                    );
+                }
+
+                if matches!(
+                    callee.as_ref(),
+                    SyntaxExpression::Member {
+                        object,
+                        key: SyntaxMemberKey::Static(method),
+                        ..
+                    } if method == "nextTick"
+                        && matches!(
+                            object.as_ref(),
+                            SyntaxExpression::Identifier {
+                                name,
+                                binding: None,
+                                ..
+                            } if name == "process"
+                        )
+                ) {
+                    return self.fail(
+                        "lowering.node_scheduler_unsupported",
+                        Some(*span),
+                        "process.nextTick belongs to the deferred Node compatibility scheduler",
+                    );
+                }
+
+                let member_promise_method = match callee.as_ref() {
+                    SyntaxExpression::Member {
+                        object,
+                        key: SyntaxMemberKey::Static(name),
+                        span: member_span,
+                    } if (name == "then" || name == "catch")
+                        && self.is_promise_expression(object) =>
+                    {
+                        Some((object.as_ref(), name.as_str(), *member_span))
+                    }
+                    _ => None,
+                };
+                if let Some((object, method, _member_span)) = member_promise_method {
+                    let promise = self.emit_expression(object)?;
+                    let (fulfilled, rejected) = if method == "catch" {
+                        let undefined_fulfilled = self
+                            .emit_undefined("materialize missing Promise fulfillment reaction")?;
+                        let rejected = if let Some(argument) = arguments.first() {
+                            self.emit_expression(argument)?
+                        } else {
+                            self.emit_undefined("materialize missing Promise rejection reaction")?
+                        };
+                        (undefined_fulfilled, rejected)
+                    } else {
+                        let fulfilled = if let Some(argument) = arguments.first() {
+                            self.emit_expression(argument)?
+                        } else {
+                            self.emit_undefined("materialize missing Promise fulfillment reaction")?
+                        };
+                        let rejected = if let Some(argument) = arguments.get(1) {
+                            self.emit_expression(argument)?
+                        } else {
+                            self.emit_undefined("materialize missing Promise rejection reaction")?
+                        };
+                        (fulfilled, rejected)
+                    };
+                    return self
+                        .emit_instruction(
+                            "js.promise_then",
+                            vec![promise.id, fulfilled.id, rejected.id],
+                            Some(ValueType::DYNAMIC),
+                            BTreeMap::new(),
+                            dynamic_effects(),
+                            self.user_source(*span, Vec::new()),
+                        )?
+                        .ok_or_else(|| {
+                            diag(
+                                self.syntax,
+                                "lowering.promise_result",
+                                Some(*span),
+                                "Promise.then produced no child Promise",
+                            )
+                        });
+                }
+
                 let (callee_value, this_value) = if let Some((object, key, member_span)) =
                     member_call_reference(callee)
                 {
@@ -1519,7 +1753,26 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => {
                 let target = self.evaluate_assignment_target(target, *span)?;
+                let is_promise =
+                    self.is_promise_expression(value) || self.is_mutable_promise_alias(value);
                 let value = self.emit_expression(value)?;
+                if is_promise
+                    && let EvaluatedAssignmentTarget::Binding(binding) = &target
+                    && (self
+                        .local_bindings
+                        .get(binding)
+                        .is_some_and(|item| item.mutable)
+                        || self
+                            .captures_by_binding
+                            .get(binding)
+                            .is_some_and(|item| item.mutable))
+                {
+                    // Mutable Promise aliases require control-flow-aware type
+                    // merging. Keep the M1 profile fail-closed rather than
+                    // lowering a maybe-Promise receiver to the Promise intrinsic.
+                    self.unsupported_mutable_promise_bindings
+                        .insert(binding.clone());
+                }
                 self.emit_assignment_target(target, value, *span)
             }
             SyntaxExpression::Update { span, .. } => self.fail(
@@ -1695,6 +1948,8 @@ impl<'a> FunctionCompiler<'a> {
                     match kind {
                         SyntaxVariableKind::Var => {
                             if let Some(initializer) = &declaration.initializer {
+                                let is_promise = self.is_promise_expression(initializer)
+                                    || self.is_mutable_promise_alias(initializer);
                                 let value = self.emit_expression(initializer)?;
                                 self.emit_env_store(
                                     binding_id,
@@ -1702,15 +1957,30 @@ impl<'a> FunctionCompiler<'a> {
                                     Some(declaration.span),
                                     None,
                                 )?;
+                                if is_promise {
+                                    self.unsupported_mutable_promise_bindings
+                                        .insert(binding_id.to_owned());
+                                }
                             }
+                            // A var declaration without an initializer does not
+                            // assign undefined and must not invalidate prior state.
                         }
                         SyntaxVariableKind::Let => {
+                            let is_promise =
+                                declaration.initializer.as_ref().is_some_and(|initializer| {
+                                    self.is_promise_expression(initializer)
+                                        || self.is_mutable_promise_alias(initializer)
+                                });
                             let value = if let Some(initializer) = &declaration.initializer {
                                 self.emit_expression(initializer)?
                             } else {
                                 self.emit_undefined("initialize uninitialized let declaration")?
                             };
                             self.emit_env_store(binding_id, value, Some(declaration.span), None)?;
+                            if is_promise {
+                                self.unsupported_mutable_promise_bindings
+                                    .insert(binding_id.to_owned());
+                            }
                         }
                         SyntaxVariableKind::Const => {
                             let Some(initializer) = &declaration.initializer else {
@@ -1720,12 +1990,20 @@ impl<'a> FunctionCompiler<'a> {
                                     "const declaration has no initializer",
                                 );
                             };
+                            let is_promise = self.is_promise_expression(initializer);
+                            let is_unsupported_alias = self.is_mutable_promise_alias(initializer);
                             let value = self.emit_expression(initializer)?;
                             self.attach_binding_to_value_source(
                                 &value.id,
                                 binding_id,
                                 declaration.span,
                             )?;
+                            if is_promise {
+                                self.promise_bindings.insert(binding_id.to_owned());
+                            } else if is_unsupported_alias {
+                                self.unsupported_mutable_promise_bindings
+                                    .insert(binding_id.to_owned());
+                            }
                             self.const_values.insert(binding_id.to_owned(), value);
                         }
                         SyntaxVariableKind::Unsupported => unreachable!(),
@@ -2727,6 +3005,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("literal return lowers");
@@ -2811,6 +3090,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("branching mutable binding lowers");
@@ -2937,6 +3217,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("computed member assignment lowers");
@@ -2986,6 +3267,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax.clone()],
+                module: Default::default(),
             },
         )
         .expect_err("mismatched semantic revision must be rejected");
@@ -2997,6 +3279,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect_err("unsupported statement must fail closed");
@@ -3025,6 +3308,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("while loop lowers to verified CFG");
@@ -3079,6 +3363,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("call lowering succeeds");
@@ -3126,6 +3411,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("throw completion lowers");
@@ -3255,6 +3541,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![parent, child],
+                module: Default::default(),
             },
         )
         .expect("initialized const value can be captured without a block environment");
@@ -3396,6 +3683,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![parent, child],
+                module: Default::default(),
             },
         )
         .expect_err("hoisted closure cannot snapshot a const still in its TDZ");
@@ -3509,6 +3797,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![parent, child],
+                module: Default::default(),
             },
         )
         .expect("captured mutable closure lowers");
@@ -3564,6 +3853,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("typeof unresolved identifier is valid JavaScript");
@@ -3614,6 +3904,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("greater-than comparison lowers");
@@ -3669,6 +3960,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("uninitialized let is initialized to undefined");
@@ -3734,6 +4026,7 @@ mod tests {
             &var_module,
             &ResolvedSyntaxProgram {
                 functions: vec![var_syntax],
+                module: Default::default(),
             },
         )
         .expect("var binding is initialized before user statements");
@@ -3803,6 +4096,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect_err("read before const initialization is a TDZ error");
@@ -3850,6 +4144,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("block-scoped declaration lowers");
@@ -4020,6 +4315,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![parent, child],
+                module: Default::default(),
             },
         )
         .expect_err("block-scoped capture requires a per-block environment");
@@ -4090,6 +4386,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("C-style for loop lowers to verified CFG");
@@ -4239,6 +4536,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![parent, child],
+                module: Default::default(),
             },
         )
         .expect("hoisted function declaration lowers");
@@ -4313,6 +4611,7 @@ mod tests {
             &module,
             &ResolvedSyntaxProgram {
                 functions: vec![syntax],
+                module: Default::default(),
             },
         )
         .expect("const initializer lowers to an SSA value");

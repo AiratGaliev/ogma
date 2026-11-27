@@ -23,6 +23,7 @@ The runner checks the actual Node version before invoking Node's built-in test r
 | cancellation.cjs | clearTimeout and clearImmediate suppress callbacks; surviving nextTick, Promise, immediate and timer callbacks are all observed. Timer/immediate order is intentionally not asserted for top-level scheduling. |
 | interval-cancellation.cjs | setInterval runs twice, is cleared from its second callback and does not fire again. |
 | errors.cjs | On Node.js 26.13.0 the fixture observes the nextTick exception, then the immediate callback, then the unhandled Promise rejection event. |
+| promise-jobs-reference.mjs | Imports the same `promise-jobs-module.mjs` source compiled by the Ogma embedding integration test; pins FIFO order when the first reaction schedules a nested Promise reaction and returns its child Promise. |
 
 The baseline stores complete event traces, not timing measurements. The I/O fixture pins only the Node-defined `setImmediate()`-before-`setTimeout(0)` order when both are scheduled from the I/O callback; a separate fixture checks nested-immediate deferral. The corpus does not assert a universal ordering between top-level `setTimeout()` and `setImmediate()`: the cancellation fixture compares their observed callback set without imposing an order.
 
@@ -36,4 +37,4 @@ CI installs the exact version through actions/setup-node and runs the same comma
 
 ## Interpretation
 
-A passing run means only that the checked-in fixtures reproduce the pinned Node.js reference observations. It does not test an Ogma Runtime. Once the Runtime and optional Node adapter exist, run equivalent fixtures through Ogma and compare their observable traces before changing any compatibility state from deferred.
+The `promise-jobs-module.mjs` file is intentionally shared: Node executes it through the reference runner, while the Rust embedding test compiles and evaluates these exact source bytes. That differential fixture covers only the declared M1 PromiseJobs subset; the remaining Node scheduling fixtures are reference observations for a later Node compatibility adapter.
