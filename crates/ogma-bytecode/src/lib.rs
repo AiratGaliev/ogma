@@ -95,6 +95,8 @@ pub struct ModuleDescriptor {
     pub imports: Vec<ModuleImport>,
     /// Static exports in source order.
     pub exports: Vec<ModuleExport>,
+    /// Unique module requests in first-occurrence source order across imports and re-exports.
+    pub requests: Vec<String>,
 }
 
 type ParsedContainer = (Value, Vec<u8>, Vec<Value>, Vec<Value>, Option<Value>);
