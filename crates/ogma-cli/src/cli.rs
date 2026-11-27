@@ -79,7 +79,7 @@ pub(crate) fn run(args: Vec<String>) -> u8 {
 
 fn compile_command(args: &[String]) -> u8 {
     if args == ["--help"] || args == ["-h"] {
-        print!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]\n");
+        println!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]");
         return EXIT_SUCCESS;
     }
     let parsed = match parse_compile_args(args) {
@@ -118,7 +118,7 @@ fn compile_command(args: &[String]) -> u8 {
 
 fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     if args == ["--help"] || args == ["-h"] {
-        print!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]\n");
+        println!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]");
         return Err(String::new());
     }
     let mut source = None;
@@ -294,8 +294,8 @@ fn inspect_command(args: &[String]) -> u8 {
 
 fn run_command(args: &[String]) -> u8 {
     if args == ["--help"] || args == ["-h"] {
-        print!(
-            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n"
+        println!(
+            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]"
         );
         return EXIT_SUCCESS;
     }
@@ -319,8 +319,8 @@ fn run_command(args: &[String]) -> u8 {
 
 fn parse_run_args(args: &[String]) -> Result<(PathBuf, RunOptions), String> {
     if args == ["--help"] || args == ["-h"] {
-        print!(
-            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n"
+        println!(
+            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]"
         );
         return Err(String::new());
     }
