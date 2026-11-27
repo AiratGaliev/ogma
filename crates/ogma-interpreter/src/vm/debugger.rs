@@ -1356,22 +1356,28 @@ impl DebuggerSession {
         let previous = self
             .last_instruction
             .insert(current.id, (current.pc, key.clone()));
-        let changed = previous
+        let previous_key = previous
             .as_ref()
-            .is_none_or(|(_, previous_key)| *previous_key != key);
+            .and_then(|(_, previous_key)| previous_key.as_ref());
         let loop_reentry = previous
             .as_ref()
             .is_some_and(|(previous_pc, _)| current.pc <= *previous_pc);
         let stop_reason = if self.pause_requested {
             self.pause_requested = false;
             Some(("pause", None))
-        } else if (changed || loop_reentry)
-            && self.matches_breakpoint(&current.image.id, location.as_ref())
-        {
+        } else if self.matches_breakpoint(
+            &current.image.id,
+            location.as_ref(),
+            if loop_reentry { None } else { previous_key },
+        ) {
             Some(("breakpoint", None))
         } else if let Some(step) = self.step.as_ref() {
             let depth = callers.len() + 1;
-            let source_changed = key.is_some() && key != step.base_key;
+            let source_changed = key.as_ref().is_some_and(|current| {
+                step.base_key
+                    .as_ref()
+                    .is_none_or(|base| !same_source_line(current, base))
+            });
             let should_stop = match step.mode {
                 StepMode::Into => source_changed,
                 StepMode::Over => depth <= step.base_depth && source_changed,
@@ -1617,7 +1623,12 @@ impl DebuggerSession {
         Ok(())
     }
 
-    fn matches_breakpoint(&self, function_id: &str, location: Option<&SourceLocation>) -> bool {
+    fn matches_breakpoint(
+        &self,
+        function_id: &str,
+        location: Option<&SourceLocation>,
+        previous_key: Option<&SourceKey>,
+    ) -> bool {
         let Some(location) = location else {
             return false;
         };
@@ -1648,6 +1659,14 @@ impl DebuggerSession {
                                 && &record.code_generation == generation
                         })
                     })
+                && previous_key.is_none_or(|previous| {
+                    previous.function_id != function_id
+                        || previous.source_id != source_id
+                        || previous.line != start.line
+                        || breakpoint
+                            .column
+                            .is_some_and(|column| column != previous.column)
+                })
         })
     }
 
@@ -2167,6 +2186,12 @@ fn code_generation(image: &FunctionImage) -> Option<CodeGeneration> {
     })
 }
 
+fn same_source_line(left: &SourceKey, right: &SourceKey) -> bool {
+    left.function_id == right.function_id
+        && left.source_id == right.source_id
+        && left.line == right.line
+}
+
 fn source_key(function_id: &str, location: &SourceLocation) -> Option<SourceKey> {
     if location.origin != "user" {
         return None;
@@ -2378,6 +2403,31 @@ mod tests {
         let (preview, truncated) = bounded_utf16_preview(&long, MAX_PREVIEW_CHARS);
         assert_eq!(preview.chars().count(), MAX_PREVIEW_CHARS);
         assert!(truncated);
+    }
+
+    #[test]
+    fn source_level_stepping_ignores_column_only_changes() {
+        let first = SourceKey {
+            function_id: "fn_run".to_owned(),
+            source_id: "source_main".to_owned(),
+            line: 12,
+            column: 3,
+        };
+        let same_statement = SourceKey {
+            column: 21,
+            ..first.clone()
+        };
+        let next_statement = SourceKey {
+            line: 13,
+            ..first.clone()
+        };
+        let nested_function = SourceKey {
+            function_id: "fn_inner".to_owned(),
+            ..first.clone()
+        };
+        assert!(same_source_line(&first, &same_statement));
+        assert!(!same_source_line(&first, &next_statement));
+        assert!(!same_source_line(&first, &nested_function));
     }
 
     #[test]
