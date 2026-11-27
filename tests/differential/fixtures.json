@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "id": "binary-addition",
+      "description": "Number addition and string conversion agree on an observable primitive",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { return \"\" + (1 + 2); }",
+      "expected": "3"
+    },
+    {
+      "id": "left-to-right-side-effect-trace",
+      "description": "Function calls are evaluated left-to-right and mutations remain visible",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { var trace = \"\"; function mark(value) { trace = trace + value; return value; } var result = mark(1) + mark(2); return \"\" + result + \":\" + trace; }",
+      "expected": "3:12"
+    },
+    {
+      "id": "branch-and-mutable-binding",
+      "description": "Branch selection and mutable lexical binding produce the same final result",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { var total = 1; if (total < 2) { total = total + 2; } else { total = 99; } return \"\" + total; }",
+      "expected": "3"
+    },
+    {
+      "id": "throw-completion",
+      "description": "Thrown primitive completion and value match the pinned reference",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { throw 17; }",
+      "expectedCompletion": "throw",
+      "expected": 17,
+      "expectedHostCalls": []
+    },
+    {
+      "id": "host-call-observable-trace",
+      "description": "A Rust host callback and its independently observed side-effect trace match the reference host function",
+      "entryFunction": "host_capability_call",
+      "source": "function __ogma_differential_entry__(value) { return benchmarkHostEcho(value); }",
+      "hostCallTrace": true,
+      "input": 23,
+      "expectedCompletion": "return",
+      "expected": 23,
+      "expectedHostCalls": [
+        {
+          "name": "benchmark.host.echo",
+          "arguments": [
+            {
+              "type": "number",
+              "value": 23
+            }
+          ],
+          "completion": "return",
+          "value": {
+            "type": "number",
+            "value": 23
+          }
+        }
+      ],
+      "referenceEntryFunction": "__ogma_differential_entry__"
+    }
+  ]
+}

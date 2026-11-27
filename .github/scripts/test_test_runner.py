@@ -469,6 +469,63 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(outside["status"], "UNSUPPORTED")
         self.assertIn("exact partial-support allowlist", outside["reason"])
 
+    def test_profile_rejects_unsafe_or_duplicate_test262_allowlist_ids(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["../escape.js"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            path.write_text(test_runner.json.dumps(profile), encoding="utf-8")
+            with self.assertRaises(test_runner.RunnerError):
+                test_runner.load_profile(path)
+            profile["test262Allowlist"] = [
+                "runner/strict-default.js",
+                "runner/strict-default.js",
+            ]
+            path.write_text(test_runner.json.dumps(profile), encoding="utf-8")
+            with self.assertRaises(test_runner.RunnerError):
+                test_runner.load_profile(path)
+
+    def test_exact_test262_allowlist_gates_untagged_tests(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["runner/strict-default.js"]
+        allowed = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        outside = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(allowed["status"], "PASS")
+        self.assertEqual(outside["status"], "UNSUPPORTED")
+        self.assertEqual(outside["variants"], [])
+        self.assertIn("exact Test262 execution allowlist", outside["reason"])
+
+    def test_unsupported_test262_allowlist_probe_is_unexpected_pass(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["runner/strict-default.js"]
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+            probe_unsupported=True,
+        )
+        self.assertEqual(result["status"], "UNEXPECTED PASS")
+
     def test_unimplemented_runtime_is_unsupported_without_reading_test_metadata(self) -> None:
         profile = ready_profile()
         profile["execution"] = {
@@ -790,6 +847,59 @@ class ParserAndShardingTests(unittest.TestCase):
             (root / "untracked.js").write_text("let untracked = true;\n", encoding="utf-8")
             with self.assertRaisesRegex(test_runner.RunnerError, "working tree is not clean"):
                 test_runner._load_and_check_revision(root, revision)
+
+    def test_exact_sparse_smoke_validates_only_allowlisted_git_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_root = root / "test"
+            test_root.mkdir()
+            (test_root / "allowed.js").write_text("var value = 1;\n", encoding="utf-8")
+            (test_root / "other.js").write_text("var other = 2;\n", encoding="utf-8")
+            (root / ".gitignore").write_text("test/ignored.js\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Ogma Tests"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "ogma-tests@example.invalid"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-q", "-m", "sparse source fixture"],
+                check=True,
+            )
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (test_root / "ignored.js").write_text("var ignored = true;\n", encoding="utf-8")
+
+            self.assertIsNone(
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["allowed.js"],
+                )
+            )
+            with self.assertRaisesRegex(test_runner.RunnerError, "not Git-tracked"):
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["ignored.js"],
+                )
+            with self.assertRaisesRegex(test_runner.RunnerError, "unsafe relative path"):
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["../escape.js"],
+                )
 
     def test_ignored_untracked_javascript_cannot_extend_pinned_corpus(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

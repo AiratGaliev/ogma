@@ -1,21 +1,32 @@
 {
   "schemaVersion": 1,
   "profileId": "ogma-compatibility-profile",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "compatibilityProfileDocument": "docs/compatibility-profile.md",
   "ecma262": {
     "edition": 17,
     "year": 2026
   },
   "execution": {
-    "state": "not_implemented",
-    "reason": "The repository does not yet contain an executable Ogma Runtime or engine adapter. Test262 cases must be reported as UNSUPPORTED rather than counted as passes."
+    "state": "ready",
+    "adapter": "ogma-test262-adapter",
+    "reason": "The M1 source adapter executes only the exact test262Allowlist; all other Test262 cases remain UNSUPPORTED."
   },
   "parserStatus": "ready",
   "defaultFeatureStatus": "deferred",
   "featureStatus": {
-    "Intl": "deferred"
+    "Intl": "deferred",
+    "hashbang": "partial"
   },
   "exclusions": [],
-  "supportedTests": {}
+  "supportedTests": {
+    "hashbang": [
+      "language/comments/hashbang/not-empty.js"
+    ]
+  },
+  "test262Allowlist": [
+    "language/comments/hashbang/not-empty.js",
+    "language/directive-prologue/10.1.1-8gs.js",
+    "language/directive-prologue/14.1-4gs.js"
+  ]
 }

@@ -189,6 +189,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deterministic_number_bit_patterns_round_trip_without_canonicalization() {
+        let mut seed = 0x5eed_cafe_d00d_beefu64;
+        for _ in 0..1024 {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let number = f64::from_bits(seed);
+            assert_eq!(Value::number(number).as_number().unwrap().to_bits(), seed);
+        }
+    }
+
+    #[test]
     fn primitive_values_keep_explicit_categories_and_number_bits() {
         assert_eq!(Value::undefined().value_type(), ValueType::Undefined);
         assert_eq!(Value::null().value_type(), ValueType::Null);

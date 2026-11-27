@@ -2412,6 +2412,26 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_generated_function_names_preserve_core_ir_verification_and_round_trip() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/core-ir/fixtures/positive-ssa-branch.json");
+        let input = fs::read_to_string(path).expect("canonical fixture exists");
+        let mut document = parse_and_verify(&input).expect("canonical fixture verifies");
+        let mut seed = 0x51a7_e5eed_u64;
+        for _ in 0..64 {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            document.function.name = format!("generated_{seed:016x}");
+            assert!(verify_document(&document).is_empty());
+            let encoded = serde_json::to_string(&document).expect("serialize generated model");
+            let decoded = parse_and_verify(&encoded).expect("generated model round-trips");
+            assert_eq!(decoded.function.name, document.function.name);
+            assert!(verify_document(&decoded).is_empty());
+        }
+    }
+
+    #[test]
     fn rejects_non_normalized_source_paths() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/core-ir/fixtures/positive-ssa-branch.json");

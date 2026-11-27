@@ -173,6 +173,54 @@ fn execute_number(
 }
 
 #[test]
+fn deterministic_source_arithmetic_executes_through_the_verified_ogmb_pipeline() {
+    let allocator = Allocator::default();
+    let source = SourceFile::new(
+        "ogm-50-generated-arithmetic",
+        "memory:///ogm-50-generated-arithmetic.js",
+        None,
+        "function add(left, right) { return left + right; }",
+    )
+    .expect("source metadata");
+    let parsed = parse(&allocator, &source, ParseRequestOptions::default()).expect("source parses");
+    let compiled = compile_to_bytecode(&parsed).expect("source compiles to OGMB");
+    let entry = compiled
+        .functions
+        .iter()
+        .find(|function| function.name == "add")
+        .expect("compiled add function");
+    let entry_id = entry.id.clone();
+    let artifacts = compiled
+        .functions
+        .into_iter()
+        .map(|function| function.artifact.bytes)
+        .collect::<Vec<_>>();
+    let module = ExecutableModule::load(artifacts)
+        .expect("Runtime verifies serialized OGMB before execution");
+    let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
+    let mut seed = 0x0a11_ce55_u64;
+    for _ in 0..128 {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let left = (seed & 0xffff) as f64;
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let right = (seed & 0xffff) as f64;
+        assert_eq!(
+            execute_number(
+                &module,
+                &entry_id,
+                &[Value::number(left), Value::number(right)],
+                &mut heap,
+            ),
+            left + right
+        );
+    }
+}
+
+#[test]
 fn compiler_rejects_arrow_functions_until_ogmb_preserves_function_kind() {
     let allocator = Allocator::default();
     let source = SourceFile::new(

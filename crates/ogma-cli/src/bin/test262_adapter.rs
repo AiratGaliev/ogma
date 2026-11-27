@@ -1,0 +1,679 @@
+//! Production M1 source-execution adapter for bounded Test262 and differential smoke tests.
+//!
+//! This executable is a test tool. It is not linked into the Runtime and does
+//! not add a QuickJS dependency to production Ogma.
+
+use std::cell::RefCell;
+use std::io::{self, BufRead, Read, Write};
+use std::rc::Rc;
+use std::time::Duration;
+
+use ogma_compiler::compile_to_bytecode;
+use ogma_embedding::{
+    Engine, ExecutionRequest, HostCallCompletion, HostFunctionDescriptor, PersistentCompletion,
+    Value as RuntimeValue,
+};
+use ogma_frontend::{ParseGoal, ParseMode, ParseRequestOptions, SourceFile, parse};
+use ogma_runtime::ValueType;
+use oxc_allocator::Allocator;
+use serde_json::{Value, json};
+
+const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TIMEOUT_MS: u64 = 30_000;
+
+fn envelope(request_id: u64, body: Value) -> Value {
+    let mut result = json!({
+        "protocol": "ogma-test-runner-adapter",
+        "version": 1,
+        "requestId": request_id
+    });
+    if let (Some(target), Some(source)) = (result.as_object_mut(), body.as_object()) {
+        target.extend(source.clone());
+    }
+    result
+}
+
+fn error_response(request_id: u64, outcome: &str, reason: impl AsRef<str>) -> Value {
+    envelope(
+        request_id,
+        json!({"outcome": outcome, "reason": reason.as_ref()}),
+    )
+}
+
+fn response_value(
+    context: &ogma_embedding::Context<'_>,
+    value: ogma_runtime::Value,
+) -> Result<Value, String> {
+    match value.value_type() {
+        ValueType::Undefined => Ok(json!({"type": "undefined"})),
+        ValueType::Null => Ok(json!({"type": "null"})),
+        ValueType::Boolean => {
+            Ok(json!({"type": "boolean", "value": value.as_boolean().expect("boolean tag")}))
+        }
+        ValueType::Number => {
+            let number = value.as_number().expect("number tag");
+            if number.is_finite() {
+                Ok(json!({"type": "number", "value": number}))
+            } else {
+                let name = if number.is_nan() {
+                    "NaN"
+                } else if number.is_sign_positive() {
+                    "Infinity"
+                } else {
+                    "-Infinity"
+                };
+                Ok(json!({"type": "number", "value": name}))
+            }
+        }
+        ValueType::String => {
+            let units = context
+                .read_string_utf16(value)
+                .map_err(|error| format!("cannot read Runtime string: {error:?}"))?;
+            let text = String::from_utf16(&units).map_err(|error| {
+                format!("differential result contains unpaired UTF-16: {error}")
+            })?;
+            Ok(json!({"type": "string", "value": text}))
+        }
+        ValueType::Object | ValueType::Function => Err(
+            "differential smoke currently accepts only observable primitive return values"
+                .to_owned(),
+        ),
+    }
+}
+
+fn process_request(request: Value) -> Value {
+    let request_id = request
+        .get("requestId")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if request.get("protocol").and_then(Value::as_str) != Some("ogma-test-runner-adapter")
+        || request.get("version").and_then(Value::as_u64) != Some(1)
+    {
+        return error_response(
+            request_id,
+            "harness_error",
+            "invalid adapter request envelope",
+        );
+    }
+
+    let Some(test) = request.get("test").and_then(Value::as_object) else {
+        return error_response(
+            request_id,
+            "harness_error",
+            "request.test must be an object",
+        );
+    };
+    let suite = test
+        .get("suite")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let differential = suite == "ogma-differential";
+    if suite != "test262" && !differential {
+        return error_response(
+            request_id,
+            "unsupported",
+            "this worker executes only bounded Test262 and Ogma differential requests",
+        );
+    }
+
+    let field = |name: &str| test.get(name).and_then(Value::as_str);
+    let Some(test_id) = field("id") else {
+        return error_response(request_id, "harness_error", "test.id must be a string");
+    };
+    let Some(source_text) = field("source") else {
+        return error_response(request_id, "harness_error", "test.source must be a string");
+    };
+    if field("sourceType").unwrap_or("script") != "script" {
+        return error_response(
+            request_id,
+            "unsupported",
+            "the bounded M1 runtime smoke supports Script source only",
+        );
+    }
+    if !differential {
+        if test.get("async").and_then(Value::as_bool).unwrap_or(false) {
+            return error_response(
+                request_id,
+                "unsupported",
+                "async Test262 execution is outside the bounded M1 profile",
+            );
+        }
+        if test
+            .get("includes")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            return error_response(
+                request_id,
+                "unsupported",
+                "Test262 harness includes are outside the bounded raw-test profile",
+            );
+        }
+        if test.get("raw").and_then(Value::as_bool) != Some(true) {
+            return error_response(
+                request_id,
+                "unsupported",
+                "only raw Test262 tests are enabled in the M1 smoke profile",
+            );
+        }
+    }
+
+    let mode = match field("mode") {
+        Some("strict") => ParseMode::Strict,
+        Some("sloppy") | Some("script") | None => ParseMode::Sloppy,
+        Some(other) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("invalid Script mode {other:?}"),
+            );
+        }
+    };
+    // Core IR source identities are symbols, not paths. Preserve the full
+    // Test262 path in the URI while mapping separators to valid identity dots.
+    let source_id = format!("test262.{}", test_id.replace('/', "."));
+    let source = match SourceFile::new(
+        source_id,
+        format!("memory:///test262/{test_id}"),
+        None,
+        source_text,
+    ) {
+        Ok(source) => source,
+        Err(error) => return error_response(request_id, "harness_error", error.to_string()),
+    };
+    let allocator = Allocator::default();
+    let parsed = match parse(
+        &allocator,
+        &source,
+        ParseRequestOptions {
+            goal: ParseGoal::Script,
+            mode,
+        },
+    ) {
+        Ok(parsed) => parsed,
+        Err(failure) => {
+            let diagnostics = failure
+                .diagnostics
+                .iter()
+                .map(|item| {
+                    json!({
+                        "phase": format!("{:?}", item.phase).to_lowercase(),
+                        "code": item.code,
+                        "message": item.message,
+                        "severity": format!("{:?}", item.severity).to_lowercase()
+                    })
+                })
+                .collect::<Vec<_>>();
+            return envelope(
+                request_id,
+                json!({
+                    "outcome": "threw",
+                    // Test262 classifies ECMAScript early errors as parse-phase SyntaxErrors.
+                    "phase": "parse",
+                    "errorName": "SyntaxError",
+                    "diagnostics": diagnostics
+                }),
+            );
+        }
+    };
+
+    let host_call_trace =
+        differential && test.get("hostCallTrace").and_then(Value::as_bool) == Some(true);
+    let compiled_functions = if host_call_trace {
+        // This canonical Core IR fixture exercises the public host-call ABI.
+        // The equivalent JavaScript host function is executed by QuickJS-NG.
+        let fixture: ogma_core_ir::FunctionDocument = match serde_json::from_str(include_str!(
+            "../../../../tests/core-ir/fixtures/positive-host-call.json"
+        )) {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                return error_response(
+                    request_id,
+                    "harness_error",
+                    format!("cannot decode canonical host-call fixture: {error}"),
+                );
+            }
+        };
+        match ogma_compiler::bytecode::compile_functions(&[fixture]) {
+            Ok(functions) => functions,
+            Err(error) => {
+                return error_response(
+                    request_id,
+                    "harness_error",
+                    format!("cannot compile canonical host-call fixture: {error:?}"),
+                );
+            }
+        }
+    } else {
+        match compile_to_bytecode(&parsed) {
+            Ok(module) => module.functions,
+            Err(error) => {
+                return error_response(
+                    request_id,
+                    "harness_error",
+                    format!("M1 source compilation failed for an enabled test: {error:?}"),
+                );
+            }
+        }
+    };
+    if compiled_functions.is_empty() {
+        return error_response(
+            request_id,
+            "harness_error",
+            "compiler emitted no executable functions",
+        );
+    }
+    let program_id = compiled_functions
+        .iter()
+        .find(|function| function.name == "<program>")
+        .map(|function| function.id.clone());
+    if !differential && program_id.is_none() {
+        return error_response(
+            request_id,
+            "harness_error",
+            "compiler output does not contain the Program entry function",
+        );
+    }
+    let artifacts = compiled_functions
+        .iter()
+        .map(|function| function.artifact.bytes.as_slice())
+        .collect::<Vec<_>>();
+
+    let engine = match Engine::new(Default::default()) {
+        Ok(engine) => engine,
+        Err(error) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("cannot create Ogma Engine: {error:?}"),
+            );
+        }
+    };
+    let mut runtime = match engine.create_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("cannot create fresh Runtime: {error:?}"),
+            );
+        }
+    };
+    let mut context = match runtime.create_context() {
+        Ok(context) => context,
+        Err(error) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("cannot create Runtime Context: {error:?}"),
+            );
+        }
+    };
+    if let Err(error) = context.load_module(artifacts) {
+        return error_response(
+            request_id,
+            "harness_error",
+            format!("Runtime rejected compiler OGMB output: {error:?}"),
+        );
+    }
+    let host_calls = Rc::new(RefCell::new(Vec::<Value>::new()));
+    if host_call_trace {
+        let trace = Rc::clone(&host_calls);
+        if let Err(error) = context.register_host_function(
+            HostFunctionDescriptor::new(1, "benchmark.host.echo"),
+            move |_call, arguments| {
+                let value = arguments
+                    .first()
+                    .copied()
+                    .unwrap_or_else(RuntimeValue::undefined);
+                let observable = value
+                    .as_number()
+                    .map(|number| json!({"type": "number", "value": number}))
+                    .unwrap_or(json!({"type": "unsupported"}));
+                trace.borrow_mut().push(json!({
+                    "name": "benchmark.host.echo",
+                    "arguments": [observable.clone()],
+                    "completion": "return",
+                    "value": observable
+                }));
+                Ok(HostCallCompletion::Normal(value))
+            },
+        ) {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("cannot register differential host callback: {error:?}"),
+            );
+        }
+    }
+
+    let functions = match context.functions() {
+        Ok(functions) => functions,
+        Err(error) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("cannot inspect loaded Runtime functions: {error:?}"),
+            );
+        }
+    };
+    let entry = if differential {
+        let Some(name) = field("entryFunction") else {
+            return error_response(
+                request_id,
+                "harness_error",
+                "differential request requires test.entryFunction",
+            );
+        };
+        functions.iter().find(|function| function.name == name)
+    } else {
+        let Some(program_id) = program_id.as_deref() else {
+            return error_response(
+                request_id,
+                "harness_error",
+                "compiler output does not contain the Program entry function",
+            );
+        };
+        functions.iter().find(|function| function.id == program_id)
+    };
+    let Some(entry) = entry else {
+        return error_response(
+            request_id,
+            "harness_error",
+            "requested source entry function was not found in the verified Runtime module",
+        );
+    };
+
+    let execution_arguments = if host_call_trace {
+        let Some(input) = test.get("input").and_then(Value::as_f64) else {
+            return error_response(
+                request_id,
+                "harness_error",
+                "host-call differential fixture requires a numeric test.input",
+            );
+        };
+        vec![RuntimeValue::number(input)]
+    } else {
+        Vec::new()
+    };
+    let requested_timeout = request
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(5_000)
+        .clamp(1, MAX_TIMEOUT_MS);
+    let report = match context.execute_persistent(
+        &entry.id,
+        &execution_arguments,
+        ExecutionRequest {
+            instruction_budget: Some(100_000),
+            time_budget: Some(Duration::from_millis(requested_timeout)),
+            ..ExecutionRequest::default()
+        },
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            return error_response(
+                request_id,
+                "harness_error",
+                format!("Runtime execution failed: {error:?}"),
+            );
+        }
+    };
+
+    match report.completion {
+        PersistentCompletion::Return(handle) => {
+            let value = context.resolve(handle);
+            let response = if differential {
+                match value {
+                    Ok(value) => match response_value(&context, value) {
+                        Ok(value) => envelope(
+                            request_id,
+                            json!({
+                                "outcome": "completed",
+                                "completion": "return",
+                                "value": value,
+                                "hostCalls": host_calls.borrow().clone(),
+                                "instructionsExecuted": report.instructions_executed
+                            }),
+                        ),
+                        Err(reason) => error_response(request_id, "harness_error", reason),
+                    },
+                    Err(error) => error_response(
+                        request_id,
+                        "harness_error",
+                        format!("cannot resolve Runtime return value: {error:?}"),
+                    ),
+                }
+            } else {
+                envelope(
+                    request_id,
+                    json!({
+                        "outcome": "completed",
+                        "instructionsExecuted": report.instructions_executed
+                    }),
+                )
+            };
+            if let Err(error) = context.release(handle) {
+                return error_response(
+                    request_id,
+                    "harness_error",
+                    format!("cannot release persistent Runtime result: {error:?}"),
+                );
+            }
+            response
+        }
+        PersistentCompletion::Throw(handle) => {
+            if differential {
+                let response = match context.resolve(handle) {
+                    Ok(value) => match response_value(&context, value) {
+                        Ok(value) => envelope(
+                            request_id,
+                            json!({
+                                "outcome": "threw",
+                                "completion": "throw",
+                                "value": value,
+                                "hostCalls": host_calls.borrow().clone(),
+                                "instructionsExecuted": report.instructions_executed
+                            }),
+                        ),
+                        Err(reason) => error_response(request_id, "harness_error", reason),
+                    },
+                    Err(error) => error_response(
+                        request_id,
+                        "harness_error",
+                        format!("cannot resolve Runtime throw value: {error:?}"),
+                    ),
+                };
+                if let Err(error) = context.release(handle) {
+                    return error_response(
+                        request_id,
+                        "harness_error",
+                        format!("cannot release persistent Runtime throw: {error:?}"),
+                    );
+                }
+                response
+            } else {
+                if let Err(error) = context.release(handle) {
+                    return error_response(
+                        request_id,
+                        "harness_error",
+                        format!("cannot release persistent Runtime throw: {error:?}"),
+                    );
+                }
+                envelope(
+                    request_id,
+                    json!({
+                        "outcome": "threw",
+                        "phase": "runtime",
+                        "errorName": "Error",
+                        "instructionsExecuted": report.instructions_executed
+                    }),
+                )
+            }
+        }
+        PersistentCompletion::Interrupted(reason) => error_response(
+            request_id,
+            "harness_error",
+            format!("bounded Runtime execution interrupted: {reason:?}"),
+        ),
+    }
+}
+
+fn main() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut reader = io::BufReader::new(stdin.lock());
+    let stdout = io::stdout();
+    let mut writer = io::BufWriter::new(stdout.lock());
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .by_ref()
+            .take((MAX_REQUEST_BYTES + 1) as u64)
+            .read_until(b'\n', &mut line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        if line.len() > MAX_REQUEST_BYTES {
+            let response =
+                error_response(0, "harness_error", "request exceeds 16 MiB protocol limit");
+            serde_json::to_writer(&mut writer, &response)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            break;
+        }
+        let response = match serde_json::from_slice::<Value>(&line) {
+            Ok(request) => process_request(request),
+            Err(error) => {
+                error_response(0, "harness_error", format!("invalid JSON request: {error}"))
+            }
+        };
+        serde_json::to_writer(&mut writer, &response)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(suite: &str, source: &str, mode: &str) -> Value {
+        json!({
+            "protocol": "ogma-test-runner-adapter",
+            "version": 1,
+            "requestId": 7,
+            "timeoutMs": 5000,
+            "test": {
+                "id": "ogm-50-adapter-test.js",
+                "suite": suite,
+                "source": source,
+                "sourceType": "script",
+                "mode": mode,
+                "raw": true,
+                "async": false,
+                "includes": []
+            }
+        })
+    }
+
+    #[test]
+    fn production_adapter_executes_source_through_verified_ogmb_and_runtime() {
+        let response = process_request(request(
+            "test262",
+            "var total = 1 + 2; if (total !== 3) { throw 'bad'; }",
+            "sloppy",
+        ));
+        assert_eq!(
+            response["outcome"], "completed",
+            "production adapter response: {response:#}"
+        );
+        assert_eq!(response["requestId"], 7);
+    }
+
+    #[test]
+    fn production_adapter_compiles_nested_test262_paths_as_valid_core_ir_identities() {
+        let mut value = request("test262", "#! hashbang comment\\n", "sloppy");
+        value["test"]["id"] = json!("language/comments/hashbang/not-empty.js");
+        let response = process_request(value);
+        assert_eq!(
+            response["outcome"], "completed",
+            "hashbang source response: {response:#}"
+        );
+    }
+
+    #[test]
+    fn production_adapter_maps_strict_early_errors_to_test262_parse_syntax_errors() {
+        let response = process_request(request("test262", "'use strict'; eval = 42;", "sloppy"));
+        assert_eq!(response["outcome"], "threw");
+        assert_eq!(response["phase"], "parse");
+        assert_eq!(response["errorName"], "SyntaxError");
+    }
+
+    #[test]
+    fn differential_adapter_returns_observable_runtime_primitive() {
+        let mut value = request(
+            "ogma-differential",
+            "function __ogma_differential_entry__() { return '' + (1 + 2); }",
+            "sloppy",
+        );
+        value["test"]["entryFunction"] = json!("__ogma_differential_entry__");
+        let response = process_request(value);
+        assert_eq!(
+            response["outcome"], "completed",
+            "differential adapter response: {response:#}"
+        );
+        assert_eq!(response["completion"], "return");
+        assert_eq!(response["value"], json!({"type": "string", "value": "3"}));
+    }
+
+    #[test]
+    fn differential_adapter_preserves_throw_completion_and_primitive_value() {
+        let mut value = request(
+            "ogma-differential",
+            "function __ogma_differential_entry__() { throw 17; }",
+            "sloppy",
+        );
+        value["test"]["entryFunction"] = json!("__ogma_differential_entry__");
+        let response = process_request(value);
+        assert_eq!(
+            response["outcome"], "threw",
+            "differential throw response: {response:#}"
+        );
+        assert_eq!(response["completion"], "throw");
+        assert_eq!(response["value"], json!({"type": "number", "value": 17.0}));
+        assert_eq!(response["hostCalls"], json!([]));
+    }
+
+    #[test]
+    fn differential_adapter_captures_real_runtime_host_call_trace() {
+        let mut value = request(
+            "ogma-differential",
+            "function __ogma_differential_entry__(value) { return benchmarkHostEcho(value); }",
+            "sloppy",
+        );
+        value["test"]["entryFunction"] = json!("host_capability_call");
+        value["test"]["hostCallTrace"] = json!(true);
+        value["test"]["input"] = json!(23);
+        let response = process_request(value);
+        assert_eq!(
+            response["outcome"], "completed",
+            "differential host-call response: {response:#}"
+        );
+        assert_eq!(response["completion"], "return");
+        assert_eq!(response["value"], json!({"type": "number", "value": 23.0}));
+        assert_eq!(
+            response["hostCalls"],
+            json!([{
+                "name": "benchmark.host.echo",
+                "arguments": [{"type": "number", "value": 23.0}],
+                "completion": "return",
+                "value": {"type": "number", "value": 23.0}
+            }])
+        );
+    }
+}

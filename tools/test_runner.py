@@ -150,6 +150,19 @@ def load_profile(path: Path) -> dict[str, Any]:
                 raise RunnerError(
                     f"{path}: invalid exact test ID in supportedTests for {feature}"
                 ) from exc
+    test262_allowlist = profile.get("test262Allowlist")
+    if test262_allowlist is not None:
+        if not isinstance(test262_allowlist, list):
+            raise RunnerError(f"{path}: test262Allowlist must be an array")
+        if any(not isinstance(test_id, str) for test_id in test262_allowlist):
+            raise RunnerError(f"{path}: test262Allowlist entries must be strings")
+        if len(test262_allowlist) != len(set(test262_allowlist)):
+            raise RunnerError(f"{path}: test262Allowlist contains duplicates")
+        for test_id in test262_allowlist:
+            try:
+                _safe_relative_path(test_id)
+            except (TypeError, RunnerError) as exc:
+                raise RunnerError(f"{path}: test262Allowlist entries must be safe exact relative paths") from exc
     exclusions = profile.get("exclusions", [])
     if not isinstance(exclusions, list):
         raise RunnerError(f"{path}: exclusions must be an array")
@@ -808,6 +821,9 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
         execution = profile["execution"]
         if execution["state"] != "ready":
             return execution.get("reason", "the engine execution adapter is not implemented")
+        exact_allowlist = profile.get("test262Allowlist")
+        if exact_allowlist is not None and descriptor["id"] not in exact_allowlist:
+            return "test is outside the exact Test262 execution allowlist"
     feature_status = profile.get("featureStatus", {})
     default_status = profile["defaultFeatureStatus"]
     deferred: list[str] = []
@@ -1842,6 +1858,7 @@ def _load_and_check_revision(
     suite_root: Path,
     expected: str,
     suite: str | None = None,
+    expected_test_ids: list[str] | None = None,
 ) -> None:
     try:
         process = subprocess.run(
@@ -1901,6 +1918,50 @@ def _load_and_check_revision(
     tracked_paths = {
         item for item in tracked.stdout.split("\x00") if item.endswith(".js")
     }
+    if expected_test_ids is not None:
+        if suite not in {"test262", "test262-parser-tests"}:
+            raise RunnerError("exact source validation requires a supported corpus suite")
+        if not expected_test_ids or len(expected_test_ids) != len(set(expected_test_ids)):
+            raise RunnerError("exact source validation requires a non-empty unique test ID list")
+        prefix = "test/" if suite == "test262" else ""
+        expected_paths = set()
+        for test_id in expected_test_ids:
+            relative = _safe_relative_path(test_id).as_posix()
+            if suite == "test262" and "_FIXTURE" in PurePosixPath(relative).name:
+                raise RunnerError("Test262 module fixture files must not be allowlisted as tests")
+            expected_paths.add(f"{prefix}{relative}")
+        missing = expected_paths - tracked_paths
+        if missing:
+            raise RunnerError(
+                "exact smoke allowlist contains files that are not Git-tracked: "
+                + ", ".join(sorted(missing))
+            )
+        root = suite_root.resolve(strict=True)
+        for relative in sorted(expected_paths):
+            source_path = suite_root.joinpath(*PurePosixPath(relative).parts)
+            try:
+                if source_path.is_symlink():
+                    raise RunnerError(f"allowlisted source file must not be a symlink: {relative}")
+                resolved = source_path.resolve(strict=True)
+                resolved.relative_to(root)
+                if not resolved.is_file():
+                    raise RunnerError(f"allowlisted source file is not a regular file: {relative}")
+                committed = subprocess.run(
+                    ["git", "-C", str(suite_root), "show", f"HEAD:{relative}"],
+                    capture_output=True,
+                    check=True,
+                    timeout=10,
+                ).stdout
+                actual_source = resolved.read_bytes()
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                raise RunnerError(
+                    f"cannot verify allowlisted source file {relative}: {exc}"
+                ) from exc
+            if actual_source != committed:
+                raise RunnerError(
+                    f"allowlisted source file differs from pinned Git content: {relative}"
+                )
+        return
     if suite == "test262":
         tracked_tests = sorted(
             item[len("test/") :]

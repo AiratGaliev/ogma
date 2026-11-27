@@ -144,9 +144,37 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-adapters:
+    name: build-production-conformance-adapters
+    needs: [plan]
+    if: needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Ogma candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - name: Build real parser and Runtime adapters
+        run: |
+          cargo build --locked --package ogma-frontend --bin ogma-parser-adapter
+          cargo build --locked --package ogma-cli --bin ogma-test262-adapter
+
+      - name: Upload production conformance adapters
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogma-production-conformance-adapters
+          path: |
+            target/debug/ogma-parser-adapter
+            target/debug/ogma-test262-adapter
+          if-no-files-found: error
+          retention-days: 1
+
   run-shards:
     name: run-deterministic-conformance-shards
-    needs: [plan]
+    needs: [plan, build-adapters]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -185,6 +213,15 @@ jobs:
           name: ogma-conformance-${{ matrix.suite }}-manifest
           path: .artifacts/manifests/${{ matrix.suite }}
 
+      - name: Download production conformance adapters
+        uses: actions/download-artifact@v4
+        with:
+          name: ogma-production-conformance-adapters
+          path: .artifacts/adapters
+
+      - name: Make production adapters executable
+        run: chmod +x .artifacts/adapters/ogma-parser-adapter .artifacts/adapters/ogma-test262-adapter
+
       - name: Checkout pinned Test262 corpus
         if: matrix.suite == 'test262'
         uses: actions/checkout@v4
@@ -208,18 +245,16 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
           SHARD_INDEX: ${{ matrix.shard }}
-          OGMA_TEST262_ADAPTER: ${{ vars.OGMA_TEST262_ADAPTER }}
-          OGMA_PARSER_ADAPTER: ${{ vars.OGMA_PARSER_ADAPTER }}
         run: |
           set -euo pipefail
           case "$SUITE" in
             test262)
               SUITE_ROOT=".artifacts/upstream/test262"
-              ADAPTER_COMMAND="$OGMA_TEST262_ADAPTER"
+              ADAPTER_COMMAND=".artifacts/adapters/ogma-test262-adapter"
               ;;
             test262-parser-tests)
               SUITE_ROOT=".artifacts/upstream/test262-parser-tests"
-              ADAPTER_COMMAND="$OGMA_PARSER_ADAPTER"
+              ADAPTER_COMMAND=".artifacts/adapters/ogma-parser-adapter"
               ;;
             *)
               echo "::error::Unknown conformance suite: $SUITE"

@@ -1,12 +1,12 @@
 # Ogma Compatibility Profile
 
 - **Profile ID:** ogma-compatibility-profile
-- **Profile version:** 1.0.0
+- **Profile version:** 1.1.0
 - **Status:** target compatibility contract with implementation status for the delivered M1 subset
-- **Baseline captured:** 2026-11-16
+- **Baseline captured:** 2026-11-27
 - **Normative owner:** this document. Architecture rationale remains in the [Ogma architecture specification](https://app.notion.com/p/4167ef18f18181bd9b34f9dda764c92d#b5ca462a10c841279d724b74c44b239a).
 
-This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. The Rust workspace, Oxc frontend, synchronous interpreter, Runtime and embedding API now exist. OGM-48 adds a deliberately partial static ESM graph loader and a minimal Promise/PromiseJobs path. The Node.js host adapter, Node package resolver and runtime Test262 execution adapter remain unimplemented; these M1 slices do not imply full ECMAScript or Node.js conformance.
+This profile defines the language, frontend, Node.js host APIs, module behaviours and consumer workloads Ogma intends to support. It separates the target contract from implementation status. The Rust workspace, Oxc frontend, synchronous interpreter, Runtime and embedding API now exist. OGM-48 adds a deliberately partial static ESM graph loader and a minimal Promise/PromiseJobs path. OGM-50 adds a production source-execution adapter, but its Test262 claim is restricted to the exact raw-test allowlist in `conformance/profile.json`; the Node.js host adapter and Node package resolver remain unimplemented. These M1 slices do not imply full ECMAScript or Node.js conformance.
 
 ## 1. Compatibility claims and status vocabulary
 
@@ -33,7 +33,7 @@ A feature must never be labelled supported merely because a parser accepts its s
 
 The architecture's `implemented` state is published as **supported** in this profile: both mean that the declared behaviour is implemented and has passed its required tests. The architecture's `host-provided` label describes ownership/provisioning, not conformance; it is represented by the required host-capability and provider columns, and it does not by itself mean that an API is supported.
 
-**Current implementation status:** the Rust workspace includes the OGM-41 Oxc JavaScript parser/source-diagnostics frontend, OGM-46 synchronous interpreter, and the OGM-48 M1 static ESM and PromiseJobs subset. The parser exposes a real parse-only adapter and a bounded Fast-CI smoke against the pinned supplementary parser corpus. The parser-only conformance runner readiness is **ready**; the Test262 execution adapter remains **not_implemented**. Full parser-corpus results are not inferred from the bounded smoke. ESM and Promise rows below are **partial** only for their explicitly enumerated M1 subsets. Node package resolution, Node scheduling APIs and broad ECMAScript semantics remain **deferred** or **unsupported** as listed. Unsupported rows are explicit exclusions from the target profile, not missing implementations that are silently tolerated.
+**Current implementation status:** the Rust workspace includes the OGM-41 Oxc JavaScript parser/source-diagnostics frontend, OGM-46 synchronous interpreter, OGM-48 M1 static ESM and PromiseJobs subset, and the OGM-50 production source-execution adapter. The parser-only readiness is **ready** and the Test262 execution adapter is **ready only for the exact three-test raw Script allowlist** in `conformance/profile.json`; every other Test262 ID is reported as **UNSUPPORTED** before invoking the engine. The bounded Fast-CI smoke separately checks the six parser-corpus cases, three allowlisted runtime cases and a small QuickJS-NG differential fixture set. None of these bounded results imply full parser-corpus, Test262, ECMAScript or Node.js conformance. ESM and Promise rows below are **partial** only for their explicitly enumerated M1 subsets. Node package resolution, Node scheduling APIs and broad ECMAScript semantics remain **deferred** or **unsupported** as listed.
 
 ## 2. ECMAScript baseline
 
@@ -52,9 +52,9 @@ The immutable Test262 and parser-corpus revisions are maintained in [conformance
 
 The parser-only corpus is an older supplementary fixture set (2021); it is not sufficient by itself for ECMAScript 2026 grammar acceptance. Test262 parser tests and Ogma-owned grammar/early-error fixtures remain authoritative for the selected 2026 profile.
 
-ECMA-402 / Intl is a separate specification surface. The 2026 Ecma General Assembly approved ECMA-402 13th edition (ECMAScript 2025 Internationalization API) separately from ECMA-262. **Intl is deferred in profile 1.0.0**; no Intl conformance is implied by the ECMA-262 baseline. A later Intl profile must pin its own ECMA-402 edition, data/ICU provider and tests.
+ECMA-402 / Intl is a separate specification surface. The 2026 Ecma General Assembly approved ECMA-402 13th edition (ECMAScript 2025 Internationalization API) separately from ECMA-262. **Intl is deferred in profile 1.1.0**; no Intl conformance is implied by the ECMA-262 baseline. A later Intl profile must pin its own ECMA-402 edition, data/ICU provider and tests.
 
-**Temporal is an intentional edition boundary exception.** The proposal reached Stage 4 during 2026 and Node.js 26 ships the Temporal API, but TC39's finished-proposals tracking assigns it to the 2027 publication year. It is therefore not part of the pinned June 2026 ECMA-262 17th-edition baseline. Profile 1.0.0 keeps the ECMAScript Temporal global and its associated built-ins **deferred**, even when running with the Node 26.13.0 reference line. A later profile must explicitly adopt the ECMAScript 2027 snapshot (or an individually pinned extension contract) and its Test262/reference fixtures; the Node version alone does not silently add the feature to this edition baseline.
+**Temporal is an intentional edition boundary exception.** The proposal reached Stage 4 during 2026 and Node.js 26 ships the Temporal API, but TC39's finished-proposals tracking assigns it to the 2027 publication year. It is therefore not part of the pinned June 2026 ECMA-262 17th-edition baseline. Profile 1.1.0 keeps the ECMAScript Temporal global and its associated built-ins **deferred**, even when running with the Node 26.13.0 reference line. A later profile must explicitly adopt the ECMAScript 2027 snapshot (or an individually pinned extension contract) and its Test262/reference fixtures; the Node version alone does not silently add the feature to this edition baseline.
 
 ### 2.2. Initial execution subset
 
@@ -75,14 +75,14 @@ The normative language reference is ECMAScript 2026, but the first executable ru
 | Proxy, Reflect, Symbol, WeakRef and FinalizationRegistry | No blanket support; each feature requires its own semantics, GC and lifecycle proof | deferred | Corresponding Test262 feature groups |
 | SharedArrayBuffer and Atomics | Requires an explicit memory/concurrency model and host/worker integration | deferred | Test262 shared-memory tests and stress tests |
 | Intl / ECMA-402 | Separate profile only; not in this profile's initial execution contract | deferred | Pinned ECMA-402 suite when adopted |
-| Temporal (Stage 4 in 2026; planned ECMA-262 publication year 2027) and later additions | Explicitly excluded from the ECMA-262 2026 edition baseline in profile 1.0.0, even though Node.js 26 ships Temporal; adoption requires a later profile revision | deferred | Pinned ECMA-262 2027 / extension reference and corresponding Test262 snapshot |
+| Temporal (Stage 4 in 2026; planned ECMA-262 publication year 2027) and later additions | Explicitly excluded from the ECMA-262 2026 edition baseline in profile 1.1.0, even though Node.js 26 ships Temporal; adoption requires a later profile revision | deferred | Pinned ECMA-262 2027 / extension reference and corresponding Test262 snapshot |
 
 The table describes the target work sequence, not an assertion that all listed features land in M1. M1 must not be expanded into full language conformance by inference. A feature becomes supported only after implementation and tests demonstrate the required observable behaviour. A subset may become partial only when its supported sub-surface and exclusions are recorded explicitly.
 
 ### 2.3. Proposals, Annex B and host APIs
 
 - Stage 4 proposals included in the pinned ECMA-262 2026 edition are part of the normative reference; they are not automatically implemented.
-- Stage 0–3 proposals and proposal-specific syntax/semantics are **unsupported** in profile 1.0.0 unless a later profile explicitly adopts and tests them.
+- Stage 0–3 proposals and proposal-specific syntax/semantics are **unsupported** in profile 1.1.0 unless a later profile explicitly adopts and tests them.
 - Features added to the live TC39 draft after the 2026 edition are **deferred** until an edition/profile update.
 - Annex B browser/web legacy semantics are **unsupported** in the embedded baseline unless a consumer requirement and explicit compatibility decision justify a narrowly scoped addition.
 - DOM, window, document, Fetch, Web Storage and browser event APIs are not ECMAScript features and are not supplied by this language profile. A host may add separately capability-gated APIs.
@@ -103,7 +103,9 @@ Use the architecture's result categories:
 
 Every exclusion must identify the test or deterministic selector, reason, affected feature and owner/revisit condition. Do not blanket-exclude a feature family to hide implementation failures. Preserve raw JSON/JUnit reports and the exact Test262 commit.
 
-CI lane policy remains unchanged: focused tests and runner self-tests belong on topic PRs; the full pinned Test262/differential corpus belongs to the dev → test promotion gate. OGM-34 provides the adapter-driven runner, pinned revisions and deterministic shard manifest/aggregator; OGM-35 integrates the actual engine adapter and promotion workflow. The active profile remains `not_implemented` until an Ogma parser/runtime adapter exists. Do not claim runtime conformance from runner self-tests.
+Profile 1.1.0 declares only these bounded runtime cases executable: `language/comments/hashbang/not-empty.js` (the exact partial `hashbang` allowlist entry), `language/directive-prologue/10.1.1-8gs.js` and `language/directive-prologue/14.1-4gs.js` (negative early-error cases). The latter two have no feature tags and are enabled solely by `test262Allowlist`; this prevents untagged tests from bypassing feature gates. The adapter creates a fresh Engine/Runtime/Context per request, parses the source, compiles through the production frontend/compiler, loads serialized verified OGMB and executes the Program entry. It supports Script/raw/synchronous requests without harness includes. Modules, async tests, non-raw tests and tests outside the exact allowlist remain `UNSUPPORTED`.
+
+CI policy keeps full Test262 and full differential/stress/fuzz/E2E work in promotion or scheduled/manual lanes. Fast CI runs only the exact three Test262 IDs, six parser-corpus cases, and the deterministic differential fixtures; JSON and JUnit evidence are retained. The differential fixtures compare return and throw completions, primitive values, ordered side-effect traces and the host-call name/argument/completion/result trace using a registered Rust callback and its equivalent JavaScript reference function. QuickJS-NG remains a development/test oracle, never a production dependency. Do not claim runtime conformance from adapter or runner self-tests, and do not infer support for a feature family from these narrow probes.
 
 ## 3. TypeScript frontend and compile-time contract
 
@@ -208,7 +210,7 @@ Node.js 26 was the Active LTS line at baseline capture. Pinning 26.13.0 makes do
 
 The tables below define the candidate v1 API surface, not all exports from each Node module. Each API starts as deferred; only the named sub-surface may later become supported/partial. Unlisted exports remain unsupported until added explicitly.
 
-Node stability is attached to individual public symbols, not uniformly to an entire module. Profile 1.0.0 admits only Node 26.13.0 symbols documented as **Stability 2 — Stable** into a future supported subset by default. Experimental, deprecated and legacy symbols stay unsupported/deferred unless a later profile explicitly adds them with rationale. Two narrowly scoped Legacy exceptions are retained because the accepted architecture explicitly requires Node scheduling compatibility: `process.nextTick()` (Node documents `queueMicrotask()` as the preferred alternative) and `clearImmediate()` (the cancellation counterpart for `setImmediate()`). They are retained only for Node-compatibility behaviour, remain deferred until their pinned fixtures pass, and are not recommended for new Ogma-only application code. Before any symbol is promoted to supported/partial, expand the relevant row to record the exact export, its versioned Node documentation stability label, observable behaviour/edge cases, required capability, supported target tuples and selected reference test files. A module-wide wildcard such as `test-buffer*.js` is a discovery family, not sufficient acceptance evidence by itself.
+Node stability is attached to individual public symbols, not uniformly to an entire module. Profile 1.1.0 admits only Node 26.13.0 symbols documented as **Stability 2 — Stable** into a future supported subset by default. Experimental, deprecated and legacy symbols stay unsupported/deferred unless a later profile explicitly adds them with rationale. Two narrowly scoped Legacy exceptions are retained because the accepted architecture explicitly requires Node scheduling compatibility: `process.nextTick()` (Node documents `queueMicrotask()` as the preferred alternative) and `clearImmediate()` (the cancellation counterpart for `setImmediate()`). They are retained only for Node-compatibility behaviour, remain deferred until their pinned fixtures pass, and are not recommended for new Ogma-only application code. Before any symbol is promoted to supported/partial, expand the relevant row to record the exact export, its versioned Node documentation stability label, observable behaviour/edge cases, required capability, supported target tuples and selected reference test files. A module-wide wildcard such as `test-buffer*.js` is a discovery family, not sufficient acceptance evidence by itself.
 
 ### 4.3. Node Base API matrix
 
@@ -303,7 +305,7 @@ The declared platform target is Windows, Linux and macOS, including x86_64 and A
 | Linux | `x86_64-unknown-linux-gnu` | `aarch64-unknown-linux-gnu` |
 | macOS | `x86_64-apple-darwin` | `aarch64-apple-darwin` |
 
-These are target-build tuples, not a claim that every API already runs on all six targets. Linux glibc minimum and supported distribution floor remain deferred until the Rust/toolchain deployment baseline is selected; musl, Android, iOS, WebAssembly and other targets are outside profile 1.0.0. A capability is available only if its adapter is compiled, registered and tested for the exact tuple.
+These are target-build tuples, not a claim that every API already runs on all six targets. Linux glibc minimum and supported distribution floor remain deferred until the Rust/toolchain deployment baseline is selected; musl, Android, iOS, WebAssembly and other targets are outside profile 1.1.0. A capability is available only if its adapter is compiled, registered and tested for the exact tuple.
 
 Capability denial, unavailable host adapters, invalid arguments and unsupported APIs must produce deterministic errors. They must not silently return empty values, access ambient process state or fall back to unrestricted OS access. Quotas, cancellation and audit policy apply to Node facades and direct Rust host calls alike.
 
@@ -333,7 +335,7 @@ The initial resolver contract covers the following fields and rules, subject to 
 - Package self-references, subpath exports/imports and package encapsulation.
 - ESM and CommonJS entry points, extension rules and module cache/identity.
 - Conditional exports conditions are enabled only when their semantics are valid for the selected profile: import/require reflect the active module mode; `default` matches unconditionally when reached in package key order; ogma, development and production require explicit profile/build configuration. Preserve the package's conditional object key order exactly; Node resolves the first matching condition in that order. Package authors should place `default` last, and the resolver must not reorder it to prefer a later key.
-- The node condition is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the Node API adapters in that build's capability/module manifest. It is not a blanket marker for any Ogma Runtime and does not claim universal Node API coverage; an API outside the selected profile still fails deterministically when imported or invoked. node-addons is never enabled in profile 1.0.0 because native Node addons are excluded.
+- The node condition is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the Node API adapters in that build's capability/module manifest. It is not a blanket marker for any Ogma Runtime and does not claim universal Node API coverage; an API outside the selected profile still fails deterministically when imported or invoked. node-addons is never enabled in profile 1.1.0 because native Node addons are excluded.
 - browser is not an implicit condition for a native application. A host may opt into it only in a separate explicit profile.
 
 The resolver must distinguish an unrecognized condition in a package's conditional map (which is simply not an enabled match) from an invalid condition supplied in Ogma's own profile configuration (which is a deterministic configuration error). Conditional-object keys must be evaluated in their original package.json insertion order: `default` is an unconditional match when reached, not a resolver-priority rule that may be moved ahead of earlier keys. Package authors should place `default` last; Ogma must not reorder condition keys. If no enabled branch/default matches, or a package's `exports` boundary forbids the requested subpath, resolution fails with a stable package-resolution diagnostic. It must not silently fall back to `main`, an arbitrary file or an unexported path after an `exports` map has been applied, and must not bypass package encapsulation.
@@ -364,7 +366,7 @@ Conditional maps are evaluated in their original JSON insertion order. The first
 - `import` and `require` are enabled by the active resolution mode.
 - `node` is enabled only in a build that explicitly selects the Node Compatibility Profile and registers the corresponding Node adapters. A plain Ogma Runtime must not enable it implicitly.
 - `ogma`, `development` and `production` are enabled only by explicit profile/build configuration.
-- `browser` is not implicit for a native application. `node-addons` is disabled in profile 1.0.0.
+- `browser` is not implicit for a native application. `node-addons` is disabled in profile 1.1.0.
 - An unknown key in a package-authored conditional map is an unavailable branch and is skipped. An invalid condition in Ogma's own profile configuration is a configuration error (Ogma diagnostic `ERR_OGMA_INVALID_CONDITION`), not a reason to silently enable a branch.
 
 When no branch matches, or an `exports` boundary denies a requested subpath, resolution fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Missing `imports` mappings fail with `ERR_PACKAGE_IMPORT_NOT_DEFINED`; unknown `node:` built-ins fail with `ERR_UNKNOWN_BUILTIN_MODULE`. Other missing-module and unsupported-format diagnostics must be mapped to the pinned Node baseline for the active ESM/CJS mode before they are claimed as compatible. Diagnostics have a stable code and normalized specifier/referrer/reason fields. Human-readable messages may include platform paths and are not the cross-platform identity contract.
@@ -425,7 +427,7 @@ The corpus is versioned independently from the Node API matrix. Every executable
 | Consumer | Pinned repository revision | Initial workload | Scope classification |
 |---|---|---|---|
 | SolidJS Native | AiratGaliev/solidjs-native@bcd0fa119c5a0b0fc762462bd5ddc4b2818c7668 | solid-js@1.9.18, local solid-native@0.1.0, TSX/JSX runtime, reactivity/effects, custom renderer and future Rust-host bridge | Primary planned runtime consumer; current smoke is still backed by rquickjs, not Ogma |
-| Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary reference repository only; not yet an executable Ogma consumer and therefore has no compatibility result or consumer-lockfile pin in profile 1.0.0 |
+| Codogma Engine | AiratGaliev/codogma-engine@982d25c26da94c1f73d61457bf55da682413eff2 | Future native application/editor/game-loop integration and host callbacks | Secondary reference repository only; not yet an executable Ogma consumer and therefore has no compatibility result or consumer-lockfile pin in profile 1.1.0 |
 | cge-experiments — Brick Breaker | AiratGaliev/cge-experiments@91dfa48300f6ba3f0bc4f2a9db9b7ac298dc508c (`main`) | Existing TypeScript Brick Breaker game hosted by a native Rust game loop; QuickJS-NG reference backend | M2 interpreter-only replacement/performance pilot; no Ogma execution or compatibility result yet. M4 OGM-78 remains the full Rust embedding/AOT consumer acceptance |
 
 ### M2 interpreter pilot — cge-experiments Brick Breaker
