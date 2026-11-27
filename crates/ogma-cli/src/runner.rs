@@ -51,9 +51,7 @@ fn interpreter_failure_exit_code(error: &ogma_embedding::InterpreterError) -> u8
 
 fn job_queue_failure_exit_code(error: &ogma_embedding::JobQueueError) -> u8 {
     match error {
-        ogma_embedding::JobQueueError::Interpreter(error) => {
-            interpreter_failure_exit_code(error)
-        }
+        ogma_embedding::JobQueueError::Interpreter(error) => interpreter_failure_exit_code(error),
         _ => crate::cli::EXIT_RUNTIME,
     }
 }

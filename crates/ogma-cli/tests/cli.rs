@@ -200,7 +200,10 @@ export function readyState() { return ready; }
     let offline_result: serde_json::Value =
         serde_json::from_slice(&offline_run.stdout).expect("offline run JSON");
     assert_eq!(offline_result["exports"]["result"].as_f64(), Some(43.0));
-    assert_eq!(offline_result["exports"]["observedReady"].as_bool(), Some(true));
+    assert_eq!(
+        offline_result["exports"]["observedReady"].as_bool(),
+        Some(true)
+    );
 }
 
 #[test]
