@@ -1697,7 +1697,8 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => {
                 let target = self.evaluate_assignment_target(target, *span)?;
-                let is_promise = self.is_promise_expression(value);
+                let is_promise = self.is_promise_expression(value)
+                    || self.is_mutable_promise_alias(value);
                 let value = self.emit_expression(value)?;
                 if is_promise
                     && let EvaluatedAssignmentTarget::Binding(binding) = &target
@@ -1888,7 +1889,8 @@ impl<'a> FunctionCompiler<'a> {
                     match kind {
                         SyntaxVariableKind::Var => {
                             if let Some(initializer) = &declaration.initializer {
-                                let is_promise = self.is_promise_expression(initializer);
+                                let is_promise = self.is_promise_expression(initializer)
+                                    || self.is_mutable_promise_alias(initializer);
                                 let value = self.emit_expression(initializer)?;
                                 self.emit_env_store(
                                     binding_id,
@@ -1905,10 +1907,12 @@ impl<'a> FunctionCompiler<'a> {
                             // assign undefined and must not invalidate prior state.
                         }
                         SyntaxVariableKind::Let => {
-                            let is_promise = declaration
-                                .initializer
-                                .as_ref()
-                                .is_some_and(|initializer| self.is_promise_expression(initializer));
+                            let is_promise = declaration.initializer.as_ref().is_some_and(
+                                |initializer| {
+                                    self.is_promise_expression(initializer)
+                                        || self.is_mutable_promise_alias(initializer)
+                                },
+                            );
                             let value = if let Some(initializer) = &declaration.initializer {
                                 self.emit_expression(initializer)?
                             } else {
@@ -1929,6 +1933,7 @@ impl<'a> FunctionCompiler<'a> {
                                 );
                             };
                             let is_promise = self.is_promise_expression(initializer);
+                            let is_unsupported_alias = self.is_mutable_promise_alias(initializer);
                             let value = self.emit_expression(initializer)?;
                             self.attach_binding_to_value_source(
                                 &value.id,
@@ -1937,6 +1942,9 @@ impl<'a> FunctionCompiler<'a> {
                             )?;
                             if is_promise {
                                 self.promise_bindings.insert(binding_id.to_owned());
+                            } else if is_unsupported_alias {
+                                self.unsupported_mutable_promise_bindings
+                                    .insert(binding_id.to_owned());
                             }
                             self.const_values.insert(binding_id.to_owned(), value);
                         }
