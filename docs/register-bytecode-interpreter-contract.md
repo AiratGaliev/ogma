@@ -92,7 +92,7 @@ The polling interval bounds dispatches between ordinary cooperative polls, not w
 
 The module retains the original verified manifest and optional source map. source_location resolves a verified code offset to source provenance, code-generation identity/version, lexical scope ranges and variable-location ranges when those records exist. ExecutionReport includes the last dispatched location.
 
-This is a metadata-preservation and lookup surface for future debugger integration. It does not implement the backend-neutral DebuggerPort, breakpoints, pause/step commands, DAP transport, Inspector or a production debugging session. See [Debugger API Contract](debugger-contract.md).
+OGM-49 adds a Debug/Development-only adapter over the backend-neutral Debugger API. `ExecutableModule::create_debugger_session` indexes the verified source map; `execute_debugged` attaches that session to real VM frames. Breakpoint matching, pause/resume, source-level stepping, call-stack snapshots, lexical locals/captures and descriptor-only inspection are serviced at dispatch safe points on the Runtime owner thread. A bounded command queue is the only control-thread entry point. Release builds compile out the adapter API, frame identities and per-instruction hooks. This remains an interpreter backend: DAP transport, IDE client integration, async stacks and native AOT debugging are outside this contract. See [Debugger API Contract](debugger-contract.md).
 
 ## 7. Explicit current limitations
 

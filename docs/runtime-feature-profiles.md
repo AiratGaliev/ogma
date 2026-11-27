@@ -78,7 +78,7 @@ Feature flags in profiles.json are **logical contract identifiers** for the even
 - Tools: tools.dap-transport, tools.inspector, tools.inspector-ui, tools.repl, tools.profiler-hooks, tools.hot-reload.
 - Optional Node layer: compat.node-resolver, compat.node-api.
 
-The profile data carries the complete flag set per configuration. The matrix deliberately does not expose flags such as language.eval, language.function-constructor or language.dynamic-code: runtime profiles cannot feature-gate ECMAScript dynamic-code semantics.
+The profile data carries the complete flag set per configuration. The M1 production interpreter adapter is currently compiled with Rust `debug_assertions`: Debug and Development retain frame identity and dispatch hooks, while Release removes its public session API and per-instruction debugger path. The profile graph remains the long-term composition contract and does not mechanically become Cargo features. The matrix deliberately does not expose flags such as language.eval, language.function-constructor or language.dynamic-code: runtime profiles cannot feature-gate ECMAScript dynamic-code semantics.
 
 ## 3. Language/runtime semantic invariants
 

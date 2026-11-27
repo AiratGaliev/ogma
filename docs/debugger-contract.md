@@ -10,7 +10,7 @@
 
 ## 1. Status and boundaries
 
-This is the M0 contract and a deterministic proof harness. The Python fixture interpreter executes a deliberately small instruction set to validate source-level control flow and adapter seams. It is **not** an ECMAScript interpreter, production VM, Rust Runtime, real GC, native AOT backend, network DAP server or complete IDE integration.
+This document defines the backend-neutral M0 API contract and retains the deterministic Python fixture harness as its original proof. OGM-49 now connects the contract source-level commands and immutable DTOs to the M1 Rust register-bytecode interpreter and managed Runtime heap. The fixture interpreter remains a separate proof tool; neither implementation is a complete ECMAScript debugger, native AOT backend, network DAP server or IDE integration.
 
 The contract fixes the data and ownership boundary before M1 VM implementation. It does not prescribe interpreter internals, registers, operand stacks, object layouts, heap pointers, code addresses, native ABI or a particular backend.
 
@@ -48,7 +48,7 @@ A lexical scope in one function artifact is function-local. References to an out
 
 ## 4. Backend-neutral API
 
-The stable facade is DebuggerPort. Public results are immutable snapshots:
+The stable facade is DebuggerPort. The production Rust interpreter exposes the same backend-neutral operations through a thread-safe `DebuggerHandle` and owner-thread `DebuggerSession`; only immutable DTOs cross the control boundary. Public results are immutable snapshots:
 
 | DTO | Responsibility |
 |---|---|
@@ -81,7 +81,7 @@ The Inspector is separate from the source debugger and consumes opaque object ID
 - result count and string previews are bounded;
 - unsupported values are rendered as unavailable, not stringified by executing user code.
 
-An inspected object is held by a temporary root for the duration of the inspection operation. The root is released in a finally/scope guard on success and failure. The Inspector does not create a persistent root or extend object lifetime after the request. The proof harness injects collection at the inspection safepoint to test this lifetime rule.
+An inspected object is rooted in a temporary Runtime scope for the duration of the descriptor walk; that scope is closed on success and failure. DebugValue object references returned from a paused production frame are backed by the frame existing register/environment roots and are invalidated on resume, detach or shutdown. The M1 adapter also retains opaque host handles for those paused references so collection cannot invalidate a reference between the variables and inspect requests; all such handles are released on resume, detach and execution completion. No object reference is available after the target resumes. The production inspector reads own data descriptors only and does not invoke user code. The M0 proof harness separately injects collection at inspection safepoints.
 
 Expression evaluation is a separate explicit operation and may have side effects. The M0 proof implements identifier-only evaluation; it does not claim general ECMAScript expression evaluation.
 
@@ -101,16 +101,16 @@ Stripping debug metadata must not change executable bytecode, Core IR semantics,
 
 ## 9. M0 proof capabilities and limitations
 
-| Capability | Proof status | Limitation |
+| Capability | Implementation status | Limitation |
 |---|---|---|
-| Source digest/generation-bound line breakpoints | Implemented in fixture harness | No actual TS frontend or parser. |
-| Pause/resume at safe points | Implemented | Only the fixture interpreter. |
-| Step into/over/out | Implemented using source locations and frame depth | Not verified against production statement lowering. |
-| Call stack and lexical locals/captures | Immutable DTO proof | No optimized native variables/async stacks. |
-| Exception event | Uncaught fixture exception event | No complete caught/uncaught runtime policy. |
-| Safe object inspection | Descriptor-only heap model and temporary roots | Not the selected production GC/object model. |
-| Core IR → .ogmb source metadata projection | Fixture proof using existing Core IR and source-map contracts | Encoder supplies instruction offsets and physical locations. |
-| DAP boundary | In-process command adapter proof | Not a DAP server or client compatibility claim. |
-| Release stripping | Proof that source/debug metadata can be removed without changing fixture execution | Production build profiles are not implemented. |
+| Source digest/generation-bound line breakpoints | M0 fixture and M1 production interpreter adapter | No TypeScript-specific mapping or conditional/log breakpoints. |
+| Pause/resume at safe points | M0 fixture and M1 production interpreter dispatch boundaries | Pause latency is bounded by the next interpreter instruction boundary. |
+| Step into/over/out | M0 fixture and M1 production interpreter, based on source locations and frame depth | No async/generator continuation or native AOT stepping. |
+| Call stack and lexical locals/captures | M1 real VM frames, register storage and capture aliases | Unavailable storage is explicit; no optimized native variables or async stacks. |
+| Exception event | M0 fixture and M1 propagated interpreter throw events | No complete caught/uncaught ECMAScript exception policy. |
+| Safe object inspection | M1 managed Runtime heap, own data descriptors, bounded preview and temporary roots | Current M1 Runtime has no Proxy/accessor representation; accessors are never executed. |
+| Core IR → .ogmb source metadata projection | M1 consumes the verified source map, lexical scopes and storage ranges emitted by the compiler | Frontend/TypeScript mapping remains owned by its source-metadata workstream. |
+| DAP boundary | M0 in-process adapter proof | Not a DAP server or client compatibility claim; production transport remains later work. |
+| Release stripping | M1 interpreter hooks and public debugger API are gated by `debug_assertions` | Production packaging/profile composition beyond the Rust interpreter crate remains a separate build concern. |
 
-These boundaries are intentional for M0. Native AOT/mixed-stack debugging, async/generator continuation, Hot Reload generations, full expression evaluation, real Runtime Inspector/GC integration, DAP transport and IDE-client acceptance are not claimed by OGM-33's M0 proof.
+These boundaries are intentional. OGM-49 supplies the M1 register-interpreter adapter and Runtime-backed inspection described above; it does not claim native AOT/mixed-stack debugging, async/generator continuation, Hot Reload generations, general expression evaluation, DAP transport or IDE-client acceptance.
