@@ -176,9 +176,7 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
                     )
                     .map_err(|_| HostError::CallbackFailed)?
                 {
-                    ExecutionCompletion::Return(value) => {
-                        Ok(HostCallCompletion::Normal(value))
-                    }
+                    ExecutionCompletion::Return(value) => Ok(HostCallCompletion::Normal(value)),
                     ExecutionCompletion::Throw(value) => Ok(HostCallCompletion::Throw(value)),
                     ExecutionCompletion::Interrupted(reason) => {
                         Ok(HostCallCompletion::Interrupted(reason))
