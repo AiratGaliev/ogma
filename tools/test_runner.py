@@ -150,6 +150,19 @@ def load_profile(path: Path) -> dict[str, Any]:
                 raise RunnerError(
                     f"{path}: invalid exact test ID in supportedTests for {feature}"
                 ) from exc
+    test262_allowlist = profile.get("test262Allowlist")
+    if test262_allowlist is not None:
+        if not isinstance(test262_allowlist, list):
+            raise RunnerError(f"{path}: test262Allowlist must be an array")
+        if any(not isinstance(test_id, str) for test_id in test262_allowlist):
+            raise RunnerError(f"{path}: test262Allowlist entries must be strings")
+        if len(test262_allowlist) != len(set(test262_allowlist)):
+            raise RunnerError(f"{path}: test262Allowlist contains duplicates")
+        for test_id in test262_allowlist:
+            try:
+                _safe_relative_path(test_id)
+            except (TypeError, RunnerError) as exc:
+                raise RunnerError(f"{path}: test262Allowlist entries must be safe exact relative paths") from exc
     exclusions = profile.get("exclusions", [])
     if not isinstance(exclusions, list):
         raise RunnerError(f"{path}: exclusions must be an array")
@@ -808,6 +821,9 @@ def _unsupported_reason(profile: dict[str, Any], descriptor: dict[str, Any]) -> 
         execution = profile["execution"]
         if execution["state"] != "ready":
             return execution.get("reason", "the engine execution adapter is not implemented")
+        exact_allowlist = profile.get("test262Allowlist")
+        if exact_allowlist is not None and descriptor["id"] not in exact_allowlist:
+            return "test is outside the exact Test262 execution allowlist"
     feature_status = profile.get("featureStatus", {})
     default_status = profile["defaultFeatureStatus"]
     deferred: list[str] = []

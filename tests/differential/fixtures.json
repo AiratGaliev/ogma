@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "id": "binary-addition",
+      "description": "Number addition and string conversion agree on an observable primitive",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { return \"\" + (1 + 2); }",
+      "expected": "3"
+    },
+    {
+      "id": "left-to-right-side-effect-trace",
+      "description": "Function calls are evaluated left-to-right and mutations remain visible",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { var trace = \"\"; function mark(value) { trace = trace + value; return value; } var result = mark(1) + mark(2); return \"\" + result + \":\" + trace; }",
+      "expected": "3:12"
+    },
+    {
+      "id": "branch-and-mutable-binding",
+      "description": "Branch selection and mutable lexical binding produce the same final result",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { var total = 1; if (total < 2) { total = total + 2; } else { total = 99; } return \"\" + total; }",
+      "expected": "3"
+    }
+  ]
+}

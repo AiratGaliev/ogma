@@ -10,6 +10,10 @@ repository.workspace = true
 name = "ogma"
 path = "src/main.rs"
 
+[[bin]]
+name = "ogma-test262-adapter"
+path = "src/bin/test262_adapter.rs"
+
 [dependencies]
 ogma-bytecode.workspace = true
 ogma-compiler.workspace = true

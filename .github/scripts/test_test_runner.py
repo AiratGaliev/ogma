@@ -469,6 +469,47 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(outside["status"], "UNSUPPORTED")
         self.assertIn("exact partial-support allowlist", outside["reason"])
 
+    def test_exact_test262_allowlist_gates_untagged_tests(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["runner/strict-default.js"]
+        allowed = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/strict-default.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        outside = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+        )
+        self.assertEqual(allowed["status"], "PASS")
+        self.assertEqual(outside["status"], "UNSUPPORTED")
+        self.assertEqual(outside["variants"], [])
+        self.assertIn("exact Test262 execution allowlist", outside["reason"])
+
+    def test_unsupported_test262_allowlist_probe_is_unexpected_pass(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["runner/strict-default.js"]
+        result = test_runner.run_one_test(
+            TEST262_ROOT,
+            "test262",
+            "runner/basic-async.js",
+            profile,
+            FAKE_ADAPTER,
+            1000,
+            1000,
+            probe_unsupported=True,
+        )
+        self.assertEqual(result["status"], "UNEXPECTED PASS")
+
     def test_unimplemented_runtime_is_unsupported_without_reading_test_metadata(self) -> None:
         profile = ready_profile()
         profile["execution"] = {
