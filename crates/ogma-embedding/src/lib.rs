@@ -1747,10 +1747,7 @@ impl Context<'_> {
                     let _ = self.runtime.heap.release_host_handle(root);
                 }
                 while self.loaded_modules.len() > loaded_module_checkpoint {
-                    let removed = self
-                        .loaded_modules
-                        .pop()
-                        .expect("length checked above");
+                    let removed = self.loaded_modules.pop().expect("length checked above");
                     self.host_functions
                         .unregister_module_owner(&removed.executable);
                 }
@@ -4160,7 +4157,10 @@ mod tests {
             ]),
             requests: HashMap::from([
                 (("entry".to_owned(), "first".to_owned()), "first".to_owned()),
-                (("entry".to_owned(), "second".to_owned()), "second".to_owned()),
+                (
+                    ("entry".to_owned(), "second".to_owned()),
+                    "second".to_owned(),
+                ),
             ]),
         };
         let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
