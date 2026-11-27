@@ -1255,6 +1255,7 @@ impl DebuggerSession {
         let cleanup = self.release_object_handles(heap);
         self.state = SessionState::Finished;
         self.active.store(false, Ordering::Release);
+        self.last_instruction.clear();
         self.reject_pending_commands();
         cleanup
     }
@@ -1327,6 +1328,10 @@ impl DebuggerSession {
         } else {
             Ok(())
         }
+    }
+
+    pub(super) fn frame_exited(&mut self, frame_id: u64) {
+        self.last_instruction.remove(&frame_id);
     }
 
     pub(super) fn before_instruction(
@@ -1459,6 +1464,7 @@ impl DebuggerSession {
                 Some(Err(_)) | None => {
                     self.state = SessionState::Detached;
                     self.active.store(false, Ordering::Release);
+                    self.last_instruction.clear();
                     self.release_object_handles(heap)?;
                 }
             }
@@ -1580,6 +1586,7 @@ impl DebuggerSession {
                 self.breakpoints.clear();
                 self.event = None;
                 self.active.store(false, Ordering::Release);
+                self.last_instruction.clear();
                 let result = self.release_object_handles(heap);
                 self.reject_pending_commands();
                 let _ = reply.send(result);
@@ -2468,7 +2475,7 @@ mod tests {
     }
 
     #[test]
-    fn debugger_session_rejects_a_different_code_generation() {
+    fn debugger_session_validates_artifact_identity_and_releases_finished_frame_state() {
         let allocator = Allocator::default();
         let source = SourceFile::new(
             "ogm49-generation-identity",
@@ -2519,5 +2526,15 @@ mod tests {
             .module_generations
             .insert(function_id, changed_cache);
         assert!(session.validate_module(&module).is_err());
+
+        let completed_frame_id = 42;
+        session
+            .last_instruction
+            .insert(completed_frame_id, (7, None));
+        session.frame_exited(completed_frame_id);
+        assert!(
+            !session.last_instruction.contains_key(&completed_frame_id),
+            "completed VM frames release debugger source-step tracking"
+        );
     }
 }

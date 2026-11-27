@@ -1393,6 +1393,10 @@ impl ExecutableModule {
                         self.unwind_frames(heap, &mut frames)?;
                         return Err(error.into());
                     }
+                    #[cfg(debug_assertions)]
+                    if let Some(session) = debugger.as_deref_mut() {
+                        session.frame_exited(frame.id);
+                    }
                     state.active_stack_bytes =
                         state.active_stack_bytes.saturating_sub(frame.stack_bytes);
                     match completion {
