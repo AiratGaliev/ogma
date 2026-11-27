@@ -200,9 +200,8 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let callback_handle = context
         .create_host_function(slot)
         .expect("create persistent JS Function value");
-    let receiver_handle = context
-        .persist(context.create_object().expect("create JS method receiver"))
-        .expect("persist method receiver");
+    let receiver = context.create_object().expect("create JS method receiver");
+    let receiver_handle = context.persist(receiver).expect("persist method receiver");
 
     context.collect().expect("host Function value survives GC");
     let callback = context
@@ -266,9 +265,12 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     context
         .unregister_host_function(slot)
         .expect("unregister invalidates old host Function token");
+    let receiver = context
+        .resolve(receiver_handle)
+        .expect("method receiver remains rooted after GC");
     let stale = context.execute(
         &invoke_id,
-        &[callback, Value::number(3.0)],
+        &[receiver, callback, Value::number(3.0)],
         ExecutionRequest::default(),
     );
     assert!(matches!(
@@ -300,10 +302,13 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let replacement = context
         .resolve(replacement_handle)
         .expect("replacement value");
+    let receiver = context
+        .resolve(receiver_handle)
+        .expect("method receiver is still rooted");
     let fresh = context
         .execute(
             &invoke_id,
-            &[replacement, Value::number(3.0)],
+            &[receiver, replacement, Value::number(3.0)],
             ExecutionRequest::default(),
         )
         .expect("replacement function is callable");
