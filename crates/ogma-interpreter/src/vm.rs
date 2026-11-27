@@ -37,8 +37,8 @@ use ogma_bytecode::{
 };
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
-    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, LexicalEnvironment,
-    HostFunctionToken, PromiseReaction, ScopeToken, Value, ValueType,
+    FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostFunctionToken, HostHandle,
+    LexicalEnvironment, PromiseReaction, ScopeToken, Value, ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
@@ -842,7 +842,9 @@ impl ExecutableModule {
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
         if let Some(token) = heap.host_function_token(callee)? {
-            return Self::execute_registered_host_callable(heap, callee, token, arguments, host, options);
+            return Self::execute_registered_host_callable(
+                heap, callee, token, arguments, host, options,
+            );
         }
         let function_id = heap.function_id(callee)?;
         let entry_id = self.runtime_functions.get(&function_id.0).ok_or_else(|| {

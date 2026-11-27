@@ -70,7 +70,8 @@ mod value;
 pub use heap::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
     CompletePropertyDescriptor, ExternalMemoryCharge, FrameToken, FunctionDefinition, FunctionId,
-    FunctionKind, Heap, HeapConfig, HeapError, HeapStats, HostFunctionToken, HostHandle, LexicalEnvironment,
-    PromiseReaction, PromiseState, PropertyDescriptor, PropertyKey, RootSnapshot, ScopeToken,
+    FunctionKind, Heap, HeapConfig, HeapError, HeapStats, HostFunctionToken, HostHandle,
+    LexicalEnvironment, PromiseReaction, PromiseState, PropertyDescriptor, PropertyKey,
+    RootSnapshot, ScopeToken,
 };
 pub use value::{Value, ValueType};

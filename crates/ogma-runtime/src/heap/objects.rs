@@ -11,7 +11,9 @@ use std::rc::Rc;
 
 use crate::value::{Value, ValueRepr, ValueType};
 
-use super::{CellKind, GcRef, Heap, HeapError, HostHandle, release_vec_capacity, reserve_vec};
+use super::{
+    CellKind, GcRef, Heap, HeapError, HostHandle, release_vec_capacity, reserve_vec,
+};
 
 /// Stable function-table identity. It is metadata, never a code pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,23 +67,33 @@ impl HostFunctionToken {
 
     /// Returns the owning registry identity.
     #[must_use]
-    pub const fn registry_id(self) -> u64 { self.registry_id }
+    pub const fn registry_id(self) -> u64 {
+        self.registry_id
+    }
 
     /// Returns the zero-based registry slot index.
     #[must_use]
-    pub const fn slot_index(self) -> u32 { self.slot_index }
+    pub const fn slot_index(self) -> u32 {
+        self.slot_index
+    }
 
     /// Returns the registry slot generation.
     #[must_use]
-    pub const fn slot_generation(self) -> u32 { self.slot_generation }
+    pub const fn slot_generation(self) -> u32 {
+        self.slot_generation
+    }
 
     /// Returns the ABI major version captured by this token.
     #[must_use]
-    pub const fn abi_major(self) -> u16 { self.abi_major }
+    pub const fn abi_major(self) -> u16 {
+        self.abi_major
+    }
 
     /// Returns the minimum ABI minor version captured by this token.
     #[must_use]
-    pub const fn abi_minor(self) -> u16 { self.abi_minor }
+    pub const fn abi_minor(self) -> u16 {
+        self.abi_minor
+    }
 }
 
 /// Stable lexical binding identity within a function.
@@ -429,7 +441,10 @@ impl Heap {
     ///
     /// The function is immediately promoted to a persistent Runtime root so the
     /// returned host handle remains valid across subsequent allocations/collections.
-    pub fn create_host_function(&mut self, token: HostFunctionToken) -> Result<HostHandle, HeapError> {
+    pub fn create_host_function(
+        &mut self,
+        token: HostFunctionToken,
+    ) -> Result<HostHandle, HeapError> {
         let scope = self.open_scope()?;
         let result = (|| {
             let function = self.allocate_cell_with_retry(|| {

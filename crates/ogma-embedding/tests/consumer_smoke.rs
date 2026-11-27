@@ -164,7 +164,9 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let callback = context.resolve(callback_handle).expect("resolve callback");
 
     context.collect().expect("host Function value survives GC");
-    let callback = context.resolve(callback_handle).expect("callback root survives GC");
+    let callback = context
+        .resolve(callback_handle)
+        .expect("callback root survives GC");
     let direct = context
         .execute(
             &invoke_id,
@@ -181,10 +183,15 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let scheduled = context
         .execute(&schedule_id, &[callback], ExecutionRequest::default())
         .expect("Promise.resolve(...).then(hostFunction) executes");
-    assert!(matches!(scheduled.completion, ExecutionCompletion::Return(_)));
+    assert!(matches!(
+        scheduled.completion,
+        ExecutionCompletion::Return(_)
+    ));
     assert_eq!(context.pending_promise_jobs(), 1);
     context.collect().expect("queued host callback survives GC");
-    let pump = context.pump_promise_jobs(None).expect("pump host PromiseJob");
+    let pump = context
+        .pump_promise_jobs(None)
+        .expect("pump host PromiseJob");
     assert_eq!(pump.outcome, ogma_embedding::JobPumpOutcome::Progress);
     assert_eq!(pump.jobs_executed, 1);
     assert_eq!(context.pending_promise_jobs(), 0);
@@ -204,7 +211,11 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
             ogma_embedding::InterpreterError::HostCapabilityDenied(_)
         ))
     ));
-    assert_eq!(calls.get(), 2, "stale function must not reach a recycled slot");
+    assert_eq!(
+        calls.get(),
+        2,
+        "stale function must not reach a recycled slot"
+    );
 
     let replacement_calls = Rc::new(Cell::new(0));
     let observed_replacement_calls = Rc::clone(&replacement_calls);
@@ -220,7 +231,9 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let replacement_handle = context
         .create_host_function(replacement_slot)
         .expect("create replacement function");
-    let replacement = context.resolve(replacement_handle).expect("replacement value");
+    let replacement = context
+        .resolve(replacement_handle)
+        .expect("replacement value");
     let fresh = context
         .execute(
             &invoke_id,
@@ -234,8 +247,12 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     ));
     assert_eq!(replacement_calls.get(), 1);
 
-    context.release(callback_handle).expect("release old callback root");
-    context.release(replacement_handle).expect("release replacement root");
+    context
+        .release(callback_handle)
+        .expect("release old callback root");
+    context
+        .release(replacement_handle)
+        .expect("release replacement root");
     context
         .unregister_host_function(replacement_slot)
         .expect("unregister replacement");

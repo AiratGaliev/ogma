@@ -29,7 +29,9 @@ pub use ogma_interpreter::{
 };
 use ogma_interpreter::{ExecutionOptions, ModuleBindingLink};
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
-use ogma_runtime::{Heap, HeapConfig, HostFunctionToken, HostHandle, LexicalEnvironment, ScopeToken};
+use ogma_runtime::{
+    Heap, HeapConfig, HostFunctionToken, HostHandle, LexicalEnvironment, ScopeToken,
+};
 
 /// ABI major version implemented by this crate.
 pub const ABI_VERSION: u16 = 1;
@@ -3353,7 +3355,9 @@ impl Host for HostFunctionRegistry {
             return throw_host_error(context, "RangeError: too many host arguments");
         }
         let _active = self.enter_dispatch().map_err(|_| HostError::Denied)?;
-        let entry = self.snapshot_token(function).map_err(|_| HostError::Denied)?;
+        let entry = self
+            .snapshot_token(function)
+            .map_err(|_| HostError::Denied)?;
         self.dispatch_entry(context, arguments, entry)
     }
 }

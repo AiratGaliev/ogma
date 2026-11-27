@@ -15,8 +15,8 @@ use objects::{
 };
 pub use objects::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode,
-    CompletePropertyDescriptor, FunctionDefinition, FunctionId, FunctionKind, LexicalEnvironment,
-    HostFunctionToken, PropertyDescriptor, PropertyKey,
+    CompletePropertyDescriptor, FunctionDefinition, FunctionId, FunctionKind, HostFunctionToken,
+    LexicalEnvironment, PropertyDescriptor, PropertyKey,
 };
 
 static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
