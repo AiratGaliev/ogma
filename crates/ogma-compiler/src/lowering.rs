@@ -1667,7 +1667,15 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => {
                 let target = self.evaluate_assignment_target(target, *span)?;
+                let is_promise = self.is_promise_expression(value);
                 let value = self.emit_expression(value)?;
+                if let EvaluatedAssignmentTarget::Binding(binding) = &target {
+                    if is_promise {
+                        self.promise_bindings.insert(binding.clone());
+                    } else {
+                        self.promise_bindings.remove(binding);
+                    }
+                }
                 self.emit_assignment_target(target, value, *span)
             }
             SyntaxExpression::Update { span, .. } => self.fail(
@@ -1843,6 +1851,7 @@ impl<'a> FunctionCompiler<'a> {
                     match kind {
                         SyntaxVariableKind::Var => {
                             if let Some(initializer) = &declaration.initializer {
+                                let is_promise = self.is_promise_expression(initializer);
                                 let value = self.emit_expression(initializer)?;
                                 self.emit_env_store(
                                     binding_id,
@@ -1850,15 +1859,31 @@ impl<'a> FunctionCompiler<'a> {
                                     Some(declaration.span),
                                     None,
                                 )?;
+                                if is_promise {
+                                    self.promise_bindings.insert(binding_id.to_owned());
+                                } else {
+                                    self.promise_bindings.remove(binding_id);
+                                }
+                            } else {
+                                self.promise_bindings.remove(binding_id);
                             }
                         }
                         SyntaxVariableKind::Let => {
+                            let is_promise = declaration
+                                .initializer
+                                .as_ref()
+                                .is_some_and(|initializer| self.is_promise_expression(initializer));
                             let value = if let Some(initializer) = &declaration.initializer {
                                 self.emit_expression(initializer)?
                             } else {
                                 self.emit_undefined("initialize uninitialized let declaration")?
                             };
                             self.emit_env_store(binding_id, value, Some(declaration.span), None)?;
+                            if is_promise {
+                                self.promise_bindings.insert(binding_id.to_owned());
+                            } else {
+                                self.promise_bindings.remove(binding_id);
+                            }
                         }
                         SyntaxVariableKind::Const => {
                             let Some(initializer) = &declaration.initializer else {
