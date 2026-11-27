@@ -1709,22 +1709,21 @@ impl DebuggerSession {
             // variable_locations separately as kind="capture". Expose them in
             // the function root scope so the Inspector can resolve the alias
             // through the active frame's capture table.
-            if parent_id.is_none() {
-                if let Some(captures) = frame
+            if parent_id.is_none()
+                && let Some(captures) = frame
                     .image
                     .artifact
                     .manifest
                     .pointer("/metadata/environment/captures")
                     .and_then(JsonValue::as_array)
-                {
-                    binding_ids.extend(captures.iter().filter_map(|capture| {
-                        capture
-                            .get("id")
-                            .and_then(JsonValue::as_str)
-                            .filter(|capture_id| valid_api_id(capture_id))
-                            .map(str::to_owned)
-                    }));
-                }
+            {
+                binding_ids.extend(captures.iter().filter_map(|capture| {
+                    capture
+                        .get("id")
+                        .and_then(JsonValue::as_str)
+                        .filter(|capture_id| valid_api_id(capture_id))
+                        .map(str::to_owned)
+                }));
             }
             binding_ids.sort();
             binding_ids.dedup();
