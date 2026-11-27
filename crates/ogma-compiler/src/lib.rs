@@ -101,44 +101,44 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
             .collect();
 
         Some(ModuleDescriptor {
-        id: parsed.source.id().as_str().to_owned(),
-        entry_function: parsed.syntax.functions[0].id.clone(),
-        environment: parsed.semantic.root_scope.clone(),
-        imports: parsed
-            .syntax
-            .module
-            .imports
-            .iter()
-            .map(|item| ModuleImport {
-                specifier: item.source.clone(),
-                imported_name: item.imported.clone(),
-                local_binding: item.binding.clone(),
-                kind: match item.kind {
-                    SyntaxImportKind::SideEffect => ModuleImportKind::SideEffect,
-                    SyntaxImportKind::Default => ModuleImportKind::Default,
-                    SyntaxImportKind::Named => ModuleImportKind::Named,
-                    SyntaxImportKind::Namespace => ModuleImportKind::Namespace,
-                },
-            })
-            .collect(),
-        exports: parsed
-            .syntax
-            .module
-            .exports
-            .iter()
-            .map(|item| ModuleExport {
-                export_name: item.exported.clone(),
-                local_binding: item.binding.clone(),
-                source: item.source.clone(),
-                imported_name: item.imported.clone(),
-                kind: match item.kind {
-                    SyntaxExportKind::Local => ModuleExportKind::Local,
-                    SyntaxExportKind::ReExport => ModuleExportKind::ReExport,
-                    SyntaxExportKind::Star => ModuleExportKind::Star,
-                },
-            })
-            .collect(),
-        requests,
+            id: parsed.source.id().as_str().to_owned(),
+            entry_function: parsed.syntax.functions[0].id.clone(),
+            environment: parsed.semantic.root_scope.clone(),
+            imports: parsed
+                .syntax
+                .module
+                .imports
+                .iter()
+                .map(|item| ModuleImport {
+                    specifier: item.source.clone(),
+                    imported_name: item.imported.clone(),
+                    local_binding: item.binding.clone(),
+                    kind: match item.kind {
+                        SyntaxImportKind::SideEffect => ModuleImportKind::SideEffect,
+                        SyntaxImportKind::Default => ModuleImportKind::Default,
+                        SyntaxImportKind::Named => ModuleImportKind::Named,
+                        SyntaxImportKind::Namespace => ModuleImportKind::Namespace,
+                    },
+                })
+                .collect(),
+            exports: parsed
+                .syntax
+                .module
+                .exports
+                .iter()
+                .map(|item| ModuleExport {
+                    export_name: item.exported.clone(),
+                    local_binding: item.binding.clone(),
+                    source: item.source.clone(),
+                    imported_name: item.imported.clone(),
+                    kind: match item.kind {
+                        SyntaxExportKind::Local => ModuleExportKind::Local,
+                        SyntaxExportKind::ReExport => ModuleExportKind::ReExport,
+                        SyntaxExportKind::Star => ModuleExportKind::Star,
+                    },
+                })
+                .collect(),
+            requests,
         })
     } else {
         None
