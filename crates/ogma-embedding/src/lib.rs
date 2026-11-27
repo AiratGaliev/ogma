@@ -1493,7 +1493,7 @@ impl Context<'_> {
             .heap
             .create_host_function(token)
             .map_err(ContextError::Heap)?;
-        self.persist(value).map_err(ContextError::Heap)
+        Ok(PersistentHandle(value))
     }
     /// Executes a function from the loaded, verified module by stable OGMB function ID.
     ///

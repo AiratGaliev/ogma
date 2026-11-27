@@ -425,16 +425,25 @@ impl FunctionData {
 }
 
 impl Heap {
-    /// Interns UTF-8 text as an ECMAScript property-key atom.impl Heap {
     /// Creates a GC-managed JavaScript Function value for a registered host callback.
     ///
-    /// The token is stored as opaque function metadata. No callback pointer or
-    /// host-owned reference is stored in the Runtime heap.
-    pub fn create_host_function(&mut self, token: HostFunctionToken) -> Result<Value, HeapError> {
-        let function = self.allocate_cell_with_retry(|| {
-            CellKind::Function(Box::new(FunctionData::host(token)))
-        })?;
-        Ok(Value::from_function(function))
+    /// The function is immediately promoted to a persistent Runtime root so the
+    /// returned host handle remains valid across subsequent allocations/collections.
+    pub fn create_host_function(&mut self, token: HostFunctionToken) -> Result<HostHandle, HeapError> {
+        let scope = self.open_scope()?;
+        let result = (|| {
+            let function = self.allocate_cell_with_retry(|| {
+                CellKind::Function(Box::new(FunctionData::host(token)))
+            })?;
+            self.scope_root(scope, function)?;
+            self.retain_host_value(function)
+        })();
+        let cleanup = self.close_scope(scope);
+        match (result, cleanup) {
+            (Ok(handle), Ok(())) => Ok(handle),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
     }
 
     /// Returns the registry token when a Function value represents a host callback.
@@ -453,6 +462,7 @@ impl Heap {
             _ => Err(HeapError::NotCallable),
         }
     }
+
     /// Interns UTF-8 text as an ECMAScript property-key atom.
     pub fn intern_property_key(&mut self, text: &str) -> Result<PropertyKey, HeapError> {
         if let Some(index) = self

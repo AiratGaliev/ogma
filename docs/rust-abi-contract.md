@@ -153,6 +153,13 @@ are not used as the execution backend.
   callback surface is limited to string creation, explicit collection,
   generation-checked opaque root retention/resolution/release and nested
   execution. Heap cells, GC registries and Runtime internals remain private.
+  Nested execution reuses the same Heap, root state, cancellation/deadline,
+  instruction fuel, stack quota and call-depth accounting. It does not create
+  another Runtime. Registry borrows are released before user callbacks run.
+  Rust and C-unwind callback panics are caught and converted to interpreter
+  boundary errors rather than being unwound through an exported C ABI function.
+  C callback transport failures and malformed completion records remain distinct
+  from capability denial and are returned as explicit interpreter boundary errors.
 - `Context::create_host_function(slot)` exposes a registered Rust or C callback
   as a GC-managed JavaScript Function value and returns a persistent host root.
   The Function stores only an opaque HostFunctionToken (registry identity,
@@ -162,13 +169,6 @@ are not used as the execution backend.
   call. Unregistration invalidates all previously created Function values,
   including values already queued as PromiseJobs. Host callbacks receive the
   original JavaScript receiver through HostCallContext::this_value().
-  Nested execution reuses the same Heap, root state, cancellation/deadline,
-  instruction fuel, stack quota and call-depth accounting. It does not create
-  another Runtime. Registry borrows are released before user callbacks run.
-  Rust and C-unwind callback panics are caught and converted to interpreter
-  boundary errors rather than being unwound through an exported C ABI function.
-  C callback transport failures and malformed completion records remain distinct
-  from capability denial and are returned as explicit interpreter boundary errors.
 - `EngineConfig` validates heap quota, maximum single allocation, estimated
   active VM stack bytes, instruction fuel, call depth, interrupt polling
   interval and pending-job capacity before Runtime creation. The interpreter
@@ -177,11 +177,10 @@ are not used as the execution backend.
   estimate of active frame structures, register windows and local-binding
   tracking; it is not a claim about process RSS or allocator capacity.
 
-The synchronous M1 interpreter does not yet enqueue or pump PromiseJobs.
-`max_pending_jobs` is validated and retained in Engine configuration so
-OGM-48 can consume the same resource policy, but queue admission, scheduling,
-fairness, pumping and shutdown are implemented in OGM-48. OGM-47 does not
-advertise asynchronous scheduling as available.
+The M1 interpreter provides a bounded Runtime-owned PromiseJobs FIFO with
+explicit admission, pumping, cancellation, pause/resume and shutdown. OGM-48
+implemented queue admission and dispatch using the existing EngineConfig
+resource policy; the async Future/Waker bridge remains outside M1.
 
 The public C declarations are kept in
 `crates/ogma-embedding/include/ogma_embedding_abi.h`. The Rust consumer

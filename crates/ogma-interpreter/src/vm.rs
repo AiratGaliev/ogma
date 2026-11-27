@@ -213,7 +213,6 @@ pub trait Host {
             .map(HostCallCompletion::Normal)
     }
 
-    /// Queues a settled Promise reaction as a host-driven ECMAScript PromiseJob.
     /// Invokes a registered host function by its generation-checked token.
     ///
     /// The default denies registered-function dispatch. Embedders must
@@ -227,6 +226,7 @@ pub trait Host {
         Err(HostError::Denied)
     }
 
+    /// Queues a settled Promise reaction as a host-driven ECMAScript PromiseJob.
     ///
     /// Embedders that implement the PromiseJobs contract override this method.
     /// The default rejects the intrinsic operation rather than running a
@@ -905,9 +905,6 @@ impl ExecutableModule {
         let completion = self.run_loop(heap, host, &options, &mut state, None, vec![root_frame]);
         state.active_stack_bytes = 0;
         completion.map(|completion| state.report(completion))
-    }
-
-    /// Instantiates a module Program closure        completion.map(|completion| state.report(completion))
     }
 
     fn execute_registered_host_callable<H: Host>(
