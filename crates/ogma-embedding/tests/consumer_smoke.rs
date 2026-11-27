@@ -10,6 +10,7 @@ use ogma_embedding::{
 };
 use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
 use oxc_allocator::Allocator;
+use std::{cell::Cell, rc::Rc};
 
 fn compile_module(source_text: &str) -> Vec<Vec<u8>> {
     let allocator = Allocator::default();
@@ -116,4 +117,126 @@ fn external_rust_consumer_registers_a_host_callback_and_observes_throw() {
         report.completion,
         ExecutionCompletion::Throw(value) if value.as_number() == Some(73.0)
     ));
+}
+
+#[test]
+fn external_rust_consumer_calls_registered_host_function_from_javascript_and_jobs() {
+    let engine = Engine::new(EngineConfig::default()).expect("validated engine");
+    let mut runtime = engine.create_runtime().expect("Runtime");
+    let mut context = runtime.create_context().expect("Context");
+    context
+        .load_module(compile_module(
+            "function invoke(callback, value) { return callback(value); } function schedule(callback) { return Promise.resolve(21).then(callback); }",
+        ))
+        .expect("source compiles to verified OGMB");
+    let functions = context.functions().expect("function metadata");
+    let invoke_id = functions
+        .iter()
+        .find(|function| function.name == "invoke")
+        .expect("invoke function")
+        .id
+        .clone();
+    let schedule_id = functions
+        .iter()
+        .find(|function| function.name == "schedule")
+        .expect("schedule function")
+        .id
+        .clone();
+
+    let calls = Rc::new(Cell::new(0));
+    let callback_calls = Rc::clone(&calls);
+    let slot = context
+        .register_host_function(
+            HostFunctionDescriptor::new(91, "consumer.double"),
+            move |call, arguments| {
+                assert!(call.this_value().is_undefined());
+                let Some(number) = arguments.first().and_then(|value| value.as_number()) else {
+                    return Ok(HostCallCompletion::Throw(Value::number(-1.0)));
+                };
+                callback_calls.set(callback_calls.get() + 1);
+                Ok(HostCallCompletion::Normal(Value::number(number * 2.0)))
+            },
+        )
+        .expect("register Rust callback");
+    let callback_handle = context
+        .create_host_function(slot)
+        .expect("create persistent JS Function value");
+    let callback = context.resolve(callback_handle).expect("resolve callback");
+
+    context.collect().expect("host Function value survives GC");
+    let callback = context.resolve(callback_handle).expect("callback root survives GC");
+    let direct = context
+        .execute(
+            &invoke_id,
+            &[callback, Value::number(21.0)],
+            ExecutionRequest::default(),
+        )
+        .expect("ordinary JavaScript Call dispatches to Rust");
+    assert!(matches!(
+        direct.completion,
+        ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
+    ));
+    assert_eq!(calls.get(), 1);
+
+    let scheduled = context
+        .execute(&schedule_id, &[callback], ExecutionRequest::default())
+        .expect("Promise.resolve(...).then(hostFunction) executes");
+    assert!(matches!(scheduled.completion, ExecutionCompletion::Return(_)));
+    assert_eq!(context.pending_promise_jobs(), 1);
+    context.collect().expect("queued host callback survives GC");
+    let pump = context.pump_promise_jobs(None).expect("pump host PromiseJob");
+    assert_eq!(pump.outcome, ogma_embedding::JobPumpOutcome::Progress);
+    assert_eq!(pump.jobs_executed, 1);
+    assert_eq!(context.pending_promise_jobs(), 0);
+    assert_eq!(calls.get(), 2);
+
+    context
+        .unregister_host_function(slot)
+        .expect("unregister invalidates old host Function token");
+    let stale = context.execute(
+        &invoke_id,
+        &[callback, Value::number(3.0)],
+        ExecutionRequest::default(),
+    );
+    assert!(matches!(
+        stale,
+        Err(ogma_embedding::ContextError::Interpreter(
+            ogma_embedding::InterpreterError::HostCapabilityDenied(_)
+        ))
+    ));
+    assert_eq!(calls.get(), 2, "stale function must not reach a recycled slot");
+
+    let replacement_calls = Rc::new(Cell::new(0));
+    let observed_replacement_calls = Rc::clone(&replacement_calls);
+    let replacement_slot = context
+        .register_host_function(
+            HostFunctionDescriptor::new(91, "consumer.double"),
+            move |_call, _arguments| {
+                observed_replacement_calls.set(observed_replacement_calls.get() + 1);
+                Ok(HostCallCompletion::Normal(Value::number(99.0)))
+            },
+        )
+        .expect("re-register same stable ID and name in a new generation");
+    let replacement_handle = context
+        .create_host_function(replacement_slot)
+        .expect("create replacement function");
+    let replacement = context.resolve(replacement_handle).expect("replacement value");
+    let fresh = context
+        .execute(
+            &invoke_id,
+            &[replacement, Value::number(3.0)],
+            ExecutionRequest::default(),
+        )
+        .expect("replacement function is callable");
+    assert!(matches!(
+        fresh.completion,
+        ExecutionCompletion::Return(value) if value.as_number() == Some(99.0)
+    ));
+    assert_eq!(replacement_calls.get(), 1);
+
+    context.release(callback_handle).expect("release old callback root");
+    context.release(replacement_handle).expect("release replacement root");
+    context
+        .unregister_host_function(replacement_slot)
+        .expect("unregister replacement");
 }

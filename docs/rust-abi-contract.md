@@ -153,6 +153,15 @@ are not used as the execution backend.
   callback surface is limited to string creation, explicit collection,
   generation-checked opaque root retention/resolution/release and nested
   execution. Heap cells, GC registries and Runtime internals remain private.
+- `Context::create_host_function(slot)` exposes a registered Rust or C callback
+  as a GC-managed JavaScript Function value and returns a persistent host root.
+  The Function stores only an opaque HostFunctionToken (registry identity,
+  slot index/generation and ABI version), never a callback pointer. Ordinary
+  JavaScript Call instructions dispatch directly through that token; the
+  registry revalidates the token, Runtime heap and capability mask on every
+  call. Unregistration invalidates all previously created Function values,
+  including values already queued as PromiseJobs. Host callbacks receive the
+  original JavaScript receiver through HostCallContext::this_value().
   Nested execution reuses the same Heap, root state, cancellation/deadline,
   instruction fuel, stack quota and call-depth accounting. It does not create
   another Runtime. Registry borrows are released before user callbacks run.

@@ -91,7 +91,7 @@ pub enum JobQueueError {
     ShuttingDown,
     /// A Context must load a verified module before it can enqueue callbacks.
     ModuleNotLoaded,
-    /// The callback is not a function owned by the Context's verified module.
+    /// The callback is neither a module function nor a live function in this Context's host registry.
     InvalidCallback,
     /// A queue/root allocation could not be reserved.
     AllocationFailed,
@@ -140,9 +140,10 @@ impl Context<'_> {
     /// Enqueues a callable Function value as a FIFO Runtime job.
     ///
     /// The callback and arguments are promoted to persistent roots before the
-    /// job becomes visible in the queue. The module's verified function table
-    /// is retained with the job, so dropping this Context does not invalidate
-    /// accepted callbacks while the parent Runtime remains alive.
+    /// job becomes visible in the queue. A verified module dispatcher or the
+    /// callback's generation-checked host token remains available to the job,
+    /// so dropping this Context does not invalidate accepted callbacks while
+    /// the parent Runtime remains alive.
     pub fn enqueue_promise_job(
         &mut self,
         callback: crate::Value,
@@ -165,17 +166,27 @@ impl Context<'_> {
         if self.loaded_modules.is_empty() {
             return Err(JobQueueError::ModuleNotLoaded);
         }
-        let mut owner = None;
-        for candidate in self.loaded_modules.iter().rev() {
-            if candidate
-                .executable
-                .contains_callable(&self.runtime.heap, callback)?
-            {
-                owner = Some(Rc::clone(&candidate.executable));
-                break;
+        let module = if let Some(token) = self.runtime.heap.host_function_token(callback)? {
+            self.host_functions
+                .snapshot_token(token)
+                .map_err(|_| JobQueueError::InvalidCallback)?;
+            self.loaded_modules
+                .last()
+                .map(|entry| Rc::clone(&entry.executable))
+                .ok_or(JobQueueError::ModuleNotLoaded)?
+        } else {
+            let mut owner = None;
+            for candidate in self.loaded_modules.iter().rev() {
+                if candidate
+                    .executable
+                    .contains_callable(&self.runtime.heap, callback)?
+                {
+                    owner = Some(Rc::clone(&candidate.executable));
+                    break;
+                }
             }
-        }
-        let module = owner.ok_or(JobQueueError::InvalidCallback)?;
+            owner.ok_or(JobQueueError::InvalidCallback)?
+        };
 
         self.runtime
             .jobs

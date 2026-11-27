@@ -19,6 +19,70 @@ pub struct FunctionId(
     /// Numeric identity in the backend-owned function table.
     pub u32,
 );
+/// Opaque identity of one registered host function.
+///
+/// A token is not a callback pointer and does not authorize dispatch by itself.
+/// The owning host registry must revalidate its registry identity, slot
+/// generation and ABI version every time the function is invoked.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HostFunctionToken {
+    registry_id: u64,
+    slot_index: u32,
+    slot_generation: u32,
+    abi_major: u16,
+    abi_minor: u16,
+    _thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl std::fmt::Debug for HostFunctionToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HostFunctionToken(<opaque>)")
+    }
+}
+
+impl HostFunctionToken {
+    /// Constructs an opaque token from registry-issued identity fields.
+    ///
+    /// Construction does not register or authorize a callback. A host
+    /// dispatcher must validate the complete token against its live registry.
+    #[must_use]
+    pub const fn new(
+        registry_id: u64,
+        slot_index: u32,
+        slot_generation: u32,
+        abi_major: u16,
+        abi_minor: u16,
+    ) -> Self {
+        Self {
+            registry_id,
+            slot_index,
+            slot_generation,
+            abi_major,
+            abi_minor,
+            _thread_affinity: PhantomData,
+        }
+    }
+
+    /// Returns the owning registry identity.
+    #[must_use]
+    pub const fn registry_id(self) -> u64 { self.registry_id }
+
+    /// Returns the zero-based registry slot index.
+    #[must_use]
+    pub const fn slot_index(self) -> u32 { self.slot_index }
+
+    /// Returns the registry slot generation.
+    #[must_use]
+    pub const fn slot_generation(self) -> u32 { self.slot_generation }
+
+    /// Returns the ABI major version captured by this token.
+    #[must_use]
+    pub const fn abi_major(self) -> u16 { self.abi_major }
+
+    /// Returns the minimum ABI minor version captured by this token.
+    #[must_use]
+    pub const fn abi_minor(self) -> u16 { self.abi_minor }
+}
 
 /// Stable lexical binding identity within a function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -313,6 +377,7 @@ pub(super) struct FunctionData {
     pub(super) kind: FunctionKind,
     pub(super) strict: bool,
     pub(super) lexical_this: Value,
+    pub(super) host_function: Option<HostFunctionToken>,
 }
 
 impl FunctionData {
@@ -324,6 +389,7 @@ impl FunctionData {
             kind: FunctionKind::Ordinary,
             strict: true,
             lexical_this: Value::undefined(),
+            host_function: None,
         }
     }
 
@@ -341,11 +407,52 @@ impl FunctionData {
             kind,
             strict,
             lexical_this,
+            host_function: None,
+        }
+    }
+
+    pub(super) fn host(token: HostFunctionToken) -> Self {
+        Self {
+            object: ObjectData::new(),
+            id: None,
+            closure_environment: None,
+            kind: FunctionKind::Ordinary,
+            strict: true,
+            lexical_this: Value::undefined(),
+            host_function: Some(token),
         }
     }
 }
 
 impl Heap {
+    /// Interns UTF-8 text as an ECMAScript property-key atom.impl Heap {
+    /// Creates a GC-managed JavaScript Function value for a registered host callback.
+    ///
+    /// The token is stored as opaque function metadata. No callback pointer or
+    /// host-owned reference is stored in the Runtime heap.
+    pub fn create_host_function(&mut self, token: HostFunctionToken) -> Result<Value, HeapError> {
+        let function = self.allocate_cell_with_retry(|| {
+            CellKind::Function(Box::new(FunctionData::host(token)))
+        })?;
+        Ok(Value::from_function(function))
+    }
+
+    /// Returns the registry token when a Function value represents a host callback.
+    pub fn host_function_token(
+        &self,
+        function: Value,
+    ) -> Result<Option<HostFunctionToken>, HeapError> {
+        let index = self.function_index(function)?;
+        match &self.slots[index]
+            .cell
+            .as_ref()
+            .ok_or(HeapError::StaleReference)?
+            .kind
+        {
+            CellKind::Function(data) => Ok(data.host_function),
+            _ => Err(HeapError::NotCallable),
+        }
+    }
     /// Interns UTF-8 text as an ECMAScript property-key atom.
     pub fn intern_property_key(&mut self, text: &str) -> Result<PropertyKey, HeapError> {
         if let Some(index) = self

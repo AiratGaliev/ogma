@@ -38,7 +38,7 @@ use ogma_bytecode::{
 use ogma_runtime::{
     BindingDefinition, BindingId, CallActivation, CaptureDefinition, CaptureMode, CollectionReport,
     FunctionDefinition, FunctionId, FunctionKind, Heap, HeapError, HostHandle, LexicalEnvironment,
-    PromiseReaction, ScopeToken, Value, ValueType,
+    HostFunctionToken, PromiseReaction, ScopeToken, Value, ValueType,
 };
 
 /// Cancellation signal shared with a host control thread.
@@ -214,6 +214,19 @@ pub trait Host {
     }
 
     /// Queues a settled Promise reaction as a host-driven ECMAScript PromiseJob.
+    /// Invokes a registered host function by its generation-checked token.
+    ///
+    /// The default denies registered-function dispatch. Embedders must
+    /// validate the token against their live host registry.
+    fn call_registered_with_context(
+        &mut self,
+        _context: &mut HostCallContext<'_>,
+        _function: HostFunctionToken,
+        _arguments: &[Value],
+    ) -> Result<HostCallCompletion, HostError> {
+        Err(HostError::Denied)
+    }
+
     ///
     /// Embedders that implement the PromiseJobs contract override this method.
     /// The default rejects the intrinsic operation rather than running a
@@ -248,6 +261,7 @@ pub struct HostCallContext<'a> {
     state: &'a mut ExecutionState,
     options: &'a ExecutionOptions,
     parent_depth: u32,
+    this_value: Value,
 }
 
 /// Opaque temporary Runtime root created by a synchronous host callback.
@@ -258,6 +272,14 @@ pub struct HostCallContext<'a> {
 pub struct HostCallRoot(HostHandle);
 
 impl HostCallContext<'_> {
+    /// Returns the JavaScript receiver supplied to this host function call.
+    ///
+    /// Calls emitted by static host-capability instructions use undefined;
+    /// ordinary JavaScript calls preserve their call-site receiver.
+    #[must_use]
+    pub const fn this_value(&self) -> Value {
+        self.this_value
+    }
     /// Allocates a JavaScript String in the active Runtime.
     ///
     /// The returned Value is transient. Retain it with `retain_value` before
@@ -819,6 +841,9 @@ impl ExecutableModule {
         options: ExecutionOptions,
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
+        if let Some(token) = heap.host_function_token(callee)? {
+            return Self::execute_registered_host_callable(heap, callee, token, arguments, host, options);
+        }
         let function_id = heap.function_id(callee)?;
         let entry_id = self.runtime_functions.get(&function_id.0).ok_or_else(|| {
             InterpreterError::MissingFunction(format!("runtime function {}", function_id.0))
@@ -880,6 +905,75 @@ impl ExecutableModule {
         let completion = self.run_loop(heap, host, &options, &mut state, None, vec![root_frame]);
         state.active_stack_bytes = 0;
         completion.map(|completion| state.report(completion))
+    }
+
+    /// Instantiates a module Program closure        completion.map(|completion| state.report(completion))
+    }
+
+    fn execute_registered_host_callable<H: Host>(
+        heap: &mut Heap,
+        callee: Value,
+        token: HostFunctionToken,
+        arguments: &[Value],
+        host: &mut H,
+        options: ExecutionOptions,
+    ) -> Result<ExecutionReport, InterpreterError> {
+        validate_options(&options)?;
+        let mut state = ExecutionState::new(&options)?;
+        let scope = heap.open_scope()?;
+        let setup = (|| {
+            heap.scope_root(scope, callee)?;
+            for argument in arguments {
+                heap.scope_root(scope, *argument)?;
+            }
+            heap.scope_root(scope, options.global_this)?;
+            Ok::<(), HeapError>(())
+        })();
+        if let Err(error) = setup {
+            let _ = heap.close_scope(scope);
+            return Err(InterpreterError::Runtime(error));
+        }
+
+        state.max_call_depth_reached = 1;
+        let execution = if let Some(reason) = state.poll(true) {
+            Ok(ExecutionCompletion::Interrupted(reason))
+        } else {
+            let mut call_context = HostCallContext {
+                heap,
+                state: &mut state,
+                options: &options,
+                parent_depth: 1,
+                this_value: Value::undefined(),
+            };
+            match host.call_registered_with_context(&mut call_context, token, arguments) {
+                Ok(HostCallCompletion::Normal(value)) => {
+                    call_context.heap.scope_root(scope, value)?;
+                    Ok(ExecutionCompletion::Return(value))
+                }
+                Ok(HostCallCompletion::Throw(value)) | Err(HostError::Throw(value)) => {
+                    call_context.heap.scope_root(scope, value)?;
+                    Ok(ExecutionCompletion::Throw(value))
+                }
+                Ok(HostCallCompletion::Interrupted(reason)) => {
+                    Ok(ExecutionCompletion::Interrupted(reason))
+                }
+                Err(HostError::Denied) => Err(InterpreterError::HostCapabilityDenied(
+                    "registered host function".to_owned(),
+                )),
+                Err(HostError::WrongRuntime) => Err(InterpreterError::HostRuntimeMismatch),
+                Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
+                Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
+                Err(HostError::CallbackFailed) => Err(InterpreterError::HostCallbackFailed),
+                Err(HostError::InvalidCompletion) => Err(InterpreterError::InvalidHostCompletion),
+            }
+        };
+        let cleanup = heap.close_scope(scope);
+        let completion = match (execution, cleanup) {
+            (Ok(completion), Ok(())) => completion,
+            (Err(error), _) => return Err(error),
+            (Ok(_), Err(error)) => return Err(InterpreterError::Runtime(error)),
+        };
+        Ok(state.report(completion))
     }
 
     /// Instantiates a module Program closure and its persistent lexical environment.
@@ -1648,19 +1742,56 @@ impl ExecutableModule {
                     .iter()
                     .map(|register| read_value(frame, *register))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.prepare_child_call(
-                    heap,
-                    options,
-                    state,
-                    frame,
-                    scope,
-                    destination,
-                    callee,
-                    this_arg,
-                    &arguments,
-                    PendingKind::Call,
-                    offset,
-                )
+                if let Some(token) = heap.host_function_token(callee)? {
+                    let mut call_context = HostCallContext {
+                        heap,
+                        state,
+                        options,
+                        parent_depth: frame.depth,
+                        this_value: this_arg,
+                    };
+                    match host.call_registered_with_context(&mut call_context, token, &arguments) {
+                        Ok(HostCallCompletion::Normal(value)) => {
+                            call_context.heap.scope_root(scope, value)?;
+                            write_register(frame, destination, RegisterValue::Value(value))?;
+                            Ok(Step::Continue {
+                                next_pc: frame.pc + 1,
+                                back_edge: false,
+                            })
+                        }
+                        Ok(HostCallCompletion::Throw(value)) | Err(HostError::Throw(value)) => {
+                            call_context.heap.scope_root(scope, value)?;
+                            Ok(Step::Complete(ExecutionCompletion::Throw(value)))
+                        }
+                        Ok(HostCallCompletion::Interrupted(reason)) => {
+                            Ok(Step::Complete(ExecutionCompletion::Interrupted(reason)))
+                        }
+                        Err(HostError::Denied) => Err(InterpreterError::HostCapabilityDenied(
+                            "registered host function".to_owned(),
+                        )),
+                        Err(HostError::WrongRuntime) => Err(InterpreterError::HostRuntimeMismatch),
+                        Err(HostError::Runtime(error)) => Err(InterpreterError::Runtime(error)),
+                        Err(HostError::Panicked) => Err(InterpreterError::HostCallbackPanicked),
+                        Err(HostError::CallbackFailed) => Err(InterpreterError::HostCallbackFailed),
+                        Err(HostError::InvalidCompletion) => {
+                            Err(InterpreterError::InvalidHostCompletion)
+                        }
+                    }
+                } else {
+                    self.prepare_child_call(
+                        heap,
+                        options,
+                        state,
+                        frame,
+                        scope,
+                        destination,
+                        callee,
+                        this_arg,
+                        &arguments,
+                        PendingKind::Call,
+                        offset,
+                    )
+                }
             }
             CallKind::Construct => {
                 let constructor = read_value(frame, sources[0])?;
@@ -1712,6 +1843,7 @@ impl ExecutableModule {
                     state,
                     options,
                     parent_depth: frame.depth,
+                    this_value: Value::undefined(),
                 };
                 match host.call_with_context(&mut call_context, &capability, &arguments) {
                     Ok(HostCallCompletion::Normal(value)) => {
