@@ -166,7 +166,7 @@ fn process_request(request: Value) -> Value {
     };
     let source = match SourceFile::new(
         test_id,
-        format!("ogma-test262://{test_id}"),
+        format!("memory:///test262/{test_id}"),
         None,
         source_text,
     ) {
@@ -226,7 +226,18 @@ fn process_request(request: Value) -> Value {
             "compiler emitted no executable functions",
         );
     }
-    let program_id = compiled.functions[0].id.clone();
+    let program_id = compiled
+        .functions
+        .iter()
+        .find(|function| function.name == "<program>")
+        .map(|function| function.id.clone());
+    if !differential && program_id.is_none() {
+        return error_response(
+            request_id,
+            "harness_error",
+            "compiler output does not contain the Program entry function",
+        );
+    }
     let artifacts = compiled
         .functions
         .iter()
@@ -290,6 +301,13 @@ fn process_request(request: Value) -> Value {
         };
         functions.iter().find(|function| function.name == name)
     } else {
+        let Some(program_id) = program_id.as_deref() else {
+            return error_response(
+                request_id,
+                "harness_error",
+                "compiler output does not contain the Program entry function",
+            );
+        };
         functions.iter().find(|function| function.id == program_id)
     };
     let Some(entry) = entry else {
