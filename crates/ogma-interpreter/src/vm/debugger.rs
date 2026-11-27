@@ -1710,7 +1710,8 @@ impl DebuggerSession {
                     .and_then(JsonValue::as_array)
                 {
                     binding_ids.extend(captures.iter().filter_map(|capture| {
-                        capture.get("id")
+                        capture
+                            .get("id")
                             .and_then(JsonValue::as_str)
                             .filter(|capture_id| valid_api_id(capture_id))
                             .map(str::to_owned)
@@ -1992,7 +1993,9 @@ fn bounded_utf16_preview(units: &[u16], max_chars: usize) -> (String, bool) {
         let first = units[end];
         end += 1;
         if (0xD800..=0xDBFF).contains(&first)
-            && units.get(end).is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
+            && units
+                .get(end)
+                .is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
         {
             end += 1;
         }
