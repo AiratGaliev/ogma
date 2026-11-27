@@ -26,6 +26,9 @@ def main() -> int:
     baseline = test_runner.load_baseline(args.baseline)
     profile = test_runner.load_profile(args.profile)
     source = test_runner._pinned_source(baseline, "test262")
+    allowlist = profile.get("test262Allowlist")
+    if not isinstance(allowlist, list) or not allowlist:
+        raise test_runner.RunnerError("the runtime smoke requires a non-empty exact test262Allowlist")
     corpus = args.corpus.resolve(strict=True)
     test_runner._load_and_check_revision(
         corpus,
@@ -33,9 +36,6 @@ def main() -> int:
         "test262",
         expected_test_ids=allowlist,
     )
-    allowlist = profile.get("test262Allowlist")
-    if not isinstance(allowlist, list) or not allowlist:
-        raise test_runner.RunnerError("the runtime smoke requires a non-empty exact test262Allowlist")
     if profile["execution"]["state"] != "ready":
         raise test_runner.RunnerError("the Runtime execution profile is not ready")
 
