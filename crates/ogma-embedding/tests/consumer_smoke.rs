@@ -127,7 +127,7 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let mut context = runtime.create_context().expect("Context");
     context
         .load_module(compile_module(
-            "function invoke(receiver, callback, value) { receiver.callback = callback; return receiver.callback(value); } function schedule(callback) { return Promise.resolve(21).then(callback); }",
+            "function invoke(receiver, callback, value) { receiver.callback = callback; return receiver.callback(value); } function schedule(callback) { return Promise.resolve(21).then(callback); } function scheduleWithCatch(callback, onRejected) { return Promise.resolve(21).then(callback).catch(onRejected); }",
         ))
         .expect("source compiles to verified OGMB");
     let functions = context.functions().expect("function metadata");
@@ -141,6 +141,12 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         .iter()
         .find(|function| function.name == "schedule")
         .expect("schedule function")
+        .id
+        .clone();
+    let schedule_with_catch_id = functions
+        .iter()
+        .find(|function| function.name == "scheduleWithCatch")
+        .expect("scheduleWithCatch function")
         .id
         .clone();
 
@@ -270,9 +276,31 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     assert_eq!(calls.get(), 2, "denied capabilities must not invoke Rust");
     context.set_capabilities(REQUIRED_CAPABILITIES);
 
+    let rejection_calls = Rc::new(Cell::new(0));
+    let observed_rejection_calls = Rc::clone(&rejection_calls);
+    let rejection_slot = context
+        .register_host_function(
+            HostFunctionDescriptor::new(92, "consumer.catch")
+                .requiring_capabilities(REQUIRED_CAPABILITIES),
+            move |_call, _arguments| {
+                observed_rejection_calls.set(observed_rejection_calls.get() + 1);
+                Ok(HostCallCompletion::Normal(Value::number(88.0)))
+            },
+        )
+        .expect("register Promise rejection handler");
+    let rejection_handle = context
+        .create_host_function(rejection_slot)
+        .expect("create Promise rejection handler Function value");
+    let rejection_handler = context
+        .resolve(rejection_handle)
+        .expect("resolve rejection handler");
     let queued_before_unregister = context
-        .execute(&schedule_id, &[callback], ExecutionRequest::default())
-        .expect("queue a host callback before unregister");
+        .execute(
+            &schedule_with_catch_id,
+            &[callback, rejection_handler],
+            ExecutionRequest::default(),
+        )
+        .expect("queue a host callback with a rejection handler before unregister");
     assert!(matches!(
         queued_before_unregister.completion,
         ExecutionCompletion::Return(_)
@@ -322,10 +350,17 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     );
     assert_eq!(stale_job_pump.jobs_executed, 1);
     assert_eq!(context.pending_promise_jobs(), 0);
+    assert_eq!(stale_job_pump.jobs_executed, 2);
+    assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(
         replacement_calls.get(),
         0,
         "queued callback from an older generation must not invoke the replacement"
+    );
+    assert_eq!(
+        rejection_calls.get(),
+        1,
+        "the stale callback rejects its Promise and runs the registered catch handler"
     );
     let replacement = context
         .resolve(replacement_handle)
@@ -356,6 +391,12 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         .release(replacement_handle)
         .expect("release replacement root");
     context
+        .release(rejection_handle)
+        .expect("release rejection handler root");
+    context
         .unregister_host_function(replacement_slot)
         .expect("unregister replacement");
+    context
+        .unregister_host_function(rejection_slot)
+        .expect("unregister rejection handler");
 }

@@ -166,9 +166,12 @@ are not used as the execution backend.
   slot index/generation and ABI version), never a callback pointer. Ordinary
   JavaScript Call instructions dispatch directly through that token; the
   registry revalidates the token, Runtime heap and capability mask on every
-  call. Unregistration invalidates all previously created Function values,
-  including values already queued as PromiseJobs. Host callbacks receive the
-  original JavaScript receiver through HostCallContext::this_value().
+  call. Unregistration invalidates all previously created Function values.
+  Invoking a stale or foreign Function produces a JavaScript ReferenceError
+  completion; a stale callback already queued as a PromiseJob rejects its child
+  Promise and does not abort the host pump or dispatch into a recycled slot.
+  Host callbacks receive the original JavaScript receiver through
+  HostCallContext::this_value().
 - `EngineConfig` validates heap quota, maximum single allocation, estimated
   active VM stack bytes, instruction fuel, call depth, interrupt polling
   interval and pending-job capacity before Runtime creation. The interpreter
