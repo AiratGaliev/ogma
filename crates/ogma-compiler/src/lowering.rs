@@ -373,6 +373,7 @@ struct FunctionCompiler<'a> {
     const_initializers: HashMap<String, SyntaxExpression>,
     const_values: HashMap<String, ValueRef>,
     promise_bindings: HashSet<String>,
+    unsupported_mutable_promise_bindings: HashSet<String>,
     hoisted_functions: HashSet<String>,
     blocks: Vec<BasicBlock>,
     current: Option<usize>,
@@ -541,6 +542,7 @@ impl<'a> FunctionCompiler<'a> {
             const_initializers,
             const_values: HashMap::new(),
             promise_bindings: HashSet::new(),
+            unsupported_mutable_promise_bindings: HashSet::new(),
             hoisted_functions: HashSet::new(),
             blocks: Vec::new(),
             current: None,
@@ -1279,6 +1281,19 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    fn is_mutable_promise_alias(&self, expression: &SyntaxExpression) -> bool {
+        match expression {
+            SyntaxExpression::Parenthesized { expression, .. } => {
+                self.is_mutable_promise_alias(expression)
+            }
+            SyntaxExpression::Identifier {
+                binding: Some(binding),
+                ..
+            } => self.unsupported_mutable_promise_bindings.contains(binding),
+            _ => false,
+        }
+    }
+
     fn is_promise_expression(&self, expression: &SyntaxExpression) -> bool {
         match expression {
             SyntaxExpression::Parenthesized { expression, .. } => {
@@ -1569,6 +1584,21 @@ impl<'a> FunctionCompiler<'a> {
                         });
                 }
 
+                if let SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } = callee.as_ref()
+                    && matches!(method.as_str(), "then" | "catch")
+                    && self.is_mutable_promise_alias(object)
+                {
+                    return self.fail(
+                        "lowering.mutable_promise_alias_unsupported",
+                        Some(*span),
+                        "M1 Promise intrinsics accept direct Promise expressions and immutable const aliases; mutable Promise aliases require control-flow-aware type tracking",
+                    );
+                }
+
                 let member_promise_method = match callee.as_ref() {
                     SyntaxExpression::Member {
                         object,
@@ -1669,12 +1699,19 @@ impl<'a> FunctionCompiler<'a> {
                 let target = self.evaluate_assignment_target(target, *span)?;
                 let is_promise = self.is_promise_expression(value);
                 let value = self.emit_expression(value)?;
-                if let EvaluatedAssignmentTarget::Binding(binding) = &target {
-                    if is_promise {
-                        self.promise_bindings.insert(binding.clone());
-                    } else {
-                        self.promise_bindings.remove(binding);
-                    }
+                if is_promise
+                    && let EvaluatedAssignmentTarget::Binding(binding) = &target
+                    && (self.local_bindings.get(binding).is_some_and(|item| item.mutable)
+                        || self
+                            .captures_by_binding
+                            .get(binding)
+                            .is_some_and(|item| item.mutable))
+                {
+                    // Mutable Promise aliases require control-flow-aware type
+                    // merging. Keep the M1 profile fail-closed rather than
+                    // lowering a maybe-Promise receiver to the Promise intrinsic.
+                    self.unsupported_mutable_promise_bindings
+                        .insert(binding.clone());
                 }
                 self.emit_assignment_target(target, value, *span)
             }
@@ -1860,13 +1897,12 @@ impl<'a> FunctionCompiler<'a> {
                                     None,
                                 )?;
                                 if is_promise {
-                                    self.promise_bindings.insert(binding_id.to_owned());
-                                } else {
-                                    self.promise_bindings.remove(binding_id);
+                                    self.unsupported_mutable_promise_bindings
+                                        .insert(binding_id.to_owned());
                                 }
-                            } else {
-                                self.promise_bindings.remove(binding_id);
                             }
+                            // A var declaration without an initializer does not
+                            // assign undefined and must not invalidate prior state.
                         }
                         SyntaxVariableKind::Let => {
                             let is_promise = declaration
@@ -1880,9 +1916,8 @@ impl<'a> FunctionCompiler<'a> {
                             };
                             self.emit_env_store(binding_id, value, Some(declaration.span), None)?;
                             if is_promise {
-                                self.promise_bindings.insert(binding_id.to_owned());
-                            } else {
-                                self.promise_bindings.remove(binding_id);
+                                self.unsupported_mutable_promise_bindings
+                                    .insert(binding_id.to_owned());
                             }
                         }
                         SyntaxVariableKind::Const => {
