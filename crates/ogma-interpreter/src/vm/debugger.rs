@@ -2028,9 +2028,9 @@ impl DebuggerSession {
         let scope = heap.open_scope()?;
         let result = (|| {
             heap.scope_root(scope, object)?;
-            let keys = heap.own_property_keys(object)?;
-            let mut properties = Vec::new();
-            for key in keys.iter().take(limit) {
+            let (keys, truncated) = heap.own_property_keys_bounded(object, limit)?;
+            let mut properties = Vec::with_capacity(keys.len());
+            for key in &keys {
                 let (name, _) = bounded_utf16_preview(heap.property_key_utf16(*key)?, 1024);
                 if let Some(CompletePropertyDescriptor {
                     value,
@@ -2053,7 +2053,7 @@ impl DebuggerSession {
                 object_id: object_id.to_owned(),
                 is_proxy: false,
                 properties,
-                truncated: keys.len() > limit,
+                truncated,
             })
         })();
         let close = heap.close_scope(scope);
