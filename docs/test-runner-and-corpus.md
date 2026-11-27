@@ -340,7 +340,7 @@ Benchmarks report reproducible measurements, not conformance classifications. Ke
 
 ## 9. CI lane policy and OGM-35 integration
 
-Runner protocol self-tests and aggregate proof cases are part of Fast CI's bounded Python unit suite. Feature PRs check out the immutable pinned source snapshots only to execute the explicit six-case parser smoke, three-test Runtime allowlist and bounded differential fixtures; they do not plan or execute the complete upstream Test262 or parser corpora.
+Runner protocol self-tests and aggregate proof cases are part of Fast CI's bounded Python unit suite. Feature PRs use sparse checkouts of only the explicit six parser cases and three Runtime allowlist cases from immutable pinned snapshots, plus the pinned QuickJS-NG source needed to build the differential oracle; they do not check out, plan or execute the complete upstream Test262 or parser corpora.
 
 The promotion workflow is the only lane that plans and executes the pinned full conformance corpora:
 

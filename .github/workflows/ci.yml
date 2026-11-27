@@ -155,6 +155,14 @@ jobs:
           path: .artifacts/test262-parser-tests
           fetch-depth: 1
           persist-credentials: false
+          sparse-checkout: |
+            pass/005dc7dff71d4b97.js
+            pass-explicit/005dc7dff71d4b97.js
+            pass/0140c25a4177e5f7.module.js
+            pass-explicit/0140c25a4177e5f7.module.js
+            early/0049fa147d7edac0.js
+            fail/0053737b6145994c.js
+          sparse-checkout-cone-mode: false
 
       - name: Checkout pinned TC39 Test262 runtime smoke
         if: hashFiles('Cargo.toml') != ''
@@ -165,6 +173,11 @@ jobs:
           path: .artifacts/test262
           fetch-depth: 1
           persist-credentials: false
+          sparse-checkout: |
+            test/language/comments/hashbang/not-empty.js
+            test/language/directive-prologue/10.1.1-8gs.js
+            test/language/directive-prologue/14.1-4gs.js
+          sparse-checkout-cone-mode: false
 
       - name: Checkout pinned QuickJS-NG differential oracle
         if: hashFiles('Cargo.toml') != ''

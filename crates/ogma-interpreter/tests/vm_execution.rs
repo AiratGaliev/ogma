@@ -182,8 +182,7 @@ fn deterministic_source_arithmetic_executes_through_the_verified_ogmb_pipeline()
         "function add(left, right) { return left + right; }",
     )
     .expect("source metadata");
-    let parsed = parse(&allocator, &source, ParseRequestOptions::default())
-        .expect("source parses");
+    let parsed = parse(&allocator, &source, ParseRequestOptions::default()).expect("source parses");
     let compiled = compile_to_bytecode(&parsed).expect("source compiles to OGMB");
     let entry = compiled
         .functions

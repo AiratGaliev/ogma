@@ -2156,23 +2156,47 @@ mod tests {
                 .retain_host_value(value)
                 .expect("persistent handle");
             let scope = runtime_heap.open_scope().expect("temporary root scope");
-            runtime_heap.scope_root(scope, value).expect("temporary root");
-            runtime_heap.collect().expect("collect while both roots are live");
+            runtime_heap
+                .scope_root(scope, value)
+                .expect("temporary root");
+            runtime_heap
+                .collect()
+                .expect("collect while both roots are live");
             if seed & 1 == 0 {
-                runtime_heap.collect().expect("deterministic repeated collection");
+                runtime_heap
+                    .collect()
+                    .expect("deterministic repeated collection");
             }
-            assert!(runtime_heap.strict_equal(
-                runtime_heap.resolve_host_handle(handle).expect("live handle"),
-                value
-            ).expect("object identity comparison"));
+            assert!(
+                runtime_heap
+                    .strict_equal(
+                        runtime_heap
+                            .resolve_host_handle(handle)
+                            .expect("live handle"),
+                        value
+                    )
+                    .expect("object identity comparison")
+            );
             runtime_heap.close_scope(scope).expect("close scope");
-            runtime_heap.collect().expect("collect with persistent handle only");
-            assert!(runtime_heap.strict_equal(
-                runtime_heap.resolve_host_handle(handle).expect("persistent handle survives"),
-                value
-            ).expect("object identity comparison"));
-            runtime_heap.release_host_handle(handle).expect("release handle");
-            runtime_heap.collect().expect("collect after final root is released");
+            runtime_heap
+                .collect()
+                .expect("collect with persistent handle only");
+            assert!(
+                runtime_heap
+                    .strict_equal(
+                        runtime_heap
+                            .resolve_host_handle(handle)
+                            .expect("persistent handle survives"),
+                        value
+                    )
+                    .expect("object identity comparison")
+            );
+            runtime_heap
+                .release_host_handle(handle)
+                .expect("release handle");
+            runtime_heap
+                .collect()
+                .expect("collect after final root is released");
         }
         assert_eq!(runtime_heap.stats().live_objects, 0);
         assert_eq!(runtime_heap.root_snapshot().persistent_host_roots, 0);
