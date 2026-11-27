@@ -55,7 +55,8 @@
             "value": 23
           }
         }
-      ]
+      ],
+      "referenceEntryFunction": "__ogma_differential_entry__"
     }
   ]
 }

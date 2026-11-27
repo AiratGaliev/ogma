@@ -60,7 +60,7 @@ def run_ogma(adapter: Path, fixture: dict, timeout_ms: int) -> dict:
 
 
 def run_quickjs(reference: Path, fixture: dict, timeout_ms: int) -> dict:
-    entry = fixture["entryFunction"]
+    entry = fixture.get("referenceEntryFunction", fixture["entryFunction"])
     source = fixture["source"]
     host_trace = bool(fixture.get("hostCallTrace", False))
     input_value = fixture.get("input")
