@@ -255,6 +255,7 @@ version = "0.1.0"
 dependencies = [
  "ogma-bytecode",
  "ogma-compiler",
+ "ogma-core-ir",
  "ogma-embedding",
  "ogma-frontend",
  "ogma-runtime",
