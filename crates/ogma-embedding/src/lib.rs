@@ -4196,7 +4196,10 @@ mod tests {
             ]),
             requests: HashMap::from([
                 (("entry".to_owned(), "first".to_owned()), "first".to_owned()),
-                (("entry".to_owned(), "second".to_owned()), "second".to_owned()),
+                (
+                    ("entry".to_owned(), "second".to_owned()),
+                    "second".to_owned(),
+                ),
             ]),
             resolved_specifiers: Vec::new(),
         };
