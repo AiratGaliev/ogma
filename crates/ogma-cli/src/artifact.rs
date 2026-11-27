@@ -242,6 +242,21 @@ pub(crate) fn verify_artifact(bytes: &[u8]) -> Result<VerifiedArtifact, String> 
     })
 }
 
+fn account_unit_artifact_size(total_bytes: &mut u64, artifact_size: usize) -> Result<(), String> {
+    let artifact_size = artifact_size as u64;
+    let combined_size = total_bytes
+        .checked_add(artifact_size)
+        .ok_or_else(|| "compilation-unit artifact size overflow".to_owned())?;
+    if artifact_size == 0
+        || artifact_size > MAX_ARTIFACT_BYTES
+        || combined_size > MAX_UNIT_ARTIFACT_BYTES
+    {
+        return Err("compilation-unit artifacts exceed the configured size limit".to_owned());
+    }
+    *total_bytes = combined_size;
+    Ok(())
+}
+
 pub(crate) fn read_unit(
     artifact_path: &Path,
     root_bytes: &[u8],
@@ -315,7 +330,8 @@ pub(crate) fn read_unit(
     ids.insert(entry.id.clone());
     let mut artifacts = Vec::with_capacity(manifest.functions.len());
     artifacts.push(root_bytes.to_vec());
-    let mut total_bytes = root_bytes.len() as u64;
+    let mut total_bytes = 0;
+    account_unit_artifact_size(&mut total_bytes, root_bytes.len())?;
 
     for item in manifest.functions.iter().filter(|item| item.file.is_some()) {
         let helper_bytes = read_helper_artifact(
@@ -457,12 +473,7 @@ fn read_helper_artifact(
             helper_path.display()
         )
     })?;
-    *total_bytes = total_bytes.saturating_add(bytes.len() as u64);
-    if *total_bytes > MAX_UNIT_ARTIFACT_BYTES || bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-        return Err(
-            "compilation-unit helper artifacts exceed the configured size limit".to_owned(),
-        );
-    }
+    account_unit_artifact_size(total_bytes, bytes.len())?;
     let verified = verify_artifact(&bytes)?;
     check_function_identity(&verified, item)?;
     Ok(bytes)
@@ -717,19 +728,6 @@ pub(crate) fn write_compilation_unit(
     }
     let verified_entry = verify_artifact(entry_bytes)?;
     check_function_identity(&verified_entry, root_entry[0])?;
-    let sidecar = sidecar_path(output);
-    if let Ok(metadata) = fs::symlink_metadata(&sidecar)
-        && metadata.file_type().is_symlink()
-    {
-        return Err(format!(
-            "refusing to write through sidecar symlink {}",
-            sidecar.display()
-        ));
-    }
-    fs::create_dir_all(&sidecar)
-        .map_err(|error| format!("cannot create {}: {error}", sidecar.display()))?;
-    let canonical_sidecar = fs::canonicalize(&sidecar)
-        .map_err(|error| format!("cannot resolve sidecar {}: {error}", sidecar.display()))?;
 
     let expected_helpers = manifest
         .functions
@@ -747,6 +745,32 @@ pub(crate) fn write_compilation_unit(
             "compilation-unit helper artifacts do not match the manifest function index".to_owned(),
         );
     }
+    let mut total_artifact_bytes = 0;
+    account_unit_artifact_size(&mut total_artifact_bytes, entry_bytes.len())?;
+    for (_, bytes) in helper_artifacts {
+        account_unit_artifact_size(&mut total_artifact_bytes, bytes.len())?;
+    }
+
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)
+        .map_err(|error| format!("cannot encode compilation-unit manifest: {error}"))?;
+    if manifest_bytes.len() as u64 > MAX_UNIT_MANIFEST_BYTES {
+        return Err("compilation-unit manifest exceeds the size limit".to_owned());
+    }
+
+    let sidecar = sidecar_path(output);
+    if let Ok(metadata) = fs::symlink_metadata(&sidecar)
+        && metadata.file_type().is_symlink()
+    {
+        return Err(format!(
+            "refusing to write through sidecar symlink {}",
+            sidecar.display()
+        ));
+    }
+    fs::create_dir_all(&sidecar)
+        .map_err(|error| format!("cannot create {}: {error}", sidecar.display()))?;
+    let canonical_sidecar = fs::canonicalize(&sidecar)
+        .map_err(|error| format!("cannot resolve sidecar {}: {error}", sidecar.display()))?;
+
     let mut written_ids = HashSet::from([manifest.entry_function.as_str()]);
     let mut written_paths = HashSet::new();
     for (entry, bytes) in helper_artifacts {
@@ -799,11 +823,6 @@ pub(crate) fn write_compilation_unit(
             ));
         }
         write_atomic(&target, bytes)?;
-    }
-    let manifest_bytes = serde_json::to_vec_pretty(manifest)
-        .map_err(|error| format!("cannot encode compilation-unit manifest: {error}"))?;
-    if manifest_bytes.len() as u64 > MAX_UNIT_MANIFEST_BYTES {
-        return Err("compilation-unit manifest exceeds the size limit".to_owned());
     }
     write_atomic(&sidecar.join("unit.json"), &manifest_bytes)?;
     write_atomic(output, entry_bytes)?;
@@ -948,4 +967,31 @@ pub(crate) fn source_uri(id: &str, _path: &Path) -> String {
 
 pub(crate) fn sha256(bytes: &[u8]) -> String {
     sha256_hex(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compilation_unit_writer_enforces_the_same_aggregate_limit_as_the_reader() {
+        let mut total = 0;
+        account_unit_artifact_size(&mut total, MAX_ARTIFACT_BYTES as usize)
+            .expect("entry artifact at per-file limit");
+        for _ in 0..3 {
+            account_unit_artifact_size(&mut total, MAX_ARTIFACT_BYTES as usize)
+                .expect("aggregate at 256 MiB limit");
+        }
+        assert_eq!(total, MAX_UNIT_ARTIFACT_BYTES);
+        assert!(
+            account_unit_artifact_size(&mut total, 1).is_err(),
+            "writer must reject a compilation unit the reader would reject"
+        );
+
+        let mut total = 0;
+        assert!(
+            account_unit_artifact_size(&mut total, MAX_ARTIFACT_BYTES as usize + 1).is_err(),
+            "per-artifact limit must be enforced before writing"
+        );
+    }
 }
