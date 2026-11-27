@@ -455,8 +455,7 @@ mod tests {
             "sloppy",
         ));
         assert_eq!(
-            response["outcome"],
-            "completed",
+            response["outcome"], "completed",
             "production adapter response: {response:#}"
         );
         assert_eq!(response["requestId"], 7);
@@ -480,8 +479,7 @@ mod tests {
         value["test"]["entryFunction"] = json!("__ogma_differential_entry__");
         let response = process_request(value);
         assert_eq!(
-            response["outcome"],
-            "completed",
+            response["outcome"], "completed",
             "differential adapter response: {response:#}"
         );
         assert_eq!(response["completion"], "return");
