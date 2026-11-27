@@ -78,7 +78,29 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
         semantic::analyze(parsed.source, &parsed.semantic).map_err(CompileFailure::Semantic)?;
     let functions = lowering::lower(parsed.source, &semantic, &parsed.syntax)
         .map_err(CompileFailure::Lowering)?;
-    let module = (parsed.goal == ParseGoal::Module).then(|| ModuleDescriptor {
+    let module = if parsed.goal == ParseGoal::Module {
+        let mut requests_with_offsets = parsed
+            .syntax
+            .module
+            .imports
+            .iter()
+            .map(|item| (item.span.start_byte, item.source.clone()))
+            .chain(parsed.syntax.module.exports.iter().filter_map(|item| {
+                item.source
+                    .as_ref()
+                    .map(|specifier| (item.span.start_byte, specifier.clone()))
+            }))
+            .collect::<Vec<_>>();
+        requests_with_offsets.sort_by_key(|(offset, _)| *offset);
+        let mut seen_requests = std::collections::HashSet::new();
+        let requests = requests_with_offsets
+            .into_iter()
+            .filter_map(|(_, specifier)| {
+                seen_requests.insert(specifier.clone()).then_some(specifier)
+            })
+            .collect();
+
+        Some(ModuleDescriptor {
         id: parsed.source.id().as_str().to_owned(),
         entry_function: parsed.syntax.functions[0].id.clone(),
         environment: parsed.semantic.root_scope.clone(),
@@ -116,7 +138,11 @@ pub fn compile(parsed: &ParsedProgram<'_>) -> Result<CompiledModule, CompileFail
                 },
             })
             .collect(),
-    });
+        requests,
+        })
+    } else {
+        None
+    };
     Ok(CompiledModule {
         semantic,
         functions,
