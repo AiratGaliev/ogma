@@ -160,6 +160,18 @@ are not used as the execution backend.
   boundary errors rather than being unwound through an exported C ABI function.
   C callback transport failures and malformed completion records remain distinct
   from capability denial and are returned as explicit interpreter boundary errors.
+- `Context::create_host_function(slot)` exposes a registered Rust or C callback
+  as a GC-managed JavaScript Function value and returns a persistent host root.
+  The Function stores only an opaque HostFunctionToken (registry identity,
+  slot index/generation and ABI version), never a callback pointer. Ordinary
+  JavaScript Call instructions dispatch directly through that token; the
+  registry revalidates the token, Runtime heap and capability mask on every
+  call. Unregistration invalidates all previously created Function values.
+  Invoking a stale or foreign Function produces a JavaScript ReferenceError
+  completion; a stale callback already queued as a PromiseJob rejects its child
+  Promise and does not abort the host pump or dispatch into a recycled slot.
+  Host callbacks receive the original JavaScript receiver through
+  HostCallContext::this_value().
 - `EngineConfig` validates heap quota, maximum single allocation, estimated
   active VM stack bytes, instruction fuel, call depth, interrupt polling
   interval and pending-job capacity before Runtime creation. The interpreter
@@ -168,11 +180,10 @@ are not used as the execution backend.
   estimate of active frame structures, register windows and local-binding
   tracking; it is not a claim about process RSS or allocator capacity.
 
-The synchronous M1 interpreter does not yet enqueue or pump PromiseJobs.
-`max_pending_jobs` is validated and retained in Engine configuration so
-OGM-48 can consume the same resource policy, but queue admission, scheduling,
-fairness, pumping and shutdown are implemented in OGM-48. OGM-47 does not
-advertise asynchronous scheduling as available.
+The M1 interpreter provides a bounded Runtime-owned PromiseJobs FIFO with
+explicit admission, pumping, cancellation, pause/resume and shutdown. OGM-48
+implemented queue admission and dispatch using the existing EngineConfig
+resource policy; the async Future/Waker bridge remains outside M1.
 
 The public C declarations are kept in
 `crates/ogma-embedding/include/ogma_embedding_abi.h`. The Rust consumer

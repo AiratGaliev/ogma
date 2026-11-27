@@ -29,7 +29,9 @@ pub use ogma_interpreter::{
 };
 use ogma_interpreter::{ExecutionOptions, ModuleBindingLink};
 pub use ogma_runtime::{CollectionReport, HeapError, HeapStats, Value};
-use ogma_runtime::{Heap, HeapConfig, HostHandle, LexicalEnvironment, ScopeToken};
+use ogma_runtime::{
+    Heap, HeapConfig, HostFunctionToken, HostHandle, LexicalEnvironment, ScopeToken,
+};
 
 /// ABI major version implemented by this crate.
 pub const ABI_VERSION: u16 = 1;
@@ -1474,6 +1476,27 @@ impl Context<'_> {
         self.host_functions.unregister(slot)
     }
 
+    /// Creates a persistent JavaScript Function value for a registered host callback.
+    ///
+    /// The returned value can be passed to JavaScript and invoked through an
+    /// ordinary Call expression. It remains rooted until Context::release.
+    /// Unregistering the slot invalidates every Function value created from it;
+    /// subsequent calls fail closed instead of resolving a recycled slot.
+    pub fn create_host_function(
+        &mut self,
+        slot: HostFunctionSlot,
+    ) -> Result<PersistentHandle, ContextError> {
+        let token = self
+            .host_functions
+            .token_for_slot(slot)
+            .map_err(ContextError::HostRegistration)?;
+        let value = self
+            .runtime
+            .heap
+            .create_host_function(token)
+            .map_err(ContextError::Heap)?;
+        Ok(PersistentHandle(value))
+    }
     /// Executes a function from the loaded, verified module by stable OGMB function ID.
     ///
     /// Obtain the ID from `functions()`; the human-readable source-level name
@@ -1931,10 +1954,7 @@ impl Context<'_> {
         self.runtime.heap.stats()
     }
 
-    /// Returns the configured pending-job capacity.
-    ///
-    /// The synchronous M1 interpreter has no job queue; OGM-48 supplies the
-    /// queue/pump and consumes this already-validated limit.
+    /// Returns the configured capacity for the Runtime-owned PromiseJobs queue.
     #[must_use]
     pub const fn pending_job_limit(&self) -> usize {
         self.runtime.config.max_pending_jobs
@@ -2027,6 +2047,8 @@ pub enum ContextError {
     Heap(HeapError),
     /// A PromiseJob reaction could not be transferred to the Runtime queue.
     JobQueue(JobQueueError),
+    /// A registered host function slot was invalid while creating a JS function value.
+    HostRegistration(HostRegistrationError),
 }
 
 /// Rust host-function descriptor. IDs are stable within ABI major 1.
@@ -3189,6 +3211,78 @@ impl HostFunctionRegistry {
             .clone()
             .ok_or(HostRegistrationError::StaleSlot)
     }
+    fn token_for_slot(
+        &self,
+        slot: HostFunctionSlot,
+    ) -> Result<HostFunctionToken, HostRegistrationError> {
+        self.ensure_owner_thread()?;
+        let token = HostFunctionToken::new(
+            slot.registry_id,
+            slot.slot_index,
+            slot.slot_generation,
+            slot.abi_major,
+            slot.abi_minor,
+        );
+        self.snapshot_token(token)?;
+        Ok(token)
+    }
+
+    fn snapshot_token(
+        &self,
+        token: HostFunctionToken,
+    ) -> Result<RegisteredHostFunction, HostRegistrationError> {
+        self.ensure_owner_thread()?;
+        if token.registry_id() != self.inner.id
+            || token.abi_major() != ABI_VERSION
+            || token.abi_minor() > ABI_MINOR
+        {
+            return Err(HostRegistrationError::StaleSlot);
+        }
+        let state = self.inner.state.borrow();
+        let cell = state
+            .slots
+            .get(token.slot_index() as usize)
+            .ok_or(HostRegistrationError::StaleSlot)?;
+        if cell.generation != token.slot_generation() {
+            return Err(HostRegistrationError::StaleSlot);
+        }
+        cell.registered
+            .clone()
+            .ok_or(HostRegistrationError::StaleSlot)
+    }
+
+    fn dispatch_entry(
+        &self,
+        context: &mut HostCallContext<'_>,
+        arguments: &[Value],
+        entry: RegisteredHostFunction,
+    ) -> Result<HostCallCompletion, HostError> {
+        let missing = entry.descriptor.required_capabilities & !self.inner.capabilities.get();
+        if missing != 0 {
+            return throw_host_error(context, "Error: host capability denied");
+        }
+        match entry.handler {
+            HostHandler::Rust(callback) => {
+                match catch_unwind(AssertUnwindSafe(|| callback(context, arguments))) {
+                    Ok(result) => result,
+                    Err(_) => Err(HostError::Panicked),
+                }
+            }
+            HostHandler::C(handler) => {
+                let host_context = (context as *mut HostCallContext<'_>).cast::<c_void>();
+                let _scope = self
+                    .abi_runtime
+                    .enter_call(host_context, self.context_handle)?;
+                invoke_c_handler(
+                    &self.abi_runtime,
+                    self.context_handle,
+                    context,
+                    handler,
+                    arguments,
+                )
+            }
+        }
+    }
 
     fn enter_dispatch(&self) -> Result<DispatchGuard, HostRegistrationError> {
         self.ensure_owner_thread()?;
@@ -3245,32 +3339,30 @@ impl Host for HostFunctionRegistry {
         }
         let _active = self.enter_dispatch().map_err(|_| HostError::Denied)?;
         let entry = self.snapshot(capability).map_err(|_| HostError::Denied)?;
-        let missing = entry.descriptor.required_capabilities & !self.inner.capabilities.get();
-        if missing != 0 {
-            return throw_host_error(context, "Error: host capability denied");
-        }
+        self.dispatch_entry(context, arguments, entry)
+    }
 
-        match entry.handler {
-            HostHandler::Rust(callback) => {
-                match catch_unwind(AssertUnwindSafe(|| callback(context, arguments))) {
-                    Ok(result) => result,
-                    Err(_) => Err(HostError::Panicked),
-                }
-            }
-            HostHandler::C(handler) => {
-                let host_context = (context as *mut HostCallContext<'_>).cast::<c_void>();
-                let _scope = self
-                    .abi_runtime
-                    .enter_call(host_context, self.context_handle)?;
-                invoke_c_handler(
-                    &self.abi_runtime,
-                    self.context_handle,
-                    context,
-                    handler,
-                    arguments,
-                )
-            }
+    fn call_registered_with_context(
+        &mut self,
+        context: &mut HostCallContext<'_>,
+        function: HostFunctionToken,
+        arguments: &[Value],
+    ) -> Result<HostCallCompletion, HostError> {
+        if context.heap_identity() != self.heap_identity {
+            return Err(HostError::WrongRuntime);
         }
+        if arguments.len() > MAX_HOST_ARGUMENTS {
+            return throw_host_error(context, "RangeError: too many host arguments");
+        }
+        let _active = self.enter_dispatch().map_err(|_| HostError::Denied)?;
+        let entry = match self.snapshot_token(function) {
+            Ok(entry) => entry,
+            Err(HostRegistrationError::StaleSlot) => {
+                return throw_host_error(context, "ReferenceError: stale or foreign host function");
+            }
+            Err(_) => return Err(HostError::Denied),
+        };
+        self.dispatch_entry(context, arguments, entry)
     }
 }
 
@@ -3483,19 +3575,34 @@ impl Context<'_> {
                 };
                 let owners = registry.module_owners.borrow();
                 let mut owner = None;
-                for candidate in owners.iter().rev() {
-                    match candidate.contains_callable(&self.runtime.heap, callback) {
-                        Ok(true) => {
-                            owner = Some(Rc::clone(candidate));
-                            break;
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            drop(owners);
-                            let reaction = pending.pop_front().expect("front reaction exists");
-                            let _ =
-                                release_queued_promise_reaction(&mut self.runtime.heap, reaction);
-                            return Err(JobQueueError::Interpreter(error));
+                if self
+                    .runtime
+                    .heap
+                    .host_function_token(callback)
+                    .map_err(JobQueueError::Heap)?
+                    .is_some()
+                {
+                    // Host function callbacks use the verified module only as
+                    // an execution dispatcher; their token is resolved by the
+                    // owning registry inside execute_callable().
+                    owner = owners.last().cloned();
+                } else {
+                    for candidate in owners.iter().rev() {
+                        match candidate.contains_callable(&self.runtime.heap, callback) {
+                            Ok(true) => {
+                                owner = Some(Rc::clone(candidate));
+                                break;
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                drop(owners);
+                                let reaction = pending.pop_front().expect("front reaction exists");
+                                let _ = release_queued_promise_reaction(
+                                    &mut self.runtime.heap,
+                                    reaction,
+                                );
+                                return Err(JobQueueError::Interpreter(error));
+                            }
                         }
                     }
                 }
