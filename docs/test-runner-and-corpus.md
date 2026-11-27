@@ -14,17 +14,17 @@ The architecture specification is authoritative for test categories, engine sema
 
 The repository contains an adapter-driven Python runner, a pinned source baseline, a machine-readable active profile, deterministic shard manifests, a result aggregator and protocol self-tests. The runner is development/test tooling only. It is not part of the Ogma Runtime or production dependency graph.
 
-The Rust workspace and OGM-41 JavaScript parser frontend now exist. `ogma-frontend` exposes a real parse-only adapter for the supplementary parser corpus. The ECMAScript Runtime and runtime Test262 adapter remain unimplemented. The Python runner and its reports are development/test tooling; they are not part of the Ogma Runtime or production dependency graph.
+The Rust workspace contains the OGM-41 Oxc JavaScript parser frontend, the OGM-46 synchronous interpreter, the OGM-48 M1 module/PromiseJobs subset and the OGM-50 production source-execution adapter. `ogma-frontend` exposes the real parse-only adapter; `ogma-cli` exposes `ogma-test262-adapter`, which executes source through the production frontend, compiler, verified OGMB loader and embedding Runtime. The Runtime readiness claim is intentionally limited to the exact three raw Script IDs in `conformance/profile.json:test262Allowlist`. The Python runner and its reports are development/test tooling; they are not part of the Ogma Runtime or production dependency graph.
 
 Consequently:
 
-- `conformance/profile.json` declares runtime execution as `not_implemented` and parser-adapter readiness as `ready`;
+- `conformance/profile.json` declares parser readiness as `ready` and Runtime execution as `ready` only for the exact three-test allowlist; the other Test262 IDs remain `UNSUPPORTED`;
 - parser-corpus cases can be sent to the real parser adapter and classified as parser `PASS` / `FAIL`;
-- runtime Test262 requests remain `UNSUPPORTED` until an execution adapter exists; parser acceptance must never be counted as runtime execution;
+- the three raw Test262 smoke cases are executed by a fresh Runtime/Context per variant; parser acceptance is never counted as runtime execution;
 - runner self-tests still use a deterministic fake adapter to test generic protocol and reporting logic; they do not execute JavaScript and do not constitute engine conformance;
-- the parser-only promotion suite can run independently, while runtime Test262 promotion remains fail-closed.
+- the parser-only promotion suite can run independently; the exact Runtime allowlist can be exercised in Fast CI, while full Test262 promotion remains bounded by the active profile and fail-closed for unsupported IDs.
 
-Do not change runtime execution state to `ready` merely to make a workflow green. It may be changed only when an executable Runtime adapter exists, its focused tests pass and the feature profile truthfully describes the semantics it can execute. Parser readiness is separate: `ready` means a real parser adapter exists and its focused checks pass, not that the full parser corpus or ECMAScript runtime is conformant.
+Do not declare runtime execution `ready` merely to make a workflow green. It may be set only when an executable Runtime adapter exists, its focused tests pass and the feature profile truthfully restricts the claim to semantics it actually executes. Parser readiness is separate: `ready` means a real parser adapter exists and its focused checks pass, not that the full parser corpus or ECMAScript runtime is conformant.
 
 ## 2. Pinned conformance baseline
 
