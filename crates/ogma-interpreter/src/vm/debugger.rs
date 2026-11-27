@@ -3,7 +3,7 @@
 //! The controller carries immutable DTOs over a bounded command queue. It never
 //! receives Runtime values, VM frames, registers, heap cells or GC handles.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -908,7 +908,16 @@ impl DebuggerSession {
             }
         }
 
-        for (local_id, entries) in source_groups {
+        let mut source_groups = source_groups.into_iter().collect::<Vec<_>>();
+        source_groups.sort_by(|left, right| left.0.cmp(&right.0));
+        let reserved_source_ids = source_groups
+            .iter()
+            .map(|(local_id, _)| local_id.clone())
+            .collect::<HashSet<_>>();
+        let mut assigned_source_ids = HashSet::new();
+
+        for (local_id, mut entries) in source_groups {
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
             let Some(first_key) = entries.first() else {
                 continue;
             };
@@ -930,15 +939,25 @@ impl DebuggerSession {
             });
             if collides {
                 for key in entries {
-                    let canonical_id = qualified_source_id(&key.0, &local_id);
+                    let canonical_id = unique_qualified_source_id(
+                        &key.0,
+                        &local_id,
+                        &reserved_source_ids,
+                        &mut assigned_source_ids,
+                    )?;
                     let file = self
                         .source_files
                         .get_mut(&key)
                         .ok_or_else(|| DebuggerError::new("indexed source file disappeared"))?;
                     file.canonical_id = canonical_id;
                 }
+            } else if !assigned_source_ids.insert(local_id.clone()) {
+                return Err(DebuggerError::new(format!(
+                    "canonical SourceId collision for local source id {local_id:?}"
+                )));
             }
         }
+
         for image in module.functions.values() {
             let identity = module_function_identity(image).ok_or_else(|| {
                 DebuggerError::new(format!(
@@ -948,9 +967,38 @@ impl DebuggerSession {
             })?;
             let code_generation = identity.code_generation.clone();
             self.module_generations.insert(image.id.clone(), identity);
-            for instruction in &image.artifact.instructions {
-                if let Some(location) = image.location(instruction.offset) {
-                    let source = self.parse_source_location(&image.id, location.source.as_ref());
+
+            let instruction_offsets = image
+                .artifact
+                .instructions
+                .iter()
+                .map(|instruction| instruction.offset)
+                .collect::<HashSet<_>>();
+            let locations = image
+                .artifact
+                .source_map
+                .as_ref()
+                .and_then(|map| map.get("locations"))
+                .and_then(JsonValue::as_array);
+            if let Some(locations) = locations {
+                for record in locations {
+                    let offset = record
+                        .get("offset")
+                        .and_then(JsonValue::as_u64)
+                        .and_then(|value| u32::try_from(value).ok())
+                        .ok_or_else(|| {
+                            DebuggerError::new(format!(
+                                "function {:?} contains an invalid source-map instruction offset",
+                                image.id
+                            ))
+                        })?;
+                    if !instruction_offsets.contains(&offset) {
+                        return Err(DebuggerError::new(format!(
+                            "function {:?} source map references non-instruction offset {offset}",
+                            image.id
+                        )));
+                    }
+                    let source = self.parse_source_location(&image.id, record.get("source"));
                     if let Some(source) =
                         source.filter(|item| item.origin == "user" && item.source_id.is_some())
                     {
@@ -2012,13 +2060,20 @@ fn bounded_utf16_preview(units: &[u16], max_chars: usize) -> (String, bool) {
 }
 
 fn qualified_source_id(function_id: &str, local_id: &str) -> String {
-    let raw = format!(
+    qualified_source_id_with_nonce(function_id, local_id, 0)
+}
+
+fn qualified_source_id_with_nonce(function_id: &str, local_id: &str, nonce: u32) -> String {
+    let mut raw = format!(
         "fn_{}_{}_{}_{}",
         function_id.len(),
         function_id,
         local_id.len(),
         local_id
     );
+    if nonce != 0 {
+        raw.push_str(&format!("_{nonce}"));
+    }
     if raw.len() <= 128 {
         return raw;
     }
@@ -2030,6 +2085,24 @@ fn qualified_source_id(function_id: &str, local_id: &str) -> String {
         });
     let prefix = raw.chars().take(111).collect::<String>();
     format!("{prefix}_{hash:016x}")
+}
+
+fn unique_qualified_source_id(
+    function_id: &str,
+    local_id: &str,
+    reserved: &HashSet<String>,
+    assigned: &mut HashSet<String>,
+) -> Result<String, DebuggerError> {
+    let mut nonce = 0_u32;
+    loop {
+        let candidate = qualified_source_id_with_nonce(function_id, local_id, nonce);
+        if !reserved.contains(&candidate) && assigned.insert(candidate.clone()) {
+            return Ok(candidate);
+        }
+        nonce = nonce
+            .checked_add(1)
+            .ok_or_else(|| DebuggerError::new("canonical SourceId space exhausted"))?;
+    }
 }
 
 fn valid_api_id(value: &str) -> bool {

@@ -1936,9 +1936,17 @@ fn production_debugger_reads_closure_capture_bindings() {
         let scopes = handle
             .get_scopes(stack[0].id.clone())
             .expect("closure lexical scope is readable");
-        let captured = scopes
+        let root_scope_id = scopes
             .iter()
-            .flat_map(|scope| &scope.variables)
+            .find(|scope| scope.parent_id.is_none())
+            .expect("closure frame exposes its function root scope")
+            .id
+            .clone();
+        let variables = handle
+            .get_variables(stack[0].id.clone(), root_scope_id)
+            .expect("captured variables are available through the variables API");
+        let captured = variables
+            .iter()
             .find(|variable| variable.name == "count")
             .expect("closure capture is included in the active root scope");
         assert_eq!(captured.availability, "available");
@@ -2017,7 +2025,12 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
             .expect("own data property is returned");
         assert_eq!(property.value.preview, "42");
         assert!(!property.is_accessor);
-        handle.detach().expect("detach releases inspection roots");
+        let object_id = value.value.object_id.clone().expect("object ID remains available");
+        handle.resume().expect("resume releases temporary inspection roots");
+        assert!(
+            handle.inspect_object(object_id, 128).is_err(),
+            "an object reference expires as soon as the target resumes"
+        );
     });
 
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
