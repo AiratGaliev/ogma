@@ -2025,8 +2025,14 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
             .expect("own data property is returned");
         assert_eq!(property.value.preview, "42");
         assert!(!property.is_accessor);
-        let object_id = value.value.object_id.clone().expect("object ID remains available");
-        handle.resume().expect("resume releases temporary inspection roots");
+        let object_id = value
+            .value
+            .object_id
+            .clone()
+            .expect("object ID remains available");
+        handle
+            .resume()
+            .expect("resume releases temporary inspection roots");
         assert!(
             handle.inspect_object(object_id, 128).is_err(),
             "an object reference expires as soon as the target resumes"
