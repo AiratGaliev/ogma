@@ -9,6 +9,7 @@ use ogma_embedding::{
     HostFunctionDescriptor, PersistentCompletion, Value,
 };
 use ogma_frontend::{ParseRequestOptions, SourceFile, parse};
+use ogma_interpreter::{ExecutableModule, HostError, NoHost};
 use oxc_allocator::Allocator;
 use std::{cell::Cell, rc::Rc};
 
@@ -143,6 +144,20 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         .id
         .clone();
 
+    let nested_module = Rc::new(
+        ExecutableModule::load(compile_module(
+            "function double(value) { return value * 2; }",
+        ))
+        .expect("nested callback target is a verified OGMB module"),
+    );
+    let nested_function_id = nested_module
+        .functions()
+        .into_iter()
+        .find(|function| function.name == "double")
+        .expect("nested function")
+        .id;
+    let callback_module = Rc::clone(&nested_module);
+    let callback_function_id = nested_function_id.clone();
     let calls = Rc::new(Cell::new(0));
     let callback_calls = Rc::clone(&calls);
     let slot = context
@@ -150,11 +165,25 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
             HostFunctionDescriptor::new(91, "consumer.double"),
             move |call, arguments| {
                 assert!(call.this_value().is_undefined());
-                let Some(number) = arguments.first().and_then(|value| value.as_number()) else {
-                    return Ok(HostCallCompletion::Throw(Value::number(-1.0)));
-                };
                 callback_calls.set(callback_calls.get() + 1);
-                Ok(HostCallCompletion::Normal(Value::number(number * 2.0)))
+                let mut nested_host = NoHost;
+                match call
+                    .execute_nested(
+                        &callback_module,
+                        &callback_function_id,
+                        arguments,
+                        &mut nested_host,
+                    )
+                    .map_err(|_| HostError::CallbackFailed)?
+                {
+                    ExecutionCompletion::Return(value) => {
+                        Ok(HostCallCompletion::Normal(value))
+                    }
+                    ExecutionCompletion::Throw(value) => Ok(HostCallCompletion::Throw(value)),
+                    ExecutionCompletion::Interrupted(reason) => {
+                        Ok(HostCallCompletion::Interrupted(reason))
+                    }
+                }
             },
         )
         .expect("register Rust callback");
