@@ -21,6 +21,41 @@
       "entryFunction": "__ogma_differential_entry__",
       "source": "function __ogma_differential_entry__() { var total = 1; if (total < 2) { total = total + 2; } else { total = 99; } return \"\" + total; }",
       "expected": "3"
+    },
+    {
+      "id": "throw-completion",
+      "description": "Thrown primitive completion and value match the pinned reference",
+      "entryFunction": "__ogma_differential_entry__",
+      "source": "function __ogma_differential_entry__() { throw 17; }",
+      "expectedCompletion": "throw",
+      "expected": 17,
+      "expectedHostCalls": []
+    },
+    {
+      "id": "host-call-observable-trace",
+      "description": "A Rust host callback and its independently observed side-effect trace match the reference host function",
+      "entryFunction": "host_capability_call",
+      "source": "function __ogma_differential_entry__(value) { return benchmarkHostEcho(value); }",
+      "hostCallTrace": true,
+      "input": 23,
+      "expectedCompletion": "return",
+      "expected": 23,
+      "expectedHostCalls": [
+        {
+          "name": "benchmark.host.echo",
+          "arguments": [
+            {
+              "type": "number",
+              "value": 23
+            }
+          ],
+          "completion": "return",
+          "value": {
+            "type": "number",
+            "value": 23
+          }
+        }
+      ]
     }
   ]
 }

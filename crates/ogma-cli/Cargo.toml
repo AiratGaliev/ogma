@@ -17,6 +17,7 @@ path = "src/bin/test262_adapter.rs"
 [dependencies]
 ogma-bytecode.workspace = true
 ogma-compiler.workspace = true
+ogma-core-ir.workspace = true
 ogma-embedding.workspace = true
 ogma-frontend.workspace = true
 ogma-runtime.workspace = true

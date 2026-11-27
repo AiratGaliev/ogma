@@ -29,6 +29,8 @@ def run_ogma(adapter: Path, fixture: dict, timeout_ms: int) -> dict:
             "sourceType": "script",
             "mode": "sloppy",
             "entryFunction": fixture["entryFunction"],
+            "hostCallTrace": fixture.get("hostCallTrace", False),
+            "input": fixture.get("input"),
             "raw": True,
             "async": False,
             "includes": [],
@@ -57,8 +59,36 @@ def run_ogma(adapter: Path, fixture: dict, timeout_ms: int) -> dict:
     return response
 
 
-def run_quickjs(reference: Path, source: str, entry: str, timeout_ms: int) -> object:
-    script = source + f"\nprint(JSON.stringify({entry}()));\n"
+def run_quickjs(reference: Path, fixture: dict, timeout_ms: int) -> dict:
+    entry = fixture["entryFunction"]
+    source = fixture["source"]
+    host_trace = bool(fixture.get("hostCallTrace", False))
+    input_value = fixture.get("input")
+    arguments = [] if input_value is None else [input_value]
+    prelude = """
+var __ogmaHostCalls = [];
+function benchmarkHostEcho(value) {
+    var observable = {type: "number", value: value};
+    __ogmaHostCalls.push({
+        name: "benchmark.host.echo",
+        arguments: [observable],
+        completion: "return",
+        value: observable
+    });
+    return value;
+}
+""" if host_trace else "var __ogmaHostCalls = [];\n"
+    invocation = f"{entry}({', '.join(json.dumps(value) for value in arguments)})"
+    script = (
+        prelude
+        + source
+        + "\ntry {\n"
+        + f"  var __ogmaResult = {invocation};\n"
+        + '  print(JSON.stringify({completion: "return", value: __ogmaResult, hostCalls: __ogmaHostCalls}));\n'
+        + "} catch (__ogmaThrown) {\n"
+        + '  print(JSON.stringify({completion: "throw", value: __ogmaThrown, hostCalls: __ogmaHostCalls}));\n'
+        + "}\n"
+    )
     with tempfile.TemporaryDirectory(prefix="ogma-differential-") as directory:
         path = Path(directory) / "case.js"
         path.write_text(script, encoding="utf-8", newline="\n")
@@ -74,7 +104,10 @@ def run_quickjs(reference: Path, source: str, entry: str, timeout_ms: int) -> ob
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if len(lines) != 1:
         raise RuntimeError(f"QuickJS-NG returned {len(lines)} observable output lines, expected one")
-    return json.loads(lines[0])
+    result = json.loads(lines[0])
+    if not isinstance(result, dict) or result.get("completion") not in ("return", "throw"):
+        raise RuntimeError(f"QuickJS-NG returned an invalid completion record: {result!r}")
+    return result
 
 
 def write_junit(path: Path, results: list[dict]) -> None:
@@ -135,23 +168,45 @@ def main() -> int:
         item = {"id": fixture["id"], "status": "ERROR"}
         try:
             ogma = run_ogma(adapter, fixture, args.timeout_ms)
-            if ogma.get("outcome") != "completed" or ogma.get("completion") != "return":
-                raise RuntimeError(f"Ogma did not return normally: {ogma}")
+            if ogma.get("outcome") not in ("completed", "threw"):
+                raise RuntimeError(f"Ogma did not produce an observable completion: {ogma}")
+            ogma_completion = ogma.get("completion")
+            if ogma_completion not in ("return", "throw"):
+                raise RuntimeError(f"Ogma returned an invalid completion kind: {ogma}")
             ogma_value = ogma.get("value")
-            if not isinstance(ogma_value, dict) or ogma_value.get("type") != "string":
-                raise RuntimeError(f"Ogma returned a non-string differential value: {ogma_value!r}")
-            quickjs_value = run_quickjs(reference, fixture["source"], fixture["entryFunction"], args.timeout_ms)
+            if not isinstance(ogma_value, dict) or "type" not in ogma_value:
+                raise RuntimeError(f"Ogma returned an invalid observable value: {ogma_value!r}")
+            quickjs_result = run_quickjs(reference, fixture, args.timeout_ms)
+            expected_completion = fixture.get("expectedCompletion", "return")
             expected = fixture["expected"]
+            expected_host_calls = fixture.get("expectedHostCalls", [])
+            ogma_host_calls = ogma.get("hostCalls", [])
+            quickjs_host_calls = quickjs_result.get("hostCalls", [])
+            ogma_observable = ogma_value.get("value")
             item.update({
-                "ogmaCompletion": ogma.get("completion"),
-                "ogmaValue": ogma_value.get("value"),
-                "quickjsCompletion": "return",
-                "quickjsValue": quickjs_value,
+                "ogmaCompletion": ogma_completion,
+                "ogmaValue": ogma_observable,
+                "ogmaHostCalls": ogma_host_calls,
+                "quickjsCompletion": quickjs_result["completion"],
+                "quickjsValue": quickjs_result.get("value"),
+                "quickjsHostCalls": quickjs_host_calls,
+                "expectedCompletion": expected_completion,
                 "expected": expected,
+                "expectedHostCalls": expected_host_calls,
             })
-            if ogma_value.get("value") != quickjs_value or quickjs_value != expected:
+            if (
+                ogma_completion != quickjs_result["completion"]
+                or ogma_completion != expected_completion
+                or ogma_observable != quickjs_result.get("value")
+                or quickjs_result.get("value") != expected
+                or ogma_host_calls != quickjs_host_calls
+                or quickjs_host_calls != expected_host_calls
+            ):
                 item["status"] = "FAIL"
-                item["reason"] = "observable return value differs from the pinned reference or fixture expectation"
+                item["reason"] = (
+                    "observable completion, value, host-call side-effect trace, "
+                    "or fixture expectation differs"
+                )
             else:
                 item["status"] = "PASS"
         except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
