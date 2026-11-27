@@ -1886,7 +1886,7 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         assert_eq!(out.reason, "step");
         let stack = handle.get_stack().expect("caller frame is restored");
         assert_eq!(stack.len(), 1);
-        assert_eq!(stack[0].function_id, run_id);
+        assert_eq!(stack[0].function_id, expected_run_id);
         handle
             .resume()
             .expect("execution resumes after the final step");
