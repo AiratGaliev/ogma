@@ -3581,6 +3581,25 @@ mod tests {
             .collect()
     }
 
+    fn compile_esm_failure(
+        module_id: &str,
+        source_text: &str,
+    ) -> ogma_compiler::CompileFailure {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(module_id, "memory:///module.mjs", None, source_text)
+            .expect("valid module source");
+        let parsed = parse(
+            &allocator,
+            &source,
+            ParseRequestOptions {
+                goal: ogma_frontend::ParseGoal::Module,
+                mode: ogma_frontend::ParseMode::Sloppy,
+            },
+        )
+        .expect("module parses");
+        compile_to_bytecode(&parsed).expect_err("mutable Promise aliases are outside the M1 subset")
+    }
+
     fn host_call_artifacts() -> Vec<Vec<u8>> {
         let document: FunctionDocument = from_str(include_str!(
             "../../../tests/core-ir/fixtures/positive-host-call.json"
@@ -3876,50 +3895,39 @@ mod tests {
     }
 
     #[test]
-    fn esm_promise_jobs_support_let_var_and_assigned_promise_aliases() {
-        let entry = compile_esm(
-            "entry",
-            r#"
-                export let order = "";
-                let first = Promise.resolve(0);
-                first.then(function() {
-                    order = order + "1";
-                });
-                var second = Promise.resolve(0);
-                second.then(function() {
-                    order = order + "2";
-                });
-                let third;
-                third = Promise.resolve(0);
-                third.then(function() {
-                    order = order + "3";
-                });
-            "#,
-        );
-        let mut resolver = MemoryModuleResolver {
-            modules: HashMap::from([("entry".to_owned(), entry)]),
-            requests: HashMap::new(),
-        };
-        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
-        let mut runtime = engine.create_runtime().expect("Runtime");
-        let mut context = runtime.create_context().expect("Context");
-        context
-            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
-            .expect("evaluate Promise aliases in mutable declarations");
-        assert_eq!(context.pending_promise_jobs(), 3);
-        let drained = context
-            .run_promise_jobs_until_idle(None)
-            .expect("pump all mutable-alias reactions");
-        assert_eq!(drained.jobs_executed, 3);
-        let order = context
-            .read_module_export("entry", "order")
-            .expect("read mutable-alias callback effects");
-        let value = context.resolve(order).expect("resolve order string");
-        let units = context
-            .read_string_utf16(value)
-            .expect("Promise callback order is a string");
-        assert_eq!(String::from_utf16(&units).expect("valid UTF-16"), "123");
-        context.release(order).expect("release order root");
+    fn esm_mutable_promise_aliases_fail_with_an_explicit_compiler_diagnostic() {
+        let fixtures = [
+            (
+                "mutable-let",
+                "let pending = Promise.resolve(0); pending.then(function() {});",
+            ),
+            (
+                "mutable-var",
+                "var pending = Promise.resolve(0); pending.catch(function() {});",
+            ),
+            (
+                "mutable-assignment",
+                "let pending; pending = Promise.resolve(0); pending.then(function() {});",
+            ),
+            (
+                "mutable-branch",
+                "let pending = Promise.resolve(0); if (true) { pending = 1; } pending.then(function() {});",
+            ),
+        ];
+
+        for (module_id, source) in fixtures {
+            let failure = compile_esm_failure(module_id, source);
+            assert!(
+                matches!(
+                    failure,
+                    ogma_compiler::CompileFailure::Lowering(diagnostics)
+                        if diagnostics.iter().any(|item| {
+                            item.code == "lowering.mutable_promise_alias_unsupported"
+                        })
+                ),
+                "mutable alias fixture {module_id:?} must fail closed: {failure:?}"
+            );
+        }
     }
 
     #[test]
