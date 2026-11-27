@@ -267,6 +267,14 @@ struct SourceRecord {
     code_generation: CodeGeneration,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModuleFunctionIdentity {
+    code_generation: CodeGeneration,
+    code_cache_id: String,
+    code_cache_version: String,
+    code_sha256: String,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SourceKey {
     function_id: String,
@@ -723,7 +731,7 @@ pub struct DebuggerSession {
     next_breakpoint_id: u64,
     source_files: HashMap<(String, String), SourceFile>,
     source_records: Vec<SourceRecord>,
-    module_generations: HashMap<String, CodeGeneration>,
+    module_generations: HashMap<String, ModuleFunctionIdentity>,
     pause_requested: bool,
     step: Option<StepRequest>,
 
@@ -790,15 +798,15 @@ impl DebuggerSession {
             ));
         }
         for image in module.functions.values() {
-            let generation = code_generation(image).ok_or_else(|| {
+            let identity = module_function_identity(image).ok_or_else(|| {
                 DebuggerError::new(format!(
-                    "function {:?} has no valid Debugger API code-generation identity",
+                    "function {:?} has incomplete or invalid code-generation/cache identity",
                     image.id
                 ))
             })?;
-            if self.module_generations.get(&image.id) != Some(&generation) {
+            if self.module_generations.get(&image.id) != Some(&identity) {
                 return Err(DebuggerError::new(format!(
-                    "debugger session code generation does not match function {:?}",
+                    "debugger session artifact identity does not match function {:?}",
                     image.id
                 )));
             }
@@ -932,14 +940,14 @@ impl DebuggerSession {
             }
         }
         for image in module.functions.values() {
-            let code_generation = code_generation(image).ok_or_else(|| {
+            let identity = module_function_identity(image).ok_or_else(|| {
                 DebuggerError::new(format!(
-                    "function {:?} has no valid Debugger API code-generation identity",
+                    "function {:?} has incomplete or invalid code-generation/cache identity",
                     image.id
                 ))
             })?;
-            self.module_generations
-                .insert(image.id.clone(), code_generation.clone());
+            let code_generation = identity.code_generation.clone();
+            self.module_generations.insert(image.id.clone(), identity);
             for instruction in &image.artifact.instructions {
                 if let Some(location) = image.location(instruction.offset) {
                     let source = self.parse_source_location(&image.id, location.source.as_ref());
@@ -987,7 +995,7 @@ impl DebuggerSession {
             "generated"
                 if reason
                     .as_deref()
-                    .is_some_and(|text| !text.is_empty() && text.len() <= 512) => {}
+                    .is_some_and(|text| !text.is_empty() && text.chars().count() <= 512) => {}
             _ => return None,
         }
         let source_sha256 = source_file.and_then(|file| file.sha256.clone());
@@ -2051,11 +2059,34 @@ fn parse_position(value: Option<&JsonValue>) -> Option<SourcePosition> {
     })
 }
 
+fn module_function_identity(image: &FunctionImage) -> Option<ModuleFunctionIdentity> {
+    let metadata = image.artifact.manifest.get("metadata")?;
+    let code_cache_id = metadata.pointer("/code_cache/id")?.as_str()?;
+    let code_cache_version = metadata.pointer("/code_cache/version")?.as_str()?;
+    let code_sha256 = image.artifact.manifest.get("code_sha256")?.as_str()?;
+    if !valid_api_id(code_cache_id)
+        || code_cache_version.is_empty()
+        || code_cache_version.chars().count() > 128
+        || code_sha256.len() != 64
+        || !code_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    Some(ModuleFunctionIdentity {
+        code_generation: code_generation(image)?,
+        code_cache_id: code_cache_id.to_owned(),
+        code_cache_version: code_cache_version.to_owned(),
+        code_sha256: code_sha256.to_owned(),
+    })
+}
+
 fn code_generation(image: &FunctionImage) -> Option<CodeGeneration> {
     let metadata = image.artifact.manifest.get("metadata")?;
     let id = metadata.pointer("/code_generation/id")?.as_str()?;
     let version = metadata.pointer("/code_generation/version")?.as_str()?;
-    if !valid_api_id(id) || version.is_empty() || version.len() > 128 {
+    if !valid_api_id(id) || version.is_empty() || version.chars().count() > 128 {
         return None;
     }
     Some(CodeGeneration {
@@ -2328,18 +2359,22 @@ mod tests {
             .next()
             .expect("module includes a function")
             .clone();
-        let original = session
+        let mut changed = session
             .module_generations
             .get(&function_id)
-            .expect("function has a code generation")
+            .expect("function has a code generation and cache identity")
             .clone();
-        session.module_generations.insert(
-            function_id,
-            CodeGeneration {
-                id: "different_generation".to_owned(),
-                version: original.version,
-            },
-        );
+        changed.code_generation.id = "different_generation".to_owned();
+        session.module_generations.insert(function_id.clone(), changed.clone());
+        assert!(session.validate_module(&module).is_err());
+
+        let mut changed_cache = session
+            .module_generations
+            .get(&function_id)
+            .expect("function has an indexed identity")
+            .clone();
+        changed_cache.code_cache_id = "different_cache".to_owned();
+        session.module_generations.insert(function_id, changed_cache);
         assert!(session.validate_module(&module).is_err());
     }
 }
