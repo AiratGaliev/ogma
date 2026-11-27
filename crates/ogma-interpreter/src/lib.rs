@@ -24,9 +24,10 @@ pub use vm::{
 
 #[cfg(debug_assertions)]
 pub use vm::{
-    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerPort, DebuggerSession, InlineFrame,
-    DebugValue, ExceptionEvent, InspectedObject, InspectedProperty, ScopeSnapshot,
-    SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent, VariableSnapshot,
+    Breakpoint, CodeGeneration, DebugValue, DebuggerError, DebuggerEvent, DebuggerHandle,
+    DebuggerPort, DebuggerSession, ExceptionEvent, InlineFrame, InspectedObject, InspectedProperty,
+    ScopeSnapshot, SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent,
+    VariableSnapshot,
 };
 
 /// OGMB container version consumed by the interpreter.

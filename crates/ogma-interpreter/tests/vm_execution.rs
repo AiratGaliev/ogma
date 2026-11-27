@@ -12,9 +12,9 @@ use ogma_interpreter::{
 };
 #[cfg(debug_assertions)]
 use ogma_interpreter::{DebuggerEvent, DebuggerPort};
-use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
 #[cfg(debug_assertions)]
 use ogma_runtime::PropertyDescriptor;
+use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
 use oxc_allocator::Allocator;
 use serde_json::{Value as JsonValue, json};
 
@@ -1707,7 +1707,6 @@ fn executes_real_compiler_output_with_lexical_closure_capture() {
     assert_eq!(report.max_call_depth_reached, 2);
 }
 
-
 #[cfg(debug_assertions)]
 fn compile_debugger_module(source_id: &str, source_text: &str) -> (ExecutableModule, String) {
     let allocator = Allocator::default();
@@ -1735,17 +1734,14 @@ fn compile_debugger_module(source_id: &str, source_text: &str) -> (ExecutableMod
         .map(|function| function.artifact.bytes)
         .collect::<Vec<_>>();
     (
-        ExecutableModule::load(artifacts).expect("interpreter verifies compiler-produced artifacts"),
+        ExecutableModule::load(artifacts)
+            .expect("interpreter verifies compiler-produced artifacts"),
         entry_id,
     )
 }
 
 #[cfg(debug_assertions)]
-fn source_breakpoint(
-    module: &ExecutableModule,
-    function_id: &str,
-    line: u64,
-) -> (String, u32) {
+fn source_breakpoint(module: &ExecutableModule, function_id: &str, line: u64) -> (String, u32) {
     source_breakpoint_in_functions(module, std::iter::once(function_id), line)
 }
 
@@ -1811,8 +1807,17 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         .set_breakpoint(source_id.clone(), line, None, None, None)
         .expect("source breakpoint is accepted");
     assert!(initial_breakpoint.verified, "{initial_breakpoint:?}");
-    assert!(session.remove_breakpoint(&initial_breakpoint.id).expect("breakpoint can be removed"));
-    assert!(session.list_breakpoints().expect("breakpoints can be listed").is_empty());
+    assert!(
+        session
+            .remove_breakpoint(&initial_breakpoint.id)
+            .expect("breakpoint can be removed")
+    );
+    assert!(
+        session
+            .list_breakpoints()
+            .expect("breakpoints can be listed")
+            .is_empty()
+    );
     let breakpoint = session
         .set_breakpoint(source_id, line, None, None, None)
         .expect("source breakpoint can be re-registered");
@@ -1846,12 +1851,18 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         handle.step_over().expect("step-over command is accepted");
         let over = stopped_event(&handle);
         assert_eq!(over.reason, "step");
-        let stack = handle.get_stack().expect("step-over preserves nested call frame");
+        let stack = handle
+            .get_stack()
+            .expect("step-over preserves nested call frame");
         assert_eq!(stack[0].function_name, "inner");
         let scopes = handle
             .get_scopes(stack[0].id.clone())
             .expect("active lexical scopes are readable");
-        let scope_id = scopes.first().expect("inner function has a lexical scope").id.clone();
+        let scope_id = scopes
+            .first()
+            .expect("inner function has a lexical scope")
+            .id
+            .clone();
         let variables = handle
             .get_variables(stack[0].id.clone(), scope_id)
             .expect("variables can be requested by lexical scope id");
@@ -1875,7 +1886,9 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         let stack = handle.get_stack().expect("caller frame is restored");
         assert_eq!(stack.len(), 1);
         assert_eq!(stack[0].function_id, run_id);
-        handle.resume().expect("execution resumes after the final step");
+        handle
+            .resume()
+            .expect("execution resumes after the final step");
     });
 
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
@@ -1889,7 +1902,9 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
             &mut session,
         )
         .expect("debugged interpreter execution completes");
-    controller.join().expect("debugger controller completes all operations");
+    controller
+        .join()
+        .expect("debugger controller completes all operations");
 
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
@@ -1921,9 +1936,12 @@ fn production_debugger_reads_closure_capture_bindings() {
             .get_scopes(stack[0].id.clone())
             .expect("closure lexical scope is readable");
         assert!(
-            scopes.iter().flat_map(|scope| &scope.variables).any(|variable| {
-                variable.availability == "available" && variable.value.preview == "41"
-            }),
+            scopes
+                .iter()
+                .flat_map(|scope| &scope.variables)
+                .any(|variable| {
+                    variable.availability == "available" && variable.value.preview == "41"
+                }),
             "captured binding is read from its closure environment: {scopes:?}"
         );
         handle.resume().expect("closure execution resumes");
@@ -1940,7 +1958,9 @@ fn production_debugger_reads_closure_capture_bindings() {
             &mut session,
         )
         .expect("debugged closure execution completes");
-    controller.join().expect("closure debugger controller completes");
+    controller
+        .join()
+        .expect("closure debugger controller completes");
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.as_number(), Some(41.0)),
         completion => panic!("expected closure result, got {completion:?}"),
@@ -1969,7 +1989,9 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
             Some(&true),
             "the heap-backed inspector is advertised only while the Runtime session is active"
         );
-        let stack = handle.get_stack().expect("paused object frame is available");
+        let stack = handle
+            .get_stack()
+            .expect("paused object frame is available");
         let scopes = handle
             .get_scopes(stack[0].id.clone())
             .expect("object parameter scope is readable");
@@ -1995,8 +2017,11 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
     let object = heap.allocate_object().expect("managed object");
     let object_scope = heap.open_scope().expect("temporary object root scope");
-    heap.scope_root(object_scope, object).expect("object remains rooted while it is initialized");
-    let key = heap.intern_property_key("answer").expect("property key atom");
+    heap.scope_root(object_scope, object)
+        .expect("object remains rooted while it is initialized");
+    let key = heap
+        .intern_property_key("answer")
+        .expect("property key atom");
     assert!(
         heap.define_own_property(
             object,
@@ -2005,7 +2030,8 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
         )
         .expect("own property descriptor is compatible")
     );
-    heap.close_scope(object_scope).expect("temporary object root scope closes before execution");
+    heap.close_scope(object_scope)
+        .expect("temporary object root scope closes before execution");
     let report = module
         .execute_debugged(
             &mut heap,
@@ -2016,19 +2042,22 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
             &mut session,
         )
         .expect("debugged object inspection run completes");
-    controller.join().expect("object inspector controller completes");
+    controller
+        .join()
+        .expect("object inspector controller completes");
     match report.completion {
         ExecutionCompletion::Return(value) => assert_eq!(value.value_type(), ValueType::Object),
         completion => panic!("expected returned object, got {completion:?}"),
     }
 }
 
-
 #[cfg(debug_assertions)]
 #[test]
 fn production_debugger_pauses_at_safe_points_and_reports_uncaught_exceptions() {
-    let (module, run_id) =
-        compile_debugger_module("ogm49-pause-exception", "function run() {\n  throw 17;\n}\n");
+    let (module, run_id) = compile_debugger_module(
+        "ogm49-pause-exception",
+        "function run() {\n  throw 17;\n}\n",
+    );
     let (mut session, handle) = module
         .create_debugger_session()
         .expect("debugger session is created");
@@ -2039,9 +2068,13 @@ fn production_debugger_pauses_at_safe_points_and_reports_uncaught_exceptions() {
     let controller = std::thread::spawn(move || {
         let paused = stopped_event(&handle);
         assert_eq!(paused.reason, "pause");
-        let stack = handle.get_stack().expect("paused exception frame is readable");
+        let stack = handle
+            .get_stack()
+            .expect("paused exception frame is readable");
         assert_eq!(stack.len(), 1);
-        handle.resume().expect("pause resumes before the throw instruction");
+        handle
+            .resume()
+            .expect("pause resumes before the throw instruction");
 
         match handle
             .recv_event_timeout(std::time::Duration::from_secs(5))
@@ -2057,7 +2090,9 @@ fn production_debugger_pauses_at_safe_points_and_reports_uncaught_exceptions() {
                 panic!("expected exception event, got stop event: {event:?}")
             }
         }
-        handle.resume().expect("execution continues after exception inspection");
+        handle
+            .resume()
+            .expect("execution continues after exception inspection");
     });
 
     let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
@@ -2071,21 +2106,20 @@ fn production_debugger_pauses_at_safe_points_and_reports_uncaught_exceptions() {
             &mut session,
         )
         .expect("debugger does not change throw completion semantics");
-    controller.join().expect("pause and exception controller completes");
+    controller
+        .join()
+        .expect("pause and exception controller completes");
     match report.completion {
         ExecutionCompletion::Throw(value) => assert_eq!(value.as_number(), Some(17.0)),
         completion => panic!("expected the original throw completion, got {completion:?}"),
     }
 }
 
-
 #[cfg(debug_assertions)]
 #[test]
 fn production_debugger_implements_backend_neutral_port_contract() {
-    let (module, _) = compile_debugger_module(
-        "ogm49-port-contract",
-        "function run() {\n  return 1;\n}\n",
-    );
+    let (module, _) =
+        compile_debugger_module("ogm49-port-contract", "function run() {\n  return 1;\n}\n");
     let (_session, handle) = module
         .create_debugger_session()
         .expect("production debugger session is initialized");

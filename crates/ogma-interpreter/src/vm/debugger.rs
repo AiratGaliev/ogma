@@ -30,7 +30,9 @@ pub struct DebuggerError {
 
 impl DebuggerError {
     fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -289,9 +291,16 @@ enum Command {
     ListBreakpoints {
         reply: SyncSender<Result<Vec<Breakpoint>, DebuggerError>>,
     },
-    Resume { reply: SyncSender<Result<(), DebuggerError>> },
-    Step { mode: StepMode, reply: SyncSender<Result<(), DebuggerError>> },
-    GetStack { reply: SyncSender<Result<Vec<StackFrameSnapshot>, DebuggerError>> },
+    Resume {
+        reply: SyncSender<Result<(), DebuggerError>>,
+    },
+    Step {
+        mode: StepMode,
+        reply: SyncSender<Result<(), DebuggerError>>,
+    },
+    GetStack {
+        reply: SyncSender<Result<Vec<StackFrameSnapshot>, DebuggerError>>,
+    },
     GetScopes {
         frame_id: String,
         reply: SyncSender<Result<Vec<ScopeSnapshot>, DebuggerError>>,
@@ -311,10 +320,16 @@ enum Command {
         limit: usize,
         reply: SyncSender<Result<InspectedObject, DebuggerError>>,
     },
-    EventMessage { reply: SyncSender<Result<Option<DebuggerEvent>, DebuggerError>> },
-    Detach { reply: SyncSender<Result<(), DebuggerError>> },
+    EventMessage {
+        reply: SyncSender<Result<Option<DebuggerEvent>, DebuggerError>>,
+    },
+    Detach {
+        reply: SyncSender<Result<(), DebuggerError>>,
+    },
     #[cfg(test)]
-    CollectGarbageForTest { reply: SyncSender<Result<(), DebuggerError>> },
+    CollectGarbageForTest {
+        reply: SyncSender<Result<(), DebuggerError>>,
+    },
 }
 
 /// Thread-safe command endpoint. Runtime and VM state never cross this boundary.
@@ -363,7 +378,9 @@ impl DebuggerHandle {
             ));
         }
         if !self.active.load(Ordering::Acquire) {
-            return Err(DebuggerError::new("debugger execution session is not active"));
+            return Err(DebuggerError::new(
+                "debugger execution session is not active",
+            ));
         }
         Ok(())
     }
@@ -374,9 +391,9 @@ impl DebuggerHandle {
     ) -> Result<T, DebuggerError> {
         self.ensure_remote_thread()?;
         let (reply, receiver) = mpsc::sync_channel(1);
-        self.commands
-            .send(create(reply))
-            .map_err(|_| DebuggerError::new("debugger owner thread is no longer servicing commands"))?;
+        self.commands.send(create(reply)).map_err(|_| {
+            DebuggerError::new("debugger owner thread is no longer servicing commands")
+        })?;
         receiver
             .recv()
             .map_err(|_| DebuggerError::new("debugger owner thread dropped a command response"))?
@@ -385,9 +402,9 @@ impl DebuggerHandle {
     /// Requests a pause; it is applied at the next interpreter dispatch safe point.
     pub fn request_pause(&self) -> Result<(), DebuggerError> {
         self.ensure_remote_thread()?;
-        self.commands
-            .send(Command::Pause)
-            .map_err(|_| DebuggerError::new("debugger owner thread is no longer servicing commands"))
+        self.commands.send(Command::Pause).map_err(|_| {
+            DebuggerError::new("debugger owner thread is no longer servicing commands")
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
@@ -401,7 +418,12 @@ impl DebuggerHandle {
     ) -> Result<Breakpoint, DebuggerError> {
         let source_id = source_id.into();
         self.request(|reply| Command::SetBreakpoint {
-            source_id, line, column, sha256, code_generation, reply,
+            source_id,
+            line,
+            column,
+            sha256,
+            code_generation,
+            reply,
         })
     }
 
@@ -423,17 +445,26 @@ impl DebuggerHandle {
 
     /// Performs this debugger operation on the owning execution.
     pub fn step_into(&self) -> Result<(), DebuggerError> {
-        self.request(|reply| Command::Step { mode: StepMode::Into, reply })
+        self.request(|reply| Command::Step {
+            mode: StepMode::Into,
+            reply,
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
     pub fn step_over(&self) -> Result<(), DebuggerError> {
-        self.request(|reply| Command::Step { mode: StepMode::Over, reply })
+        self.request(|reply| Command::Step {
+            mode: StepMode::Over,
+            reply,
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
     pub fn step_out(&self) -> Result<(), DebuggerError> {
-        self.request(|reply| Command::Step { mode: StepMode::Out, reply })
+        self.request(|reply| Command::Step {
+            mode: StepMode::Out,
+            reply,
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
@@ -442,7 +473,10 @@ impl DebuggerHandle {
     }
 
     /// Performs this debugger operation on the owning execution.
-    pub fn get_scopes(&self, frame_id: impl Into<String>) -> Result<Vec<ScopeSnapshot>, DebuggerError> {
+    pub fn get_scopes(
+        &self,
+        frame_id: impl Into<String>,
+    ) -> Result<Vec<ScopeSnapshot>, DebuggerError> {
         let frame_id = frame_id.into();
         self.request(|reply| Command::GetScopes { frame_id, reply })
     }
@@ -455,7 +489,11 @@ impl DebuggerHandle {
     ) -> Result<Vec<VariableSnapshot>, DebuggerError> {
         let frame_id = frame_id.into();
         let scope_id = scope_id.into();
-        self.request(|reply| Command::GetVariables { frame_id, scope_id, reply })
+        self.request(|reply| Command::GetVariables {
+            frame_id,
+            scope_id,
+            reply,
+        })
     }
 
     /// Evaluates a single identifier or binding ID. Expressions and user code are never executed.
@@ -466,7 +504,11 @@ impl DebuggerHandle {
     ) -> Result<DebugValue, DebuggerError> {
         let frame_id = frame_id.into();
         let identifier = identifier.into();
-        self.request(|reply| Command::EvaluateIdentifier { frame_id, identifier, reply })
+        self.request(|reply| Command::EvaluateIdentifier {
+            frame_id,
+            identifier,
+            reply,
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
@@ -476,7 +518,11 @@ impl DebuggerHandle {
         limit: usize,
     ) -> Result<InspectedObject, DebuggerError> {
         let object_id = object_id.into();
-        self.request(|reply| Command::InspectObject { object_id, limit, reply })
+        self.request(|reply| Command::InspectObject {
+            object_id,
+            limit,
+            reply,
+        })
     }
 
     /// Performs this debugger operation on the owning execution.
@@ -495,12 +541,20 @@ impl DebuggerHandle {
     }
 
     /// Waits for the next stop/exception notification without touching Runtime state.
-    pub fn recv_event_timeout(&self, timeout: Duration) -> Result<Option<DebuggerEvent>, DebuggerError> {
-        let receiver = self.events.lock().map_err(|_| DebuggerError::new("debugger event lock is poisoned"))?;
+    pub fn recv_event_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<DebuggerEvent>, DebuggerError> {
+        let receiver = self
+            .events
+            .lock()
+            .map_err(|_| DebuggerError::new("debugger event lock is poisoned"))?;
         match receiver.recv_timeout(timeout) {
             Ok(event) => Ok(Some(event)),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(DebuggerError::new("debugger event stream is closed")),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(DebuggerError::new("debugger event stream is closed"))
+            }
         }
     }
 }
@@ -517,7 +571,14 @@ pub trait DebuggerPort: Send + Sync {
     /// Returns the unique execution session identity.
     fn session_id(&self) -> &str;
     /// Adds a source breakpoint.
-    fn set_breakpoint(&self, source_id: String, line: u32, column: Option<u32>, sha256: Option<String>, code_generation: Option<CodeGeneration>) -> Result<Breakpoint, DebuggerError>;
+    fn set_breakpoint(
+        &self,
+        source_id: String,
+        line: u32,
+        column: Option<u32>,
+        sha256: Option<String>,
+        code_generation: Option<CodeGeneration>,
+    ) -> Result<Breakpoint, DebuggerError>;
     /// Removes a source breakpoint.
     fn remove_breakpoint(&self, id: String) -> Result<bool, DebuggerError>;
     /// Lists source breakpoints.
@@ -537,11 +598,23 @@ pub trait DebuggerPort: Send + Sync {
     /// Returns lexical scopes in one paused frame.
     fn get_scopes(&self, frame_id: String) -> Result<Vec<ScopeSnapshot>, DebuggerError>;
     /// Returns variables from one paused lexical scope.
-    fn get_variables(&self, frame_id: String, scope_id: String) -> Result<Vec<VariableSnapshot>, DebuggerError>;
+    fn get_variables(
+        &self,
+        frame_id: String,
+        scope_id: String,
+    ) -> Result<Vec<VariableSnapshot>, DebuggerError>;
     /// Resolves a single identifier or binding ID without evaluating user code.
-    fn evaluate_identifier(&self, frame_id: String, identifier: String) -> Result<DebugValue, DebuggerError>;
+    fn evaluate_identifier(
+        &self,
+        frame_id: String,
+        identifier: String,
+    ) -> Result<DebugValue, DebuggerError>;
     /// Inspects bounded own data-property descriptors.
-    fn inspect_object(&self, object_id: String, limit: usize) -> Result<InspectedObject, DebuggerError>;
+    fn inspect_object(
+        &self,
+        object_id: String,
+        limit: usize,
+    ) -> Result<InspectedObject, DebuggerError>;
     /// Returns the latest stop or exception event.
     fn event_message(&self) -> Result<Option<DebuggerEvent>, DebuggerError>;
     /// Detaches this controller and releases retained inspection handles.
@@ -549,26 +622,80 @@ pub trait DebuggerPort: Send + Sync {
 }
 
 impl DebuggerPort for DebuggerHandle {
-    fn backend_name(&self) -> &'static str { DebuggerHandle::backend_name(self) }
-    fn backend_capabilities(&self) -> BTreeMap<String, bool> { DebuggerHandle::backend_capabilities(self) }
-    fn session_id(&self) -> &str { DebuggerHandle::session_id(self) }
-    fn set_breakpoint(&self, source_id: String, line: u32, column: Option<u32>, sha256: Option<String>, code_generation: Option<CodeGeneration>) -> Result<Breakpoint, DebuggerError> { DebuggerHandle::set_breakpoint(self, source_id, line, column, sha256, code_generation) }
-    fn remove_breakpoint(&self, id: String) -> Result<bool, DebuggerError> { DebuggerHandle::remove_breakpoint(self, id) }
-    fn list_breakpoints(&self) -> Result<Vec<Breakpoint>, DebuggerError> { DebuggerHandle::list_breakpoints(self) }
-    fn request_pause(&self) -> Result<(), DebuggerError> { DebuggerHandle::request_pause(self) }
-    fn resume(&self) -> Result<(), DebuggerError> { DebuggerHandle::resume(self) }
-    fn step_into(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_into(self) }
-    fn step_over(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_over(self) }
-    fn step_out(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_out(self) }
-    fn get_stack(&self) -> Result<Vec<StackFrameSnapshot>, DebuggerError> { DebuggerHandle::get_stack(self) }
-    fn get_scopes(&self, frame_id: String) -> Result<Vec<ScopeSnapshot>, DebuggerError> { DebuggerHandle::get_scopes(self, frame_id) }
-    fn get_variables(&self, frame_id: String, scope_id: String) -> Result<Vec<VariableSnapshot>, DebuggerError> { DebuggerHandle::get_variables(self, frame_id, scope_id) }
-    fn evaluate_identifier(&self, frame_id: String, identifier: String) -> Result<DebugValue, DebuggerError> { DebuggerHandle::evaluate_identifier(self, frame_id, identifier) }
-    fn inspect_object(&self, object_id: String, limit: usize) -> Result<InspectedObject, DebuggerError> { DebuggerHandle::inspect_object(self, object_id, limit) }
-    fn event_message(&self) -> Result<Option<DebuggerEvent>, DebuggerError> { DebuggerHandle::event_message(self) }
-    fn detach(&self) -> Result<(), DebuggerError> { DebuggerHandle::detach(self) }
+    fn backend_name(&self) -> &'static str {
+        DebuggerHandle::backend_name(self)
+    }
+    fn backend_capabilities(&self) -> BTreeMap<String, bool> {
+        DebuggerHandle::backend_capabilities(self)
+    }
+    fn session_id(&self) -> &str {
+        DebuggerHandle::session_id(self)
+    }
+    fn set_breakpoint(
+        &self,
+        source_id: String,
+        line: u32,
+        column: Option<u32>,
+        sha256: Option<String>,
+        code_generation: Option<CodeGeneration>,
+    ) -> Result<Breakpoint, DebuggerError> {
+        DebuggerHandle::set_breakpoint(self, source_id, line, column, sha256, code_generation)
+    }
+    fn remove_breakpoint(&self, id: String) -> Result<bool, DebuggerError> {
+        DebuggerHandle::remove_breakpoint(self, id)
+    }
+    fn list_breakpoints(&self) -> Result<Vec<Breakpoint>, DebuggerError> {
+        DebuggerHandle::list_breakpoints(self)
+    }
+    fn request_pause(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::request_pause(self)
+    }
+    fn resume(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::resume(self)
+    }
+    fn step_into(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::step_into(self)
+    }
+    fn step_over(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::step_over(self)
+    }
+    fn step_out(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::step_out(self)
+    }
+    fn get_stack(&self) -> Result<Vec<StackFrameSnapshot>, DebuggerError> {
+        DebuggerHandle::get_stack(self)
+    }
+    fn get_scopes(&self, frame_id: String) -> Result<Vec<ScopeSnapshot>, DebuggerError> {
+        DebuggerHandle::get_scopes(self, frame_id)
+    }
+    fn get_variables(
+        &self,
+        frame_id: String,
+        scope_id: String,
+    ) -> Result<Vec<VariableSnapshot>, DebuggerError> {
+        DebuggerHandle::get_variables(self, frame_id, scope_id)
+    }
+    fn evaluate_identifier(
+        &self,
+        frame_id: String,
+        identifier: String,
+    ) -> Result<DebugValue, DebuggerError> {
+        DebuggerHandle::evaluate_identifier(self, frame_id, identifier)
+    }
+    fn inspect_object(
+        &self,
+        object_id: String,
+        limit: usize,
+    ) -> Result<InspectedObject, DebuggerError> {
+        DebuggerHandle::inspect_object(self, object_id, limit)
+    }
+    fn event_message(&self) -> Result<Option<DebuggerEvent>, DebuggerError> {
+        DebuggerHandle::event_message(self)
+    }
+    fn detach(&self) -> Result<(), DebuggerError> {
+        DebuggerHandle::detach(self)
+    }
 }
-
 
 /// Owner-thread adapter state. Create it on the same thread that owns the Runtime.
 pub struct DebuggerSession {
@@ -631,7 +758,10 @@ impl DebuggerSession {
             events: Arc::new(Mutex::new(event_receiver)),
             active: session.active.clone(),
             owner_thread,
-            session_id: format!("debug-{}", NEXT_DEBUGGER_SESSION_ID.fetch_add(1, Ordering::Relaxed)),
+            session_id: format!(
+                "debug-{}",
+                NEXT_DEBUGGER_SESSION_ID.fetch_add(1, Ordering::Relaxed)
+            ),
         };
         Ok((session, handle))
     }
@@ -663,7 +793,9 @@ impl DebuggerSession {
 
     fn ensure_owner(&self) -> Result<(), DebuggerError> {
         if thread::current().id() != self.owner_thread {
-            return Err(DebuggerError::new("debugger session access must run on the Runtime owner thread"));
+            return Err(DebuggerError::new(
+                "debugger session access must run on the Runtime owner thread",
+            ));
         }
         Ok(())
     }
@@ -680,38 +812,69 @@ impl DebuggerSession {
                     image.id
                 )));
             }
-            if let Some(files) = image.artifact.source_map.as_ref()
+            if let Some(files) = image
+                .artifact
+                .source_map
+                .as_ref()
                 .and_then(|map| map.get("files"))
                 .and_then(JsonValue::as_array)
             {
                 for file in files {
                     let Some(id) = file.get("id").and_then(JsonValue::as_str) else {
-                        return Err(DebuggerError::new("source file metadata is missing its local id"));
+                        return Err(DebuggerError::new(
+                            "source file metadata is missing its local id",
+                        ));
                     };
-                    let _path = file.get("path").and_then(JsonValue::as_str)
+                    let _path = file
+                        .get("path")
+                        .and_then(JsonValue::as_str)
                         .filter(|value| !value.is_empty() && value.chars().count() <= 4096)
-                        .ok_or_else(|| DebuggerError::new(format!("source file {id:?} has an invalid path")))?;
-                    let language = file.get("language").and_then(JsonValue::as_str)
-                        .filter(|value| matches!(*value, "javascript" | "typescript" | "json" | "synthetic"))
-                        .ok_or_else(|| DebuggerError::new(format!("source file {id:?} has an invalid language")))?;
+                        .ok_or_else(|| {
+                            DebuggerError::new(format!("source file {id:?} has an invalid path"))
+                        })?;
+                    let language = file
+                        .get("language")
+                        .and_then(JsonValue::as_str)
+                        .filter(|value| {
+                            matches!(*value, "javascript" | "typescript" | "json" | "synthetic")
+                        })
+                        .ok_or_else(|| {
+                            DebuggerError::new(format!(
+                                "source file {id:?} has an invalid language"
+                            ))
+                        })?;
                     if !valid_api_id(id) {
                         return Err(DebuggerError::new(format!(
                             "source file id {id:?} does not satisfy the Debugger API v1 id contract"
                         )));
                     }
-                    let sha256 = file.get("sha256").and_then(JsonValue::as_str).map(str::to_owned);
+                    let sha256 = file
+                        .get("sha256")
+                        .and_then(JsonValue::as_str)
+                        .map(str::to_owned);
                     if sha256.as_deref().is_some_and(|digest| {
                         digest.len() != 64
-                            || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                            || !digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                     }) {
-                        return Err(DebuggerError::new(format!("source file {id:?} has an invalid SHA-256 digest")));
+                        return Err(DebuggerError::new(format!(
+                            "source file {id:?} has an invalid SHA-256 digest"
+                        )));
                     }
                     let key = (image.id.clone(), id.to_owned());
-                    if self.source_files.insert(key.clone(), SourceFile {
-                        language: language.to_owned(),
-                        sha256,
-                        canonical_id: id.to_owned(),
-                    }).is_some() {
+                    if self
+                        .source_files
+                        .insert(
+                            key.clone(),
+                            SourceFile {
+                                language: language.to_owned(),
+                                sha256,
+                                canonical_id: id.to_owned(),
+                            },
+                        )
+                        .is_some()
+                    {
                         return Err(DebuggerError::new(format!(
                             "function {:?} contains duplicate local source file id {id:?}",
                             image.id
@@ -723,11 +886,17 @@ impl DebuggerSession {
         }
 
         for (local_id, entries) in source_groups {
-            let Some(first_key) = entries.first() else { continue };
-            let first = self.source_files.get(first_key)
+            let Some(first_key) = entries.first() else {
+                continue;
+            };
+            let first = self
+                .source_files
+                .get(first_key)
                 .ok_or_else(|| DebuggerError::new("indexed source file disappeared"))?;
             let collides = entries.iter().skip(1).any(|key| {
-                let Some(candidate) = self.source_files.get(key) else { return true };
+                let Some(candidate) = self.source_files.get(key) else {
+                    return true;
+                };
                 if candidate.language != first.language {
                     return true;
                 }
@@ -739,7 +908,9 @@ impl DebuggerSession {
             if collides {
                 for key in entries {
                     let canonical_id = qualified_source_id(&key.0, &local_id);
-                    let file = self.source_files.get_mut(&key)
+                    let file = self
+                        .source_files
+                        .get_mut(&key)
                         .ok_or_else(|| DebuggerError::new("indexed source file disappeared"))?;
                     file.canonical_id = canonical_id;
                 }
@@ -752,11 +923,14 @@ impl DebuggerSession {
                     image.id
                 ))
             })?;
-            self.module_generations.insert(image.id.clone(), code_generation.clone());
+            self.module_generations
+                .insert(image.id.clone(), code_generation.clone());
             for instruction in &image.artifact.instructions {
                 if let Some(location) = image.location(instruction.offset) {
                     let source = self.parse_source_location(&image.id, location.source.as_ref());
-                    if let Some(source) = source.filter(|item| item.origin == "user" && item.source_id.is_some()) {
+                    if let Some(source) =
+                        source.filter(|item| item.origin == "user" && item.source_id.is_some())
+                    {
                         self.source_records.push(SourceRecord {
                             function_id: image.id.clone(),
                             location: source,
@@ -776,47 +950,78 @@ impl DebuggerSession {
     ) -> Option<SourceLocation> {
         let value = value?;
         let origin = value.get("origin")?.as_str()?.to_owned();
-        let local_source_id = value.get("file").and_then(JsonValue::as_str).map(str::to_owned);
-        let source_file = local_source_id.as_ref()
+        let local_source_id = value
+            .get("file")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
+        let source_file = local_source_id
+            .as_ref()
             .and_then(|id| self.source_files.get(&(function_id.to_owned(), id.clone())));
         let source_id = source_file.map(|file| file.canonical_id.clone());
         let start = parse_position(value.get("start"));
         let end = parse_position(value.get("end"));
-        let reason = value.get("reason").and_then(JsonValue::as_str).map(str::to_owned);
+        let reason = value
+            .get("reason")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned);
         match origin.as_str() {
-            "user" if source_id.as_deref().is_some_and(valid_api_id)
-                && start.is_some() && end.is_some() => {}
-            "generated" if reason.as_deref().is_some_and(|text| !text.is_empty() && text.len() <= 512) => {}
+            "user"
+                if source_id.as_deref().is_some_and(valid_api_id)
+                    && start.is_some()
+                    && end.is_some() => {}
+            "generated"
+                if reason
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty() && text.len() <= 512) => {}
             _ => return None,
         }
         let source_sha256 = source_file.and_then(|file| file.sha256.clone());
-        let scope_id = value.get("scope").and_then(JsonValue::as_str)
-            .filter(|id| valid_api_id(id)).map(str::to_owned);
-        let mut binding_ids = value.get("bindings")
+        let scope_id = value
+            .get("scope")
+            .and_then(JsonValue::as_str)
+            .filter(|id| valid_api_id(id))
+            .map(str::to_owned);
+        let mut binding_ids = value
+            .get("bindings")
             .and_then(JsonValue::as_array)
-            .map(|items| items.iter().filter_map(JsonValue::as_str)
-                .filter(|id| valid_api_id(id)).map(str::to_owned).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .filter(|id| valid_api_id(id))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         binding_ids.sort();
         binding_ids.dedup();
-        let inline_chain = value.get("inline_chain")
+        let inline_chain = value
+            .get("inline_chain")
             .and_then(JsonValue::as_array)
-            .map(|items| items.iter().take(64).filter_map(|item| {
-                let function = item.get("function").and_then(JsonValue::as_str)?;
-                let local_file = item.get("file").and_then(JsonValue::as_str)?;
-                if !valid_api_id(function) {
-                    return None;
-                }
-                let file = self.source_files
-                    .get(&(function_id.to_owned(), local_file.to_owned()))?
-                    .canonical_id.clone();
-                Some(InlineFrame {
-                    function: function.to_owned(),
-                    file,
-                    start: parse_position(item.get("start"))?,
-                    end: parse_position(item.get("end"))?,
-                })
-            }).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .iter()
+                    .take(64)
+                    .filter_map(|item| {
+                        let function = item.get("function").and_then(JsonValue::as_str)?;
+                        let local_file = item.get("file").and_then(JsonValue::as_str)?;
+                        if !valid_api_id(function) {
+                            return None;
+                        }
+                        let file = self
+                            .source_files
+                            .get(&(function_id.to_owned(), local_file.to_owned()))?
+                            .canonical_id
+                            .clone();
+                        Some(InlineFrame {
+                            function: function.to_owned(),
+                            file,
+                            start: parse_position(item.get("start"))?,
+                            end: parse_position(item.get("end"))?,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         Some(SourceLocation {
             origin,
@@ -842,7 +1047,9 @@ impl DebuggerSession {
     ) -> Result<Breakpoint, DebuggerError> {
         self.ensure_owner()?;
         if self.state != SessionState::Created {
-            return Err(DebuggerError::new("direct breakpoint changes are only available before execution; use DebuggerHandle while running"));
+            return Err(DebuggerError::new(
+                "direct breakpoint changes are only available before execution; use DebuggerHandle while running",
+            ));
         }
         self.create_breakpoint(source_id.into(), line, column, sha256, generation)
     }
@@ -851,7 +1058,9 @@ impl DebuggerSession {
     pub fn remove_breakpoint(&mut self, id: &str) -> Result<bool, DebuggerError> {
         self.ensure_owner()?;
         if self.state != SessionState::Created {
-            return Err(DebuggerError::new("direct breakpoint changes are only available before execution; use DebuggerHandle while running"));
+            return Err(DebuggerError::new(
+                "direct breakpoint changes are only available before execution; use DebuggerHandle while running",
+            ));
         }
         Ok(self.breakpoints.remove(id).is_some())
     }
@@ -866,7 +1075,9 @@ impl DebuggerSession {
     pub fn request_pause(&mut self) -> Result<(), DebuggerError> {
         self.ensure_owner()?;
         if self.state != SessionState::Created {
-            return Err(DebuggerError::new("use DebuggerHandle to request a pause during execution"));
+            return Err(DebuggerError::new(
+                "use DebuggerHandle to request a pause during execution",
+            ));
         }
         self.pause_requested = true;
         Ok(())
@@ -886,14 +1097,25 @@ impl DebuggerSession {
             ));
         }
         if line == 0 {
-            return Err(DebuggerError::new("source line numbers are one-based and must be positive"));
+            return Err(DebuggerError::new(
+                "source line numbers are one-based and must be positive",
+            ));
         }
-        let source_file = self.source_files.values().find(|file| file.canonical_id == source_id);
+        let source_file = self
+            .source_files
+            .values()
+            .find(|file| file.canonical_id == source_id);
         let mut verified = source_file.is_some();
-        let mut message = if verified { None } else { Some("unknown source file".to_owned()) };
+        let mut message = if verified {
+            None
+        } else {
+            Some("unknown source file".to_owned())
+        };
         if let Some(digest) = requested_sha.as_deref() {
             let valid = digest.len() == 64
-                && digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
             if !valid {
                 verified = false;
                 message = Some("source digest must be lowercase SHA-256 hex".to_owned());
@@ -910,25 +1132,32 @@ impl DebuggerSession {
                 && location.start.is_some_and(|start| {
                     start.line == line && column.is_none_or(|value| value == start.column)
                 })
-                && requested_generation.as_ref().is_none_or(|wanted| &record.code_generation == wanted)
+                && requested_generation
+                    .as_ref()
+                    .is_none_or(|wanted| &record.code_generation == wanted)
         });
         if matching.is_none() && verified {
             verified = false;
             message = Some(if requested_generation.is_some() {
-                "no executable source location matches this line/column and code generation".to_owned()
+                "no executable source location matches this line/column and code generation"
+                    .to_owned()
             } else {
                 "no executable source location matches this line/column".to_owned()
             });
         }
 
-        let generation = requested_generation.or_else(|| matching.map(|item| item.code_generation.clone()));
+        let generation =
+            requested_generation.or_else(|| matching.map(|item| item.code_generation.clone()));
         let id = format!("bp-{}", self.next_breakpoint_id);
-        self.next_breakpoint_id = self.next_breakpoint_id.checked_add(1)
+        self.next_breakpoint_id = self
+            .next_breakpoint_id
+            .checked_add(1)
             .ok_or_else(|| DebuggerError::new("breakpoint identity space exhausted"))?;
         let breakpoint = Breakpoint {
             id: id.clone(),
             source_id,
-            source_sha256: requested_sha.or_else(|| source_file.and_then(|file| file.sha256.clone())),
+            source_sha256: requested_sha
+                .or_else(|| source_file.and_then(|file| file.sha256.clone())),
             code_generation: generation,
             line,
             column,
@@ -942,7 +1171,9 @@ impl DebuggerSession {
     pub(super) fn activate(&mut self) -> Result<(), DebuggerError> {
         self.ensure_owner()?;
         if self.state != SessionState::Created {
-            return Err(DebuggerError::new("debugger session can only be executed once"));
+            return Err(DebuggerError::new(
+                "debugger session can only be executed once",
+            ));
         }
         self.state = SessionState::Running;
         self.active.store(true, Ordering::Release);
@@ -967,20 +1198,46 @@ impl DebuggerSession {
             let error = DebuggerError::new("debugger execution session has finished");
             match command {
                 Command::Pause => {}
-                Command::SetBreakpoint { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::RemoveBreakpoint { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::ListBreakpoints { reply } => { let _ = reply.send(Err(error)); }
-                Command::Resume { reply } => { let _ = reply.send(Err(error)); }
-                Command::Step { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::GetStack { reply } => { let _ = reply.send(Err(error)); }
-                Command::GetScopes { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::GetVariables { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::EvaluateIdentifier { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::InspectObject { reply, .. } => { let _ = reply.send(Err(error)); }
-                Command::EventMessage { reply } => { let _ = reply.send(Err(error)); }
-                Command::Detach { reply } => { let _ = reply.send(Err(error)); }
+                Command::SetBreakpoint { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::RemoveBreakpoint { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::ListBreakpoints { reply } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::Resume { reply } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::Step { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::GetStack { reply } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::GetScopes { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::GetVariables { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::EvaluateIdentifier { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::InspectObject { reply, .. } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::EventMessage { reply } => {
+                    let _ = reply.send(Err(error));
+                }
+                Command::Detach { reply } => {
+                    let _ = reply.send(Err(error));
+                }
                 #[cfg(test)]
-                Command::CollectGarbageForTest { reply } => { let _ = reply.send(Err(error)); }
+                Command::CollectGarbageForTest { reply } => {
+                    let _ = reply.send(Err(error));
+                }
             }
         }
         // Closing the receiver prevents a request that raced with shutdown from
@@ -995,7 +1252,11 @@ impl DebuggerSession {
                 first_error.get_or_insert(error);
             }
         }
-        if let Some(error) = first_error { Err(error.into()) } else { Ok(()) }
+        if let Some(error) = first_error {
+            Err(error.into())
+        } else {
+            Ok(())
+        }
     }
 
     pub(super) fn before_instruction(
@@ -1012,7 +1273,9 @@ impl DebuggerSession {
                 None => break,
             };
             match command {
-                Ok(command) => self.process_command(heap, callers, current, current_location, command)?,
+                Ok(command) => {
+                    self.process_command(heap, callers, current, current_location, command)?
+                }
                 Err(_) => break,
             }
         }
@@ -1020,15 +1283,26 @@ impl DebuggerSession {
             return Ok(());
         }
 
-        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
-        let key = location.as_ref().and_then(|item| source_key(&current.image.id, item));
-        let previous = self.last_instruction.insert(current.id, (current.pc, key.clone()));
-        let changed = previous.as_ref().is_none_or(|(_, previous_key)| *previous_key != key);
-        let loop_reentry = previous.as_ref().is_some_and(|(previous_pc, _)| current.pc <= *previous_pc);
+        let location = current_location
+            .and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
+        let key = location
+            .as_ref()
+            .and_then(|item| source_key(&current.image.id, item));
+        let previous = self
+            .last_instruction
+            .insert(current.id, (current.pc, key.clone()));
+        let changed = previous
+            .as_ref()
+            .is_none_or(|(_, previous_key)| *previous_key != key);
+        let loop_reentry = previous
+            .as_ref()
+            .is_some_and(|(previous_pc, _)| current.pc <= *previous_pc);
         let stop_reason = if self.pause_requested {
             self.pause_requested = false;
             Some(("pause", None))
-        } else if (changed || loop_reentry) && self.matches_breakpoint(&current.image.id, location.as_ref()) {
+        } else if (changed || loop_reentry)
+            && self.matches_breakpoint(&current.image.id, location.as_ref())
+        {
             Some(("breakpoint", None))
         } else if let Some(step) = self.step.as_ref() {
             let depth = callers.len() + 1;
@@ -1038,7 +1312,11 @@ impl DebuggerSession {
                 StepMode::Over => depth <= step.base_depth && source_changed,
                 StepMode::Out => depth < step.base_depth && source_changed,
             };
-            if should_stop { Some(("step", None)) } else { None }
+            if should_stop {
+                Some(("step", None))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -1068,7 +1346,8 @@ impl DebuggerSession {
         if self.state == SessionState::Detached {
             return Ok(());
         }
-        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
+        let location = current_location
+            .and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
         let event = ExceptionEvent {
             value: self.debug_value(heap, value)?,
             frame_id: frame_id(current),
@@ -1096,7 +1375,9 @@ impl DebuggerSession {
         while self.state == SessionState::Paused {
             let command = self.commands.as_ref().map(Receiver::recv);
             match command {
-                Some(Ok(command)) => self.process_command(heap, callers, current, current_location, command)?,
+                Some(Ok(command)) => {
+                    self.process_command(heap, callers, current, current_location, command)?
+                }
                 Some(Err(_)) | None => {
                     self.state = SessionState::Detached;
                     self.active.store(false, Ordering::Release);
@@ -1121,8 +1402,16 @@ impl DebuggerSession {
                     self.pause_requested = true;
                 }
             }
-            Command::SetBreakpoint { source_id, line, column, sha256, code_generation, reply } => {
-                let result = self.create_breakpoint(source_id, line, column, sha256, code_generation);
+            Command::SetBreakpoint {
+                source_id,
+                line,
+                column,
+                sha256,
+                code_generation,
+                reply,
+            } => {
+                let result =
+                    self.create_breakpoint(source_id, line, column, sha256, code_generation);
                 let _ = reply.send(result);
             }
             Command::RemoveBreakpoint { id, reply } => {
@@ -1143,30 +1432,63 @@ impl DebuggerSession {
                 let result = if self.state == SessionState::Paused {
                     self.stack_snapshot(callers, current, current_location)
                 } else {
-                    Err(DebuggerError::new("call-stack inspection requires a paused execution"))
+                    Err(DebuggerError::new(
+                        "call-stack inspection requires a paused execution",
+                    ))
                 };
                 let _ = reply.send(result);
             }
-            Command::GetScopes { frame_id: requested, reply } => {
+            Command::GetScopes {
+                frame_id: requested,
+                reply,
+            } => {
                 let result = self.scopes(heap, callers, current, current_location, &requested);
                 let _ = reply.send(result);
             }
-            Command::GetVariables { frame_id: requested, scope_id, reply } => {
-                let result = self.scopes(heap, callers, current, current_location, &requested)
-                    .and_then(|scopes| scopes.into_iter().find(|scope| scope.id == scope_id)
-                        .map(|scope| scope.variables)
-                        .ok_or_else(|| DebuggerError::new("unknown lexical scope")));
+            Command::GetVariables {
+                frame_id: requested,
+                scope_id,
+                reply,
+            } => {
+                let result = self
+                    .scopes(heap, callers, current, current_location, &requested)
+                    .and_then(|scopes| {
+                        scopes
+                            .into_iter()
+                            .find(|scope| scope.id == scope_id)
+                            .map(|scope| scope.variables)
+                            .ok_or_else(|| DebuggerError::new("unknown lexical scope"))
+                    });
                 let _ = reply.send(result);
             }
-            Command::EvaluateIdentifier { frame_id: requested, identifier, reply } => {
-                let result = self.scopes(heap, callers, current, current_location, &requested)
-                    .and_then(|scopes| scopes.into_iter().flat_map(|scope| scope.variables)
-                        .find(|variable| variable.binding_id == identifier || variable.name == identifier)
-                        .map(|variable| variable.value)
-                        .ok_or_else(|| DebuggerError::new("identifier is not available in the selected frame")));
+            Command::EvaluateIdentifier {
+                frame_id: requested,
+                identifier,
+                reply,
+            } => {
+                let result = self
+                    .scopes(heap, callers, current, current_location, &requested)
+                    .and_then(|scopes| {
+                        scopes
+                            .into_iter()
+                            .flat_map(|scope| scope.variables)
+                            .find(|variable| {
+                                variable.binding_id == identifier || variable.name == identifier
+                            })
+                            .map(|variable| variable.value)
+                            .ok_or_else(|| {
+                                DebuggerError::new(
+                                    "identifier is not available in the selected frame",
+                                )
+                            })
+                    });
                 let _ = reply.send(result);
             }
-            Command::InspectObject { object_id, limit, reply } => {
+            Command::InspectObject {
+                object_id,
+                limit,
+                reply,
+            } => {
                 let result = self.inspect(heap, &object_id, limit);
                 let _ = reply.send(result);
             }
@@ -1216,11 +1538,14 @@ impl DebuggerSession {
             return Err(DebuggerError::new("execution is not paused"));
         }
         self.release_object_handles(heap)?;
-        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
+        let location = current_location
+            .and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
         self.step = Some(StepRequest {
             mode,
             base_depth: callers.len() + 1,
-            base_key: location.as_ref().and_then(|item| source_key(&current.image.id, item)),
+            base_key: location
+                .as_ref()
+                .and_then(|item| source_key(&current.image.id, item)),
         });
         self.event = None;
         self.state = SessionState::Running;
@@ -1228,22 +1553,36 @@ impl DebuggerSession {
     }
 
     fn matches_breakpoint(&self, function_id: &str, location: Option<&SourceLocation>) -> bool {
-        let Some(location) = location else { return false };
-        let Some(source_id) = location.source_id.as_deref() else { return false };
-        let Some(start) = location.start else { return false };
+        let Some(location) = location else {
+            return false;
+        };
+        let Some(source_id) = location.source_id.as_deref() else {
+            return false;
+        };
+        let Some(start) = location.start else {
+            return false;
+        };
         self.breakpoints.values().any(|breakpoint| {
             breakpoint.verified
                 && breakpoint.source_id == source_id
                 && breakpoint.line == start.line
-                && breakpoint.column.is_none_or(|column| column == start.column)
-                && breakpoint.source_sha256.as_ref().is_none_or(|sha| location.source_sha256.as_ref() == Some(sha))
-                && breakpoint.code_generation.as_ref().is_none_or(|generation| {
-                    self.source_records.iter().any(|record| {
-                        record.function_id == function_id
-                            && record.location == *location
-                            && &record.code_generation == generation
+                && breakpoint
+                    .column
+                    .is_none_or(|column| column == start.column)
+                && breakpoint
+                    .source_sha256
+                    .as_ref()
+                    .is_none_or(|sha| location.source_sha256.as_ref() == Some(sha))
+                && breakpoint
+                    .code_generation
+                    .as_ref()
+                    .is_none_or(|generation| {
+                        self.source_records.iter().any(|record| {
+                            record.function_id == function_id
+                                && record.location == *location
+                                && &record.code_generation == generation
+                        })
                     })
-                })
         })
     }
 
@@ -1256,13 +1595,19 @@ impl DebuggerSession {
         let mut result = Vec::with_capacity(callers.len() + 1);
         result.push(self.frame_snapshot(current, current_location)?);
         for frame in callers.iter().rev() {
-            let location = frame.last_offset.and_then(|offset| frame.image.location(offset));
+            let location = frame
+                .last_offset
+                .and_then(|offset| frame.image.location(offset));
             result.push(self.frame_snapshot(frame, location.as_ref())?);
         }
         Ok(result)
     }
 
-    fn frame_snapshot(&self, frame: &VmFrame, location: Option<&InstructionLocation>) -> Result<StackFrameSnapshot, DebuggerError> {
+    fn frame_snapshot(
+        &self,
+        frame: &VmFrame,
+        location: Option<&InstructionLocation>,
+    ) -> Result<StackFrameSnapshot, DebuggerError> {
         let generation = code_generation(&frame.image).ok_or_else(|| {
             DebuggerError::new(format!(
                 "function {:?} has no valid Debugger API code-generation identity",
@@ -1307,14 +1652,20 @@ impl DebuggerSession {
         requested_frame: &str,
     ) -> Result<Vec<ScopeSnapshot>, DebuggerError> {
         if self.state != SessionState::Paused {
-            return Err(DebuggerError::new("scope inspection requires a paused execution"));
+            return Err(DebuggerError::new(
+                "scope inspection requires a paused execution",
+            ));
         }
         let (frame, location) = find_frame(callers, current, current_location, requested_frame)
             .ok_or_else(|| DebuggerError::new("unknown stack frame"))?;
-        let Some(location) = location else { return Ok(Vec::new()) };
+        let Some(location) = location else {
+            return Ok(Vec::new());
+        };
         let mut result = Vec::new();
         for scope in &location.lexical_scopes {
-            let Some(id) = scope.get("id").and_then(JsonValue::as_str) else { continue };
+            let Some(id) = scope.get("id").and_then(JsonValue::as_str) else {
+                continue;
+            };
             if !valid_api_id(id) {
                 continue;
             }
@@ -1330,8 +1681,11 @@ impl DebuggerSession {
             result.push(ScopeSnapshot {
                 id: id.to_owned(),
                 name: "Locals".to_owned(),
-                parent_id: scope.get("parent").and_then(JsonValue::as_str)
-                    .filter(|parent| valid_api_id(parent)).map(str::to_owned),
+                parent_id: scope
+                    .get("parent")
+                    .and_then(JsonValue::as_str)
+                    .filter(|parent| valid_api_id(parent))
+                    .map(str::to_owned),
                 variables,
             });
         }
@@ -1346,17 +1700,33 @@ impl DebuggerSession {
         binding_id: &str,
     ) -> Result<VariableSnapshot, DebuggerError> {
         let metadata = frame.image.artifact.manifest.get("metadata");
-        let binding = metadata.and_then(|meta| meta.pointer("/environment/bindings"))
+        let binding = metadata
+            .and_then(|meta| meta.pointer("/environment/bindings"))
             .and_then(JsonValue::as_array)
-            .and_then(|items| items.iter().find(|item| item.get("id").and_then(JsonValue::as_str) == Some(binding_id)));
-        let capture = metadata.and_then(|meta| meta.pointer("/environment/captures"))
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(JsonValue::as_str) == Some(binding_id))
+            });
+        let capture = metadata
+            .and_then(|meta| meta.pointer("/environment/captures"))
             .and_then(JsonValue::as_array)
-            .and_then(|items| items.iter().find(|item| item.get("id").and_then(JsonValue::as_str) == Some(binding_id)));
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(JsonValue::as_str) == Some(binding_id))
+            });
         let descriptor = binding.or(capture);
-        let raw_name = descriptor.and_then(|item| item.get("name")).and_then(JsonValue::as_str)
-            .filter(|name| !name.is_empty()).unwrap_or(binding_id);
+        let raw_name = descriptor
+            .and_then(|item| item.get("name"))
+            .and_then(JsonValue::as_str)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(binding_id);
         let name = raw_name.chars().take(512).collect::<String>();
-        let mutable = descriptor.and_then(|item| item.get("mutable")).and_then(JsonValue::as_bool).unwrap_or(false);
+        let mutable = descriptor
+            .and_then(|item| item.get("mutable"))
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
         let value = self.read_binding(heap, frame, location, binding_id)?;
         let (availability, debug_value) = match value {
             Some(value) => ("available".to_owned(), self.debug_value(heap, value)?),
@@ -1378,27 +1748,42 @@ impl DebuggerSession {
         location: &InstructionLocation,
         binding_id: &str,
     ) -> Result<Option<Value>, DebuggerError> {
-        let Some(storage) = location.variable_locations.iter().find(|item| {
-            item.get("binding").and_then(JsonValue::as_str) == Some(binding_id)
-        }) else { return Ok(None) };
-        let kind = storage.get("kind").and_then(JsonValue::as_str).unwrap_or("");
-        let index = storage.get("index").and_then(JsonValue::as_u64)
+        let Some(storage) = location
+            .variable_locations
+            .iter()
+            .find(|item| item.get("binding").and_then(JsonValue::as_str) == Some(binding_id))
+        else {
+            return Ok(None);
+        };
+        let kind = storage
+            .get("kind")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let index = storage
+            .get("index")
+            .and_then(JsonValue::as_u64)
             .and_then(|value| usize::try_from(value).ok());
         let value = match kind {
             "register" => {
-                let Some(index) = index.and_then(|value| u16::try_from(value).ok()) else { return Ok(None) };
+                let Some(index) = index.and_then(|value| u16::try_from(value).ok()) else {
+                    return Ok(None);
+                };
                 match frame.registers.get(index as usize) {
                     Some(RegisterValue::Value(value)) => Some(*value),
-                    Some(RegisterValue::Cell(binding)) => match heap.load_binding(frame.activation.environment(), *binding) {
-                        Ok(value) => Some(value),
-                        Err(HeapError::UninitializedBinding) => None,
-                        Err(error) => return Err(error.into()),
-                    },
+                    Some(RegisterValue::Cell(binding)) => {
+                        match heap.load_binding(frame.activation.environment(), *binding) {
+                            Ok(value) => Some(value),
+                            Err(HeapError::UninitializedBinding) => None,
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
                     Some(RegisterValue::Uninitialized | RegisterValue::Token { .. }) | None => None,
                 }
             }
             "capture" => {
-                let Some(capture) = index.and_then(|value| frame.image.captures.get(value)) else { return Ok(None) };
+                let Some(capture) = index.and_then(|value| frame.image.captures.get(value)) else {
+                    return Ok(None);
+                };
                 match heap.load_binding(frame.activation.environment(), capture.alias_binding) {
                     Ok(value) => Some(value),
                     Err(HeapError::UninitializedBinding) => None,
@@ -1407,8 +1792,11 @@ impl DebuggerSession {
             }
             "local" | "environment" => {
                 let register = frame.image.binding_registers.get(binding_id).copied();
-                let binding = register.and_then(|slot| frame.image.register_bindings.get(&slot).copied());
-                let Some(binding) = binding else { return Ok(None) };
+                let binding =
+                    register.and_then(|slot| frame.image.register_bindings.get(&slot).copied());
+                let Some(binding) = binding else {
+                    return Ok(None);
+                };
                 match heap.load_binding(frame.activation.environment(), binding) {
                     Ok(value) => Some(value),
                     Err(HeapError::UninitializedBinding) => None,
@@ -1424,8 +1812,21 @@ impl DebuggerSession {
         let (value_type, preview, truncated) = match value.value_type() {
             ValueType::Undefined => ("undefined", "undefined".to_owned(), false),
             ValueType::Null => ("null", "null".to_owned(), false),
-            ValueType::Boolean => ("boolean", if value.as_boolean() == Some(true) { "true" } else { "false" }.to_owned(), false),
-            ValueType::Number => ("number", super::format_number(value.as_number().unwrap_or(f64::NAN)), false),
+            ValueType::Boolean => (
+                "boolean",
+                if value.as_boolean() == Some(true) {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_owned(),
+                false,
+            ),
+            ValueType::Number => (
+                "number",
+                super::format_number(value.as_number().unwrap_or(f64::NAN)),
+                false,
+            ),
             ValueType::String => {
                 let units = heap.string_utf16(value)?;
                 let text = String::from_utf16_lossy(units);
@@ -1449,7 +1850,9 @@ impl DebuggerSession {
             }
             let handle = heap.retain_host_value(value)?;
             let id = format!("object-{}", self.next_object_id);
-            self.next_object_id = self.next_object_id.checked_add(1)
+            self.next_object_id = self
+                .next_object_id
+                .checked_add(1)
                 .ok_or_else(|| DebuggerError::new("object identity space exhausted"))?;
             self.object_handles.insert(id.clone(), handle);
             Some(id)
@@ -1465,18 +1868,32 @@ impl DebuggerSession {
         })
     }
 
-    fn inspect(&mut self, heap: &mut Heap, object_id: &str, limit: usize) -> Result<InspectedObject, DebuggerError> {
+    fn inspect(
+        &mut self,
+        heap: &mut Heap,
+        object_id: &str,
+        limit: usize,
+    ) -> Result<InspectedObject, DebuggerError> {
         if self.state != SessionState::Paused {
-            return Err(DebuggerError::new("object inspection requires a paused execution"));
+            return Err(DebuggerError::new(
+                "object inspection requires a paused execution",
+            ));
         }
         if limit > MAX_INSPECTION_PROPERTIES {
-            return Err(DebuggerError::new("inspection limit must be between 0 and 128"));
+            return Err(DebuggerError::new(
+                "inspection limit must be between 0 and 128",
+            ));
         }
-        let handle = self.object_handles.get(object_id).copied()
+        let handle = self
+            .object_handles
+            .get(object_id)
+            .copied()
             .ok_or_else(|| DebuggerError::new("unknown or expired inspection reference"))?;
         let object = heap.resolve_host_handle(handle)?;
         if !matches!(object.value_type(), ValueType::Object | ValueType::Function) {
-            return Err(DebuggerError::new("inspection reference does not identify an object"));
+            return Err(DebuggerError::new(
+                "inspection reference does not identify an object",
+            ));
         }
 
         let scope = heap.open_scope()?;
@@ -1486,8 +1903,12 @@ impl DebuggerSession {
             let mut properties = Vec::new();
             for key in keys.iter().take(limit) {
                 let name = String::from_utf16_lossy(heap.property_key_utf16(*key)?);
-                if let Some(CompletePropertyDescriptor { value, writable, enumerable, configurable }) =
-                    heap.get_own_property_descriptor(object, *key)?
+                if let Some(CompletePropertyDescriptor {
+                    value,
+                    writable,
+                    enumerable,
+                    configurable,
+                }) = heap.get_own_property_descriptor(object, *key)?
                 {
                     properties.push(InspectedProperty {
                         name: name.chars().take(1024).collect(),
@@ -1508,8 +1929,14 @@ impl DebuggerSession {
         })();
         let close = heap.close_scope(scope);
         match result {
-            Err(error) => { let _ = close; Err(error) }
-            Ok(value) => { close?; Ok(value) }
+            Err(error) => {
+                let _ = close;
+                Err(error)
+            }
+            Ok(value) => {
+                close?;
+                Ok(value)
+            }
         }
     }
 }
@@ -1519,13 +1946,22 @@ fn frame_id(frame: &VmFrame) -> String {
 }
 
 fn qualified_source_id(function_id: &str, local_id: &str) -> String {
-    let raw = format!("fn_{}_{}_{}_{}", function_id.len(), function_id, local_id.len(), local_id);
+    let raw = format!(
+        "fn_{}_{}_{}_{}",
+        function_id.len(),
+        function_id,
+        local_id.len(),
+        local_id
+    );
     if raw.len() <= 128 {
         return raw;
     }
-    let hash = raw.as_bytes().iter().fold(0xcbf29ce484222325_u64, |state, byte| {
-        (state ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    });
+    let hash = raw
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |state, byte| {
+            (state ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
     let prefix = raw.chars().take(111).collect::<String>();
     format!("{prefix}_{hash:016x}")
 }
@@ -1535,7 +1971,9 @@ fn valid_api_id(value: &str) -> bool {
         return false;
     }
     let mut chars = value.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     (first.is_ascii_alphabetic() || first == '_')
         && chars.all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | ':' | '-')
@@ -1568,7 +2006,9 @@ fn code_generation(image: &FunctionImage) -> Option<CodeGeneration> {
 }
 
 fn source_key(function_id: &str, location: &SourceLocation) -> Option<SourceKey> {
-    if location.origin != "user" { return None; }
+    if location.origin != "user" {
+        return None;
+    }
     let start = location.start?;
     Some(SourceKey {
         function_id: function_id.to_owned(),
@@ -1599,12 +2039,16 @@ fn find_frame<'a>(
     }
     for frame in callers.iter().rev() {
         if frame_id(frame) == requested_id {
-            return Some((frame, frame.last_offset.and_then(|offset| frame.image.location(offset))));
+            return Some((
+                frame,
+                frame
+                    .last_offset
+                    .and_then(|offset| frame.image.location(offset)),
+            ));
         }
     }
     None
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1627,8 +2071,7 @@ mod tests {
         .expect("debugger test source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
             .expect("debugger test source parses");
-        let compiled = compile_to_bytecode(&parsed)
-            .expect("debugger test source compiles");
+        let compiled = compile_to_bytecode(&parsed).expect("debugger test source compiles");
         let entry_id = compiled
             .functions
             .iter()
@@ -1636,7 +2079,8 @@ mod tests {
             .expect("run entry exists")
             .id
             .clone();
-        let artifacts = compiled.functions
+        let artifacts = compiled
+            .functions
             .into_iter()
             .map(|function| function.artifact.bytes)
             .collect::<Vec<_>>();
@@ -1644,7 +2088,8 @@ mod tests {
             .expect("compiler-produced artifacts pass bytecode verification");
 
         let functions = module.functions();
-        let source_id = functions.iter()
+        let source_id = functions
+            .iter()
             .find_map(|function| {
                 (0..4096_u32)
                     .filter_map(|offset| module.source_location(&function.id, offset))
@@ -1658,75 +2103,104 @@ mod tests {
                     })
             })
             .expect("return statement has a source mapping");
-        let (mut session, handle) = module.create_debugger_session()
+        let (mut session, handle) = module
+            .create_debugger_session()
             .expect("debugger indexes verified source metadata");
-        let breakpoint = session.set_breakpoint(source_id, 2, None, None, None)
+        let breakpoint = session
+            .set_breakpoint(source_id, 2, None, None, None)
             .expect("return statement breakpoint is accepted");
         assert!(breakpoint.verified, "{breakpoint:?}");
 
         let controller = thread::spawn(move || {
-            let event = handle.recv_event_timeout(Duration::from_secs(5))
+            let event = handle
+                .recv_event_timeout(Duration::from_secs(5))
                 .expect("event channel is connected")
                 .expect("breakpoint stops the interpreter");
-            assert!(matches!(event, DebuggerEvent::Stopped(StoppedEvent { reason, .. }) if reason == "breakpoint"));
+            assert!(
+                matches!(event, DebuggerEvent::Stopped(StoppedEvent { reason, .. }) if reason == "breakpoint")
+            );
 
             // The VM instruction root scope remains open during this owner-thread collection.
-            handle.collect_garbage_for_test()
+            handle
+                .collect_garbage_for_test()
                 .expect("live frame registers remain rooted during collection");
 
-            let stack = handle.get_stack().expect("VM frame survives paused collection");
-            let scopes = handle.get_scopes(stack[0].id.clone())
+            let stack = handle
+                .get_stack()
+                .expect("VM frame survives paused collection");
+            let scopes = handle
+                .get_scopes(stack[0].id.clone())
                 .expect("lexical environment survives paused collection");
-            let subject = scopes.iter()
+            let subject = scopes
+                .iter()
                 .flat_map(|scope| &scope.variables)
                 .find(|variable| variable.name == "subject")
                 .expect("parameter is present in the current scope");
             assert_eq!(subject.value.value_type, "object");
-            let object_id = subject.value.object_id.clone()
+            let object_id = subject
+                .value
+                .object_id
+                .clone()
                 .expect("object gets an opaque paused inspection handle");
 
             // A second collection validates the persistent host handle between
             // the variable and descriptor-inspection requests.
-            handle.collect_garbage_for_test()
+            handle
+                .collect_garbage_for_test()
                 .expect("inspection handle remains rooted during collection");
-            let inspected = handle.inspect_object(object_id, 16)
+            let inspected = handle
+                .inspect_object(object_id, 16)
                 .expect("object remains inspectable after GC");
-            assert!(inspected.properties.iter().any(|property| {
-                property.name == "answer" && property.value.preview == "42"
-            }));
+            assert!(
+                inspected.properties.iter().any(|property| {
+                    property.name == "answer" && property.value.preview == "42"
+                })
+            );
 
-            handle.detach().expect("detach releases all inspection handles");
+            handle
+                .detach()
+                .expect("detach releases all inspection handles");
         });
 
         let mut heap = Heap::new(HeapConfig::default()).expect("Runtime heap");
         let object = heap.allocate_object().expect("managed object");
         let roots = heap.open_scope().expect("object initialization root scope");
-        heap.scope_root(roots, object).expect("object is rooted while initialized");
-        let property = heap.intern_property_key("answer").expect("object property key");
-        assert!(heap.define_own_property(
-            object,
-            property,
-            PropertyDescriptor::data(Value::number(42.0), true, true, true),
-        ).expect("object property descriptor is accepted"));
+        heap.scope_root(roots, object)
+            .expect("object is rooted while initialized");
+        let property = heap
+            .intern_property_key("answer")
+            .expect("object property key");
+        assert!(
+            heap.define_own_property(
+                object,
+                property,
+                PropertyDescriptor::data(Value::number(42.0), true, true, true),
+            )
+            .expect("object property descriptor is accepted")
+        );
         heap.close_scope(roots).expect("initialization root closes");
 
-        let report = module.execute_debugged(
-            &mut heap,
-            &entry_id,
-            &[object],
-            &mut ogma_interpreter::NoHost,
-            Default::default(),
-            &mut session,
-        ).expect("debugged execution completes after detach");
+        let report = module
+            .execute_debugged(
+                &mut heap,
+                &entry_id,
+                &[object],
+                &mut ogma_interpreter::NoHost,
+                Default::default(),
+                &mut session,
+            )
+            .expect("debugged execution completes after detach");
         controller.join().expect("GC debugger controller completes");
-        assert!(matches!(report.completion, super::super::ExecutionCompletion::Return(value) if value.value_type() == ValueType::Object));
+        assert!(
+            matches!(report.completion, super::super::ExecutionCompletion::Return(value) if value.value_type() == ValueType::Object)
+        );
 
         let roots = heap.root_snapshot();
         assert_eq!(roots.interpreter_frames, 0);
         assert_eq!(roots.temporary_scopes, 0);
         assert_eq!(roots.persistent_host_roots, 0);
     }
-    
+
     #[test]
     fn debugger_api_identifiers_follow_the_v1_schema() {
         assert!(valid_api_id("source_file"));
@@ -1746,7 +2220,7 @@ mod tests {
         assert!(long_canonical.len() <= 128);
         assert!(valid_api_id(&long_canonical));
     }
-    
+
     #[test]
     fn debugger_session_rejects_a_different_code_generation() {
         let allocator = Allocator::default();
@@ -1759,31 +2233,37 @@ mod tests {
         .expect("debugger test source is valid");
         let parsed = parse(&allocator, &source, ParseRequestOptions::default())
             .expect("debugger test source parses");
-        let compiled = compile_to_bytecode(&parsed)
-            .expect("debugger test source compiles");
-        let artifacts = compiled.functions
+        let compiled = compile_to_bytecode(&parsed).expect("debugger test source compiles");
+        let artifacts = compiled
+            .functions
             .into_iter()
             .map(|function| function.artifact.bytes)
             .collect::<Vec<_>>();
-        let module = ExecutableModule::load(artifacts)
-            .expect("compiler-produced artifacts verify");
-        let (mut session, _handle) = DebuggerSession::new(&module)
-            .expect("debugger session indexes its module");
-        session.validate_module(&module)
+        let module = ExecutableModule::load(artifacts).expect("compiler-produced artifacts verify");
+        let (mut session, _handle) =
+            DebuggerSession::new(&module).expect("debugger session indexes its module");
+        session
+            .validate_module(&module)
             .expect("session accepts the exact module it indexed");
 
-        let function_id = session.module_generations.keys()
+        let function_id = session
+            .module_generations
+            .keys()
             .next()
             .expect("module includes a function")
             .clone();
-        let original = session.module_generations.get(&function_id)
+        let original = session
+            .module_generations
+            .get(&function_id)
             .expect("function has a code generation")
             .clone();
-        session.module_generations.insert(function_id, CodeGeneration {
-            id: "different_generation".to_owned(),
-            version: original.version,
-        });
+        session.module_generations.insert(
+            function_id,
+            CodeGeneration {
+                id: "different_generation".to_owned(),
+                version: original.version,
+            },
+        );
         assert!(session.validate_module(&module).is_err());
     }
-
 }

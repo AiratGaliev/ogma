@@ -21,9 +21,10 @@ static NEXT_VM_FRAME_ID: AtomicU64 = AtomicU64::new(1);
 mod debugger;
 #[cfg(debug_assertions)]
 pub use debugger::{
-    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerPort, DebuggerSession, InlineFrame, InlineFrame,
-    DebugValue, ExceptionEvent, InspectedObject, InspectedProperty, ScopeSnapshot,
-    SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent, VariableSnapshot,
+    Breakpoint, CodeGeneration, DebugValue, DebuggerError, DebuggerEvent, DebuggerHandle,
+    DebuggerPort, DebuggerSession, ExceptionEvent, InlineFrame, InspectedObject, InspectedProperty,
+    ScopeSnapshot, SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent,
+    VariableSnapshot,
 };
 
 #[cfg(not(debug_assertions))]
