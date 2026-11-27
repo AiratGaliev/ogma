@@ -22,6 +22,8 @@ creating a second cache. Create a new Context when a distinct graph is needed.
 - The resolver is responsible for deterministic identity and source retrieval.
   Two requests that resolve to the same canonical ID refer to one module
   instance in the graph.
+- Unique static module requests are resolved and evaluated in first-occurrence
+  source order across both imports and re-exports, not grouped by declaration kind.
 - Resolver failures, duplicate identities with inconsistent descriptors,
   missing dependencies and malformed descriptors fail graph construction
   explicitly. No fallback to ambient host resolution is performed.
