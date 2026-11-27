@@ -1797,9 +1797,9 @@ fn stopped_event(handle: &ogma_interpreter::DebuggerHandle) -> ogma_interpreter:
 #[cfg(debug_assertions)]
 #[test]
 fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
-    let source_text = "function inner(value) {\n  const incremented = value + 1;\n  return incremented;\n}\n\nfunction run(seed) {\n  const initial = seed + 1;\n  const answer = inner(initial);\n  return answer;\n}\n";
+    let source_text = "function run(seed) {\n  function inner(value) {\n    const incremented = value + 1;\n    return incremented;\n  }\n  const initial = seed + 1;\n  const answer = inner(initial);\n  return answer;\n}\n";
     let (module, run_id) = compile_debugger_module("ogm49-step-debugger", source_text);
-    let (source_id, line) = source_breakpoint(&module, &run_id, 8);
+    let (source_id, line) = source_breakpoint(&module, &run_id, 7);
     let (mut session, handle) = module
         .create_debugger_session()
         .expect("verified bytecode source metadata creates a debugger session");
@@ -1829,7 +1829,7 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         let first = stopped_event(&handle);
         assert_eq!(first.reason, "breakpoint");
         let dynamic_breakpoint = handle
-            .set_breakpoint(control_source_id, 9, None, None, None)
+            .set_breakpoint(control_source_id, 8, None, None, None)
             .expect("breakpoints can be added from the control thread while paused");
         assert!(dynamic_breakpoint.verified, "{dynamic_breakpoint:?}");
         assert!(
@@ -1936,14 +1936,19 @@ fn production_debugger_reads_closure_capture_bindings() {
         let scopes = handle
             .get_scopes(stack[0].id.clone())
             .expect("closure lexical scope is readable");
-        assert!(
-            scopes
-                .iter()
-                .flat_map(|scope| &scope.variables)
-                .any(|variable| {
-                    variable.availability == "available" && variable.value.preview == "41"
-                }),
-            "captured binding is read from its closure environment: {scopes:?}"
+        let captured = scopes
+            .iter()
+            .flat_map(|scope| &scope.variables)
+            .find(|variable| variable.name == "count")
+            .expect("closure capture is included in the active root scope");
+        assert_eq!(captured.availability, "available");
+        assert_eq!(captured.value.preview, "41");
+        assert_eq!(
+            handle
+                .evaluate_identifier(stack[0].id.clone(), captured.binding_id.clone())
+                .expect("capture ID resolves without evaluating user code")
+                .preview,
+            "41"
         );
         handle.resume().expect("closure execution resumes");
     });

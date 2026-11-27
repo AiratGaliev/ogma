@@ -1678,23 +1678,56 @@ impl DebuggerSession {
             if !valid_api_id(id) {
                 continue;
             }
-            let bindings = scope.get("bindings").and_then(JsonValue::as_array);
-            let mut variables = Vec::new();
-            if let Some(bindings) = bindings {
-                for binding in bindings.iter().filter_map(JsonValue::as_str) {
-                    if valid_api_id(binding) {
-                        variables.push(self.variable_snapshot(heap, frame, &location, binding)?);
-                    }
+            let parent_id = scope
+                .get("parent")
+                .and_then(JsonValue::as_str)
+                .filter(|parent| valid_api_id(parent))
+                .map(str::to_owned);
+            let mut binding_ids = scope
+                .get("bindings")
+                .and_then(JsonValue::as_array)
+                .map(|bindings| {
+                    bindings
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .filter(|binding| valid_api_id(binding))
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            // Capture IDs live in this function's closure environment, not in
+            // environment.bindings. The compiler records their canonical
+            // variable_locations separately as kind="capture". Expose them in
+            // the function root scope so the Inspector can resolve the alias
+            // through the active frame's capture table.
+            if parent_id.is_none() {
+                if let Some(captures) = frame
+                    .image
+                    .artifact
+                    .manifest
+                    .pointer("/metadata/environment/captures")
+                    .and_then(JsonValue::as_array)
+                {
+                    binding_ids.extend(captures.iter().filter_map(|capture| {
+                        capture.get("id")
+                            .and_then(JsonValue::as_str)
+                            .filter(|capture_id| valid_api_id(capture_id))
+                            .map(str::to_owned)
+                    }));
                 }
+            }
+            binding_ids.sort();
+            binding_ids.dedup();
+
+            let mut variables = Vec::with_capacity(binding_ids.len());
+            for binding in &binding_ids {
+                variables.push(self.variable_snapshot(heap, frame, &location, binding)?);
             }
             result.push(ScopeSnapshot {
                 id: id.to_owned(),
                 name: "Locals".to_owned(),
-                parent_id: scope
-                    .get("parent")
-                    .and_then(JsonValue::as_str)
-                    .filter(|parent| valid_api_id(parent))
-                    .map(str::to_owned),
+                parent_id,
                 variables,
             });
         }
@@ -1838,10 +1871,7 @@ impl DebuggerSession {
             ),
             ValueType::String => {
                 let units = heap.string_utf16(value)?;
-                let text = String::from_utf16_lossy(units);
-                let mut chars = text.chars();
-                let preview = chars.by_ref().take(MAX_PREVIEW_CHARS).collect::<String>();
-                let truncated = chars.next().is_some();
+                let (preview, truncated) = bounded_utf16_preview(units, MAX_PREVIEW_CHARS);
                 ("string", preview, truncated)
             }
             ValueType::Object => ("object", "Object".to_owned(), false),
@@ -1857,12 +1887,13 @@ impl DebuggerSession {
                     truncated: false,
                 });
             }
-            let handle = heap.retain_host_value(value)?;
-            let id = format!("object-{}", self.next_object_id);
-            self.next_object_id = self
+            let next_object_id = self
                 .next_object_id
                 .checked_add(1)
                 .ok_or_else(|| DebuggerError::new("object identity space exhausted"))?;
+            let id = format!("object-{}", self.next_object_id);
+            let handle = heap.retain_host_value(value)?;
+            self.next_object_id = next_object_id;
             self.object_handles.insert(id.clone(), handle);
             Some(id)
         } else {
@@ -1911,7 +1942,7 @@ impl DebuggerSession {
             let keys = heap.own_property_keys(object)?;
             let mut properties = Vec::new();
             for key in keys.iter().take(limit) {
-                let name = String::from_utf16_lossy(heap.property_key_utf16(*key)?);
+                let (name, _) = bounded_utf16_preview(heap.property_key_utf16(*key)?, 1024);
                 if let Some(CompletePropertyDescriptor {
                     value,
                     writable,
@@ -1920,7 +1951,7 @@ impl DebuggerSession {
                 }) = heap.get_own_property_descriptor(object, *key)?
                 {
                     properties.push(InspectedProperty {
-                        name: name.chars().take(1024).collect(),
+                        name,
                         value: self.debug_value(heap, value)?,
                         enumerable,
                         writable,
@@ -1952,6 +1983,22 @@ impl DebuggerSession {
 
 fn frame_id(frame: &VmFrame) -> String {
     format!("frame-{}", frame.id)
+}
+
+fn bounded_utf16_preview(units: &[u16], max_chars: usize) -> (String, bool) {
+    let mut end = 0;
+    let mut chars = 0;
+    while end < units.len() && chars < max_chars {
+        let first = units[end];
+        end += 1;
+        if (0xD800..=0xDBFF).contains(&first)
+            && units.get(end).is_some_and(|next| (0xDC00..=0xDFFF).contains(next))
+        {
+            end += 1;
+        }
+        chars += 1;
+    }
+    (String::from_utf16_lossy(&units[..end]), end < units.len())
 }
 
 fn qualified_source_id(function_id: &str, local_id: &str) -> String {
@@ -2208,6 +2255,23 @@ mod tests {
         assert_eq!(roots.interpreter_frames, 0);
         assert_eq!(roots.temporary_scopes, 0);
         assert_eq!(roots.persistent_host_roots, 0);
+    }
+
+    #[test]
+    fn debugger_string_previews_are_bounded_without_splitting_surrogate_pairs() {
+        let input = "A😀B".encode_utf16().collect::<Vec<_>>();
+        let (preview, truncated) = bounded_utf16_preview(&input, 2);
+        assert_eq!(preview, "A😀");
+        assert!(truncated);
+
+        let (complete, truncated) = bounded_utf16_preview(&input, 3);
+        assert_eq!(complete, "A😀B");
+        assert!(!truncated);
+
+        let long = vec![u16::from(b'x'); 1_000_000];
+        let (preview, truncated) = bounded_utf16_preview(&long, MAX_PREVIEW_CHARS);
+        assert_eq!(preview.chars().count(), MAX_PREVIEW_CHARS);
+        assert!(truncated);
     }
 
     #[test]
