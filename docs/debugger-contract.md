@@ -73,6 +73,8 @@ Runtime/Isolate remains owner-thread-affine. Transport or host-control threads m
 
 A pause request is not an arbitrary asynchronous interruption of native code. The M0 proof checks requests at interpreter instruction boundaries. Native AOT pause latency and safepoint strategy require a separate backend design and capability declaration.
 
+For the register interpreter, a step boundary is a change of source line or function identity, not merely a different bytecode offset or source column on the same line. `stepInto` stops when execution enters another function or reaches another source line. `stepOver` and `stepOut` apply the same source boundary with the corresponding frame-depth constraint. While a step request is active, a breakpoint on the request's base source line is suppressed so the same statement does not immediately re-trigger; breakpoints on other source lines remain eligible.
+
 ## 6. Runtime Inspector and GC roots
 
 The Inspector is separate from the source debugger and consumes opaque object IDs only while the target is paused. Ordinary inspection is descriptor-only:
