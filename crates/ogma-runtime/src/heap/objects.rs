@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use crate::value::{Value, ValueRepr, ValueType};
 
-use super::{CellKind, GcRef, Heap, HeapError, release_vec_capacity, reserve_vec};
+use super::{CellKind, GcRef, Heap, HeapError, HostHandle, release_vec_capacity, reserve_vec};
 
 /// Stable function-table identity. It is metadata, never a code pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -442,7 +442,10 @@ impl Heap {
         match (result, cleanup) {
             (Ok(handle), Ok(())) => Ok(handle),
             (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
+            (Ok(handle), Err(error)) => {
+                let _ = self.release_host_handle(handle);
+                Err(error)
+            }
         }
     }
 

@@ -1952,10 +1952,7 @@ impl Context<'_> {
         self.runtime.heap.stats()
     }
 
-    /// Returns the configured pending-job capacity.
-    ///
-    /// The synchronous M1 interpreter has no job queue; OGM-48 supplies the
-    /// queue/pump and consumes this already-validated limit.
+    /// Returns the configured capacity for the Runtime-owned PromiseJobs queue.
     #[must_use]
     pub const fn pending_job_limit(&self) -> usize {
         self.runtime.config.max_pending_jobs
