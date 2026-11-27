@@ -469,6 +469,38 @@ fn configured_call_depth_is_enforced_by_the_production_runtime() {
 }
 
 #[test]
+fn promise_job_call_depth_limit_uses_interrupted_exit_code() {
+    let directory = TestDirectory::new();
+    let source = directory.path().join("promise-recursion.js");
+    let artifact = directory.path().join("promise-recursion.ogmb");
+    fs::write(
+        &source,
+        "function recurse(value) { return recurse(value + 1); }\nPromise.resolve(0).then(function () { recurse(0); });\n",
+    )
+    .expect("write Promise callback source");
+
+    let compiled = compile(&source, &artifact, None);
+    assert!(
+        compiled.status.success(),
+        "Promise callback compile failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let result = cli(&[
+        "run",
+        artifact.to_str().expect("UTF-8 path"),
+        "--call-depth",
+        "4",
+    ]);
+    assert_eq!(
+        result.status.code(),
+        Some(7),
+        "Promise callback call-depth exhaustion must use the interruption exit code: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
 fn zero_runtime_limits_are_rejected_before_execution() {
     let result = cli(&["run", "missing.ogmb", "--job-capacity", "0"]);
     assert_eq!(result.status.code(), Some(2));
