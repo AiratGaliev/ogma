@@ -217,8 +217,8 @@ fn process_request(request: Value) -> Value {
         }
     };
 
-    let host_call_trace = differential
-        && test.get("hostCallTrace").and_then(Value::as_bool) == Some(true);
+    let host_call_trace =
+        differential && test.get("hostCallTrace").and_then(Value::as_bool) == Some(true);
     let compiled_functions = if host_call_trace {
         // This canonical Core IR fixture exercises the public host-call ABI.
         // The equivalent JavaScript host function is executed by QuickJS-NG.
