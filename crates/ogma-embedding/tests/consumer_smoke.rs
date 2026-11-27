@@ -127,7 +127,7 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let mut context = runtime.create_context().expect("Context");
     context
         .load_module(compile_module(
-            "function invoke(callback, value) { return callback(value); } function schedule(callback) { return Promise.resolve(21).then(callback); }",
+            "function invoke(receiver, callback, value) { receiver.callback = callback; return receiver.callback(value); } function schedule(callback) { return Promise.resolve(21).then(callback); }",
         ))
         .expect("source compiles to verified OGMB");
     let functions = context.functions().expect("function metadata");
@@ -158,13 +158,25 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         .id;
     let callback_module = Rc::clone(&nested_module);
     let callback_function_id = nested_function_id.clone();
+    const REQUIRED_CAPABILITIES: u64 = 1 << 1;
+    context.set_capabilities(REQUIRED_CAPABILITIES);
     let calls = Rc::new(Cell::new(0));
     let callback_calls = Rc::clone(&calls);
+    let method_receivers = Rc::new(Cell::new(0));
+    let observed_method_receivers = Rc::clone(&method_receivers);
+    let undefined_receivers = Rc::new(Cell::new(0));
+    let observed_undefined_receivers = Rc::clone(&undefined_receivers);
     let slot = context
         .register_host_function(
-            HostFunctionDescriptor::new(91, "consumer.double"),
+            HostFunctionDescriptor::new(91, "consumer.double")
+                .requiring_capabilities(REQUIRED_CAPABILITIES),
             move |call, arguments| {
-                assert!(call.this_value().is_undefined());
+                if call.this_value().is_undefined() {
+                    observed_undefined_receivers.set(observed_undefined_receivers.get() + 1);
+                } else {
+                    observed_method_receivers.set(observed_method_receivers.get() + 1);
+                }
+                call.collect().map_err(|_| HostError::CallbackFailed)?;
                 callback_calls.set(callback_calls.get() + 1);
                 let mut nested_host = NoHost;
                 match call
@@ -188,15 +200,21 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let callback_handle = context
         .create_host_function(slot)
         .expect("create persistent JS Function value");
+    let receiver_handle = context
+        .persist(context.create_object().expect("create JS method receiver"))
+        .expect("persist method receiver");
 
     context.collect().expect("host Function value survives GC");
     let callback = context
         .resolve(callback_handle)
         .expect("callback root survives GC");
+    let receiver = context
+        .resolve(receiver_handle)
+        .expect("method receiver root survives GC");
     let direct = context
         .execute(
             &invoke_id,
-            &[callback, Value::number(21.0)],
+            &[receiver, callback, Value::number(21.0)],
             ExecutionRequest::default(),
         )
         .expect("ordinary JavaScript Call dispatches to Rust");
@@ -205,6 +223,8 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         ExecutionCompletion::Return(value) if value.as_number() == Some(42.0)
     ));
     assert_eq!(calls.get(), 1);
+    assert_eq!(method_receivers.get(), 1, "method calls preserve their receiver");
+    assert_eq!(undefined_receivers.get(), 0);
 
     let scheduled = context
         .execute(&schedule_id, &[callback], ExecutionRequest::default())
@@ -222,6 +242,26 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     assert_eq!(pump.jobs_executed, 1);
     assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(calls.get(), 2);
+    assert_eq!(method_receivers.get(), 1);
+    assert_eq!(undefined_receivers.get(), 1, "PromiseJobs use an undefined receiver");
+
+    context.set_capabilities(0);
+    let receiver = context
+        .resolve(receiver_handle)
+        .expect("method receiver remains rooted");
+    let callback = context
+        .resolve(callback_handle)
+        .expect("host callback remains rooted");
+    let denied = context
+        .execute(
+            &invoke_id,
+            &[receiver, callback, Value::number(3.0)],
+            ExecutionRequest::default(),
+        )
+        .expect("capability denial is a JavaScript throw completion");
+    assert!(matches!(denied.completion, ExecutionCompletion::Throw(_)));
+    assert_eq!(calls.get(), 2, "denied capabilities must not invoke Rust");
+    context.set_capabilities(REQUIRED_CAPABILITIES);
 
     context
         .unregister_host_function(slot)
@@ -276,6 +316,9 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     context
         .release(callback_handle)
         .expect("release old callback root");
+    context
+        .release(receiver_handle)
+        .expect("release method receiver root");
     context
         .release(replacement_handle)
         .expect("release replacement root");
