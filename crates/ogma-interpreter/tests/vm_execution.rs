@@ -1819,11 +1819,12 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
             .is_empty()
     );
     let breakpoint = session
-        .set_breakpoint(source_id, line, None, None, None)
+        .set_breakpoint(source_id.clone(), line, None, None, None)
         .expect("source breakpoint can be re-registered");
     assert!(breakpoint.verified, "{breakpoint:?}");
 
     let control_source_id = source_id.clone();
+    let expected_run_id = run_id.clone();
     let controller = std::thread::spawn(move || {
         let first = stopped_event(&handle);
         assert_eq!(first.reason, "breakpoint");
@@ -1838,7 +1839,7 @@ fn production_debugger_supports_source_breakpoints_and_source_level_stepping() {
         );
         let stack = handle.get_stack().expect("paused VM stack is readable");
         assert_eq!(stack.len(), 1);
-        assert_eq!(stack[0].function_id, run_id);
+        assert_eq!(stack[0].function_id, expected_run_id);
         assert!(!stack[0].scope_ids.is_empty());
 
         handle.step_into().expect("step-into command is accepted");

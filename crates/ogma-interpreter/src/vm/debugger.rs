@@ -2194,7 +2194,7 @@ mod tests {
                 &mut heap,
                 &entry_id,
                 &[object],
-                &mut ogma_interpreter::NoHost,
+                &mut super::super::NoHost,
                 Default::default(),
                 &mut session,
             )
