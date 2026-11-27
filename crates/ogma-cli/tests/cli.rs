@@ -433,13 +433,6 @@ fn runtime_throw_and_instruction_budget_have_distinct_exit_codes() {
     ]);
     assert_eq!(stack_limit.status.code(), Some(7));
 
-    let job_capacity = cli(&[
-        "run",
-        throwing_artifact.to_str().expect("UTF-8 path"),
-        "--job-capacity",
-        "1",
-    ]);
-    assert_eq!(job_capacity.status.code(), Some(6));
 }
 
 #[test]
@@ -496,6 +489,38 @@ fn promise_job_call_depth_limit_uses_interrupted_exit_code() {
         result.status.code(),
         Some(7),
         "Promise callback call-depth exhaustion must use the interruption exit code: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn promise_job_capacity_is_enforced_by_the_production_runtime() {
+    let directory = TestDirectory::new();
+    let source = directory.path().join("promise-capacity.js");
+    let artifact = directory.path().join("promise-capacity.ogmb");
+    fs::write(
+        &source,
+        "Promise.resolve(0).then(function () {});\\nPromise.resolve(1).then(function () {});\\n",
+    )
+    .expect("write Promise queue capacity source");
+
+    let compiled = compile(&source, &artifact, None);
+    assert!(
+        compiled.status.success(),
+        "Promise capacity fixture compile failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let result = cli(&[
+        "run",
+        artifact.to_str().expect("UTF-8 path"),
+        "--job-capacity",
+        "1",
+    ]);
+    assert_eq!(
+        result.status.code(),
+        Some(6),
+        "a second pending PromiseJob must exceed the one-job Runtime capacity: {}",
         String::from_utf8_lossy(&result.stderr)
     );
 }
