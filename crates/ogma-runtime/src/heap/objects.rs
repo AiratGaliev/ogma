@@ -2770,9 +2770,7 @@ mod tests {
         }
         let names = |heap: &Heap, keys: &[PropertyKey]| {
             keys.iter()
-                .map(|key| {
-                    String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap()
-                })
+                .map(|key| String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap())
                 .collect::<Vec<_>>()
         };
 
@@ -2804,7 +2802,10 @@ mod tests {
         assert!(truncated);
 
         let (keys, truncated) = heap.own_property_keys_bounded(array, 5).unwrap();
-        assert_eq!(names(&heap, &keys), vec!["1", "3", "length", "extra", "tail"]);
+        assert_eq!(
+            names(&heap, &keys),
+            vec!["1", "3", "length", "extra", "tail"]
+        );
         assert!(!truncated);
         heap.close_scope(roots).unwrap();
     }
