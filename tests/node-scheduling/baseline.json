@@ -85,6 +85,14 @@
         "immediate",
         "unhandled:promise-failure"
       ]
+    },
+    "promiseJobs": {
+      "file": "promise-jobs-reference.mjs",
+      "expected": [
+        "first",
+        "second",
+        "nested"
+      ]
     }
   }
 }
