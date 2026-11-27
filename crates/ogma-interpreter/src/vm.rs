@@ -21,7 +21,7 @@ static NEXT_VM_FRAME_ID: AtomicU64 = AtomicU64::new(1);
 mod debugger;
 #[cfg(debug_assertions)]
 pub use debugger::{
-    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerSession,
+    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerPort, DebuggerSession, InlineFrame, InlineFrame,
     DebugValue, ExceptionEvent, InspectedObject, InspectedProperty, ScopeSnapshot,
     SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent, VariableSnapshot,
 };
@@ -782,6 +782,9 @@ impl ExecutableModule {
     ) -> Result<ExecutionReport, InterpreterError> {
         validate_options(&options)?;
         let mut state = ExecutionState::new(&options)?;
+        debugger
+            .validate_module(self)
+            .map_err(|error| InterpreterError::Debugger(error.to_string()))?;
         debugger
             .activate()
             .map_err(|error| InterpreterError::Debugger(error.to_string()))?;

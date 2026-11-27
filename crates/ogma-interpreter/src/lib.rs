@@ -24,7 +24,7 @@ pub use vm::{
 
 #[cfg(debug_assertions)]
 pub use vm::{
-    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerSession,
+    Breakpoint, CodeGeneration, DebuggerError, DebuggerEvent, DebuggerHandle, DebuggerPort, DebuggerSession, InlineFrame,
     DebugValue, ExceptionEvent, InspectedObject, InspectedProperty, ScopeSnapshot,
     SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent, VariableSnapshot,
 };

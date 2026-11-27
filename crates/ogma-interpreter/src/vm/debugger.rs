@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, SyncSender},
 };
 use std::thread::{self, ThreadId};
@@ -21,6 +21,7 @@ const COMMAND_QUEUE_CAPACITY: usize = 64;
 const MAX_INSPECTION_PROPERTIES: usize = 128;
 const MAX_PREVIEW_CHARS: usize = 1024;
 const MAX_OBJECT_HANDLES: usize = 4096;
+static NEXT_DEBUGGER_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebuggerError {
@@ -81,6 +82,20 @@ pub struct SourceLocation {
     pub scope_id: Option<String>,
     /// Describes this debugger snapshot field.
     pub binding_ids: Vec<String>,
+    /// Inline call-chain metadata; empty for the register interpreter.
+    pub inline_chain: Vec<InlineFrame>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineFrame {
+    /// Stable inlined function identity.
+    pub function: String,
+    /// Stable source file identity.
+    pub file: String,
+    /// Inclusive source start.
+    pub start: SourcePosition,
+    /// Exclusive source end.
+    pub end: SourcePosition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +167,7 @@ pub struct StackFrameSnapshot {
     /// Describes this debugger snapshot field.
     pub function_name: String,
     /// Describes this debugger snapshot field.
-    pub code_generation: Option<CodeGeneration>,
+    pub code_generation: CodeGeneration,
     /// Describes this debugger snapshot field.
     pub location: Option<SourceLocation>,
     /// Describes this debugger snapshot field.
@@ -223,14 +238,16 @@ pub struct InspectedObject {
 
 #[derive(Clone, Debug)]
 struct SourceFile {
+    language: String,
     sha256: Option<String>,
+    canonical_id: String,
 }
 
 #[derive(Clone, Debug)]
 struct SourceRecord {
     function_id: String,
     location: SourceLocation,
-    code_generation: Option<CodeGeneration>,
+    code_generation: CodeGeneration,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -307,9 +324,38 @@ pub struct DebuggerHandle {
     events: Arc<Mutex<Receiver<DebuggerEvent>>>,
     active: Arc<AtomicBool>,
     owner_thread: ThreadId,
+    session_id: String,
 }
 
 impl DebuggerHandle {
+    /// Stable execution backend name.
+    pub fn backend_name(&self) -> &'static str {
+        "interpreter"
+    }
+
+    /// Capabilities supported by the production interpreter backend.
+    pub fn backend_capabilities(&self) -> BTreeMap<String, bool> {
+        [
+            ("pause", true),
+            ("breakpoints", true),
+            ("stepInto", true),
+            ("stepOver", true),
+            ("stepOut", true),
+            ("callStack", true),
+            ("scopes", true),
+            ("safeInspection", self.active.load(Ordering::Acquire)),
+            ("exceptionEvents", true),
+        ]
+        .into_iter()
+        .map(|(name, enabled)| (name.to_owned(), enabled))
+        .collect()
+    }
+
+    /// Unique identity of this execution session.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     fn ensure_remote_thread(&self) -> Result<(), DebuggerError> {
         if thread::current().id() == self.owner_thread {
             return Err(DebuggerError::new(
@@ -459,6 +505,71 @@ impl DebuggerHandle {
     }
 }
 
+/// Backend-neutral debugger command port implemented by execution backends.
+///
+/// No Runtime values, frames, registers, heap layout or mutable objects cross
+/// this boundary; control clients receive immutable snapshots and opaque IDs.
+pub trait DebuggerPort: Send + Sync {
+    /// Returns the backend identifier.
+    fn backend_name(&self) -> &'static str;
+    /// Returns the capability map used by tooling for feature discovery.
+    fn backend_capabilities(&self) -> BTreeMap<String, bool>;
+    /// Returns the unique execution session identity.
+    fn session_id(&self) -> &str;
+    /// Adds a source breakpoint.
+    fn set_breakpoint(&self, source_id: String, line: u32, column: Option<u32>, sha256: Option<String>, code_generation: Option<CodeGeneration>) -> Result<Breakpoint, DebuggerError>;
+    /// Removes a source breakpoint.
+    fn remove_breakpoint(&self, id: String) -> Result<bool, DebuggerError>;
+    /// Lists source breakpoints.
+    fn list_breakpoints(&self) -> Result<Vec<Breakpoint>, DebuggerError>;
+    /// Requests a cooperative pause.
+    fn request_pause(&self) -> Result<(), DebuggerError>;
+    /// Resumes execution.
+    fn resume(&self) -> Result<(), DebuggerError>;
+    /// Steps into the next source-level location.
+    fn step_into(&self) -> Result<(), DebuggerError>;
+    /// Steps over the next source-level location.
+    fn step_over(&self) -> Result<(), DebuggerError>;
+    /// Steps out of the current function.
+    fn step_out(&self) -> Result<(), DebuggerError>;
+    /// Returns immutable active call-stack snapshots.
+    fn get_stack(&self) -> Result<Vec<StackFrameSnapshot>, DebuggerError>;
+    /// Returns lexical scopes in one paused frame.
+    fn get_scopes(&self, frame_id: String) -> Result<Vec<ScopeSnapshot>, DebuggerError>;
+    /// Returns variables from one paused lexical scope.
+    fn get_variables(&self, frame_id: String, scope_id: String) -> Result<Vec<VariableSnapshot>, DebuggerError>;
+    /// Resolves a single identifier or binding ID without evaluating user code.
+    fn evaluate_identifier(&self, frame_id: String, identifier: String) -> Result<DebugValue, DebuggerError>;
+    /// Inspects bounded own data-property descriptors.
+    fn inspect_object(&self, object_id: String, limit: usize) -> Result<InspectedObject, DebuggerError>;
+    /// Returns the latest stop or exception event.
+    fn event_message(&self) -> Result<Option<DebuggerEvent>, DebuggerError>;
+    /// Detaches this controller and releases retained inspection handles.
+    fn detach(&self) -> Result<(), DebuggerError>;
+}
+
+impl DebuggerPort for DebuggerHandle {
+    fn backend_name(&self) -> &'static str { DebuggerHandle::backend_name(self) }
+    fn backend_capabilities(&self) -> BTreeMap<String, bool> { DebuggerHandle::backend_capabilities(self) }
+    fn session_id(&self) -> &str { DebuggerHandle::session_id(self) }
+    fn set_breakpoint(&self, source_id: String, line: u32, column: Option<u32>, sha256: Option<String>, code_generation: Option<CodeGeneration>) -> Result<Breakpoint, DebuggerError> { DebuggerHandle::set_breakpoint(self, source_id, line, column, sha256, code_generation) }
+    fn remove_breakpoint(&self, id: String) -> Result<bool, DebuggerError> { DebuggerHandle::remove_breakpoint(self, id) }
+    fn list_breakpoints(&self) -> Result<Vec<Breakpoint>, DebuggerError> { DebuggerHandle::list_breakpoints(self) }
+    fn request_pause(&self) -> Result<(), DebuggerError> { DebuggerHandle::request_pause(self) }
+    fn resume(&self) -> Result<(), DebuggerError> { DebuggerHandle::resume(self) }
+    fn step_into(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_into(self) }
+    fn step_over(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_over(self) }
+    fn step_out(&self) -> Result<(), DebuggerError> { DebuggerHandle::step_out(self) }
+    fn get_stack(&self) -> Result<Vec<StackFrameSnapshot>, DebuggerError> { DebuggerHandle::get_stack(self) }
+    fn get_scopes(&self, frame_id: String) -> Result<Vec<ScopeSnapshot>, DebuggerError> { DebuggerHandle::get_scopes(self, frame_id) }
+    fn get_variables(&self, frame_id: String, scope_id: String) -> Result<Vec<VariableSnapshot>, DebuggerError> { DebuggerHandle::get_variables(self, frame_id, scope_id) }
+    fn evaluate_identifier(&self, frame_id: String, identifier: String) -> Result<DebugValue, DebuggerError> { DebuggerHandle::evaluate_identifier(self, frame_id, identifier) }
+    fn inspect_object(&self, object_id: String, limit: usize) -> Result<InspectedObject, DebuggerError> { DebuggerHandle::inspect_object(self, object_id, limit) }
+    fn event_message(&self) -> Result<Option<DebuggerEvent>, DebuggerError> { DebuggerHandle::event_message(self) }
+    fn detach(&self) -> Result<(), DebuggerError> { DebuggerHandle::detach(self) }
+}
+
+
 /// Owner-thread adapter state. Create it on the same thread that owns the Runtime.
 pub struct DebuggerSession {
     owner_thread: ThreadId,
@@ -468,8 +579,9 @@ pub struct DebuggerSession {
     state: SessionState,
     breakpoints: BTreeMap<String, Breakpoint>,
     next_breakpoint_id: u64,
-    source_files: HashMap<String, SourceFile>,
+    source_files: HashMap<(String, String), SourceFile>,
     source_records: Vec<SourceRecord>,
+    module_generations: HashMap<String, CodeGeneration>,
     pause_requested: bool,
     step: Option<StepRequest>,
 
@@ -504,6 +616,7 @@ impl DebuggerSession {
             next_breakpoint_id: 1,
             source_files: HashMap::new(),
             source_records: Vec::new(),
+            module_generations: HashMap::new(),
             pause_requested: false,
             step: None,
 
@@ -518,8 +631,34 @@ impl DebuggerSession {
             events: Arc::new(Mutex::new(event_receiver)),
             active: session.active.clone(),
             owner_thread,
+            session_id: format!("debug-{}", NEXT_DEBUGGER_SESSION_ID.fetch_add(1, Ordering::Relaxed)),
         };
         Ok((session, handle))
+    }
+
+    /// Verifies that a session is attached to the exact code generations it indexed.
+    pub(super) fn validate_module(&self, module: &ExecutableModule) -> Result<(), DebuggerError> {
+        self.ensure_owner()?;
+        if module.functions.len() != self.module_generations.len() {
+            return Err(DebuggerError::new(
+                "debugger session belongs to a different executable module",
+            ));
+        }
+        for image in module.functions.values() {
+            let generation = code_generation(image).ok_or_else(|| {
+                DebuggerError::new(format!(
+                    "function {:?} has no valid Debugger API code-generation identity",
+                    image.id
+                ))
+            })?;
+            if self.module_generations.get(&image.id) != Some(&generation) {
+                return Err(DebuggerError::new(format!(
+                    "debugger session code generation does not match function {:?}",
+                    image.id
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn ensure_owner(&self) -> Result<(), DebuggerError> {
@@ -530,34 +669,93 @@ impl DebuggerSession {
     }
 
     fn index_module(&mut self, module: &ExecutableModule) -> Result<(), DebuggerError> {
-        // Index every source identity before resolving file digests from instruction maps.
+        // Core IR source-file IDs are local to a function. Index them with their
+        // function identity first, then derive a session-wide SourceId only when
+        // the same local ID is reused for different source contents.
+        let mut source_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for image in module.functions.values() {
+            if !valid_api_id(&image.id) {
+                return Err(DebuggerError::new(format!(
+                    "function identity {:?} does not satisfy the Debugger API v1 id contract",
+                    image.id
+                )));
+            }
             if let Some(files) = image.artifact.source_map.as_ref()
                 .and_then(|map| map.get("files"))
                 .and_then(JsonValue::as_array)
             {
                 for file in files {
-                    let Some(id) = file.get("id").and_then(JsonValue::as_str) else { continue };
-                    let source_file = SourceFile {
-                        sha256: file.get("sha256").and_then(JsonValue::as_str).map(str::to_owned),
+                    let Some(id) = file.get("id").and_then(JsonValue::as_str) else {
+                        return Err(DebuggerError::new("source file metadata is missing its local id"));
                     };
-                    if let Some(existing) = self.source_files.get(id) {
-                        if existing.sha256 != source_file.sha256 {
-                            return Err(DebuggerError::new(format!(
-                                "source identity {id:?} has conflicting digest metadata across functions"
-                            )));
-                        }
-                    } else {
-                        self.source_files.insert(id.to_owned(), source_file);
+                    let _path = file.get("path").and_then(JsonValue::as_str)
+                        .filter(|value| !value.is_empty() && value.chars().count() <= 4096)
+                        .ok_or_else(|| DebuggerError::new(format!("source file {id:?} has an invalid path")))?;
+                    let language = file.get("language").and_then(JsonValue::as_str)
+                        .filter(|value| matches!(*value, "javascript" | "typescript" | "json" | "synthetic"))
+                        .ok_or_else(|| DebuggerError::new(format!("source file {id:?} has an invalid language")))?;
+                    if !valid_api_id(id) {
+                        return Err(DebuggerError::new(format!(
+                            "source file id {id:?} does not satisfy the Debugger API v1 id contract"
+                        )));
                     }
+                    let sha256 = file.get("sha256").and_then(JsonValue::as_str).map(str::to_owned);
+                    if sha256.as_deref().is_some_and(|digest| {
+                        digest.len() != 64
+                            || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    }) {
+                        return Err(DebuggerError::new(format!("source file {id:?} has an invalid SHA-256 digest")));
+                    }
+                    let key = (image.id.clone(), id.to_owned());
+                    if self.source_files.insert(key.clone(), SourceFile {
+                        language: language.to_owned(),
+                        sha256,
+                        canonical_id: id.to_owned(),
+                    }).is_some() {
+                        return Err(DebuggerError::new(format!(
+                            "function {:?} contains duplicate local source file id {id:?}",
+                            image.id
+                        )));
+                    }
+                    source_groups.entry(id.to_owned()).or_default().push(key);
+                }
+            }
+        }
+
+        for (local_id, entries) in source_groups {
+            let Some(first_key) = entries.first() else { continue };
+            let first = self.source_files.get(first_key)
+                .ok_or_else(|| DebuggerError::new("indexed source file disappeared"))?;
+            let collides = entries.iter().skip(1).any(|key| {
+                let Some(candidate) = self.source_files.get(key) else { return true };
+                if candidate.language != first.language {
+                    return true;
+                }
+                match (&candidate.sha256, &first.sha256) {
+                    (Some(left), Some(right)) => left != right,
+                    _ => true,
+                }
+            });
+            if collides {
+                for key in entries {
+                    let canonical_id = qualified_source_id(&key.0, &local_id);
+                    let file = self.source_files.get_mut(&key)
+                        .ok_or_else(|| DebuggerError::new("indexed source file disappeared"))?;
+                    file.canonical_id = canonical_id;
                 }
             }
         }
         for image in module.functions.values() {
-            let code_generation = code_generation(image);
+            let code_generation = code_generation(image).ok_or_else(|| {
+                DebuggerError::new(format!(
+                    "function {:?} has no valid Debugger API code-generation identity",
+                    image.id
+                ))
+            })?;
+            self.module_generations.insert(image.id.clone(), code_generation.clone());
             for instruction in &image.artifact.instructions {
                 if let Some(location) = image.location(instruction.offset) {
-                    let source = self.parse_source_location(location.source.as_ref());
+                    let source = self.parse_source_location(&image.id, location.source.as_ref());
                     if let Some(source) = source.filter(|item| item.origin == "user" && item.source_id.is_some()) {
                         self.source_records.push(SourceRecord {
                             function_id: image.id.clone(),
@@ -571,25 +769,65 @@ impl DebuggerSession {
         Ok(())
     }
 
-    fn parse_source_location(&self, value: Option<&JsonValue>) -> Option<SourceLocation> {
+    fn parse_source_location(
+        &self,
+        function_id: &str,
+        value: Option<&JsonValue>,
+    ) -> Option<SourceLocation> {
         let value = value?;
         let origin = value.get("origin")?.as_str()?.to_owned();
-        let source_id = value.get("file").and_then(JsonValue::as_str).map(str::to_owned);
-        let source_sha256 = source_id.as_ref()
-            .and_then(|id| self.source_files.get(id))
-            .and_then(|file| file.sha256.clone());
+        let local_source_id = value.get("file").and_then(JsonValue::as_str).map(str::to_owned);
+        let source_file = local_source_id.as_ref()
+            .and_then(|id| self.source_files.get(&(function_id.to_owned(), id.clone())));
+        let source_id = source_file.map(|file| file.canonical_id.clone());
+        let start = parse_position(value.get("start"));
+        let end = parse_position(value.get("end"));
+        let reason = value.get("reason").and_then(JsonValue::as_str).map(str::to_owned);
+        match origin.as_str() {
+            "user" if source_id.as_deref().is_some_and(valid_api_id)
+                && start.is_some() && end.is_some() => {}
+            "generated" if reason.as_deref().is_some_and(|text| !text.is_empty() && text.len() <= 512) => {}
+            _ => return None,
+        }
+        let source_sha256 = source_file.and_then(|file| file.sha256.clone());
+        let scope_id = value.get("scope").and_then(JsonValue::as_str)
+            .filter(|id| valid_api_id(id)).map(str::to_owned);
+        let mut binding_ids = value.get("bindings")
+            .and_then(JsonValue::as_array)
+            .map(|items| items.iter().filter_map(JsonValue::as_str)
+                .filter(|id| valid_api_id(id)).map(str::to_owned).collect::<Vec<_>>())
+            .unwrap_or_default();
+        binding_ids.sort();
+        binding_ids.dedup();
+        let inline_chain = value.get("inline_chain")
+            .and_then(JsonValue::as_array)
+            .map(|items| items.iter().take(64).filter_map(|item| {
+                let function = item.get("function").and_then(JsonValue::as_str)?;
+                let local_file = item.get("file").and_then(JsonValue::as_str)?;
+                if !valid_api_id(function) {
+                    return None;
+                }
+                let file = self.source_files
+                    .get(&(function_id.to_owned(), local_file.to_owned()))?
+                    .canonical_id.clone();
+                Some(InlineFrame {
+                    function: function.to_owned(),
+                    file,
+                    start: parse_position(item.get("start"))?,
+                    end: parse_position(item.get("end"))?,
+                })
+            }).collect::<Vec<_>>())
+            .unwrap_or_default();
         Some(SourceLocation {
             origin,
             source_id,
             source_sha256,
-            start: parse_position(value.get("start")),
-            end: parse_position(value.get("end")),
-            reason: value.get("reason").and_then(JsonValue::as_str).map(str::to_owned),
-            scope_id: value.get("scope").and_then(JsonValue::as_str).map(str::to_owned),
-            binding_ids: value.get("bindings")
-                .and_then(JsonValue::as_array)
-                .map(|items| items.iter().filter_map(JsonValue::as_str).map(str::to_owned).collect())
-                .unwrap_or_default(),
+            start,
+            end,
+            reason,
+            scope_id,
+            binding_ids,
+            inline_chain,
         })
     }
 
@@ -642,13 +880,15 @@ impl DebuggerSession {
         requested_sha: Option<String>,
         requested_generation: Option<CodeGeneration>,
     ) -> Result<Breakpoint, DebuggerError> {
-        if source_id.is_empty() {
-            return Err(DebuggerError::new("source id must not be empty"));
+        if !valid_api_id(&source_id) {
+            return Err(DebuggerError::new(
+                "source id does not satisfy the Debugger API v1 id contract",
+            ));
         }
         if line == 0 {
             return Err(DebuggerError::new("source line numbers are one-based and must be positive"));
         }
-        let source_file = self.source_files.get(&source_id);
+        let source_file = self.source_files.values().find(|file| file.canonical_id == source_id);
         let mut verified = source_file.is_some();
         let mut message = if verified { None } else { Some("unknown source file".to_owned()) };
         if let Some(digest) = requested_sha.as_deref() {
@@ -670,7 +910,7 @@ impl DebuggerSession {
                 && location.start.is_some_and(|start| {
                     start.line == line && column.is_none_or(|value| value == start.column)
                 })
-                && requested_generation.as_ref().is_none_or(|wanted| record.code_generation.as_ref() == Some(wanted))
+                && requested_generation.as_ref().is_none_or(|wanted| &record.code_generation == wanted)
         });
         if matching.is_none() && verified {
             verified = false;
@@ -681,7 +921,7 @@ impl DebuggerSession {
             });
         }
 
-        let generation = requested_generation.or_else(|| matching.and_then(|item| item.code_generation.clone()));
+        let generation = requested_generation.or_else(|| matching.map(|item| item.code_generation.clone()));
         let id = format!("bp-{}", self.next_breakpoint_id);
         self.next_breakpoint_id = self.next_breakpoint_id.checked_add(1)
             .ok_or_else(|| DebuggerError::new("breakpoint identity space exhausted"))?;
@@ -780,7 +1020,7 @@ impl DebuggerSession {
             return Ok(());
         }
 
-        let location = current_location.and_then(|item| self.parse_source_location(item.source.as_ref()));
+        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
         let key = location.as_ref().and_then(|item| source_key(&current.image.id, item));
         let previous = self.last_instruction.insert(current.id, (current.pc, key.clone()));
         let changed = previous.as_ref().is_none_or(|(_, previous_key)| *previous_key != key);
@@ -828,7 +1068,7 @@ impl DebuggerSession {
         if self.state == SessionState::Detached {
             return Ok(());
         }
-        let location = current_location.and_then(|item| self.parse_source_location(item.source.as_ref()));
+        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
         let event = ExceptionEvent {
             value: self.debug_value(heap, value)?,
             frame_id: frame_id(current),
@@ -892,7 +1132,7 @@ impl DebuggerSession {
                 let _ = reply.send(Ok(self.breakpoints.values().cloned().collect()));
             }
             Command::Resume { reply } => {
-                let result = self.resume_from_pause(heap, current);
+                let result = self.resume_from_pause(heap);
                 let _ = reply.send(result);
             }
             Command::Step { mode, reply } => {
@@ -900,7 +1140,12 @@ impl DebuggerSession {
                 let _ = reply.send(result);
             }
             Command::GetStack { reply } => {
-                let _ = reply.send(Ok(self.stack_snapshot(callers, current, current_location)));
+                let result = if self.state == SessionState::Paused {
+                    self.stack_snapshot(callers, current, current_location)
+                } else {
+                    Err(DebuggerError::new("call-stack inspection requires a paused execution"))
+                };
+                let _ = reply.send(result);
             }
             Command::GetScopes { frame_id: requested, reply } => {
                 let result = self.scopes(heap, callers, current, current_location, &requested);
@@ -948,7 +1193,7 @@ impl DebuggerSession {
         Ok(())
     }
 
-    fn resume_from_pause(&mut self, heap: &mut Heap, current: &VmFrame) -> Result<(), DebuggerError> {
+    fn resume_from_pause(&mut self, heap: &mut Heap) -> Result<(), DebuggerError> {
         if self.state != SessionState::Paused {
             return Err(DebuggerError::new("execution is not paused"));
         }
@@ -971,7 +1216,7 @@ impl DebuggerSession {
             return Err(DebuggerError::new("execution is not paused"));
         }
         self.release_object_handles(heap)?;
-        let location = current_location.and_then(|item| self.parse_source_location(item.source.as_ref()));
+        let location = current_location.and_then(|item| self.parse_source_location(&current.image.id, item.source.as_ref()));
         self.step = Some(StepRequest {
             mode,
             base_depth: callers.len() + 1,
@@ -996,7 +1241,7 @@ impl DebuggerSession {
                     self.source_records.iter().any(|record| {
                         record.function_id == function_id
                             && record.location == *location
-                            && record.code_generation.as_ref() == Some(generation)
+                            && &record.code_generation == generation
                     })
                 })
         })
@@ -1007,35 +1252,50 @@ impl DebuggerSession {
         callers: &[VmFrame],
         current: &VmFrame,
         current_location: Option<&InstructionLocation>,
-    ) -> Vec<StackFrameSnapshot> {
+    ) -> Result<Vec<StackFrameSnapshot>, DebuggerError> {
         let mut result = Vec::with_capacity(callers.len() + 1);
-        result.push(self.frame_snapshot(current, current_location));
+        result.push(self.frame_snapshot(current, current_location)?);
         for frame in callers.iter().rev() {
             let location = frame.last_offset.and_then(|offset| frame.image.location(offset));
-            result.push(self.frame_snapshot(frame, location.as_ref()));
+            result.push(self.frame_snapshot(frame, location.as_ref())?);
         }
-        result
+        Ok(result)
     }
 
-    fn frame_snapshot(&self, frame: &VmFrame, location: Option<&InstructionLocation>) -> StackFrameSnapshot {
-        let generation = code_generation(&frame.image);
-        let scope_ids = location
+    fn frame_snapshot(&self, frame: &VmFrame, location: Option<&InstructionLocation>) -> Result<StackFrameSnapshot, DebuggerError> {
+        let generation = code_generation(&frame.image).ok_or_else(|| {
+            DebuggerError::new(format!(
+                "function {:?} has no valid Debugger API code-generation identity",
+                frame.image.id
+            ))
+        })?;
+        let mut scope_ids = location
             .into_iter()
             .flat_map(|item| item.lexical_scopes.iter())
             .filter_map(|scope| scope.get("id").and_then(JsonValue::as_str))
+            .filter(|id| valid_api_id(id))
             .map(str::to_owned)
-            .collect();
+            .collect::<Vec<_>>();
+        scope_ids.sort();
+        scope_ids.dedup();
         let source_location = location
-            .and_then(|item| self.parse_source_location(item.source.as_ref()));
-        StackFrameSnapshot {
+            .and_then(|item| self.parse_source_location(&frame.image.id, item.source.as_ref()));
+        Ok(StackFrameSnapshot {
             id: frame_id(frame),
             function_id: frame.image.id.clone(),
-            function_name: frame.image.name.clone(),
+            function_name: {
+                let name = if frame.image.name.is_empty() {
+                    "(anonymous)"
+                } else {
+                    frame.image.name.as_str()
+                };
+                name.chars().take(512).collect()
+            },
             code_generation: generation,
             location: source_location,
             scope_ids,
             backend: "interpreter".to_owned(),
-        }
+        })
     }
 
     fn scopes(
@@ -1055,17 +1315,23 @@ impl DebuggerSession {
         let mut result = Vec::new();
         for scope in &location.lexical_scopes {
             let Some(id) = scope.get("id").and_then(JsonValue::as_str) else { continue };
+            if !valid_api_id(id) {
+                continue;
+            }
             let bindings = scope.get("bindings").and_then(JsonValue::as_array);
             let mut variables = Vec::new();
             if let Some(bindings) = bindings {
                 for binding in bindings.iter().filter_map(JsonValue::as_str) {
-                    variables.push(self.variable_snapshot(heap, frame, &location, binding)?);
+                    if valid_api_id(binding) {
+                        variables.push(self.variable_snapshot(heap, frame, &location, binding)?);
+                    }
                 }
             }
             result.push(ScopeSnapshot {
                 id: id.to_owned(),
                 name: "Locals".to_owned(),
-                parent_id: scope.get("parent").and_then(JsonValue::as_str).map(str::to_owned),
+                parent_id: scope.get("parent").and_then(JsonValue::as_str)
+                    .filter(|parent| valid_api_id(parent)).map(str::to_owned),
                 variables,
             });
         }
@@ -1087,8 +1353,9 @@ impl DebuggerSession {
             .and_then(JsonValue::as_array)
             .and_then(|items| items.iter().find(|item| item.get("id").and_then(JsonValue::as_str) == Some(binding_id)));
         let descriptor = binding.or(capture);
-        let name = descriptor.and_then(|item| item.get("name")).and_then(JsonValue::as_str)
-            .unwrap_or(binding_id).to_owned();
+        let raw_name = descriptor.and_then(|item| item.get("name")).and_then(JsonValue::as_str)
+            .filter(|name| !name.is_empty()).unwrap_or(binding_id);
+        let name = raw_name.chars().take(512).collect::<String>();
         let mutable = descriptor.and_then(|item| item.get("mutable")).and_then(JsonValue::as_bool).unwrap_or(false);
         let value = self.read_binding(heap, frame, location, binding_id)?;
         let (availability, debug_value) = match value {
@@ -1223,7 +1490,7 @@ impl DebuggerSession {
                     heap.get_own_property_descriptor(object, *key)?
                 {
                     properties.push(InspectedProperty {
-                        name,
+                        name: name.chars().take(1024).collect(),
                         value: self.debug_value(heap, value)?,
                         enumerable,
                         writable,
@@ -1251,19 +1518,52 @@ fn frame_id(frame: &VmFrame) -> String {
     format!("frame-{}", frame.id)
 }
 
+fn qualified_source_id(function_id: &str, local_id: &str) -> String {
+    let raw = format!("fn_{}_{}_{}_{}", function_id.len(), function_id, local_id.len(), local_id);
+    if raw.len() <= 128 {
+        return raw;
+    }
+    let hash = raw.as_bytes().iter().fold(0xcbf29ce484222325_u64, |state, byte| {
+        (state ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    });
+    let prefix = raw.chars().take(111).collect::<String>();
+    format!("{prefix}_{hash:016x}")
+}
+
+fn valid_api_id(value: &str) -> bool {
+    if value.is_empty() || value.len() > 128 || !value.is_ascii() {
+        return false;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else { return false };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | ':' | '-')
+        })
+}
+
 fn parse_position(value: Option<&JsonValue>) -> Option<SourcePosition> {
     let value = value?;
+    let line = u32::try_from(value.get("line")?.as_u64()?).ok()?;
+    if line == 0 {
+        return None;
+    }
     Some(SourcePosition {
-        line: u32::try_from(value.get("line")?.as_u64()?).ok()?,
+        line,
         column: u32::try_from(value.get("column")?.as_u64()?).ok()?,
     })
 }
 
 fn code_generation(image: &FunctionImage) -> Option<CodeGeneration> {
     let metadata = image.artifact.manifest.get("metadata")?;
+    let id = metadata.pointer("/code_generation/id")?.as_str()?;
+    let version = metadata.pointer("/code_generation/version")?.as_str()?;
+    if !valid_api_id(id) || version.is_empty() || version.len() > 128 {
+        return None;
+    }
     Some(CodeGeneration {
-        id: metadata.pointer("/code_generation/id")?.as_str()?.to_owned(),
-        version: metadata.pointer("/code_generation/version")?.as_str()?.to_owned(),
+        id: id.to_owned(),
+        version: version.to_owned(),
     })
 }
 
@@ -1426,4 +1726,64 @@ mod tests {
         assert_eq!(roots.temporary_scopes, 0);
         assert_eq!(roots.persistent_host_roots, 0);
     }
+    
+    #[test]
+    fn debugger_api_identifiers_follow_the_v1_schema() {
+        assert!(valid_api_id("source_file"));
+        assert!(valid_api_id("_module:entry-1.0"));
+        assert!(valid_api_id(&format!("a{}", "b".repeat(127))));
+        assert!(!valid_api_id(""));
+        assert!(!valid_api_id("1starts_with_digit"));
+        assert!(!valid_api_id("contains space"));
+        assert!(!valid_api_id("contains/slash"));
+        assert!(!valid_api_id("a".repeat(129).as_str()));
+        assert!(!valid_api_id("éclair"));
+        let canonical_a = qualified_source_id("a_b", "c");
+        let canonical_b = qualified_source_id("a", "b_c");
+        assert_ne!(canonical_a, canonical_b);
+        assert!(valid_api_id(&canonical_a));
+        let long_canonical = qualified_source_id(&"f".repeat(128), &"s".repeat(128));
+        assert!(long_canonical.len() <= 128);
+        assert!(valid_api_id(&long_canonical));
+    }
+    
+    #[test]
+    fn debugger_session_rejects_a_different_code_generation() {
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "ogm49-generation-identity",
+            "memory:///ogm49-generation-identity.js",
+            None,
+            "function run() { return 1; }",
+        )
+        .expect("debugger test source is valid");
+        let parsed = parse(&allocator, &source, ParseRequestOptions::default())
+            .expect("debugger test source parses");
+        let compiled = compile_to_bytecode(&parsed)
+            .expect("debugger test source compiles");
+        let artifacts = compiled.functions
+            .into_iter()
+            .map(|function| function.artifact.bytes)
+            .collect::<Vec<_>>();
+        let module = ExecutableModule::load(artifacts)
+            .expect("compiler-produced artifacts verify");
+        let (mut session, _handle) = DebuggerSession::new(&module)
+            .expect("debugger session indexes its module");
+        session.validate_module(&module)
+            .expect("session accepts the exact module it indexed");
+
+        let function_id = session.module_generations.keys()
+            .next()
+            .expect("module includes a function")
+            .clone();
+        let original = session.module_generations.get(&function_id)
+            .expect("function has a code generation")
+            .clone();
+        session.module_generations.insert(function_id, CodeGeneration {
+            id: "different_generation".to_owned(),
+            version: original.version,
+        });
+        assert!(session.validate_module(&module).is_err());
+    }
+
 }

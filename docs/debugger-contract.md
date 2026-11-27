@@ -26,6 +26,8 @@ A source file has a stable SourceId, normalized repository-relative POSIX path, 
 
 A code-generation identity is the pair (id, version) from the function manifest. Breakpoints/frames are associated with that generation and with the source digest when supplied. A stale generation or digest must be reported as an unverified breakpoint, never silently rebound.
 
+Core IR v1 source-file IDs are function-local. The production interpreter indexes each entry by `(functionId, localFileId)` before exposing it through the session-wide Debugger API. When the same local ID occurs in multiple functions, the adapter reuses it only when all occurrences have the same language and the same present SHA-256; otherwise it derives a deterministic, function-qualified API ID. Missing hashes are not treated as proof that two entries identify the same source. The descriptive path is never used as source identity. This prevents same-string local IDs from silently binding a breakpoint to another file while keeping a shared file ID stable across functions when content identity is verified.
+
 ## 3. Frontend → Core IR → bytecode propagation
 
 The frontend owns stable source identity, source spans and semantic binding IDs. Core IR v1 remains the semantic source of truth for function-local bindings, captures and instruction/terminator source provenance. A lowering pass must preserve or explicitly remap this provenance; it must not assign a nearby user line to generated code.
@@ -48,7 +50,7 @@ A lexical scope in one function artifact is function-local. References to an out
 
 ## 4. Backend-neutral API
 
-The stable facade is DebuggerPort. The production Rust interpreter exposes the same backend-neutral operations through a thread-safe `DebuggerHandle` and owner-thread `DebuggerSession`; only immutable DTOs cross the control boundary. Public results are immutable snapshots:
+The stable facade is DebuggerPort. The production Rust interpreter implements the backend-neutral `DebuggerPort` trait through a thread-safe `DebuggerHandle` and owner-thread `DebuggerSession`; only immutable DTOs cross the control boundary. The handle reports its backend name, session identity and capability map. Public results are immutable snapshots:
 
 | DTO | Responsibility |
 |---|---|

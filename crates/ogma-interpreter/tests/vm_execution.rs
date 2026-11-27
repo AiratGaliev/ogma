@@ -11,7 +11,7 @@ use ogma_interpreter::{
     ExecutionOptions, Host, HostError, InterpreterError, NoHost,
 };
 #[cfg(debug_assertions)]
-use ogma_interpreter::DebuggerEvent;
+use ogma_interpreter::{DebuggerEvent, DebuggerPort};
 use ogma_runtime::{Heap, HeapConfig, Value, ValueType};
 #[cfg(debug_assertions)]
 use ogma_runtime::PropertyDescriptor;
@@ -1964,6 +1964,11 @@ fn production_debugger_inspects_own_data_descriptors_without_user_code() {
     let controller = std::thread::spawn(move || {
         let stopped = stopped_event(&handle);
         assert_eq!(stopped.reason, "breakpoint");
+        assert_eq!(
+            handle.backend_capabilities().get("safeInspection"),
+            Some(&true),
+            "the heap-backed inspector is advertised only while the Runtime session is active"
+        );
         let stack = handle.get_stack().expect("paused object frame is available");
         let scopes = handle
             .get_scopes(stack[0].id.clone())
@@ -2071,4 +2076,34 @@ fn production_debugger_pauses_at_safe_points_and_reports_uncaught_exceptions() {
         ExecutionCompletion::Throw(value) => assert_eq!(value.as_number(), Some(17.0)),
         completion => panic!("expected the original throw completion, got {completion:?}"),
     }
+}
+
+
+#[cfg(debug_assertions)]
+#[test]
+fn production_debugger_implements_backend_neutral_port_contract() {
+    let (module, _) = compile_debugger_module(
+        "ogm49-port-contract",
+        "function run() {\n  return 1;\n}\n",
+    );
+    let (_session, handle) = module
+        .create_debugger_session()
+        .expect("production debugger session is initialized");
+    let port: &dyn DebuggerPort = &handle;
+    assert_eq!(port.backend_name(), "interpreter");
+    assert!(port.session_id().starts_with("debug-"));
+    let capabilities = port.backend_capabilities();
+    for capability in [
+        "pause",
+        "breakpoints",
+        "stepInto",
+        "stepOver",
+        "stepOut",
+        "callStack",
+        "scopes",
+        "exceptionEvents",
+    ] {
+        assert_eq!(capabilities.get(capability), Some(&true), "{capability}");
+    }
+    assert_eq!(capabilities.get("safeInspection"), Some(&false));
 }
