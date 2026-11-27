@@ -937,10 +937,10 @@ impl Heap {
         for (_, key) in indices.into_sorted_vec() {
             result.push(self.property_key_for_index(key));
         }
-        if result.len() < capacity {
-            if let Some(key) = length_key {
-                result.push(key);
-            }
+        if result.len() < capacity
+            && let Some(key) = length_key
+        {
+            result.push(key);
         }
         for key in strings.into_iter().take(capacity - result.len()) {
             result.push(self.property_key_for_index(key));
