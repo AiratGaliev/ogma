@@ -5,6 +5,7 @@
 //! arrays, function closures and lexical binding cells. Accessors, Symbols,
 //! Proxy, classes and primitive boxing are intentionally not claimed.
 
+use std::collections::BinaryHeap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -866,6 +867,86 @@ impl Heap {
             result.push(self.property_key_for_index(key));
         }
         Ok(result)
+    }
+
+    /// Returns at most `limit` own keys in ECMAScript property order.
+    ///
+    /// Integer-index keys are selected in ascending order, followed by an
+    /// array's special `length` key and then string keys in insertion order.
+    /// The method keeps temporary storage bounded by `limit`, even when the
+    /// object itself has many more properties. The boolean is true when keys
+    /// were omitted from the returned prefix.
+    pub fn own_property_keys_bounded(
+        &mut self,
+        object: Value,
+        limit: usize,
+    ) -> Result<(Vec<PropertyKey>, bool), HeapError> {
+        let index = self.object_index(object)?;
+        let is_array = matches!(
+            &self.slots[index]
+                .cell
+                .as_ref()
+                .ok_or(HeapError::StaleReference)?
+                .kind,
+            CellKind::Array(_)
+        );
+        let properties = &self.object_data(index)?.properties;
+        let total_count = properties
+            .len()
+            .checked_add(usize::from(is_array))
+            .ok_or(HeapError::SizeOverflow)?;
+        let capacity = limit.min(total_count);
+        if capacity == 0 {
+            return Ok((Vec::new(), total_count != 0));
+        }
+
+        let mut indices = BinaryHeap::<(u32, u32)>::new();
+        indices
+            .try_reserve(capacity.min(properties.len()))
+            .map_err(|_| HeapError::AllocationFailed)?;
+        let mut strings = Vec::new();
+        strings
+            .try_reserve_exact(capacity.min(properties.len()))
+            .map_err(|_| HeapError::AllocationFailed)?;
+
+        for property in properties {
+            if let Some(array_index) = self.array_index_from_atom(property.key as usize) {
+                if indices.len() < capacity {
+                    indices.push((array_index, property.key));
+                } else if indices
+                    .peek()
+                    .is_some_and(|(largest, _)| array_index < *largest)
+                {
+                    indices.pop();
+                    indices.push((array_index, property.key));
+                }
+            } else if strings.len() < capacity {
+                strings.push(property.key);
+            }
+        }
+
+        let length_key = if is_array && capacity > indices.len() {
+            Some(self.intern_property_key("length")?)
+        } else {
+            None
+        };
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(capacity)
+            .map_err(|_| HeapError::AllocationFailed)?;
+        for (_, key) in indices.into_sorted_vec() {
+            result.push(self.property_key_for_index(key));
+        }
+        if result.len() < capacity
+            && let Some(key) = length_key
+        {
+            result.push(key);
+        }
+        for key in strings.into_iter().take(capacity - result.len()) {
+            result.push(self.property_key_for_index(key));
+        }
+        let truncated = total_count > result.len();
+        Ok((result, truncated))
     }
 
     /// Creates an environment with mutable bindings backed by shared GC cells.
@@ -2671,6 +2752,61 @@ mod tests {
             .map(|key| String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["1", "3", "length", "extra"]);
+        heap.close_scope(roots).unwrap();
+    }
+
+    #[test]
+    fn bounded_own_property_keys_preserve_order_and_limit_results() {
+        let mut heap = heap();
+        let object = heap.allocate_object().unwrap();
+        let array = heap.allocate_array().unwrap();
+        let roots = heap.open_scope().unwrap();
+        heap.scope_root(roots, object).unwrap();
+        heap.scope_root(roots, array).unwrap();
+
+        for name in ["tail", "10", "2", "01", "4294967295", "0", "later"] {
+            let key = heap.intern_property_key(name).unwrap();
+            assert!(heap.set_property(object, key, Value::undefined()).unwrap());
+        }
+        let names = |heap: &Heap, keys: &[PropertyKey]| {
+            keys.iter()
+                .map(|key| String::from_utf16(heap.property_key_utf16(*key).unwrap()).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let (keys, truncated) = heap.own_property_keys_bounded(object, 3).unwrap();
+        assert_eq!(names(&heap, &keys), vec!["0", "2", "10"]);
+        assert!(truncated);
+
+        let (keys, truncated) = heap.own_property_keys_bounded(object, 5).unwrap();
+        assert_eq!(names(&heap, &keys), vec!["0", "2", "10", "tail", "01"]);
+        assert!(truncated);
+
+        let (keys, truncated) = heap.own_property_keys_bounded(object, 8).unwrap();
+        assert_eq!(
+            names(&heap, &keys),
+            vec!["0", "2", "10", "tail", "01", "4294967295", "later"]
+        );
+        assert!(!truncated);
+
+        let (keys, truncated) = heap.own_property_keys_bounded(object, 0).unwrap();
+        assert!(keys.is_empty());
+        assert!(truncated);
+
+        for name in ["3", "extra", "1", "tail"] {
+            let key = heap.intern_property_key(name).unwrap();
+            assert!(heap.set_property(array, key, Value::undefined()).unwrap());
+        }
+        let (keys, truncated) = heap.own_property_keys_bounded(array, 3).unwrap();
+        assert_eq!(names(&heap, &keys), vec!["1", "3", "length"]);
+        assert!(truncated);
+
+        let (keys, truncated) = heap.own_property_keys_bounded(array, 5).unwrap();
+        assert_eq!(
+            names(&heap, &keys),
+            vec!["1", "3", "length", "extra", "tail"]
+        );
+        assert!(!truncated);
         heap.close_scope(roots).unwrap();
     }
 

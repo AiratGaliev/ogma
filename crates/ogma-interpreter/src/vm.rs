@@ -14,6 +14,22 @@ use std::time::{Duration, Instant};
 
 static NEXT_RUNTIME_FUNCTION_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(debug_assertions)]
+static NEXT_VM_FRAME_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(debug_assertions)]
+mod debugger;
+#[cfg(debug_assertions)]
+pub use debugger::{
+    Breakpoint, CodeGeneration, DebugValue, DebuggerError, DebuggerEvent, DebuggerHandle,
+    DebuggerPort, DebuggerSession, ExceptionEvent, InlineFrame, InspectedObject, InspectedProperty,
+    ScopeSnapshot, SourceLocation, SourcePosition, StackFrameSnapshot, StoppedEvent,
+    VariableSnapshot,
+};
+
+#[cfg(not(debug_assertions))]
+pub(crate) struct DebuggerSession;
+
 use ogma_bytecode::{
     ArtifactJsonValue as JsonValue, BinaryOperation, CallKind, ConstantKind,
     DecodedRegisterInstruction, Diagnostic, RegisterOperation, UnaryOperation, VerifiedArtifact,
@@ -299,6 +315,7 @@ impl HostCallContext<'_> {
             self.options,
             self.state,
             entry_depth,
+            None,
         )
     }
 
@@ -393,6 +410,9 @@ pub enum InterpreterError {
         /// Maximum number of modules retained by one Context.
         limit: usize,
     },
+    /// The owner-thread Debugger adapter rejected a command or inspection request.
+    #[cfg(debug_assertions)]
+    Debugger(String),
 }
 
 impl fmt::Display for InterpreterError {
@@ -730,7 +750,58 @@ impl ExecutableModule {
             &options,
             &mut state,
             1,
+            None,
         )?;
+        Ok(state.report(completion))
+    }
+
+    /// Creates a debugger session bound to this module's verified source metadata.
+    ///
+    /// The returned session remains on the Runtime owner thread. Use its handle
+    /// from a separate control thread to issue requests while execution is active.
+    /// This API is compiled only in Debug and Development profiles.
+    #[cfg(debug_assertions)]
+    pub fn create_debugger_session(
+        &self,
+    ) -> Result<(DebuggerSession, DebuggerHandle), DebuggerError> {
+        DebuggerSession::new(self)
+    }
+
+    /// Executes an entry function while servicing a production debugger session.
+    ///
+    /// Breakpoints, stepping and inspection are handled on the Runtime owner
+    /// thread at VM dispatch safe points. This API is absent from Release builds.
+    #[cfg(debug_assertions)]
+    pub fn execute_debugged<H: Host>(
+        &self,
+        heap: &mut Heap,
+        entry_function_id: &str,
+        arguments: &[Value],
+        host: &mut H,
+        options: ExecutionOptions,
+        debugger: &mut DebuggerSession,
+    ) -> Result<ExecutionReport, InterpreterError> {
+        validate_options(&options)?;
+        let mut state = ExecutionState::new(&options)?;
+        debugger
+            .validate_module(self)
+            .map_err(|error| InterpreterError::Debugger(error.to_string()))?;
+        debugger
+            .activate()
+            .map_err(|error| InterpreterError::Debugger(error.to_string()))?;
+        let execution = self.execute_with_state(
+            heap,
+            entry_function_id,
+            arguments,
+            host,
+            &options,
+            &mut state,
+            1,
+            Some(&mut *debugger),
+        );
+        let cleanup = debugger.finish(heap);
+        let completion = execution?;
+        cleanup.map_err(|error| InterpreterError::Debugger(error.to_string()))?;
         Ok(state.report(completion))
     }
 
@@ -806,7 +877,7 @@ impl ExecutableModule {
         state.max_call_depth_reached = 1;
         state.active_stack_bytes = frame_stack_bytes;
         state.max_stack_bytes_reached = frame_stack_bytes;
-        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame]);
+        let completion = self.run_loop(heap, host, &options, &mut state, None, vec![root_frame]);
         state.active_stack_bytes = 0;
         completion.map(|completion| state.report(completion))
     }
@@ -1021,7 +1092,7 @@ impl ExecutableModule {
         state.max_call_depth_reached = 1;
         state.active_stack_bytes = frame_stack_bytes;
         state.max_stack_bytes_reached = frame_stack_bytes;
-        let completion = self.run_loop(heap, host, &options, &mut state, vec![root_frame]);
+        let completion = self.run_loop(heap, host, &options, &mut state, None, vec![root_frame]);
         state.active_stack_bytes = 0;
         completion.map(|completion| state.report(completion))
     }
@@ -1042,6 +1113,7 @@ impl ExecutableModule {
         options: &ExecutionOptions,
         state: &mut ExecutionState,
         entry_depth: u32,
+        debugger: Option<&mut DebuggerSession>,
     ) -> Result<ExecutionCompletion, InterpreterError> {
         let image = self
             .functions
@@ -1120,7 +1192,7 @@ impl ExecutableModule {
         state.max_call_depth_reached = state.max_call_depth_reached.max(entry_depth);
         state.active_stack_bytes = requested_stack_bytes;
         state.max_stack_bytes_reached = state.max_stack_bytes_reached.max(requested_stack_bytes);
-        let completion = self.run_loop(heap, host, options, state, vec![root_frame]);
+        let completion = self.run_loop(heap, host, options, state, debugger, vec![root_frame]);
         state.active_stack_bytes = base_stack_bytes;
         completion
     }
@@ -1142,8 +1214,14 @@ impl ExecutableModule {
         host: &mut H,
         options: &ExecutionOptions,
         state: &mut ExecutionState,
+        debugger: Option<&mut DebuggerSession>,
         mut frames: Vec<VmFrame>,
     ) -> Result<ExecutionCompletion, InterpreterError> {
+        #[cfg(debug_assertions)]
+        let mut debugger = debugger;
+        #[cfg(not(debug_assertions))]
+        let _ = debugger;
+
         loop {
             let Some(mut frame) = frames.pop() else {
                 return Err(InterpreterError::InvalidControlFlow(0));
@@ -1202,7 +1280,42 @@ impl ExecutableModule {
                 return Err(error);
             }
 
+            #[cfg(debug_assertions)]
+            {
+                frame.last_offset = Some(instruction.offset);
+                if let Some(session) = debugger.as_deref_mut()
+                    && let Err(error) = session.before_instruction(
+                        heap,
+                        &frames,
+                        &frame,
+                        state.last_location.as_ref(),
+                    )
+                {
+                    let _ = heap.close_scope(scope);
+                    frames.push(frame);
+                    self.unwind_frames(heap, &mut frames)?;
+                    return Err(InterpreterError::Debugger(error.to_string()));
+                }
+            }
+
             let step = self.dispatch(heap, host, options, state, &mut frame, scope, &instruction);
+
+            #[cfg(debug_assertions)]
+            if let Ok(Step::Complete(ExecutionCompletion::Throw(value))) = &step
+                && let Some(session) = debugger.as_deref_mut()
+                && let Err(error) = session.on_exception(
+                    heap,
+                    &frames,
+                    &frame,
+                    state.last_location.as_ref(),
+                    *value,
+                )
+            {
+                let _ = heap.close_scope(scope);
+                frames.push(frame);
+                self.unwind_frames(heap, &mut frames)?;
+                return Err(InterpreterError::Debugger(error.to_string()));
+            }
             match step {
                 Ok(Step::Continue { next_pc, back_edge }) => {
                     if let Err(error) = heap.close_scope(scope) {
@@ -1279,6 +1392,10 @@ impl ExecutableModule {
                     if let Err(error) = heap.leave_function_call(frame.activation) {
                         self.unwind_frames(heap, &mut frames)?;
                         return Err(error.into());
+                    }
+                    #[cfg(debug_assertions)]
+                    if let Some(session) = debugger.as_deref_mut() {
+                        session.frame_exited(frame.id);
                     }
                     state.active_stack_bytes =
                         state.active_stack_bytes.saturating_sub(frame.stack_bytes);
@@ -2490,6 +2607,10 @@ enum RegisterValue {
 }
 
 struct VmFrame {
+    #[cfg(debug_assertions)]
+    id: u64,
+    #[cfg(debug_assertions)]
+    last_offset: Option<u32>,
     image: Rc<FunctionImage>,
     activation: CallActivation,
     function_value: Value,
@@ -2569,6 +2690,10 @@ impl VmFrame {
             write_register_slot(&mut registers, register, value)?;
         }
         Ok(Self {
+            #[cfg(debug_assertions)]
+            id: NEXT_VM_FRAME_ID.fetch_add(1, Ordering::Relaxed),
+            #[cfg(debug_assertions)]
+            last_offset: None,
             stack_bytes: Self::estimated_stack_bytes(&image),
             image: image.clone(),
             activation,
