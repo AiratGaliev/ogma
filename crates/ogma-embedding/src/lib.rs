@@ -3355,9 +3355,13 @@ impl Host for HostFunctionRegistry {
             return throw_host_error(context, "RangeError: too many host arguments");
         }
         let _active = self.enter_dispatch().map_err(|_| HostError::Denied)?;
-        let entry = self
-            .snapshot_token(function)
-            .map_err(|_| HostError::Denied)?;
+        let entry = match self.snapshot_token(function) {
+            Ok(entry) => entry,
+            Err(HostRegistrationError::StaleSlot) => {
+                return throw_host_error(context, "ReferenceError: stale or foreign host function");
+            }
+            Err(_) => return Err(HostError::Denied),
+        };
         self.dispatch_entry(context, arguments, entry)
     }
 }

@@ -262,23 +262,29 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     assert_eq!(calls.get(), 2, "denied capabilities must not invoke Rust");
     context.set_capabilities(REQUIRED_CAPABILITIES);
 
+    let queued_before_unregister = context
+        .execute(&schedule_id, &[callback], ExecutionRequest::default())
+        .expect("queue a host callback before unregister");
+    assert!(matches!(
+        queued_before_unregister.completion,
+        ExecutionCompletion::Return(_)
+    ));
+    assert_eq!(context.pending_promise_jobs(), 1);
+
     context
         .unregister_host_function(slot)
         .expect("unregister invalidates old host Function token");
     let receiver = context
         .resolve(receiver_handle)
         .expect("method receiver remains rooted after GC");
-    let stale = context.execute(
-        &invoke_id,
-        &[receiver, callback, Value::number(3.0)],
-        ExecutionRequest::default(),
-    );
-    assert!(matches!(
-        stale,
-        Err(ogma_embedding::ContextError::Interpreter(
-            ogma_embedding::InterpreterError::HostCapabilityDenied(_)
-        ))
-    ));
+    let stale = context
+        .execute(
+            &invoke_id,
+            &[receiver, callback, Value::number(3.0)],
+            ExecutionRequest::default(),
+        )
+        .expect("stale JS Function produces a JavaScript Throw completion");
+    assert!(matches!(stale.completion, ExecutionCompletion::Throw(_)));
     assert_eq!(
         calls.get(),
         2,
@@ -299,6 +305,17 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let replacement_handle = context
         .create_host_function(replacement_slot)
         .expect("create replacement function");
+    let stale_job_pump = context
+        .pump_promise_jobs(None)
+        .expect("stale PromiseJob is rejected without aborting the pump");
+    assert_eq!(stale_job_pump.outcome, ogma_embedding::JobPumpOutcome::Progress);
+    assert_eq!(stale_job_pump.jobs_executed, 1);
+    assert_eq!(context.pending_promise_jobs(), 0);
+    assert_eq!(
+        replacement_calls.get(),
+        0,
+        "queued callback from an older generation must not invoke the replacement"
+    );
     let replacement = context
         .resolve(replacement_handle)
         .expect("replacement value");
