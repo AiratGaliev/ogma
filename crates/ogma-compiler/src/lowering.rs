@@ -1697,12 +1697,15 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => {
                 let target = self.evaluate_assignment_target(target, *span)?;
-                let is_promise = self.is_promise_expression(value)
-                    || self.is_mutable_promise_alias(value);
+                let is_promise =
+                    self.is_promise_expression(value) || self.is_mutable_promise_alias(value);
                 let value = self.emit_expression(value)?;
                 if is_promise
                     && let EvaluatedAssignmentTarget::Binding(binding) = &target
-                    && (self.local_bindings.get(binding).is_some_and(|item| item.mutable)
+                    && (self
+                        .local_bindings
+                        .get(binding)
+                        .is_some_and(|item| item.mutable)
                         || self
                             .captures_by_binding
                             .get(binding)
@@ -1907,12 +1910,11 @@ impl<'a> FunctionCompiler<'a> {
                             // assign undefined and must not invalidate prior state.
                         }
                         SyntaxVariableKind::Let => {
-                            let is_promise = declaration.initializer.as_ref().is_some_and(
-                                |initializer| {
+                            let is_promise =
+                                declaration.initializer.as_ref().is_some_and(|initializer| {
                                     self.is_promise_expression(initializer)
                                         || self.is_mutable_promise_alias(initializer)
-                                },
-                            );
+                                });
                             let value = if let Some(initializer) = &declaration.initializer {
                                 self.emit_expression(initializer)?
                             } else {
