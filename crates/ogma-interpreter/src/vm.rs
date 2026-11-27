@@ -1283,39 +1283,38 @@ impl ExecutableModule {
             #[cfg(debug_assertions)]
             {
                 frame.last_offset = Some(instruction.offset);
-                if let Some(session) = debugger.as_deref_mut() {
-                    if let Err(error) = session.before_instruction(
+                if let Some(session) = debugger.as_deref_mut()
+                    && let Err(error) = session.before_instruction(
                         heap,
                         &frames,
                         &frame,
                         state.last_location.as_ref(),
-                    ) {
-                        let _ = heap.close_scope(scope);
-                        frames.push(frame);
-                        self.unwind_frames(heap, &mut frames)?;
-                        return Err(InterpreterError::Debugger(error.to_string()));
-                    }
+                    )
+                {
+                    let _ = heap.close_scope(scope);
+                    frames.push(frame);
+                    self.unwind_frames(heap, &mut frames)?;
+                    return Err(InterpreterError::Debugger(error.to_string()));
                 }
             }
 
             let step = self.dispatch(heap, host, options, state, &mut frame, scope, &instruction);
 
             #[cfg(debug_assertions)]
-            if let Ok(Step::Complete(ExecutionCompletion::Throw(value))) = &step {
-                if let Some(session) = debugger.as_deref_mut() {
-                    if let Err(error) = session.on_exception(
-                        heap,
-                        &frames,
-                        &frame,
-                        state.last_location.as_ref(),
-                        *value,
-                    ) {
-                        let _ = heap.close_scope(scope);
-                        frames.push(frame);
-                        self.unwind_frames(heap, &mut frames)?;
-                        return Err(InterpreterError::Debugger(error.to_string()));
-                    }
-                }
+            if let Ok(Step::Complete(ExecutionCompletion::Throw(value))) = &step
+                && let Some(session) = debugger.as_deref_mut()
+                && let Err(error) = session.on_exception(
+                    heap,
+                    &frames,
+                    &frame,
+                    state.last_location.as_ref(),
+                    *value,
+                )
+            {
+                let _ = heap.close_scope(scope);
+                frames.push(frame);
+                self.unwind_frames(heap, &mut frames)?;
+                return Err(InterpreterError::Debugger(error.to_string()));
             }
             match step {
                 Ok(Step::Continue { next_pc, back_edge }) => {

@@ -24,6 +24,7 @@ const MAX_OBJECT_HANDLES: usize = 4096;
 static NEXT_DEBUGGER_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Error returned when a debugger command or inspection operation is unavailable.
 pub struct DebuggerError {
     message: String,
 }
@@ -51,6 +52,7 @@ impl From<HeapError> for DebuggerError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Stable identity and version of the loaded executable code generation.
 pub struct CodeGeneration {
     /// Describes this debugger snapshot field.
     pub id: String,
@@ -59,6 +61,7 @@ pub struct CodeGeneration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Source position with one-based line and zero-based UTF-16 column.
 pub struct SourcePosition {
     /// Describes this debugger snapshot field.
     pub line: u32,
@@ -67,6 +70,7 @@ pub struct SourcePosition {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Source span and lexical identity resolved from verified bytecode metadata.
 pub struct SourceLocation {
     /// Describes this debugger snapshot field.
     pub origin: String,
@@ -89,6 +93,7 @@ pub struct SourceLocation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// One inlined frame in a native or optimized source call chain.
 pub struct InlineFrame {
     /// Stable inlined function identity.
     pub function: String,
@@ -101,6 +106,7 @@ pub struct InlineFrame {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Source breakpoint and its current verification result.
 pub struct Breakpoint {
     /// Describes this debugger snapshot field.
     pub id: String,
@@ -121,6 +127,7 @@ pub struct Breakpoint {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Immutable preview of a Runtime value with an optional opaque object reference.
 pub struct DebugValue {
     /// Describes this debugger snapshot field.
     pub value_type: String,
@@ -135,6 +142,7 @@ pub struct DebugValue {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Read-only snapshot of a local or closure-captured binding.
 pub struct VariableSnapshot {
     /// Describes this debugger snapshot field.
     pub binding_id: String,
@@ -149,6 +157,7 @@ pub struct VariableSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Lexical scope snapshot at a paused source position.
 pub struct ScopeSnapshot {
     /// Describes this debugger snapshot field.
     pub id: String,
@@ -161,6 +170,7 @@ pub struct ScopeSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Immutable view of an active interpreter call frame.
 pub struct StackFrameSnapshot {
     /// Describes this debugger snapshot field.
     pub id: String,
@@ -179,6 +189,7 @@ pub struct StackFrameSnapshot {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Notification that execution stopped for a breakpoint, pause or source step.
 pub struct StoppedEvent {
     /// Describes this debugger snapshot field.
     pub reason: String,
@@ -191,6 +202,7 @@ pub struct StoppedEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Notification for a thrown value in the supported interpreter subset.
 pub struct ExceptionEvent {
     /// Describes this debugger snapshot field.
     pub value: DebugValue,
@@ -203,6 +215,7 @@ pub struct ExceptionEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Backend-neutral event emitted by an execution debugger.
 pub enum DebuggerEvent {
     /// Execution paused at a breakpoint, explicit pause or source step.
     Stopped(StoppedEvent),
@@ -211,6 +224,7 @@ pub enum DebuggerEvent {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Own data-property descriptor snapshot; accessors are never evaluated.
 pub struct InspectedProperty {
     /// Describes this debugger snapshot field.
     pub name: String,
@@ -227,6 +241,7 @@ pub struct InspectedProperty {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Bounded, descriptor-only view of a managed Runtime object.
 pub struct InspectedObject {
     /// Describes this debugger snapshot field.
     pub object_id: String,
@@ -1189,12 +1204,11 @@ impl DebuggerSession {
     }
 
     fn reject_pending_commands(&mut self) {
-        loop {
-            let command = match self.commands.as_ref() {
-                Some(receiver) => receiver.try_recv(),
-                None => break,
-            };
-            let Ok(command) = command else { break };
+        while let Some(command) = self
+            .commands
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok())
+        {
             let error = DebuggerError::new("debugger execution session has finished");
             match command {
                 Command::Pause => {}
@@ -1267,17 +1281,12 @@ impl DebuggerSession {
         current_location: Option<&InstructionLocation>,
     ) -> Result<(), DebuggerError> {
         self.ensure_owner()?;
-        loop {
-            let command = match self.commands.as_ref() {
-                Some(receiver) => receiver.try_recv(),
-                None => break,
-            };
-            match command {
-                Ok(command) => {
-                    self.process_command(heap, callers, current, current_location, command)?
-                }
-                Err(_) => break,
-            }
+        while let Some(command) = self
+            .commands
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok())
+        {
+            self.process_command(heap, callers, current, current_location, command)?;
         }
         if self.state == SessionState::Detached {
             return Ok(());
