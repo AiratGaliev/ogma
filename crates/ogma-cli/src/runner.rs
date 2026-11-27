@@ -414,7 +414,7 @@ fn execute_script(
         .run_promise_jobs_until_idle_with_request(Some(job_budget), request.clone())
         .map_err(|error| {
             RunFailure::new(
-                crate::cli::EXIT_RUNTIME,
+                job_queue_failure_exit_code(&error),
                 format!("PromiseJobs pump failed: {error:?}"),
             )
         })?;
