@@ -2364,7 +2364,9 @@ mod tests {
             .expect("function has a code generation and cache identity")
             .clone();
         changed.code_generation.id = "different_generation".to_owned();
-        session.module_generations.insert(function_id.clone(), changed.clone());
+        session
+            .module_generations
+            .insert(function_id.clone(), changed.clone());
         assert!(session.validate_module(&module).is_err());
 
         let mut changed_cache = session
@@ -2373,7 +2375,9 @@ mod tests {
             .expect("function has an indexed identity")
             .clone();
         changed_cache.code_cache_id = "different_cache".to_owned();
-        session.module_generations.insert(function_id, changed_cache);
+        session
+            .module_generations
+            .insert(function_id, changed_cache);
         assert!(session.validate_module(&module).is_err());
     }
 }
