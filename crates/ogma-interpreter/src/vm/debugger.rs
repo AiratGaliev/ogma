@@ -1362,14 +1362,21 @@ impl DebuggerSession {
         let loop_reentry = previous
             .as_ref()
             .is_some_and(|(previous_pc, _)| current.pc <= *previous_pc);
+        let stepping_same_source_line = self.step.as_ref().is_some_and(|step| {
+            key.as_ref()
+                .zip(step.base_key.as_ref())
+                .is_some_and(|(current, base)| same_source_file_line(current, base))
+        });
         let stop_reason = if self.pause_requested {
             self.pause_requested = false;
             Some(("pause", None))
-        } else if self.matches_breakpoint(
-            &current.image.id,
-            location.as_ref(),
-            if loop_reentry { None } else { previous_key },
-        ) {
+        } else if !stepping_same_source_line
+            && self.matches_breakpoint(
+                &current.image.id,
+                location.as_ref(),
+                if loop_reentry { None } else { previous_key },
+            )
+        {
             Some(("breakpoint", None))
         } else if let Some(step) = self.step.as_ref() {
             let depth = callers.len() + 1;
@@ -2190,6 +2197,10 @@ fn code_generation(image: &FunctionImage) -> Option<CodeGeneration> {
     })
 }
 
+fn same_source_file_line(left: &SourceKey, right: &SourceKey) -> bool {
+    left.source_id == right.source_id && left.line == right.line
+}
+
 fn same_source_line(left: &SourceKey, right: &SourceKey) -> bool {
     left.function_id == right.function_id
         && left.source_id == right.source_id
@@ -2430,6 +2441,8 @@ mod tests {
             ..first.clone()
         };
         assert!(same_source_line(&first, &same_statement));
+        assert!(same_source_file_line(&first, &nested_function));
+        assert!(!same_source_file_line(&first, &next_statement));
         assert!(!same_source_line(&first, &next_statement));
         assert!(!same_source_line(&first, &nested_function));
     }
