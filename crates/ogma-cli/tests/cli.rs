@@ -134,7 +134,8 @@ fn esm_entry_graph_supports_relative_imports_cycles_and_live_bindings() {
 export let ready = false;
 increment();
 ready = true;
-export const result = value + (readyState() ? 1 : 0);
+export const result = value + 1;
+export const observedReady = readyState();
 "#,
     )
     .expect("write entry module");
@@ -183,6 +184,7 @@ export function readyState() { return ready; }
     assert_eq!(result["modules"].as_array().map(Vec::len), Some(2));
     assert_eq!(result["exports"]["result"].as_f64(), Some(43.0));
     assert_eq!(result["exports"]["ready"].as_bool(), Some(true));
+    assert_eq!(result["exports"]["observedReady"].as_bool(), Some(true));
 
     let direct_result = evaluate_with_public_embedding_api(&entry, &dependency);
     assert_eq!(result["exports"]["result"].as_f64(), Some(direct_result));
@@ -198,6 +200,7 @@ export function readyState() { return ready; }
     let offline_result: serde_json::Value =
         serde_json::from_slice(&offline_run.stdout).expect("offline run JSON");
     assert_eq!(offline_result["exports"]["result"].as_f64(), Some(43.0));
+    assert_eq!(offline_result["exports"]["observedReady"].as_bool(), Some(true));
 }
 
 #[test]
@@ -230,7 +233,7 @@ fn configured_heap_quota_is_enforced_by_the_production_runtime() {
     let artifact = directory.path().join("allocate.ogmb");
     fs::write(
         &source,
-        "function create() { return { value: 42 }; }\nlet result = create();\n",
+        "let result = \"this string must be allocated in the Runtime heap\";\n",
     )
     .expect("write allocating source");
     let compiled = compile(&source, &artifact, None);
@@ -276,8 +279,7 @@ fn malformed_and_unsupported_artifacts_are_rejected_before_runtime_execution() {
     let result = cli(&["run", corrupt.to_str().expect("UTF-8 path")]);
     assert_eq!(result.status.code(), Some(5));
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("invalid")
-            || String::from_utf8_lossy(&result.stderr).contains("artifact"),
+        String::from_utf8_lossy(&result.stderr).contains("container.truncated_header"),
         "unexpected diagnostic: {}",
         String::from_utf8_lossy(&result.stderr)
     );

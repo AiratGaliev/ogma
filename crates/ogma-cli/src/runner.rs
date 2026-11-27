@@ -39,6 +39,44 @@ impl RunFailure {
     }
 }
 
+fn interpreter_failure_exit_code(error: &ogma_embedding::InterpreterError) -> u8 {
+    match error {
+        ogma_embedding::InterpreterError::CallDepthExceeded { .. }
+        | ogma_embedding::InterpreterError::StackQuotaExceeded { .. } => {
+            crate::cli::EXIT_INTERRUPTED
+        }
+        _ => crate::cli::EXIT_RUNTIME,
+    }
+}
+
+fn job_queue_failure_exit_code(error: &ogma_embedding::JobQueueError) -> u8 {
+    match error {
+        ogma_embedding::JobQueueError::Interpreter(error) => {
+            interpreter_failure_exit_code(error)
+        }
+        _ => crate::cli::EXIT_RUNTIME,
+    }
+}
+
+fn context_failure_exit_code(error: &ogma_embedding::ContextError) -> u8 {
+    match error {
+        ogma_embedding::ContextError::Interpreter(error) => interpreter_failure_exit_code(error),
+        ogma_embedding::ContextError::JobQueue(error) => job_queue_failure_exit_code(error),
+        _ => crate::cli::EXIT_RUNTIME,
+    }
+}
+
+fn module_graph_failure_exit_code(error: &ogma_embedding::ModuleGraphError) -> u8 {
+    match error {
+        ogma_embedding::ModuleGraphError::Interpreter(error) => {
+            interpreter_failure_exit_code(error)
+        }
+        ogma_embedding::ModuleGraphError::Context(error) => context_failure_exit_code(error),
+        ogma_embedding::ModuleGraphError::Jobs(error) => job_queue_failure_exit_code(error),
+        _ => crate::cli::EXIT_RUNTIME,
+    }
+}
+
 pub(crate) fn run_artifact(path: &Path, options: &RunOptions) -> Result<(), RunFailure> {
     let artifact_bytes = read_artifact(path).map_err(|error| {
         let exit_code = if error.starts_with("invalid artifact size") {
@@ -162,7 +200,7 @@ pub(crate) fn run_artifact(path: &Path, options: &RunOptions) -> Result<(), RunF
                 .evaluate_module_graph(&unit.manifest.source.id, &mut resolver, request.clone())
                 .map_err(|error| {
                     RunFailure::new(
-                        crate::cli::EXIT_RUNTIME,
+                        module_graph_failure_exit_code(&error),
                         format!("module graph failed: {error:?}"),
                     )
                 })?;
@@ -221,7 +259,7 @@ pub(crate) fn run_artifact(path: &Path, options: &RunOptions) -> Result<(), RunF
                 )
                 .map_err(|error| {
                     RunFailure::new(
-                        crate::cli::EXIT_RUNTIME,
+                        job_queue_failure_exit_code(&error),
                         format!("PromiseJobs pump failed: {error:?}"),
                     )
                 })?;
@@ -325,7 +363,7 @@ fn execute_script(
         .execute_persistent(entry_function, &[], request.clone())
         .map_err(|error| {
             RunFailure::new(
-                crate::cli::EXIT_RUNTIME,
+                context_failure_exit_code(&error),
                 format!("execution failed: {error:?}"),
             )
         })?;
