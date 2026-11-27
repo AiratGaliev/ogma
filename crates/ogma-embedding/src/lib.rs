@@ -4104,6 +4104,45 @@ mod tests {
     }
 
     #[test]
+    fn esm_promise_jobs_match_the_pinned_node_shared_source_fixture() {
+        let entry = compile_esm(
+            "entry",
+            include_str!("../../../tests/node-scheduling/fixtures/promise-jobs-module.mjs"),
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("evaluate the source shared with the pinned Node reference runner");
+        let drained = context
+            .run_promise_jobs_until_idle(None)
+            .expect("drain PromiseJobs and nested Promise adoption");
+        assert_eq!(drained.outcome, crate::JobPumpOutcome::Progress);
+        assert_eq!(context.pending_promise_jobs(), 0);
+
+        let trace = context
+            .read_module_export("entry", "trace")
+            .expect("read shared-fixture event trace");
+        let value = context.resolve(trace).expect("resolve shared trace");
+        let units = context
+            .read_string_utf16(value)
+            .expect("shared trace is a string");
+        assert_eq!(
+            String::from_utf16(&units).expect("valid UTF-16"),
+            "first,second,nested,"
+        );
+        context.release(trace).expect("release shared trace root");
+        context.collect().expect("collect settled Promise graph");
+        assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
     fn esm_module_requests_preserve_source_order_across_imports_and_reexports() {
         let first = compile_esm("first", "export const value = 1;");
         let second = compile_esm("second", "export const value = 2;");
