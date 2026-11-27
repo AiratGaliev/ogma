@@ -161,7 +161,6 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
     let callback_handle = context
         .create_host_function(slot)
         .expect("create persistent JS Function value");
-    let callback = context.resolve(callback_handle).expect("resolve callback");
 
     context.collect().expect("host Function value survives GC");
     let callback = context
