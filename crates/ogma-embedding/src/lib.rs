@@ -866,28 +866,39 @@ fn validate_module_descriptor(
             )));
         }
     }
-    Ok(())
-}
 
-fn module_request_specifiers(descriptor: &ModuleDescriptor) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for specifier in descriptor
+    let expected_requests = descriptor
         .imports
         .iter()
-        .map(|item| item.specifier.as_str())
+        .map(|item| item.specifier.clone())
         .chain(
             descriptor
                 .exports
                 .iter()
-                .filter_map(|item| item.source.as_deref()),
+                .filter_map(|item| item.source.clone()),
         )
-    {
-        if seen.insert(specifier.to_owned()) {
-            result.push(specifier.to_owned());
+        .collect::<std::collections::HashSet<_>>();
+    let mut declared_requests = std::collections::HashSet::new();
+    for specifier in &descriptor.requests {
+        if specifier.is_empty()
+            || specifier.len() > 4096
+            || !declared_requests.insert(specifier.clone())
+        {
+            return Err(ModuleGraphError::InvalidDescriptor(format!(
+                "module {requested_id:?} has an empty, oversized or duplicate ordered module request"
+            )));
         }
     }
-    result
+    if declared_requests != expected_requests {
+        return Err(ModuleGraphError::InvalidDescriptor(format!(
+            "module {requested_id:?} ordered module requests do not match its imports and re-exports"
+        )));
+    }
+    Ok(())
+}
+
+fn module_request_specifiers(descriptor: &ModuleDescriptor) -> Vec<String> {
+    descriptor.requests.clone()
 }
 
 struct DiscoveredModuleGraph {
@@ -1177,83 +1188,104 @@ fn evaluate_module_recursive(
         .expect("validated above")
         .state = ModuleEvaluationState::Evaluating;
 
-    for dependency in dependencies {
-        if let Some(failed_module) =
-            evaluate_module_recursive(executable, heap, host, graph, &dependency, options, records)?
-        {
-            let instance = graph
-                .modules
-                .get_mut(module_id)
-                .expect("module remains cached");
-            instance.state = ModuleEvaluationState::Failed;
-            instance.failure_module_id = Some(failed_module.clone());
-            return Ok(Some(failed_module));
+    let result = (|| -> Result<Option<String>, ModuleGraphError> {
+        for dependency in dependencies {
+            if let Some(failed_module) = evaluate_module_recursive(
+                executable,
+                heap,
+                host,
+                graph,
+                &dependency,
+                options,
+                records,
+            )? {
+                let instance = graph
+                    .modules
+                    .get_mut(module_id)
+                    .expect("module remains cached");
+                instance.state = ModuleEvaluationState::Failed;
+                instance.failure_module_id = Some(failed_module.clone());
+                return Ok(Some(failed_module));
+            }
         }
-    }
 
-    let (entry_function, environment, entry_closure) = {
-        let instance = graph.modules.get(module_id).expect("module remains cached");
-        (
-            instance.descriptor.entry_function.clone(),
-            instance.environment,
-            instance.entry_closure,
-        )
-    };
-    let callee = heap.resolve_host_handle(entry_closure)?;
-    let report = executable.execute_in_environment(
-        heap,
-        &entry_function,
-        callee,
-        environment,
-        host,
-        options.clone(),
-    )?;
-    match report.completion {
-        ExecutionCompletion::Return(_) => {
-            graph
-                .modules
-                .get_mut(module_id)
-                .expect("module remains cached")
-                .state = ModuleEvaluationState::Evaluated;
-            records.push(ModuleEvaluationRecord {
-                module_id: module_id.to_owned(),
-                completion: ModuleEvaluationCompletion::Evaluated,
-                instructions_executed: report.instructions_executed,
-            });
-            Ok(None)
+        let (entry_function, environment, entry_closure) = {
+            let instance = graph.modules.get(module_id).expect("module remains cached");
+            (
+                instance.descriptor.entry_function.clone(),
+                instance.environment,
+                instance.entry_closure,
+            )
+        };
+        let callee = heap.resolve_host_handle(entry_closure)?;
+        let report = executable.execute_in_environment(
+            heap,
+            &entry_function,
+            callee,
+            environment,
+            host,
+            options.clone(),
+        )?;
+        match report.completion {
+            ExecutionCompletion::Return(_) => {
+                graph
+                    .modules
+                    .get_mut(module_id)
+                    .expect("module remains cached")
+                    .state = ModuleEvaluationState::Evaluated;
+                records.push(ModuleEvaluationRecord {
+                    module_id: module_id.to_owned(),
+                    completion: ModuleEvaluationCompletion::Evaluated,
+                    instructions_executed: report.instructions_executed,
+                });
+                Ok(None)
+            }
+            ExecutionCompletion::Throw(value) => {
+                let report_root = heap.retain_host_value(value)?;
+                let instance = graph
+                    .modules
+                    .get_mut(module_id)
+                    .expect("module remains cached");
+                instance.state = ModuleEvaluationState::Failed;
+                instance.failure_module_id = Some(module_id.to_owned());
+                records.push(ModuleEvaluationRecord {
+                    module_id: module_id.to_owned(),
+                    completion: ModuleEvaluationCompletion::Threw(PersistentHandle(report_root)),
+                    instructions_executed: report.instructions_executed,
+                });
+                Ok(Some(module_id.to_owned()))
+            }
+            ExecutionCompletion::Interrupted(reason) => {
+                let instance = graph
+                    .modules
+                    .get_mut(module_id)
+                    .expect("module remains cached");
+                instance.state = ModuleEvaluationState::Failed;
+                instance.failure_module_id = Some(module_id.to_owned());
+                records.push(ModuleEvaluationRecord {
+                    module_id: module_id.to_owned(),
+                    completion: ModuleEvaluationCompletion::Interrupted(reason),
+                    instructions_executed: report.instructions_executed,
+                });
+                Ok(Some(module_id.to_owned()))
+            }
         }
-        ExecutionCompletion::Throw(value) => {
-            let report_root = heap.retain_host_value(value)?;
-            let instance = graph
-                .modules
-                .get_mut(module_id)
-                .expect("module remains cached");
-            instance.state = ModuleEvaluationState::Failed;
-            instance.failure_module_id = Some(module_id.to_owned());
-            records.push(ModuleEvaluationRecord {
-                module_id: module_id.to_owned(),
-                completion: ModuleEvaluationCompletion::Threw(PersistentHandle(report_root)),
-                instructions_executed: report.instructions_executed,
-            });
-            Ok(Some(module_id.to_owned()))
-        }
-        ExecutionCompletion::Interrupted(reason) => {
-            let instance = graph
-                .modules
-                .get_mut(module_id)
-                .expect("module remains cached");
-            instance.state = ModuleEvaluationState::Failed;
-            instance.failure_module_id = Some(module_id.to_owned());
-            records.push(ModuleEvaluationRecord {
-                module_id: module_id.to_owned(),
-                completion: ModuleEvaluationCompletion::Interrupted(reason),
-                instructions_executed: report.instructions_executed,
-            });
-            Ok(Some(module_id.to_owned()))
-        }
+    })();
+
+    if result.is_err() {
+        // A hard Runtime/Interpreter failure is cached as an evaluation failure.
+        // Retrying a partially executed Program would repeat its side effects,
+        // while leaving Evaluating behind would make future calls look like
+        // successful cycle back-edges.
+        let instance = graph
+            .modules
+            .get_mut(module_id)
+            .expect("module remains cached");
+        instance.state = ModuleEvaluationState::Failed;
+        instance.failure_module_id = Some(module_id.to_owned());
     }
+    result
 }
-
 /// A loaded execution Context borrowing one Runtime.
 ///
 /// Module metadata, host-function registration and capabilities are scoped to
@@ -1581,6 +1613,7 @@ impl Context<'_> {
 
         let reused = self.module_graph.is_some();
         if self.module_graph.is_none() {
+            let loaded_module_checkpoint = self.loaded_modules.len();
             let mut temporary_roots = Vec::new();
             let graph_build = (|| -> Result<(), ModuleGraphError> {
                 let discovered = discover_module_graph(entry_module_id, resolver)?;
@@ -1713,6 +1746,18 @@ impl Context<'_> {
                 for root in temporary_roots {
                     let _ = self.runtime.heap.release_host_handle(root);
                 }
+                while self.loaded_modules.len() > loaded_module_checkpoint {
+                    let removed = self
+                        .loaded_modules
+                        .pop()
+                        .expect("length checked above");
+                    self.host_functions
+                        .unregister_module_owner(&removed.executable);
+                }
+                self.module = self
+                    .loaded_modules
+                    .last()
+                    .map(|entry| Rc::clone(&entry.executable));
                 return Err(error);
             }
         }
@@ -2780,6 +2825,12 @@ impl HostFunctionRegistry {
             .map_err(|_| HeapError::AllocationFailed)?;
         owners.push(module);
         Ok(())
+    }
+
+    fn unregister_module_owner(&self, module: &Rc<ExecutableModule>) {
+        self.module_owners
+            .borrow_mut()
+            .retain(|owner| !Rc::ptr_eq(owner, module));
     }
 
     fn take_promise_reactions(&self) -> VecDeque<QueuedPromiseReaction> {
@@ -4003,6 +4054,126 @@ mod tests {
             .collect()
             .expect("collect unreachable settled Promise objects");
         assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn esm_module_requests_preserve_source_order_across_imports_and_reexports() {
+        let first = compile_esm("first", "export const value = 1;");
+        let second = compile_esm("second", "export const value = 2;");
+        let entry = compile_esm(
+            "entry",
+            "export { value as first } from 'first'; import { value as second } from 'second'; export const observed = second;",
+        );
+        assert_eq!(entry.descriptor.requests, vec!["first", "second"]);
+
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("first".to_owned(), first),
+                ("second".to_owned(), second),
+            ]),
+            requests: HashMap::from([
+                (("entry".to_owned(), "first".to_owned()), "first".to_owned()),
+                (("entry".to_owned(), "second".to_owned()), "second".to_owned()),
+            ]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        let report = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("resolve and evaluate ordered module requests");
+        assert_eq!(
+            report
+                .evaluations
+                .iter()
+                .map(|record| record.module_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second", "entry"]
+        );
+    }
+
+    #[test]
+    fn esm_link_failure_rolls_back_loaded_module_and_host_owner() {
+        let entry = compile_esm(
+            "entry",
+            "import { value } from 'dependency'; export const observed = value;",
+        );
+        let invalid_dependency = compile_esm("dependency", "export const other = 1;");
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("dependency".to_owned(), invalid_dependency),
+            ]),
+            requests: HashMap::from([(
+                ("entry".to_owned(), "dependency".to_owned()),
+                "dependency".to_owned(),
+            )]),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        assert!(matches!(
+            context.evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default()),
+            Err(ModuleGraphError::MissingExport { .. })
+        ));
+        assert_eq!(context.loaded_module_count(), 0);
+        assert_eq!(context.host_functions.module_owners.borrow().len(), 0);
+        assert!(context.module.is_none());
+
+        resolver.modules.insert(
+            "dependency".to_owned(),
+            compile_esm("dependency", "export const value = 7;"),
+        );
+        let retry = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("a corrected graph can be loaded after a failed link");
+        assert_eq!(retry.failure, None);
+        assert_eq!(context.loaded_module_count(), 1);
+        assert_eq!(context.host_functions.module_owners.borrow().len(), 1);
+    }
+
+    #[test]
+    fn esm_runtime_error_is_cached_instead_of_leaving_module_evaluating() {
+        let entry = compile_esm(
+            "entry",
+            "Promise.resolve().then(function() {}); Promise.resolve().then(function() {});",
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig {
+            max_pending_jobs: 1,
+            ..EngineConfig::default()
+        })
+        .expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+
+        assert!(
+            context
+                .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+                .is_err(),
+            "the second Promise reaction exceeds the configured queue capacity"
+        );
+        let state = context
+            .module_graph
+            .as_ref()
+            .and_then(|graph| graph.modules.get("entry"))
+            .map(|module| module.state);
+        assert_eq!(state, Some(ModuleEvaluationState::Failed));
+        assert_eq!(context.pending_promise_jobs(), 1);
+        context
+            .cancel_pending_promise_jobs()
+            .expect("release queued Promise reaction roots");
+
+        let cached = context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("cached evaluation failure is reported without re-entering the Program");
+        assert_eq!(cached.failure.as_deref(), Some("entry"));
+        assert!(cached.evaluations.is_empty());
     }
 
     #[test]
