@@ -853,9 +853,9 @@ class ParserAndShardingTests(unittest.TestCase):
             root = Path(directory)
             test_root = root / "test"
             test_root.mkdir()
-            (test_root / "allowed.js").write_text("var value = 1;\\n", encoding="utf-8")
-            (test_root / "other.js").write_text("var other = 2;\\n", encoding="utf-8")
-            (root / ".gitignore").write_text("test/ignored.js\\n", encoding="utf-8")
+            (test_root / "allowed.js").write_text("var value = 1;\n", encoding="utf-8")
+            (test_root / "other.js").write_text("var other = 2;\n", encoding="utf-8")
+            (root / ".gitignore").write_text("test/ignored.js\n", encoding="utf-8")
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(
                 ["git", "-C", str(root), "config", "user.name", "Ogma Tests"],
@@ -876,7 +876,7 @@ class ParserAndShardingTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            (test_root / "ignored.js").write_text("var ignored = true;\\n", encoding="utf-8")
+            (test_root / "ignored.js").write_text("var ignored = true;\n", encoding="utf-8")
 
             self.assertIsNone(
                 test_runner._load_and_check_revision(
