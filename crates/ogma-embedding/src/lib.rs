@@ -922,8 +922,8 @@ fn discover_module_graph<R: ModuleResolver>(
         let specifiers = module_request_specifiers(&package.descriptor);
         packages.insert(module_id.clone(), package);
 
-        // Reverse push preserves declaration order during depth-first loading.
-        for specifier in specifiers.into_iter().rev() {
+        let mut dependencies = Vec::with_capacity(specifiers.len());
+        for specifier in specifiers {
             let dependency_id = match resolved_requests.get(&(module_id.clone(), specifier.clone()))
             {
                 Some(id) => id.clone(),
@@ -938,6 +938,11 @@ fn discover_module_graph<R: ModuleResolver>(
                     id
                 }
             };
+            dependencies.push(dependency_id);
+        }
+        // Resolve in source order, then reverse only the stack insertion so
+        // depth-first discovery and evaluation retain that same order.
+        for dependency_id in dependencies.into_iter().rev() {
             if !packages.contains_key(&dependency_id) {
                 pending.push(dependency_id);
             }
@@ -3581,10 +3586,7 @@ mod tests {
             .collect()
     }
 
-    fn compile_esm_failure(
-        module_id: &str,
-        source_text: &str,
-    ) -> ogma_compiler::CompileFailure {
+    fn compile_esm_failure(module_id: &str, source_text: &str) -> ogma_compiler::CompileFailure {
         let allocator = Allocator::default();
         let source = SourceFile::new(module_id, "memory:///module.mjs", None, source_text)
             .expect("valid module source");
@@ -3639,6 +3641,37 @@ mod tests {
     struct MemoryModuleResolver {
         modules: HashMap<String, ResolvedModule>,
         requests: HashMap<(String, String), String>,
+    }
+
+    struct OrderedModuleResolver {
+        modules: HashMap<String, ResolvedModule>,
+        requests: HashMap<(String, String), String>,
+        resolved_specifiers: Vec<String>,
+    }
+
+    impl ModuleResolver for OrderedModuleResolver {
+        fn resolve(
+            &mut self,
+            referrer_module_id: &str,
+            specifier: &str,
+        ) -> Result<String, ModuleResolverError> {
+            self.resolved_specifiers.push(specifier.to_owned());
+            self.requests
+                .get(&(referrer_module_id.to_owned(), specifier.to_owned()))
+                .cloned()
+                .ok_or_else(|| {
+                    ModuleResolverError::new(format!(
+                        "unmapped module request {referrer_module_id:?} -> {specifier:?}"
+                    ))
+                })
+        }
+
+        fn load(&mut self, module_id: &str) -> Result<ResolvedModule, ModuleResolverError> {
+            self.modules
+                .get(module_id)
+                .cloned()
+                .ok_or_else(|| ModuleResolverError::new(format!("unknown module {module_id:?}")))
+        }
     }
 
     impl ModuleResolver for MemoryModuleResolver {
@@ -4145,6 +4178,35 @@ mod tests {
         context.release(trace).expect("release shared trace root");
         context.collect().expect("collect settled Promise graph");
         assert_eq!(context.heap_stats().external_memory_bytes, 0);
+    }
+
+    #[test]
+    fn esm_host_resolver_is_called_in_module_request_source_order() {
+        let entry = compile_esm(
+            "entry",
+            "import 'first'; import 'second'; export const completed = true;",
+        );
+        let first = compile_esm("first", "export const first = 1;");
+        let second = compile_esm("second", "export const second = 2;");
+        let mut resolver = OrderedModuleResolver {
+            modules: HashMap::from([
+                ("entry".to_owned(), entry),
+                ("first".to_owned(), first),
+                ("second".to_owned(), second),
+            ]),
+            requests: HashMap::from([
+                (("entry".to_owned(), "first".to_owned()), "first".to_owned()),
+                (("entry".to_owned(), "second".to_owned()), "second".to_owned()),
+            ]),
+            resolved_specifiers: Vec::new(),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("evaluate ordered static ModuleRequests");
+        assert_eq!(resolver.resolved_specifiers, vec!["first", "second"]);
     }
 
     #[test]
