@@ -146,7 +146,7 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
 
     let nested_module = Rc::new(
         ExecutableModule::load(compile_module(
-            "function double(value) { return value * 2; }",
+            "function double(value) { return value + value; }",
         ))
         .expect("nested callback target is a verified OGMB module"),
     );
