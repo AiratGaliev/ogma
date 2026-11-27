@@ -1,0 +1,24 @@
+[package]
+name = "ogma-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ogma"
+path = "src/main.rs"
+
+[dependencies]
+ogma-bytecode.workspace = true
+ogma-compiler.workspace = true
+ogma-embedding.workspace = true
+ogma-frontend.workspace = true
+ogma-runtime.workspace = true
+oxc_allocator.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

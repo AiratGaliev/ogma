@@ -1,6 +1,6 @@
 # Ogma Toolchain CLI Contract
 
-**Status:** Target command ownership contract; the M1 CLI remains intentionally minimal.
+**Status:** M1 command implementation is delivered in `ogma-cli` by OGM-93; the command ownership for later milestones remains as specified below.
 
 **Architecture authority:** Notion Ogma architecture specification, sections 12–14 and 20.9.
 **Related implementation issues:** OGM-93 (M1 CLI), OGM-106 (M2 Rust embedding emission), OGM-72 (`ogma test`), OGM-94 (M3 packaging), OGM-107 (M3 Native Provider registry).
@@ -19,13 +19,21 @@ The CLI remains thin: it calls production Ogma libraries, produces deterministic
 
 ### M1 — Portable runtime CLI (OGM-93)
 
-The initial command surface is deliberately limited to:
+The implemented M1 command surface is deliberately limited to:
 
-- `ogma compile <source.js> -o <artifact.ogmb>` — production frontend/compiler to portable bytecode;
-- `ogma run <artifact.ogmb>` — decode, verify and execute through the production Runtime/interpreter with explicit bounded Runtime configuration;
-- `ogma inspect <artifact.ogmb>` — inspect validated artifact metadata without executing it.
+- `ogma compile <source.js|source.mjs> -o <artifact.ogmb> [--module|--script]` — parse using the production frontend, run semantic/Core IR lowering and emit canonical verified OGMB v1 artifacts. `.js` defaults to Script goal and `.mjs` to Module goal; an explicit goal overrides the extension.
+- `ogma inspect <artifact.ogmb>` — re-verify the container and show its version, feature flags, code/function metadata, available source/debug metadata and any indexed compilation-unit functions/module graph without executing code.
+- `ogma run <artifact.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]` — re-verify the persisted artifact (and all sidecar artifacts when present), load through the public Runtime/embedding API and execute verified bytecode. The same finite `EngineConfig` and per-execution cancellation/deadline policy are used for execution and PromiseJobs pumping. Every numeric override must be positive. When a limit is omitted, the CLI uses the public `EngineConfig::default()` values: 64 MiB aggregate heap quota, 16 MiB maximum single allocation, 8 MiB execution stack, 1,000,000 dispatched instructions, 256 nested calls, 256 loaded modules, 1,024 pending PromiseJobs and 64 callbacks per pump turn. `--heap-bytes` also caps the maximum single allocation when the heap quota is lower. The optional deadline has no default.
 
-Do not add package installation, lockfile ingestion, provider selection, AOT linking or application bundling to OGM-93. The command must remain usable without pnpm or Cargo package-manager operations when running an already-built `.ogmb` artifact.
+M1 accepts JavaScript `.js` and `.mjs` only. TypeScript/TSX, REPL, `ogma test`, package installation, lockfile ingestion, provider selection, AOT linking and application bundling are excluded. The command remains usable without pnpm or Cargo package-manager operations when running an already-built `.ogmb` artifact.
+
+#### Compilation-unit sidecar
+
+OGMB v1 remains the canonical, independently verified per-function artifact; the CLI does not change its container format. A compile operation writes the Program entry function to the requested `.ogmb` path and writes `<artifact.ogmb>.d/unit.json` plus helper/dependency OGMB files into the adjacent sidecar directory. The versioned `ogma.cli-unit` 1.0 index records source-relative identities, SHA-256 digests, function IDs, module descriptors and the complete static `referrer + specifier → module ID` table. Every referenced OGMB is re-read and re-verified before inspect/run; sidecar paths are bounded, relative and symlink/traversal checked. A standalone verified OGMB without a sidecar can still run when its entry function is self-contained.
+
+For Module-goal input, the compile-time filesystem resolver accepts explicit relative `.js`/`.mjs` specifiers that canonicalize below the entry source directory. It rejects bare specifiers, unsupported extensions and traversal outside that root; it does not implement package lookup, extension probing, CommonJS or Node.js resolution. Dependency modules are compiled once and persisted as OGMB artifacts with their descriptors and exact request mappings. Runtime module linking, cycles, live bindings, evaluation and PromiseJobs remain in the production `ModuleResolver`/module-graph API. `ogma run` consumes only the re-verified persisted compilation unit; it does not reopen or recompile source files, so a compiled ESM graph can run after its original sources are removed.
+
+Process exit codes are stable: `0` success; `2` invalid command/option/resource limit; `3` filesystem or host setup failure; `4` source parse/semantic/lowering/compile failure; `5` malformed, unsupported or unverified artifact/unit; `6` JavaScript exception or Runtime failure; `7` cooperative cancellation, deadline, fuel, stack/call-depth or job-budget interruption. Diagnostics are written to stderr; successful command results are JSON on stdout. Ctrl+C/SIGTERM are converted into the public Runtime cancellation token and signal handlers are restored when execution ends.
 
 ### M2 — TypeScript and package compatibility
 
@@ -68,7 +76,7 @@ Cargo operations remain explicit Rust-host operations. `ogma build` may invoke C
 ## 3. CLI design invariants
 
 - Every command is a thin wrapper over the production library/contract that owns the behavior.
-- The CLI does not contain an independent ECMAScript interpreter, module resolver, package resolver, provider resolver, Cargo resolver or linker implementation.
+- The CLI does not contain an independent ECMAScript interpreter, ECMAScript linker/evaluator, package resolver, provider resolver, Cargo resolver or linker implementation. Its compile-time file resolver only creates the bounded M1 static module graph; at runtime its host adapter serves the versioned sidecar mapping through the public `ModuleResolver` contract. Linking and evaluation stay in the production Runtime.
 - Read-only commands (`check`, `deps plan`, `deps why`, provider inspection) must not install packages, rewrite lockfiles, mutate Cargo manifests or silently enable capabilities.
 - Build commands must be deterministic from pinned inputs and report the exact target triple, toolchain, selected profiles, dependency graph identities, provider IDs/versions, ABI/bytecode requirements and artifact hashes.
 - Unsupported APIs, unavailable providers, missing capabilities, ambiguous provider selection, target mismatches, lockfile drift and ABI mismatches fail closed with actionable diagnostics.

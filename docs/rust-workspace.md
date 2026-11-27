@@ -1,12 +1,12 @@
 # Rust workspace and M1 crate boundaries
 
-**Status:** M1 implementation is in progress. OGM-41 delivers the pinned Oxc parser and source diagnostics. OGM-42 currently provides the owned Rust Core IR v1 model/verifier, Oxc-backed semantic/syntax projection and compiler-owned AST-to-Core-IR lowering for the supported synchronous subset. `ogma-compiler::compile()` composes semantic analysis and verified function-document emission; Core IR-to-OGMB compilation, Runtime, interpreter and embedding remain owned by their respective issues.
+**Status:** M1 implementation is in progress. OGM-41/42 deliver the pinned Oxc parser, source diagnostics, owned Core IR v1 and compiler-owned lowering; OGM-45 delivers Core IR-to-OGMB v1 compilation and verification; OGM-46/47/48 deliver the interpreter, Runtime embedding facade and ESM/PromiseJobs APIs. OGM-93 adds the `ogma` compile/inspect/run executable as a thin consumer of those production crates.
 
 ## Workspace baseline
 
 The repository root is the only production Cargo workspace. It pins Rust **1.100.0** in `rust-toolchain.toml`, including the `rustfmt` and `clippy` components. All production crates inherit version, edition, MSRV, license, repository metadata and lint policy from the root manifest.
 
-The root `Cargo.lock` covers the seven production workspace members. The complete `benchmarks/` tree is excluded: each M0 proof/benchmark keeps its own manifest, lockfile, dependency resolution and task-specific CI. In particular, the nested `benchmarks/parser-frontend` workspace remains independent. Do not move M0 projects into the root workspace or replace their lockfiles with the root lockfile.
+The root `Cargo.lock` covers the eight production workspace members. The complete `benchmarks/` tree is excluded: each M0 proof/benchmark keeps its own manifest, lockfile, dependency resolution and task-specific CI. In particular, the nested `benchmarks/parser-frontend` workspace remains independent. Do not move M0 projects into the root workspace or replace their lockfiles with the root lockfile.
 
 ## Package ownership
 
@@ -19,6 +19,7 @@ The root `Cargo.lock` covers the seven production workspace members. The complet
 | `ogma-compiler` | Compiler-owned semantic analysis and lowering of frontend syntax into verified Core IR v1 documents (OGM-42); later Core IR-to-OGMB compilation (OGM-45) | `ogma-frontend`, `ogma-core-ir`, `ogma-bytecode` |
 | `ogma-interpreter` | Execution of verified portable bytecode using the shared Runtime (OGM-46) | `ogma-bytecode`, `ogma-runtime` |
 | `ogma-embedding` | Consumer-facing Rust Runtime/Context and host-call API (OGM-47) | `ogma-interpreter`, `ogma-runtime` |
+| `ogma-cli` | Single M1 `ogma` executable; compile/inspect/run orchestration, diagnostics, sidecar compilation-unit and filesystem-to-precompiled-module resolver adapter (OGM-93) | `ogma-compiler`, `ogma-frontend`, `ogma-bytecode`, `ogma-embedding`, `ogma-runtime`, `oxc_allocator` |
 
 The dependency graph is intentionally acyclic. Arrows point from a dependency to the crate that consumes it:
 
@@ -36,7 +37,7 @@ ogma-runtime ──────┴──> ogma-embedding
 
 The `ogma-runtime` and `ogma-bytecode` packages do not depend on compile-time crates. The interpreter path is `ogma-interpreter → ogma-bytecode + ogma-runtime`; the embedding path adds only the embedding facade. Neither path depends on `ogma-compiler`, `ogma-frontend` or `ogma-core-ir`. A CI dependency-tree assertion protects this boundary.
 
-This is the complete initial production package set justified by M1. The JavaScript frontend is implemented in `ogma-frontend` using the pinned Oxc parser/semantic crates; it does not change the interpreter/Runtime dependency boundary. Do not scaffold separate crates for Node compatibility, TypeScript bindings, AOT backends, DAP, CLI, package resolution, fuzzing or release packaging in this task; their owning issues introduce those boundaries when implementation requires them.
+The M1 production package set includes the OGM-93 `ogma-cli` composition layer. Its compile-time dependencies intentionally combine compiler-side crates with the public embedding facade; the interpreter/Runtime dependency boundary remains unchanged. `ogma-cli` must not become a dependency of `ogma-interpreter`, `ogma-embedding` or `ogma-runtime`. Do not scaffold separate crates for Node compatibility, TypeScript bindings, AOT backends, DAP, package resolution, fuzzing or release packaging; their owning issues introduce those boundaries when implementation requires them.
 
 ## Dependency and feature policy
 
