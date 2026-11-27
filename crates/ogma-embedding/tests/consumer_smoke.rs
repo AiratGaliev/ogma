@@ -348,8 +348,6 @@ fn external_rust_consumer_calls_registered_host_function_from_javascript_and_job
         stale_job_pump.outcome,
         ogma_embedding::JobPumpOutcome::Progress
     );
-    assert_eq!(stale_job_pump.jobs_executed, 1);
-    assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(stale_job_pump.jobs_executed, 2);
     assert_eq!(context.pending_promise_jobs(), 0);
     assert_eq!(
