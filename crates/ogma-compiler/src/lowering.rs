@@ -1599,6 +1599,63 @@ impl<'a> FunctionCompiler<'a> {
                     );
                 }
 
+                if let SyntaxExpression::Member {
+                    object,
+                    key: SyntaxMemberKey::Static(method),
+                    ..
+                } = callee.as_ref()
+                    && method == "finally"
+                    && (self.is_promise_expression(object)
+                        || self.is_mutable_promise_alias(object))
+                {
+                    return self.fail(
+                        "lowering.promise_finally_unsupported",
+                        Some(*span),
+                        "Promise.prototype.finally is outside the supported M1 Promise subset",
+                    );
+                }
+
+                if matches!(
+                    callee.as_ref(),
+                    SyntaxExpression::Identifier {
+                        name,
+                        binding: None,
+                        ..
+                    } if matches!(
+                        name.as_str(),
+                        "queueMicrotask" | "setTimeout" | "setInterval" | "setImmediate"
+                    )
+                ) {
+                    return self.fail(
+                        "lowering.node_scheduler_unsupported",
+                        Some(*span),
+                        "Node/host scheduling APIs are outside the ECMAScript PromiseJobs core",
+                    );
+                }
+
+                if matches!(
+                    callee.as_ref(),
+                    SyntaxExpression::Member {
+                        object,
+                        key: SyntaxMemberKey::Static(method),
+                        ..
+                    } if method == "nextTick"
+                        && matches!(
+                            object.as_ref(),
+                            SyntaxExpression::Identifier {
+                                name,
+                                binding: None,
+                                ..
+                            } if name == "process"
+                        )
+                ) {
+                    return self.fail(
+                        "lowering.node_scheduler_unsupported",
+                        Some(*span),
+                        "process.nextTick belongs to the deferred Node compatibility scheduler",
+                    );
+                }
+
                 let member_promise_method = match callee.as_ref() {
                     SyntaxExpression::Member {
                         object,
