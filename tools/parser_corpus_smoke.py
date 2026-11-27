@@ -131,7 +131,12 @@ def main() -> int:
     baseline = test_runner.load_baseline(args.baseline)
     pinned = test_runner._pinned_source(baseline, "test262-parser-tests")
     corpus = args.corpus.resolve(strict=True)
-    test_runner._load_and_check_revision(corpus, pinned["revision"], "test262-parser-tests")
+    test_runner._load_and_check_revision(
+        corpus,
+        pinned["revision"],
+        "test262-parser-tests",
+        expected_test_ids=[case[0] for case in CASES],
+    )
     revision = pinned["revision"]
 
     fingerprints: dict[str, str] = {}

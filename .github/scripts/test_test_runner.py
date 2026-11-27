@@ -848,6 +848,59 @@ class ParserAndShardingTests(unittest.TestCase):
             with self.assertRaisesRegex(test_runner.RunnerError, "working tree is not clean"):
                 test_runner._load_and_check_revision(root, revision)
 
+    def test_exact_sparse_smoke_validates_only_allowlisted_git_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_root = root / "test"
+            test_root.mkdir()
+            (test_root / "allowed.js").write_text("var value = 1;\\n", encoding="utf-8")
+            (test_root / "other.js").write_text("var other = 2;\\n", encoding="utf-8")
+            (root / ".gitignore").write_text("test/ignored.js\\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Ogma Tests"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "ogma-tests@example.invalid"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-q", "-m", "sparse source fixture"],
+                check=True,
+            )
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (test_root / "ignored.js").write_text("var ignored = true;\\n", encoding="utf-8")
+
+            self.assertIsNone(
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["allowed.js"],
+                )
+            )
+            with self.assertRaisesRegex(test_runner.RunnerError, "not Git-tracked"):
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["ignored.js"],
+                )
+            with self.assertRaisesRegex(test_runner.RunnerError, "unsafe relative path"):
+                test_runner._load_and_check_revision(
+                    root,
+                    revision,
+                    "test262",
+                    expected_test_ids=["../escape.js"],
+                )
+
     def test_ignored_untracked_javascript_cannot_extend_pinned_corpus(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
