@@ -2158,6 +2158,9 @@ mod tests {
             let scope = runtime_heap.open_scope().expect("temporary root scope");
             runtime_heap.scope_root(scope, value).expect("temporary root");
             runtime_heap.collect().expect("collect while both roots are live");
+            if seed & 1 == 0 {
+                runtime_heap.collect().expect("deterministic repeated collection");
+            }
             assert!(runtime_heap.strict_equal(
                 runtime_heap.resolve_host_handle(handle).expect("live handle"),
                 value
@@ -2173,7 +2176,6 @@ mod tests {
         }
         assert_eq!(runtime_heap.stats().live_objects, 0);
         assert_eq!(runtime_heap.root_snapshot().persistent_host_roots, 0);
-        let _ = seed;
     }
 
     #[test]

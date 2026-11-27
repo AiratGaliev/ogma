@@ -469,6 +469,22 @@ class Test262MetadataTests(unittest.TestCase):
         self.assertEqual(outside["status"], "UNSUPPORTED")
         self.assertIn("exact partial-support allowlist", outside["reason"])
 
+    def test_profile_rejects_unsafe_or_duplicate_test262_allowlist_ids(self) -> None:
+        profile = ready_profile()
+        profile["test262Allowlist"] = ["../escape.js"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            path.write_text(test_runner.json.dumps(profile), encoding="utf-8")
+            with self.assertRaises(test_runner.RunnerError):
+                test_runner.load_profile(path)
+            profile["test262Allowlist"] = [
+                "runner/strict-default.js",
+                "runner/strict-default.js",
+            ]
+            path.write_text(test_runner.json.dumps(profile), encoding="utf-8")
+            with self.assertRaises(test_runner.RunnerError):
+                test_runner.load_profile(path)
+
     def test_exact_test262_allowlist_gates_untagged_tests(self) -> None:
         profile = ready_profile()
         profile["test262Allowlist"] = ["runner/strict-default.js"]
