@@ -1,3 +1,5 @@
+//! End-to-end command-line integration tests for the persisted M1 compilation unit.
+
 use ogma_compiler::compile_to_bytecode;
 use ogma_embedding::{
     Engine, EngineConfig, ExecutionRequest, ModuleResolver, ModuleResolverError, ResolvedModule,
@@ -486,7 +488,7 @@ fn sigint_requests_cooperative_runtime_cancellation() {
     );
 
     let started = Instant::now();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ogma"))
+    let child = Command::new(env!("CARGO_BIN_EXE_ogma"))
         .args([
             "run",
             artifact.to_str().expect("UTF-8 path"),
