@@ -6,6 +6,18 @@ Ogma is an independent engine project. It is not a wrapper around QuickJS-NG, a 
 
 > **Current phase: M1 — Minimal Executable Runtime.** OGM-41 provides the pinned Oxc JavaScript parser and source diagnostics; OGM-42 provides semantic analysis and verified Core IR v1 lowering for the supported synchronous subset; OGM-45 provides Rust Core IR → OGMB v1 register-bytecode compilation and structural verification; OGM-46 adds the first synchronous M1 register interpreter over re-verified serialized artifacts and the shared Runtime. This is an initial execution profile, not full ECMAScript conformance, a production-frozen ISA, Node.js compatibility or runtime Test262 readiness. See the [Register Bytecode Interpreter Contract](docs/register-bytecode-interpreter-contract.md) for the implemented subset and fail-closed exclusions.
 
+## M1 CLI quick start
+
+The M1 toolchain exposes one `ogma` executable for the production portable-bytecode workflow:
+
+```sh
+cargo run -p ogma-cli -- compile example.js -o example.ogmb
+cargo run -p ogma-cli -- inspect example.ogmb
+cargo run -p ogma-cli -- run example.ogmb --fuel 1000000
+```
+
+Use `.mjs` for static ECMAScript modules. `compile` stores the entry function as canonical OGMB v1 and places helper functions, module descriptors and the precompiled ESM graph in the adjacent `.ogmb.d/` compilation-unit sidecar. `run` re-verifies the entry and sidecar artifacts and executes through the production Runtime; it does not need the original source files after compilation. M1 supports only the JavaScript subset and relative `.js`/`.mjs` imports described by the [Toolchain CLI Contract](docs/toolchain-cli-contract.md), not Node.js package resolution or TypeScript.
+
 ## Project direction
 
 The target architecture is built around these boundaries:

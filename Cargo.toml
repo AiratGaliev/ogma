@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/ogma-bytecode",
+    "crates/ogma-cli",
     "crates/ogma-compiler",
     "crates/ogma-core-ir",
     "crates/ogma-embedding",
@@ -29,6 +30,7 @@ ogma-embedding = { path = "crates/ogma-embedding" }
 ogma-frontend = { path = "crates/ogma-frontend" }
 ogma-interpreter = { path = "crates/ogma-interpreter" }
 ogma-runtime = { path = "crates/ogma-runtime" }
+oxc_allocator = "=0.158.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"
