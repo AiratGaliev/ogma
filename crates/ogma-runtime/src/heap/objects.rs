@@ -11,9 +11,7 @@ use std::rc::Rc;
 
 use crate::value::{Value, ValueRepr, ValueType};
 
-use super::{
-    CellKind, GcRef, Heap, HeapError, HostHandle, release_vec_capacity, reserve_vec,
-};
+use super::{CellKind, GcRef, Heap, HeapError, HostHandle, release_vec_capacity, reserve_vec};
 
 /// Stable function-table identity. It is metadata, never a code pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
