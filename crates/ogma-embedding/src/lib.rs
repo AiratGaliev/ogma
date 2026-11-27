@@ -3879,6 +3879,53 @@ mod tests {
     }
 
     #[test]
+    fn esm_promise_jobs_support_let_var_and_assigned_promise_aliases() {
+        let entry = compile_esm(
+            "entry",
+            r#"
+                export let order = "";
+                let first = Promise.resolve(0);
+                first.then(function() {
+                    order = order + "1";
+                });
+                var second = Promise.resolve(0);
+                second.then(function() {
+                    order = order + "2";
+                });
+                let third;
+                third = Promise.resolve(0);
+                third.then(function() {
+                    order = order + "3";
+                });
+            "#,
+        );
+        let mut resolver = MemoryModuleResolver {
+            modules: HashMap::from([("entry".to_owned(), entry)]),
+            requests: HashMap::new(),
+        };
+        let engine = Engine::new(EngineConfig::default()).expect("valid Engine");
+        let mut runtime = engine.create_runtime().expect("Runtime");
+        let mut context = runtime.create_context().expect("Context");
+        context
+            .evaluate_module_graph("entry", &mut resolver, ExecutionRequest::default())
+            .expect("evaluate Promise aliases in mutable declarations");
+        assert_eq!(context.pending_promise_jobs(), 3);
+        let drained = context
+            .run_promise_jobs_until_idle(None)
+            .expect("pump all mutable-alias reactions");
+        assert_eq!(drained.jobs_executed, 3);
+        let order = context
+            .read_module_export("entry", "order")
+            .expect("read mutable-alias callback effects");
+        let value = context.resolve(order).expect("resolve order string");
+        let units = context
+            .read_string_utf16(value)
+            .expect("Promise callback order is a string");
+        assert_eq!(String::from_utf16(&units).expect("valid UTF-16"), "123");
+        context.release(order).expect("release order root");
+    }
+
+    #[test]
     fn promise_self_scheduling_yields_at_total_budget_and_cancels_bounded_work() {
         let entry = compile_esm(
             "entry",
