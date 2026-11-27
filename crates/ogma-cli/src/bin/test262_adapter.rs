@@ -164,8 +164,11 @@ fn process_request(request: Value) -> Value {
             );
         }
     };
+    // Core IR source identities are symbols, not paths. Preserve the full
+    // Test262 path in the URI while mapping separators to valid identity dots.
+    let source_id = format!("test262.{}", test_id.replace('/', "."));
     let source = match SourceFile::new(
-        test_id,
+        source_id,
         format!("memory:///test262/{test_id}"),
         None,
         source_text,
@@ -477,6 +480,17 @@ mod tests {
             "production adapter response: {response:#}"
         );
         assert_eq!(response["requestId"], 7);
+    }
+
+    #[test]
+    fn production_adapter_compiles_nested_test262_paths_as_valid_core_ir_identities() {
+        let mut value = request("test262", "#! hashbang comment\\n", "sloppy");
+        value["test"]["id"] = json!("language/comments/hashbang/not-empty.js");
+        let response = process_request(value);
+        assert_eq!(
+            response["outcome"], "completed",
+            "hashbang source response: {response:#}"
+        );
     }
 
     #[test]
