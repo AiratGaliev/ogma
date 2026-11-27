@@ -7,9 +7,9 @@ use oxc_allocator::Allocator;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 #[cfg(unix)]
 use std::process::Stdio;
+use std::process::{Command, Output};
 #[cfg(unix)]
 use std::thread;
 #[cfg(unix)]
@@ -22,10 +22,7 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let id = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "ogma-cli-test-{}-{id}",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("ogma-cli-test-{}-{id}", std::process::id()));
         fs::create_dir_all(&path).expect("create temp directory");
         Self(path)
     }
@@ -66,7 +63,8 @@ fn script_compile_inspect_and_run_use_a_persisted_ogmb_artifact() {
     fs::write(
         &source,
         "function add(value) { return value + 2; }\nlet value = add(40);\n",
-    ).expect("write source");
+    )
+    .expect("write source");
 
     let compiled = compile(&source, &artifact, None);
     assert!(
@@ -90,25 +88,35 @@ fn script_compile_inspect_and_run_use_a_persisted_ogmb_artifact() {
     assert_eq!(report["execution_model"], "register");
     assert!(report["container"]["instructions"].as_u64().unwrap() > 0);
     assert!(report["source"]["files"].as_array().is_some());
-    assert!(report["compilation_unit"]["function_count"].as_u64().unwrap() > 1);
+    assert!(
+        report["compilation_unit"]["function_count"]
+            .as_u64()
+            .unwrap()
+            > 1
+    );
 
     let executed = cli(&[
         "run",
         artifact.to_str().expect("UTF-8 path"),
-        "--heap-bytes", "1048576",
-        "--stack-bytes", "1048576",
-        "--call-depth", "64",
-        "--fuel", "500000",
-        "--timeout-ms", "10000",
-        "--job-capacity", "128",
+        "--heap-bytes",
+        "1048576",
+        "--stack-bytes",
+        "1048576",
+        "--call-depth",
+        "64",
+        "--fuel",
+        "500000",
+        "--timeout-ms",
+        "10000",
+        "--job-capacity",
+        "128",
     ]);
     assert!(
         executed.status.success(),
         "run failed: {}",
         String::from_utf8_lossy(&executed.stderr)
     );
-    let result: serde_json::Value =
-        serde_json::from_slice(&executed.stdout).expect("run JSON");
+    let result: serde_json::Value = serde_json::from_slice(&executed.stdout).expect("run JSON");
     assert_eq!(result["completion"], "return");
 }
 
@@ -152,10 +160,7 @@ export function readyState() { return ready; }
         inspection["compilation_unit"]["module"]["imports"][0]["specifier"],
         "./dependency.mjs"
     );
-    assert_eq!(
-        inspection["compilation_unit"]["dependency_module_count"],
-        1
-    );
+    assert_eq!(inspection["compilation_unit"]["dependency_module_count"], 1);
     assert_eq!(
         inspection["compilation_unit"]["source"]["path"],
         "entry.mjs"
@@ -171,8 +176,7 @@ export function readyState() { return ready; }
         "ESM run failed: {}",
         String::from_utf8_lossy(&executed.stderr)
     );
-    let result: serde_json::Value =
-        serde_json::from_slice(&executed.stdout).expect("run JSON");
+    let result: serde_json::Value = serde_json::from_slice(&executed.stdout).expect("run JSON");
     assert_eq!(result["completion"], "evaluated");
     assert_eq!(result["modules"].as_array().map(Vec::len), Some(2));
     assert_eq!(result["exports"]["result"].as_f64(), Some(43.0));
@@ -225,7 +229,8 @@ fn configured_heap_quota_is_enforced_by_the_production_runtime() {
     fs::write(
         &source,
         "function create() { return { value: 42 }; }\nlet result = create();\n",
-    ).expect("write allocating source");
+    )
+    .expect("write allocating source");
     let compiled = compile(&source, &artifact, None);
     assert!(
         compiled.status.success(),
@@ -284,7 +289,9 @@ fn malformed_and_unsupported_artifacts_are_rejected_before_runtime_execution() {
 
     let mut unsupported_features = fs::read(&artifact).expect("read valid artifact");
     let feature_flags = u64::from_le_bytes(
-        unsupported_features[12..20].try_into().expect("feature flag header"),
+        unsupported_features[12..20]
+            .try_into()
+            .expect("feature flag header"),
     );
     unsupported_features[12..20].copy_from_slice(&(feature_flags | (1_u64 << 63)).to_le_bytes());
     let feature_path = directory.path().join("unsupported-features.ogmb");
@@ -301,22 +308,33 @@ fn compilation_unit_rejects_helper_path_traversal_before_reading_outside_files()
     fs::write(
         &source,
         "function add(value) { return value + 2; }\nlet value = add(40);\n",
-    ).expect("write source");
+    )
+    .expect("write source");
     let compiled = compile(&source, &artifact, None);
-    assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
 
     let sidecar = artifact.with_file_name("program.ogmb.d");
     let manifest_path = sidecar.join("unit.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).expect("read unit manifest"))
             .expect("parse unit manifest");
-    let functions = manifest["functions"].as_array_mut().expect("functions array");
-    let helper = functions.iter_mut()
+    let functions = manifest["functions"]
+        .as_array_mut()
+        .expect("functions array");
+    let helper = functions
+        .iter_mut()
         .find(|item| item["file"].is_string())
         .expect("helper artifact");
     helper["file"] = serde_json::Value::String("../outside.ogmb".to_owned());
-    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).expect("encode manifest"))
-        .expect("tamper manifest");
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("encode manifest"),
+    )
+    .expect("tamper manifest");
 
     let inspected = cli(&["inspect", artifact.to_str().expect("UTF-8 path")]);
     assert_eq!(inspected.status.code(), Some(5));
@@ -425,7 +443,8 @@ fn configured_call_depth_is_enforced_by_the_production_runtime() {
     fs::write(
         &source,
         "function recurse(value) { return recurse(value + 1); }\nrecurse(0);\n",
-    ).expect("write recursive source");
+    )
+    .expect("write recursive source");
     let compiled = compile(&source, &artifact, None);
     assert!(
         compiled.status.success(),
@@ -503,7 +522,10 @@ fn module_identity(root: &Path, path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/");
-    format!("source_{}", ogma_bytecode::sha256_hex(stable_path.as_bytes()))
+    format!(
+        "source_{}",
+        ogma_bytecode::sha256_hex(stable_path.as_bytes())
+    )
 }
 
 fn compile_module(root: &Path, path: &Path) -> ResolvedModule {
@@ -554,10 +576,7 @@ impl ModuleResolver for DirectResolver {
             .sources
             .get(referrer_module_id)
             .ok_or_else(|| ModuleResolverError::new("unknown referrer identity"))?;
-        let candidate = referrer
-            .parent()
-            .expect("referrer parent")
-            .join(specifier);
+        let candidate = referrer.parent().expect("referrer parent").join(specifier);
         let canonical = fs::canonicalize(&candidate)
             .map_err(|error| ModuleResolverError::new(error.to_string()))?;
         if !canonical.starts_with(&self.root) {

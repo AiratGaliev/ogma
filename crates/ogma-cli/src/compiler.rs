@@ -2,15 +2,14 @@
 
 use crate::artifact::{
     ArtifactEntry, ModuleDescriptorData, SourceInfo, UnitManifest, sha256, source_id,
-    source_relative_path, source_uri,
-    write_compilation_unit,
+    source_relative_path, source_uri, write_compilation_unit,
 };
 use crate::module_source::compile_dependency_graph;
-use oxc_allocator::Allocator;
 use ogma_compiler::{CompileFailure, compile_to_bytecode};
 use ogma_frontend::{
     DiagnosticSeverity, ParseGoal, ParseMode, ParseRequestOptions, SourceFile, parse,
 };
+use oxc_allocator::Allocator;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,22 +37,41 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
     if options.output.extension().and_then(|value| value.to_str()) != Some("ogmb") {
         return Err("compile output must use the .ogmb extension".to_owned());
     }
-    let source_path = fs::canonicalize(&options.source)
-        .map_err(|error| format!("cannot resolve source {}: {error}", options.source.display()))?;
+    let source_path = fs::canonicalize(&options.source).map_err(|error| {
+        format!(
+            "cannot resolve source {}: {error}",
+            options.source.display()
+        )
+    })?;
     let metadata = fs::metadata(&source_path)
         .map_err(|error| format!("cannot inspect source {}: {error}", source_path.display()))?;
     if !metadata.is_file() {
-        return Err(format!("source {} is not a regular file", source_path.display()));
+        return Err(format!(
+            "source {} is not a regular file",
+            source_path.display()
+        ));
     }
     if metadata.len() > MAX_SOURCE_BYTES {
-        return Err(format!("source exceeds the {}-byte CLI source limit", MAX_SOURCE_BYTES));
+        return Err(format!(
+            "source exceeds the {}-byte CLI source limit",
+            MAX_SOURCE_BYTES
+        ));
     }
-    let source_text = fs::read_to_string(&source_path)
-        .map_err(|error| format!("cannot read UTF-8 source {}: {error}", source_path.display()))?;
-    let source_parent = source_path.parent()
+    let source_text = fs::read_to_string(&source_path).map_err(|error| {
+        format!(
+            "cannot read UTF-8 source {}: {error}",
+            source_path.display()
+        )
+    })?;
+    let source_parent = source_path
+        .parent()
         .ok_or_else(|| format!("source {} has no parent directory", source_path.display()))?;
-    let source_root = fs::canonicalize(source_parent)
-        .map_err(|error| format!("cannot resolve source root {}: {error}", source_parent.display()))?;
+    let source_root = fs::canonicalize(source_parent).map_err(|error| {
+        format!(
+            "cannot resolve source root {}: {error}",
+            source_parent.display()
+        )
+    })?;
     let source_id = source_id(&source_root, &source_path)?;
     let uri = source_uri(&source_id, &source_path);
     let source = SourceFile::new(source_id.clone(), uri, None, source_text)
@@ -69,11 +87,19 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
     let parsed = parse(&allocator, &source, parse_options)
         .map_err(|failure| render_parse_failure(&source_path.display().to_string(), &failure))?;
 
-    for diagnostic in parsed.diagnostics.iter().filter(|item| item.severity == DiagnosticSeverity::Warning) {
+    for diagnostic in parsed
+        .diagnostics
+        .iter()
+        .filter(|item| item.severity == DiagnosticSeverity::Warning)
+    {
         eprintln!(
             "{}: warning{}: {}",
             source_path.display(),
-            diagnostic.code.as_deref().map(|code| format!("[{code}]")).unwrap_or_default(),
+            diagnostic
+                .code
+                .as_deref()
+                .map(|code| format!("[{code}]"))
+                .unwrap_or_default(),
             diagnostic.message
         );
         if let Some(help) = &diagnostic.help {
@@ -86,7 +112,10 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
     let module_descriptor = compiled.module.as_ref();
     let module = module_descriptor.map(ModuleDescriptorData::from);
     if (options.goal == SourceGoal::Module) != module.is_some() {
-        return Err("compiler returned module metadata inconsistent with the requested source goal".to_owned());
+        return Err(
+            "compiler returned module metadata inconsistent with the requested source goal"
+                .to_owned(),
+        );
     }
     let (dependency_modules, resolved_requests) = if let Some(descriptor) = module_descriptor {
         let graph = compile_dependency_graph(&source_path, &descriptor.id, &descriptor.requests)?;
@@ -94,11 +123,13 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
     } else {
         (Vec::new(), Vec::new())
     };
-    let entry_id = module.as_ref().map(|descriptor| descriptor.entry_function.as_str());
-    let entry = compiled.functions.iter()
-        .find(|function| {
-            entry_id.map_or(function.name == "<program>", |id| function.id == id)
-        })
+    let entry_id = module
+        .as_ref()
+        .map(|descriptor| descriptor.entry_function.as_str());
+    let entry = compiled
+        .functions
+        .iter()
+        .find(|function| entry_id.map_or(function.name == "<program>", |id| function.id == id))
         .ok_or_else(|| "compiler output does not contain the Program entry function".to_owned())?;
     let entry_bytes = entry.artifact.bytes.clone();
 
@@ -125,7 +156,8 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
 
     let mut dependency_data = Vec::with_capacity(dependency_modules.len());
     let mut all_helpers = helpers;
-    let dependency_function_count = dependency_modules.iter()
+    let dependency_function_count = dependency_modules
+        .iter()
         .map(|dependency| dependency.data.functions.len())
         .sum::<usize>();
     for dependency in dependency_modules {
@@ -158,37 +190,59 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
 }
 
 fn absolute_output_path(path: &Path) -> Result<PathBuf, String> {
-    let parent = path.parent().filter(|value| !value.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("cannot create output directory {}: {error}", parent.display()))?;
-    let parent = fs::canonicalize(parent)
-        .map_err(|error| format!("cannot resolve output directory {}: {error}", parent.display()))?;
-    let name = path.file_name().ok_or_else(|| "output path must name a file".to_owned())?;
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "cannot create output directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let parent = fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "cannot resolve output directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| "output path must name a file".to_owned())?;
     Ok(parent.join(name))
 }
 
-fn render_parse_failure(
-    source_label: &str,
-    failure: &ogma_frontend::ParseFailure,
-) -> String {
+fn render_parse_failure(source_label: &str, failure: &ogma_frontend::ParseFailure) -> String {
     let mut output = Vec::new();
     for diagnostic in &failure.diagnostics {
-        let code = diagnostic.code.as_deref()
+        let code = diagnostic
+            .code
+            .as_deref()
             .map(|value| format!("[{value}]"))
             .unwrap_or_default();
-        let primary = diagnostic.labels.iter().find(|label| label.primary)
+        let primary = diagnostic
+            .labels
+            .iter()
+            .find(|label| label.primary)
             .or_else(|| diagnostic.labels.first());
         if let Some(label) = primary {
             let start = label.span.start;
             output.push(format!(
                 "{}:{}:{}: error{}: {}",
-                source_label, start.line, start.column_utf16 + 1, code, diagnostic.message
+                source_label,
+                start.line,
+                start.column_utf16 + 1,
+                code,
+                diagnostic.message
             ));
             if let Some(message) = &label.message {
                 output.push(format!("  {message}"));
             }
         } else {
-            output.push(format!("{}: error{}: {}", source_label, code, diagnostic.message));
+            output.push(format!(
+                "{}: error{}: {}",
+                source_label, code, diagnostic.message
+            ));
         }
         if let Some(help) = &diagnostic.help {
             output.push(format!("  help: {help}"));
@@ -198,7 +252,10 @@ fn render_parse_failure(
         }
     }
     if output.is_empty() {
-        format!("{}: source parsing failed ({:?})", source_label, failure.phase)
+        format!(
+            "{}: source parsing failed ({:?})",
+            source_label, failure.phase
+        )
     } else {
         output.join("\n")
     }
@@ -206,36 +263,58 @@ fn render_parse_failure(
 
 pub(crate) fn render_compile_failure(source_label: &str, failure: CompileFailure) -> String {
     match failure {
-        CompileFailure::Semantic(diagnostics) => diagnostics.into_iter().map(|diagnostic| {
-            if let Some(span) = diagnostic.span {
+        CompileFailure::Semantic(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                if let Some(span) = diagnostic.span {
+                    format!(
+                        "{}:{}:{}: error[{}]: {}",
+                        source_label,
+                        span.start.line,
+                        span.start.column_utf16 + 1,
+                        diagnostic.code,
+                        diagnostic.message
+                    )
+                } else {
+                    format!(
+                        "{}: error[{}]: {}",
+                        source_label, diagnostic.code, diagnostic.message
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        CompileFailure::Lowering(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                if let Some(span) = diagnostic.span {
+                    format!(
+                        "{}:{}:{}: error[{}] in {}: {}",
+                        source_label,
+                        span.start.line,
+                        span.start.column_utf16 + 1,
+                        diagnostic.code,
+                        diagnostic.function,
+                        diagnostic.message
+                    )
+                } else {
+                    format!(
+                        "{}: error[{}] in {}: {}",
+                        source_label, diagnostic.code, diagnostic.function, diagnostic.message
+                    )
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        CompileFailure::Bytecode(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
                 format!(
-                    "{}:{}:{}: error[{}]: {}",
-                    source_label, span.start.line, span.start.column_utf16 + 1,
-                    diagnostic.code, diagnostic.message
+                    "{}: error[{}] at {}: {}",
+                    source_label, diagnostic.code, diagnostic.path, diagnostic.message
                 )
-            } else {
-                format!("{}: error[{}]: {}", source_label, diagnostic.code, diagnostic.message)
-            }
-        }).collect::<Vec<_>>().join("\n"),
-        CompileFailure::Lowering(diagnostics) => diagnostics.into_iter().map(|diagnostic| {
-            if let Some(span) = diagnostic.span {
-                format!(
-                    "{}:{}:{}: error[{}] in {}: {}",
-                    source_label, span.start.line, span.start.column_utf16 + 1,
-                    diagnostic.code, diagnostic.function, diagnostic.message
-                )
-            } else {
-                format!(
-                    "{}: error[{}] in {}: {}",
-                    source_label, diagnostic.code, diagnostic.function, diagnostic.message
-                )
-            }
-        }).collect::<Vec<_>>().join("\n"),
-        CompileFailure::Bytecode(diagnostics) => diagnostics.into_iter().map(|diagnostic| {
-            format!(
-                "{}: error[{}] at {}: {}",
-                source_label, diagnostic.code, diagnostic.path, diagnostic.message
-            )
-        }).collect::<Vec<_>>().join("\n"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
     }
 }

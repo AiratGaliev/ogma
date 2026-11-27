@@ -94,17 +94,24 @@ fn compile_command(args: &[String]) -> u8 {
     };
     match compile_file(parsed) {
         Ok(summary) => {
-            println!("{}", json!({
-                "command": "compile",
-                "output": summary.output,
-                "functions": summary.function_count,
-                "module": summary.module,
-            }));
+            println!(
+                "{}",
+                json!({
+                    "command": "compile",
+                    "output": summary.output,
+                    "functions": summary.function_count,
+                    "module": summary.module,
+                })
+            );
             EXIT_SUCCESS
         }
         Err(error) => {
             eprintln!("{error}");
-            if is_io_error(&error) { EXIT_IO } else { EXIT_COMPILE }
+            if is_io_error(&error) {
+                EXIT_IO
+            } else {
+                EXIT_COMPILE
+            }
         }
     }
 }
@@ -122,7 +129,9 @@ fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
         match args[index].as_str() {
             "-o" | "--output" => {
                 index += 1;
-                let value = args.get(index).ok_or_else(|| "missing path after --output".to_owned())?;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "missing path after --output".to_owned())?;
                 if output.replace(PathBuf::from(value)).is_some() {
                     return Err("--output may be specified only once".to_owned());
                 }
@@ -156,7 +165,11 @@ fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     let inferred_goal = match source.extension().and_then(|value| value.to_str()) {
         Some("mjs") => SourceGoal::Module,
         Some("js") => SourceGoal::Script,
-        Some("ts" | "tsx") => return Err("TypeScript/TSX compilation is not part of M1; use JavaScript input".to_owned()),
+        Some("ts" | "tsx") => {
+            return Err(
+                "TypeScript/TSX compilation is not part of M1; use JavaScript input".to_owned(),
+            );
+        }
         _ => return Err("M1 compile input must have a .js or .mjs extension".to_owned()),
     };
     Ok(CompileOptions {
@@ -180,7 +193,11 @@ fn inspect_command(args: &[String]) -> u8 {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{error}");
-            return if error.starts_with("invalid artifact size") { EXIT_ARTIFACT } else { EXIT_IO };
+            return if error.starts_with("invalid artifact size") {
+                EXIT_ARTIFACT
+            } else {
+                EXIT_IO
+            };
         }
     };
     let verified = match verify_artifact(&bytes) {
@@ -202,27 +219,33 @@ fn inspect_command(args: &[String]) -> u8 {
         let mut function_reports = Vec::with_capacity(unit.artifacts.len());
         for function_bytes in &unit.artifacts {
             match verify_artifact(function_bytes) {
-                Ok(function) => function_reports.push(artifact_report(&function, function_bytes.len())),
+                Ok(function) => {
+                    function_reports.push(artifact_report(&function, function_bytes.len()))
+                }
                 Err(error) => {
                     eprintln!("invalid helper artifact: {error}");
                     return EXIT_ARTIFACT;
                 }
             }
         }
-        let module = unit.manifest.module.as_ref().map(|module| json!({
-            "id": module.id,
-            "entry_function": module.entry_function,
-            "environment": module.environment,
-            "requests": module.requests,
-            "imports": module.imports,
-            "exports": module.exports,
-        }));
+        let module = unit.manifest.module.as_ref().map(|module| {
+            json!({
+                "id": module.id,
+                "entry_function": module.entry_function,
+                "environment": module.environment,
+                "requests": module.requests,
+                "imports": module.imports,
+                "exports": module.exports,
+            })
+        });
         let mut dependency_reports = Vec::with_capacity(unit.dependencies.len());
         for dependency in &unit.dependencies {
             let mut dependency_functions = Vec::with_capacity(dependency.artifacts.len());
             for function_bytes in &dependency.artifacts {
                 match verify_artifact(function_bytes) {
-                    Ok(function) => dependency_functions.push(artifact_report(&function, function_bytes.len())),
+                    Ok(function) => {
+                        dependency_functions.push(artifact_report(&function, function_bytes.len()))
+                    }
                     Err(error) => {
                         eprintln!("invalid dependency artifact: {error}");
                         return EXIT_ARTIFACT;
@@ -271,7 +294,9 @@ fn inspect_command(args: &[String]) -> u8 {
 
 fn run_command(args: &[String]) -> u8 {
     if args == ["--help"] || args == ["-h"] {
-        print!("ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n");
+        print!(
+            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n"
+        );
         return EXIT_SUCCESS;
     }
     match parse_run_args(args) {
@@ -294,7 +319,9 @@ fn run_command(args: &[String]) -> u8 {
 
 fn parse_run_args(args: &[String]) -> Result<(PathBuf, RunOptions), String> {
     if args == ["--help"] || args == ["-h"] {
-        print!("ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n");
+        print!(
+            "ogma run <program.ogmb> [--heap-bytes n] [--stack-bytes n] [--call-depth n] [--fuel n] [--timeout-ms n] [--job-capacity n]\n"
+        );
         return Err(String::new());
     }
     let mut path = None;
@@ -304,7 +331,9 @@ fn parse_run_args(args: &[String]) -> Result<(PathBuf, RunOptions), String> {
         let option = args[index].as_str();
         if option.starts_with("--") {
             index += 1;
-            let raw = args.get(index).ok_or_else(|| format!("missing value after {option}"))?;
+            let raw = args
+                .get(index)
+                .ok_or_else(|| format!("missing value after {option}"))?;
             match option {
                 "--heap-bytes" => options.heap_bytes = Some(parse_positive(raw, option)?),
                 "--stack-bytes" => options.stack_bytes = Some(parse_positive(raw, option)?),
@@ -332,7 +361,9 @@ fn parse_positive<T>(value: &str, option: &str) -> Result<T, String>
 where
     T: std::str::FromStr + PartialEq + Default,
 {
-    let parsed = value.parse::<T>().map_err(|_| format!("{option} expects a positive integer"))?;
+    let parsed = value
+        .parse::<T>()
+        .map_err(|_| format!("{option} expects a positive integer"))?;
     if parsed == T::default() {
         return Err(format!("{option} must be greater than zero"));
     }
@@ -353,7 +384,9 @@ fn is_io_error(message: &str) -> bool {
         "cannot create ",
         "cannot write ",
         "cannot resolve output directory",
-    ].iter().any(|prefix| message.contains(*prefix))
+    ]
+    .iter()
+    .any(|prefix| message.contains(*prefix))
 }
 
 #[cfg(test)]
@@ -363,32 +396,52 @@ mod tests {
     #[test]
     fn compile_goal_is_inferred_and_can_be_overridden() {
         let base = parse_compile_args(&[
-            "sample.mjs".to_owned(), "-o".to_owned(), "out.ogmb".to_owned(),
-        ]).expect("module defaults");
+            "sample.mjs".to_owned(),
+            "-o".to_owned(),
+            "out.ogmb".to_owned(),
+        ])
+        .expect("module defaults");
         assert_eq!(base.goal, SourceGoal::Module);
         let override_goal = parse_compile_args(&[
-            "sample.mjs".to_owned(), "-o".to_owned(), "out.ogmb".to_owned(),
+            "sample.mjs".to_owned(),
+            "-o".to_owned(),
+            "out.ogmb".to_owned(),
             "--script".to_owned(),
-        ]).expect("explicit script goal");
+        ])
+        .expect("explicit script goal");
         assert_eq!(override_goal.goal, SourceGoal::Script);
     }
 
     #[test]
     fn compile_rejects_typescript_and_conflicting_goals() {
-        assert!(parse_compile_args(&[
-            "sample.ts".to_owned(), "-o".to_owned(), "out.ogmb".to_owned(),
-        ]).is_err());
-        assert!(parse_compile_args(&[
-            "sample.js".to_owned(), "-o".to_owned(), "out.ogmb".to_owned(),
-            "--module".to_owned(), "--script".to_owned(),
-        ]).is_err());
+        assert!(
+            parse_compile_args(&[
+                "sample.ts".to_owned(),
+                "-o".to_owned(),
+                "out.ogmb".to_owned(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_compile_args(&[
+                "sample.js".to_owned(),
+                "-o".to_owned(),
+                "out.ogmb".to_owned(),
+                "--module".to_owned(),
+                "--script".to_owned(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
     fn run_limits_must_be_positive_and_flags_are_explicit() {
         let args = vec![
-            "program.ogmb".to_owned(), "--fuel".to_owned(), "100".to_owned(),
-            "--timeout-ms".to_owned(), "5".to_owned(),
+            "program.ogmb".to_owned(),
+            "--fuel".to_owned(),
+            "100".to_owned(),
+            "--timeout-ms".to_owned(),
+            "5".to_owned(),
         ];
         let (_, options) = parse_run_args(&args).expect("valid limits");
         assert_eq!(options.fuel, Some(100));
@@ -402,11 +455,8 @@ mod tests {
             "--job-capacity",
         ] {
             assert!(
-                parse_run_args(&[
-                    "program.ogmb".to_owned(),
-                    option.to_owned(),
-                    "0".to_owned(),
-                ]).is_err(),
+                parse_run_args(&["program.ogmb".to_owned(), option.to_owned(), "0".to_owned(),])
+                    .is_err(),
                 "{option} must reject zero"
             );
         }
