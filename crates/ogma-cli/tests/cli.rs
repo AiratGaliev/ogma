@@ -848,4 +848,3 @@ fn declaration_files_are_not_executable_compile_inputs() {
         );
     }
 }
-
