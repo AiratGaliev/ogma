@@ -798,7 +798,7 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
             "unsupported-jsx.tsx",
             include_str!("../../../tests/typescript/fixtures/unsupported-jsx.tsx"),
             "typescript.jsx_requires_external_transform",
-            "1:1",
+            "1:14",
         ),
     ];
     for (name, contents, expected_code, expected_position) in cases {
