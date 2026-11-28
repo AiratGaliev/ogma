@@ -1,16 +1,17 @@
 //! JavaScript source frontend boundary.
 //!
 //! OGM-41 supplies the JavaScript parser, source identity/position mapping and
-//! deterministic diagnostics. Semantic resolution and Core IR lowering stay
-//! in their own frontend/compiler boundaries. This crate never depends on the
-//! Ogma Runtime.
+//! deterministic diagnostics. OGM-54 adds a pinned TypeScript type-erasure
+//! frontend over the same arena-owned Oxc AST. Semantic resolution and Core IR
+//! lowering stay in their own frontend/compiler boundaries. This crate never
+//! depends on the Ogma Runtime.
 //!
 //! The Oxc AST borrows from the caller-provided compile-unit arena. A parsed
 //! tree cannot outlive either the source file or its allocator.
 
 #![deny(missing_docs)]
 
-use std::{fmt, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{self, Program};
@@ -18,7 +19,8 @@ use oxc_ast_visit::{Visit, walk};
 use oxc_diagnostics::{OxcDiagnostic, Severity as OxcSeverity};
 use oxc_parser::{ParseOptions as OxcParseOptions, Parser};
 use oxc_semantic::{Semantic, SemanticBuilder};
-use oxc_span::SourceType;
+use oxc_span::{SourceType, Span};
+use oxc_transformer::{JsxOptions, TransformOptions, Transformer};
 use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
 
 mod syntax;
@@ -235,6 +237,8 @@ pub enum DiagnosticPhase {
     Parse,
     /// ECMAScript early syntax/semantic error.
     Early,
+    /// TypeScript feature-profile validation or type-erasure transform.
+    Transform,
 }
 
 /// Severity of a frontend diagnostic.
@@ -505,6 +509,294 @@ pub fn parse<'a>(
         semantic,
         syntax,
     })
+}
+
+
+/// Parses TypeScript with the pinned Ogma profile and erases compile-time-only syntax.
+///
+/// The parser and transformer operate on the same caller-owned Oxc arena. Runtime
+/// syntax that would require new Core IR semantics is rejected before transformation.
+/// JSX is parsed for accurate TSX diagnostics but must be lowered by the consumer's
+/// declared build tool (for example vite-plugin-solid) before Ogma bytecode compilation.
+pub fn parse_typescript<'a>(
+    allocator: &'a Allocator,
+    source: &'a SourceFile,
+    options: ParseRequestOptions,
+    jsx: bool,
+) -> Result<ParsedProgram<'a>, ParseFailure> {
+    let source_type = if jsx { SourceType::tsx() } else { SourceType::ts() };
+    let source_type = match options.goal {
+        ParseGoal::Script => source_type.with_script(true),
+        ParseGoal::Module => source_type.with_module(true),
+    };
+    let oxc_options = OxcParseOptions {
+        preserve_parens: false,
+        ..OxcParseOptions::default()
+    };
+
+    let parsed = Parser::new(allocator, source.text(), source_type)
+        .with_options(oxc_options)
+        .parse();
+    let mut program = parsed.program;
+    let parser_diagnostics = convert_diagnostics(
+        parsed.diagnostics.into_vec(),
+        DiagnosticPhase::Parse,
+        source,
+        OffsetMapping::Identity,
+    );
+    if has_errors(&parser_diagnostics) {
+        return Err(ParseFailure {
+            phase: DiagnosticPhase::Parse,
+            diagnostics: parser_diagnostics,
+        });
+    }
+
+    let mut diagnostics = parser_diagnostics;
+    if options.goal == ParseGoal::Script && options.mode == ParseMode::Strict {
+        let (strict_text, mapping) = strict_script_source(source, program.hashbang.as_ref());
+        let strict_allocator = Allocator::default();
+        let strict_parse = Parser::new(&strict_allocator, &strict_text, source_type)
+            .with_options(oxc_options)
+            .parse();
+        let strict_program = strict_parse.program;
+        let strict_parser_diagnostics = convert_diagnostics(
+            strict_parse.diagnostics.into_vec(),
+            DiagnosticPhase::Early,
+            source,
+            mapping,
+        );
+        if has_errors(&strict_parser_diagnostics) {
+            return Err(ParseFailure {
+                phase: DiagnosticPhase::Early,
+                diagnostics: merge_diagnostics(diagnostics, strict_parser_diagnostics),
+            });
+        }
+        diagnostics.extend(strict_parser_diagnostics);
+
+        let strict_semantic = SemanticBuilder::new_compiler().build(&strict_program);
+        let strict_diagnostics = convert_diagnostics(
+            strict_semantic.diagnostics.into_vec(),
+            DiagnosticPhase::Early,
+            source,
+            mapping,
+        );
+        if has_errors(&strict_diagnostics) {
+            return Err(ParseFailure {
+                phase: DiagnosticPhase::Early,
+                diagnostics: merge_diagnostics(diagnostics, strict_diagnostics),
+            });
+        }
+        diagnostics.extend(strict_diagnostics);
+    }
+
+    let mut unsupported = TypeScriptProfileVisitor {
+        source,
+        diagnostics: Vec::new(),
+    };
+    unsupported.visit_program(&program);
+    if !unsupported.diagnostics.is_empty() {
+        return Err(ParseFailure {
+            phase: DiagnosticPhase::Transform,
+            diagnostics: merge_diagnostics(diagnostics, unsupported.diagnostics),
+        });
+    }
+
+    let semantic_before_transform =
+        SemanticBuilder::new_compiler().with_excess_capacity(2.0).build(&program);
+    let semantic_diagnostics = convert_diagnostics(
+        semantic_before_transform.diagnostics.into_vec(),
+        DiagnosticPhase::Early,
+        source,
+        OffsetMapping::Identity,
+    );
+    if has_errors(&semantic_diagnostics) {
+        return Err(ParseFailure {
+            phase: DiagnosticPhase::Early,
+            diagnostics: merge_diagnostics(diagnostics, semantic_diagnostics),
+        });
+    }
+    diagnostics.extend(semantic_diagnostics);
+
+    let mut transform_options = TransformOptions::default();
+    transform_options.typescript.allow_namespaces = false;
+    transform_options.typescript.optimize_const_enums = false;
+    transform_options.typescript.optimize_enums = false;
+    transform_options.jsx = JsxOptions::disable();
+
+    let transformed = Transformer::new(
+        allocator,
+        Path::new(source.uri()),
+        &transform_options,
+    )
+    .build_with_scoping(semantic_before_transform.semantic.into_scoping(), &mut program);
+    let mut transform_diagnostics = convert_diagnostics(
+        transformed.diagnostics.into_vec(),
+        DiagnosticPhase::Transform,
+        source,
+        OffsetMapping::Identity,
+    );
+    // The pinned profile is fail-closed: Oxc warnings indicate syntax for which
+    // this profile cannot prove a semantics-preserving transform.
+    for diagnostic in &mut transform_diagnostics {
+        diagnostic.severity = DiagnosticSeverity::Error;
+    }
+    if has_errors(&transform_diagnostics) {
+        return Err(ParseFailure {
+            phase: DiagnosticPhase::Transform,
+            diagnostics: merge_diagnostics(diagnostics, transform_diagnostics),
+        });
+    }
+    diagnostics.extend(transform_diagnostics);
+
+    let semantic_after_transform = SemanticBuilder::new_compiler().build(&program);
+    let lowered_semantic_diagnostics = convert_diagnostics(
+        semantic_after_transform.diagnostics.into_vec(),
+        DiagnosticPhase::Early,
+        source,
+        OffsetMapping::Identity,
+    );
+    if has_errors(&lowered_semantic_diagnostics) {
+        return Err(ParseFailure {
+            phase: DiagnosticPhase::Early,
+            diagnostics: merge_diagnostics(diagnostics, lowered_semantic_diagnostics),
+        });
+    }
+    diagnostics.extend(lowered_semantic_diagnostics);
+
+    let mut semantic =
+        build_semantic_snapshot(&program, source, &semantic_after_transform.semantic);
+    let mut syntax = syntax::build_syntax_program(&program, source, &semantic);
+    if options.goal == ParseGoal::Module {
+        let prefix = module_identity_prefix(source);
+        namespace_module_semantics(&mut semantic, &prefix);
+        syntax::namespace_syntax_program(&mut syntax, &prefix);
+    }
+    let source_has_strict_directive = program
+        .directives
+        .iter()
+        .any(|directive| directive.directive.as_str() == "use strict");
+    Ok(ParsedProgram {
+        program,
+        source,
+        goal: options.goal,
+        is_strict: options.goal == ParseGoal::Module
+            || options.mode == ParseMode::Strict
+            || source_has_strict_directive,
+        diagnostics,
+        semantic,
+        syntax,
+    })
+}
+
+struct TypeScriptProfileVisitor<'s> {
+    source: &'s SourceFile,
+    diagnostics: Vec<ParseDiagnostic>,
+}
+
+impl TypeScriptProfileVisitor<'_> {
+    fn reject(&mut self, code: &str, message: &str, span: Span, help: &str) {
+        self.diagnostics.push(ParseDiagnostic {
+            phase: DiagnosticPhase::Transform,
+            code: Some(code.to_owned()),
+            severity: DiagnosticSeverity::Error,
+            message: message.to_owned(),
+            labels: vec![DiagnosticLabel {
+                span: self.source.span(span.start as usize, span.end as usize),
+                message: None,
+                primary: true,
+            }],
+            help: Some(help.to_owned()),
+            note: None,
+        });
+    }
+}
+
+impl<'a, 's> Visit<'a> for TypeScriptProfileVisitor<'s> {
+    fn visit_ts_enum_declaration(&mut self, node: &ast::TSEnumDeclaration<'a>) {
+        if !node.declare {
+            self.reject(
+                "typescript.enum_runtime_not_supported",
+                "Runtime TypeScript enums are not part of the Ogma TypeScript profile.",
+                node.span,
+                "Use a JavaScript object or a union of string/number literals until runtime enum lowering is added.",
+            );
+        }
+        walk::walk_ts_enum_declaration(self, node);
+    }
+
+    fn visit_ts_namespace_declaration(&mut self, node: &ast::TSNamespaceDeclaration<'a>) {
+        if !node.declare {
+            self.reject(
+                "typescript.namespace_runtime_not_supported",
+                "Runtime TypeScript namespaces are not part of the Ogma TypeScript profile.",
+                node.span,
+                "Use ECMAScript modules and explicitly exported declarations.",
+            );
+        }
+        walk::walk_ts_namespace_declaration(self, node);
+    }
+
+    fn visit_formal_parameter(&mut self, node: &ast::FormalParameter<'a>) {
+        if node.accessibility.is_some() || node.readonly || node.r#override {
+            self.reject(
+                "typescript.parameter_property_not_supported",
+                "TypeScript parameter properties require class-constructor lowering.",
+                node.span,
+                "Declare the class field explicitly and assign it in the constructor body.",
+            );
+        }
+        walk::walk_formal_parameter(self, node);
+    }
+
+    fn visit_decorator(&mut self, node: &ast::Decorator<'a>) {
+        self.reject(
+            "typescript.decorators_not_supported",
+            "TypeScript decorators are outside the pinned Ogma frontend profile.",
+            node.span,
+            "Apply decorators in the consumer's explicitly configured build pipeline.",
+        );
+        walk::walk_decorator(self, node);
+    }
+
+    fn visit_ts_import_equals_declaration(&mut self, node: &ast::TSImportEqualsDeclaration<'a>) {
+        self.reject(
+            "typescript.import_equals_not_supported",
+            "TypeScript import-equals declarations are not supported.",
+            node.span,
+            "Use ECMAScript import declarations supported by the Ogma module pipeline.",
+        );
+        walk::walk_ts_import_equals_declaration(self, node);
+    }
+
+    fn visit_ts_export_assignment(&mut self, node: &ast::TSExportAssignment<'a>) {
+        self.reject(
+            "typescript.export_assignment_not_supported",
+            "TypeScript export assignments are not supported.",
+            node.span,
+            "Use ECMAScript export declarations.",
+        );
+        walk::walk_ts_export_assignment(self, node);
+    }
+
+    fn visit_jsx_element(&mut self, node: &ast::JSXElement<'a>) {
+        self.reject(
+            "typescript.jsx_requires_external_transform",
+            "JSX syntax must be lowered by the declared consumer build tool before Ogma compilation.",
+            node.span,
+            "For Solid Native, run the pinned vite-plugin-solid transform and compile its JavaScript output.",
+        );
+        walk::walk_jsx_element(self, node);
+    }
+
+    fn visit_jsx_fragment(&mut self, node: &ast::JSXFragment<'a>) {
+        self.reject(
+            "typescript.jsx_requires_external_transform",
+            "JSX syntax must be lowered by the declared consumer build tool before Ogma compilation.",
+            node.span,
+            "For Solid Native, run the pinned vite-plugin-solid transform and compile its JavaScript output.",
+        );
+        walk::walk_jsx_fragment(self, node);
+    }
 }
 
 /// Returns a deterministic SHA-256 fingerprint of AST structure.
@@ -1945,5 +2237,89 @@ mod syntax_projection_tests {
                 ..
             }) if syntax == "spread_call_argument"
         ));
+    }
+}
+
+
+#[cfg(test)]
+mod typescript_profile_tests {
+    use super::*;
+
+    fn parse_ts<'a>(
+        allocator: &'a Allocator,
+        source: &'a SourceFile,
+        jsx: bool,
+    ) -> Result<ParsedProgram<'a>, ParseFailure> {
+        parse_typescript(
+            allocator,
+            source,
+            ParseRequestOptions {
+                goal: ParseGoal::Module,
+                mode: ParseMode::Sloppy,
+            },
+            jsx,
+        )
+    }
+
+    #[test]
+    fn erases_type_only_syntax_without_rewriting_runtime_source_spans() {
+        let code = "import type { MissingType } from './missing.js';\ntype Value = number;\ninterface Box<T> { value: T }\nfunction identity<T>(value: T): T { return value; }\nexport const result: Value = identity(40 as Value) + 2;\n";
+        let allocator = Allocator::default();
+        let source = SourceFile::new("typescript-test", "memory:///src/sample.ts", None, code)
+            .expect("valid TypeScript source");
+        let parsed = parse_ts(&allocator, &source, false).expect("supported TypeScript subset");
+        assert!(parsed.program.source_type.is_javascript());
+        assert!(parsed.diagnostics.is_empty());
+        assert!(parsed.syntax.module.imports.is_empty());
+
+        let identity = parsed
+            .syntax
+            .functions
+            .iter()
+            .find(|function| function.name == "identity")
+            .expect("runtime function remains");
+        let start = identity.span.start_byte as usize;
+        assert_eq!(&code[start..start + "function".len()], "function");
+        assert!(identity.span.end_byte as usize <= code.len());
+
+        let debug = format!("{:?}", parsed.program.body);
+        assert!(!debug.contains("TSTypeAliasDeclaration"));
+        assert!(!debug.contains("TSInterfaceDeclaration"));
+        assert!(!debug.contains("TSTypeAnnotation"));
+    }
+
+    #[test]
+    fn runtime_enum_is_rejected_at_its_original_source_span() {
+        let code = "enum Color { Red, Green }\n";
+        let allocator = Allocator::default();
+        let source = SourceFile::new("typescript-test", "memory:///src/enum.ts", None, code)
+            .expect("valid TypeScript source");
+        let failure = parse_ts(&allocator, &source, false).expect_err("runtime enum must fail closed");
+        assert_eq!(failure.phase, DiagnosticPhase::Transform);
+        let diagnostic = failure
+            .diagnostics
+            .iter()
+            .find(|item| item.code.as_deref() == Some("typescript.enum_runtime_not_supported"))
+            .expect("stable enum diagnostic");
+        let label = diagnostic.labels.first().expect("primary source label");
+        assert_eq!(label.span.start_byte, 0);
+        assert_eq!(label.span.end_byte as usize, "enum Color { Red, Green }".len());
+        assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
+    }
+
+    #[test]
+    fn tsx_jsx_is_rejected_for_the_consumer_owned_transform() {
+        let code = "const view = <div />;\n";
+        let allocator = Allocator::default();
+        let source = SourceFile::new("typescript-test", "memory:///src/sample.tsx", None, code)
+            .expect("valid TSX source");
+        let failure = parse_ts(&allocator, &source, true)
+            .expect_err("raw JSX must not reach Core IR");
+        assert_eq!(failure.phase, DiagnosticPhase::Transform);
+        assert!(
+            failure.diagnostics.iter().any(|item| {
+                item.code.as_deref() == Some("typescript.jsx_requires_external_transform")
+            })
+        );
     }
 }

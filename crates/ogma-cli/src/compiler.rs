@@ -8,6 +8,7 @@ use crate::module_source::compile_dependency_graph;
 use ogma_compiler::{CompileFailure, compile_to_bytecode};
 use ogma_frontend::{
     DiagnosticSeverity, ParseGoal, ParseMode, ParseRequestOptions, SourceFile, parse,
+    parse_typescript,
 };
 use oxc_allocator::Allocator;
 use std::fs;
@@ -21,10 +22,18 @@ pub(crate) enum SourceGoal {
     Module,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceLanguage {
+    JavaScript,
+    TypeScript,
+    TypeScriptJsx,
+}
+
 pub(crate) struct CompileOptions {
     pub(crate) source: PathBuf,
     pub(crate) output: PathBuf,
     pub(crate) goal: SourceGoal,
+    pub(crate) language: SourceLanguage,
 }
 
 pub(crate) struct CompileSummary {
@@ -84,7 +93,12 @@ pub(crate) fn compile_file(options: CompileOptions) -> Result<CompileSummary, St
         },
         mode: ParseMode::Sloppy,
     };
-    let parsed = parse(&allocator, &source, parse_options)
+    let parsed_result = match options.language {
+        SourceLanguage::JavaScript => parse(&allocator, &source, parse_options),
+        SourceLanguage::TypeScript => parse_typescript(&allocator, &source, parse_options, false),
+        SourceLanguage::TypeScriptJsx => parse_typescript(&allocator, &source, parse_options, true),
+    };
+    let parsed = parsed_result
         .map_err(|failure| render_parse_failure(&source_path.display().to_string(), &failure))?;
 
     for diagnostic in parsed

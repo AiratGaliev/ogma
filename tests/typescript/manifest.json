@@ -1,0 +1,16 @@
+{
+  "schema": "ogma.typescript-fixtures",
+  "version": "1.0",
+  "profile": "ogma.typescript.v1",
+  "positive": [
+    "fixtures/type-erasure.ts",
+    "fixtures/tsx-type-erasure.tsx"
+  ],
+  "negative": [
+    { "path": "fixtures/unsupported-enum.ts", "code": "typescript.enum_runtime_not_supported" },
+    { "path": "fixtures/unsupported-namespace.ts", "code": "typescript.namespace_runtime_not_supported" },
+    { "path": "fixtures/unsupported-parameter-property.ts", "code": "typescript.parameter_property_not_supported" },
+    { "path": "fixtures/unsupported-decorator.ts", "code": "typescript.decorators_not_supported" },
+    { "path": "fixtures/unsupported-jsx.tsx", "code": "typescript.jsx_requires_external_transform" }
+  ]
+}

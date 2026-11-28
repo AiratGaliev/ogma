@@ -1,0 +1,77 @@
+{
+  "schema": "ogma.typescript-profile",
+  "version": "1.0",
+  "profileId": "ogma.typescript.v1",
+  "language": {
+    "name": "TypeScript",
+    "referenceVersion": "7.0.2",
+    "referenceCommit": "1e4744d68260a7cb91b62b12edc3f6a2187faaf1",
+    "typeChecking": false,
+    "runtimeSemantics": "ecmascript-only"
+  },
+  "frontend": {
+    "parser": { "name": "oxc_parser", "version": "0.158.0" },
+    "transformer": {
+      "name": "oxc_transformer",
+      "version": "0.158.0",
+      "sourceCommit": "74e5e665ab8227c3d43abf3ce0e4383830e80c12",
+      "operation": "in-place-type-erasure",
+      "jsx": "preserve-and-reject-before-core-ir",
+      "transformWarnings": "errors"
+    },
+    "astOwnership": "caller-owned-oxc-arena",
+    "duplicateAst": false,
+    "rustEdition": "2024",
+    "rustMsrv": "1.100",
+    "license": "MIT"
+  },
+  "supported": [
+    "type-annotations",
+    "type-aliases",
+    "interfaces",
+    "generic-declarations",
+    "generic-parameters",
+    "generic-arguments",
+    "type-assertions",
+    "non-null-assertions",
+    "satisfies",
+    "type-only-imports",
+    "type-only-exports",
+    "ambient-declare-syntax-without-runtime-body",
+    "tsx-without-jsx"
+  ],
+  "unsupported": [
+    "runtime-enums",
+    "runtime-namespaces",
+    "decorators",
+    "decorator-metadata",
+    "parameter-properties",
+    "import-equals",
+    "export-assignment",
+    "jsx-elements",
+    "jsx-fragments",
+    "declaration-files-as-entrypoints",
+    "syntax-outside-ogma-core-ir-profile"
+  ],
+  "jsx": {
+    "owner": "consumer-build-tool",
+    "solidNative": {
+      "plugin": "vite-plugin-solid",
+      "version": "2.11.15",
+      "output": "javascript-before-ogma-compile"
+    },
+    "reactTransform": false
+  },
+  "sourceProvenance": {
+    "sourceOfTruth": "ogma_frontend::SourceFile",
+    "offsets": ["utf8-byte", "utf16-line-column"],
+    "runtimeNodes": "original-oxc-spans",
+    "generatedRuntimeNodes": "none-in-v1",
+    "futureGeneratedNodesRequireOriginSpans": true
+  },
+  "moduleResolution": {
+    "typeOnlyImports": "erased-before-resolution",
+    "runtimeResolution": "existing-ogma-cli-contract",
+    "nodePackageResolution": "ogm-59"
+  }
+}
