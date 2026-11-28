@@ -80,7 +80,9 @@ pub(crate) fn run(args: Vec<String>) -> u8 {
 
 fn compile_command(args: &[String]) -> u8 {
     if args == ["--help"] || args == ["-h"] {
-        println!("ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]");
+        println!(
+            "ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]"
+        );
         return EXIT_SUCCESS;
     }
     let parsed = match parse_compile_args(args) {
@@ -119,7 +121,9 @@ fn compile_command(args: &[String]) -> u8 {
 
 fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     if args == ["--help"] || args == ["-h"] {
-        println!("ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]");
+        println!(
+            "ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]"
+        );
         return Err(String::new());
     }
     let mut source = None;
@@ -163,8 +167,14 @@ fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     if output.extension().and_then(|value| value.to_str()) != Some("ogmb") {
         return Err("compile output must use the .ogmb extension".to_owned());
     }
-    let file_name = source.file_name().and_then(|value| value.to_str()).unwrap_or_default();
-    if [".d.ts", ".d.mts", ".d.cts"].iter().any(|suffix| file_name.ends_with(suffix)) {
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|suffix| file_name.ends_with(suffix))
+    {
         return Err("TypeScript declaration files do not produce executable output".to_owned());
     }
     let (inferred_goal, language) = match source.extension().and_then(|value| value.to_str()) {

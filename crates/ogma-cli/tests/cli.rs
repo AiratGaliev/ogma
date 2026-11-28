@@ -695,7 +695,6 @@ fn evaluate_with_public_embedding_api(entry: &Path, dependency: &Path) -> f64 {
     number
 }
 
-
 #[test]
 fn typescript_type_erasure_uses_the_production_compiler_and_runtime() {
     let directory = TestDirectory::new();
@@ -715,11 +714,20 @@ fn typescript_type_erasure_uses_the_production_compiler_and_runtime() {
     );
 
     let inspected = cli(&["inspect", artifact.to_str().expect("UTF-8 path")]);
-    assert!(inspected.status.success(), "inspect failed: {}", String::from_utf8_lossy(&inspected.stderr));
+    assert!(
+        inspected.status.success(),
+        "inspect failed: {}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
     let inspection: serde_json::Value =
         serde_json::from_slice(&inspected.stdout).expect("inspection JSON");
     assert_eq!(inspection["compilation_unit"]["dependency_module_count"], 0);
-    assert!(inspection["compilation_unit"]["module"]["imports"].as_array().unwrap().is_empty());
+    assert!(
+        inspection["compilation_unit"]["module"]["imports"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let executed = cli(&["run", artifact.to_str().expect("UTF-8 path")]);
     assert!(
@@ -801,8 +809,17 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
             String::from_utf8_lossy(&result.stderr)
         );
         let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(stderr.contains(expected_code), "{name}: missing {expected_code}: {stderr}");
-        assert!(stderr.contains(":1:1: error"), "{name}: missing original source location: {stderr}");
-        assert!(!artifact.exists(), "{name}: rejected source must not leave an artifact");
+        assert!(
+            stderr.contains(expected_code),
+            "{name}: missing {expected_code}: {stderr}"
+        );
+        assert!(
+            stderr.contains(":1:1: error"),
+            "{name}: missing original source location: {stderr}"
+        );
+        assert!(
+            !artifact.exists(),
+            "{name}: rejected source must not leave an artifact"
+        );
     }
 }

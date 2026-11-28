@@ -20,8 +20,8 @@ use oxc_diagnostics::{OxcDiagnostic, Severity as OxcSeverity};
 use oxc_parser::{ParseOptions as OxcParseOptions, Parser};
 use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_span::{SourceType, Span};
-use oxc_transformer::{JsxOptions, TransformOptions, Transformer};
 use oxc_syntax::{reference::ReferenceId, scope::ScopeId, symbol::SymbolId};
+use oxc_transformer::{JsxOptions, TransformOptions, Transformer};
 
 mod syntax;
 pub use syntax::{
@@ -511,7 +511,6 @@ pub fn parse<'a>(
     })
 }
 
-
 /// Parses TypeScript with the pinned Ogma profile and erases compile-time-only syntax.
 ///
 /// The parser and transformer operate on the same caller-owned Oxc arena. Runtime
@@ -524,7 +523,11 @@ pub fn parse_typescript<'a>(
     options: ParseRequestOptions,
     jsx: bool,
 ) -> Result<ParsedProgram<'a>, ParseFailure> {
-    let source_type = if jsx { SourceType::tsx() } else { SourceType::ts() };
+    let source_type = if jsx {
+        SourceType::tsx()
+    } else {
+        SourceType::ts()
+    };
     let source_type = match options.goal {
         ParseGoal::Script => source_type.with_script(true),
         ParseGoal::Module => source_type.with_module(true),
@@ -601,8 +604,9 @@ pub fn parse_typescript<'a>(
         });
     }
 
-    let semantic_before_transform =
-        SemanticBuilder::new_compiler().with_excess_capacity(2.0).build(&program);
+    let semantic_before_transform = SemanticBuilder::new_compiler()
+        .with_excess_capacity(2.0)
+        .build(&program);
     let semantic_diagnostics = convert_diagnostics(
         semantic_before_transform.diagnostics.into_vec(),
         DiagnosticPhase::Early,
@@ -623,12 +627,11 @@ pub fn parse_typescript<'a>(
     transform_options.typescript.optimize_enums = false;
     transform_options.jsx = JsxOptions::disable();
 
-    let transformed = Transformer::new(
-        allocator,
-        Path::new(source.uri()),
-        &transform_options,
-    )
-    .build_with_scoping(semantic_before_transform.semantic.into_scoping(), &mut program);
+    let transformed = Transformer::new(allocator, Path::new(source.uri()), &transform_options)
+        .build_with_scoping(
+            semantic_before_transform.semantic.into_scoping(),
+            &mut program,
+        );
     let mut transform_diagnostics = convert_diagnostics(
         transformed.diagnostics.into_vec(),
         DiagnosticPhase::Transform,
@@ -2240,7 +2243,6 @@ mod syntax_projection_tests {
     }
 }
 
-
 #[cfg(test)]
 mod typescript_profile_tests {
     use super::*;
@@ -2294,7 +2296,8 @@ mod typescript_profile_tests {
         let allocator = Allocator::default();
         let source = SourceFile::new("typescript-test", "memory:///src/enum.ts", None, code)
             .expect("valid TypeScript source");
-        let failure = parse_ts(&allocator, &source, false).expect_err("runtime enum must fail closed");
+        let failure =
+            parse_ts(&allocator, &source, false).expect_err("runtime enum must fail closed");
         assert_eq!(failure.phase, DiagnosticPhase::Transform);
         let diagnostic = failure
             .diagnostics
@@ -2303,7 +2306,10 @@ mod typescript_profile_tests {
             .expect("stable enum diagnostic");
         let label = diagnostic.labels.first().expect("primary source label");
         assert_eq!(label.span.start_byte, 0);
-        assert_eq!(label.span.end_byte as usize, "enum Color { Red, Green }".len());
+        assert_eq!(
+            label.span.end_byte as usize,
+            "enum Color { Red, Green }".len()
+        );
         assert_eq!(diagnostic.severity, DiagnosticSeverity::Error);
     }
 
@@ -2313,13 +2319,11 @@ mod typescript_profile_tests {
         let allocator = Allocator::default();
         let source = SourceFile::new("typescript-test", "memory:///src/sample.tsx", None, code)
             .expect("valid TSX source");
-        let failure = parse_ts(&allocator, &source, true)
-            .expect_err("raw JSX must not reach Core IR");
+        let failure =
+            parse_ts(&allocator, &source, true).expect_err("raw JSX must not reach Core IR");
         assert_eq!(failure.phase, DiagnosticPhase::Transform);
-        assert!(
-            failure.diagnostics.iter().any(|item| {
-                item.code.as_deref() == Some("typescript.jsx_requires_external_transform")
-            })
-        );
+        assert!(failure.diagnostics.iter().any(|item| {
+            item.code.as_deref() == Some("typescript.jsx_requires_external_transform")
+        }));
     }
 }
