@@ -88,31 +88,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "417bef24afe1460300965a25ff4a24b8b45ad011948302ec221e8a0a81eb2c79"
 
 [[package]]
-name = "crossbeam-deque"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-epoch"
-version = "0.9.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -130,18 +105,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
-name = "embedded-io"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
-
-[[package]]
-name = "embedded-io"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -154,43 +117,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
-name = "futures-channel"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
-dependencies = [
- "futures-core",
- "futures-sink",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
-
-[[package]]
-name = "futures-io"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
-
-[[package]]
-name = "futures-macro"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.10",
-]
-
-[[package]]
-name = "futures-sink"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
 
 [[package]]
 name = "futures-task"
@@ -204,13 +134,8 @@ version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
- "futures-channel",
  "futures-core",
- "futures-io",
- "futures-macro",
- "futures-sink",
  "futures-task",
- "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -326,9 +251,6 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
- "rayon",
- "serde",
- "serde_core",
 ]
 
 [[package]]
@@ -877,8 +799,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
 dependencies = [
  "cobs",
- "embedded-io 0.4.0",
- "embedded-io 0.6.1",
  "serde",
 ]
 
@@ -909,26 +829,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rayon"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
-dependencies = [
- "either",
- "rayon-core",
-]
-
-[[package]]
-name = "rayon-core"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
-dependencies = [
- "crossbeam-deque",
- "crossbeam-utils",
 ]
 
 [[package]]
