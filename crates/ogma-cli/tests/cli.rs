@@ -774,29 +774,34 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
             "unsupported-enum.ts",
             include_str!("../../../tests/typescript/fixtures/unsupported-enum.ts"),
             "typescript.enum_runtime_not_supported",
+            "1:1",
         ),
         (
             "unsupported-namespace.ts",
             include_str!("../../../tests/typescript/fixtures/unsupported-namespace.ts"),
             "typescript.namespace_runtime_not_supported",
+            "1:1",
         ),
         (
             "unsupported-parameter-property.ts",
             include_str!("../../../tests/typescript/fixtures/unsupported-parameter-property.ts"),
             "typescript.parameter_property_not_supported",
+            "1:25",
         ),
         (
             "unsupported-decorator.ts",
             include_str!("../../../tests/typescript/fixtures/unsupported-decorator.ts"),
             "typescript.decorators_not_supported",
+            "1:1",
         ),
         (
             "unsupported-jsx.tsx",
             include_str!("../../../tests/typescript/fixtures/unsupported-jsx.tsx"),
             "typescript.jsx_requires_external_transform",
+            "1:1",
         ),
     ];
-    for (name, contents, expected_code) in cases {
+    for (name, contents, expected_code, expected_position) in cases {
         let directory = TestDirectory::new();
         let source = directory.path().join(name);
         let artifact = directory.path().join("rejected.ogmb");
@@ -814,8 +819,8 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
             "{name}: missing {expected_code}: {stderr}"
         );
         assert!(
-            stderr.contains(":1:1: error"),
-            "{name}: missing original source location: {stderr}"
+            stderr.contains(&format!(":{expected_position}: error")),
+            "{name}: expected source location {expected_position}: {stderr}"
         );
         assert!(
             !artifact.exists(),
