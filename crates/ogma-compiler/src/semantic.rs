@@ -401,6 +401,7 @@ pub fn from_frontend_diagnostic(diagnostic: &ParseDiagnostic) -> SemanticDiagnos
         code: match diagnostic.phase {
             ogma_frontend::DiagnosticPhase::Parse => "frontend.parse",
             ogma_frontend::DiagnosticPhase::Early => "frontend.early_error",
+            ogma_frontend::DiagnosticPhase::Transform => "frontend.transform",
         },
         span: diagnostic
             .labels

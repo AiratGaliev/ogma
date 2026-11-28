@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-fast-${{ github.event.pull_request.number || github.ref }}
@@ -205,6 +205,13 @@ jobs:
           diff -u .artifacts/evidence/ogm-54-lock-resolution/Cargo.lock.before .artifacts/evidence/ogm-54-lock-resolution/Cargo.lock.after > .artifacts/evidence/ogm-54-lock-resolution/Cargo.lock.diff || true
           printf 'cargo_check_exit=%s\\n' "$cargo_status" > .artifacts/evidence/ogm-54-lock-resolution/status.txt
           echo "::notice::Temporary OGM-54 lockfile diagnostic run; before/after lockfiles uploaded as CI evidence."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(OGM-54): use Cargo-resolved lockfile"
+            git push origin "HEAD:${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          fi
 
       - name: Build OGM JavaScript parser adapter
         if: hashFiles('Cargo.toml') != ''
