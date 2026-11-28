@@ -2314,13 +2314,9 @@ mod typescript_profile_tests {
 
         let valid = "type Count = number;\nexport const count: Count = 2;\n";
         let fresh_allocator = Allocator::default();
-        let fresh_source = SourceFile::new(
-            "typescript-test",
-            "memory:///src/recovered.ts",
-            None,
-            valid,
-        )
-        .expect("valid source container");
+        let fresh_source =
+            SourceFile::new("typescript-test", "memory:///src/recovered.ts", None, valid)
+                .expect("valid source container");
         let parsed = parse_ts(&fresh_allocator, &fresh_source, false)
             .expect("a malformed prior input must not poison the next parse");
         assert!(parsed.diagnostics.is_empty());
