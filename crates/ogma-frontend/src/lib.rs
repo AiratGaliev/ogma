@@ -2291,6 +2291,42 @@ mod typescript_profile_tests {
     }
 
     #[test]
+    fn malformed_typescript_reports_original_parse_errors_and_allows_a_fresh_parse() {
+        let malformed = "const first: = 1;\nconst second: = 2;\n";
+        let allocator = Allocator::default();
+        let source = SourceFile::new(
+            "typescript-test",
+            "memory:///src/malformed.ts",
+            None,
+            malformed,
+        )
+        .expect("valid source container");
+        let failure = parse_ts(&allocator, &source, false)
+            .expect_err("malformed TypeScript must stop before transformation");
+        assert_eq!(failure.phase, DiagnosticPhase::Parse);
+        assert!(!failure.diagnostics.is_empty());
+        for diagnostic in &failure.diagnostics {
+            for label in &diagnostic.labels {
+                assert!(label.span.start_byte <= label.span.end_byte);
+                assert!(label.span.end_byte as usize <= malformed.len());
+            }
+        }
+
+        let valid = "type Count = number;\nexport const count: Count = 2;\n";
+        let fresh_allocator = Allocator::default();
+        let fresh_source = SourceFile::new(
+            "typescript-test",
+            "memory:///src/recovered.ts",
+            None,
+            valid,
+        )
+        .expect("valid source container");
+        let parsed = parse_ts(&fresh_allocator, &fresh_source, false)
+            .expect("a malformed prior input must not poison the next parse");
+        assert!(parsed.diagnostics.is_empty());
+    }
+
+    #[test]
     fn runtime_enum_is_rejected_at_its_original_source_span() {
         let code = "enum Color { Red, Green }\n";
         let allocator = Allocator::default();

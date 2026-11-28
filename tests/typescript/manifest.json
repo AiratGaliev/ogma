@@ -7,10 +7,33 @@
     "fixtures/tsx-type-erasure.tsx"
   ],
   "negative": [
-    { "path": "fixtures/unsupported-enum.ts", "code": "typescript.enum_runtime_not_supported" },
-    { "path": "fixtures/unsupported-namespace.ts", "code": "typescript.namespace_runtime_not_supported" },
-    { "path": "fixtures/unsupported-parameter-property.ts", "code": "typescript.parameter_property_not_supported" },
-    { "path": "fixtures/unsupported-decorator.ts", "code": "typescript.decorators_not_supported" },
-    { "path": "fixtures/unsupported-jsx.tsx", "code": "typescript.jsx_requires_external_transform" }
+    {
+      "path": "fixtures/unsupported-enum.ts",
+      "code": "typescript.enum_runtime_not_supported"
+    },
+    {
+      "path": "fixtures/unsupported-namespace.ts",
+      "code": "typescript.namespace_runtime_not_supported"
+    },
+    {
+      "path": "fixtures/unsupported-parameter-property.ts",
+      "code": "typescript.parameter_property_not_supported"
+    },
+    {
+      "path": "fixtures/unsupported-decorator.ts",
+      "code": "typescript.decorators_not_supported"
+    },
+    {
+      "path": "fixtures/unsupported-jsx.tsx",
+      "code": "typescript.jsx_requires_external_transform"
+    },
+    {
+      "path": "fixtures/unsupported-import-equals.ts",
+      "code": "typescript.import_equals_not_supported"
+    },
+    {
+      "path": "fixtures/unsupported-export-assignment.ts",
+      "code": "typescript.export_assignment_not_supported"
+    }
   ]
 }

@@ -800,6 +800,18 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
             "typescript.jsx_requires_external_transform",
             "1:14",
         ),
+        (
+            "unsupported-import-equals.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-import-equals.ts"),
+            "typescript.import_equals_not_supported",
+            "1:1",
+        ),
+        (
+            "unsupported-export-assignment.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-export-assignment.ts"),
+            "typescript.export_assignment_not_supported",
+            "2:1",
+        ),
     ];
     for (name, contents, expected_code, expected_position) in cases {
         let directory = TestDirectory::new();
