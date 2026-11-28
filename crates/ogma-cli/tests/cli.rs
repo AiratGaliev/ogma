@@ -823,3 +823,29 @@ fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
         );
     }
 }
+
+#[test]
+fn declaration_files_are_not_executable_compile_inputs() {
+    let directory = TestDirectory::new();
+    for extension in ["d.ts", "d.mts", "d.cts"] {
+        let source = directory.path().join(format!("types.{extension}"));
+        let artifact = directory.path().join(format!("types-{extension}.ogmb"));
+        fs::write(&source, "export interface Shape { value: number }\\n")
+            .expect("write declaration file");
+
+        let result = compile(&source, &artifact, None);
+        assert!(
+            !result.status.success(),
+            "{extension} must not compile as an executable entry point"
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("declaration files"),
+            "{extension}: missing declaration-file rejection diagnostic"
+        );
+        assert!(
+            !artifact.exists(),
+            "{extension}: declaration input must not produce an artifact"
+        );
+    }
+}
+
