@@ -416,10 +416,32 @@ pub fn from_frontend_diagnostic(diagnostic: &ParseDiagnostic) -> SemanticDiagnos
 mod tests {
     use super::*;
     use ogma_frontend::{
-        ResolvedBinding, ResolvedBindingKind, ResolvedFunction, ResolvedReference, ResolvedScope,
-        SemanticSnapshot, SourcePosition,
+        DiagnosticLabel, DiagnosticPhase, DiagnosticSeverity, ResolvedBinding, ResolvedBindingKind,
+        ResolvedFunction, ResolvedReference, ResolvedScope, SemanticSnapshot, SourcePosition,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn transform_diagnostics_map_to_the_compiler_surface_with_original_spans() {
+        let diagnostic = ParseDiagnostic {
+            phase: DiagnosticPhase::Transform,
+            code: Some("typescript.enum_runtime_not_supported".to_owned()),
+            severity: DiagnosticSeverity::Error,
+            message: "Runtime enums are unsupported".to_owned(),
+            labels: vec![DiagnosticLabel {
+                span: span(4, 9),
+                message: Some("enum declaration".to_owned()),
+                primary: true,
+            }],
+            help: Some("Use an object".to_owned()),
+            note: None,
+        };
+
+        let adapted = from_frontend_diagnostic(&diagnostic);
+        assert_eq!(adapted.code, "frontend.transform");
+        assert_eq!(adapted.span, Some(span(4, 9)));
+        assert_eq!(adapted.message, "Runtime enums are unsupported");
+    }
 
     fn span(start_byte: u32, end_byte: u32) -> SourceSpan {
         SourceSpan {
