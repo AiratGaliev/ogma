@@ -38,6 +38,7 @@ fn phase_name(phase: DiagnosticPhase) -> &'static str {
     match phase {
         DiagnosticPhase::Parse => "parse",
         DiagnosticPhase::Early => "early",
+        DiagnosticPhase::Transform => "transform",
     }
 }
 

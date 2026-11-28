@@ -694,3 +694,174 @@ fn evaluate_with_public_embedding_api(entry: &Path, dependency: &Path) -> f64 {
     context.release(handle).expect("release export root");
     number
 }
+
+#[test]
+fn typescript_type_erasure_uses_the_production_compiler_and_runtime() {
+    let directory = TestDirectory::new();
+    let source = directory.path().join("main.ts");
+    let artifact = directory.path().join("program.ogmb");
+    fs::write(
+        &source,
+        include_str!("../../../tests/typescript/fixtures/type-erasure.ts"),
+    )
+    .expect("write TypeScript source");
+
+    let compiled = compile(&source, &artifact, None);
+    assert!(
+        compiled.status.success(),
+        "TypeScript compile failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+
+    let inspected = cli(&["inspect", artifact.to_str().expect("UTF-8 path")]);
+    assert!(
+        inspected.status.success(),
+        "inspect failed: {}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+    let inspection: serde_json::Value =
+        serde_json::from_slice(&inspected.stdout).expect("inspection JSON");
+    assert_eq!(inspection["compilation_unit"]["dependency_module_count"], 0);
+    assert!(
+        inspection["compilation_unit"]["module"]["imports"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let executed = cli(&["run", artifact.to_str().expect("UTF-8 path")]);
+    assert!(
+        executed.status.success(),
+        "TypeScript Runtime execution failed: {}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&executed.stdout).expect("run JSON");
+    assert_eq!(result["completion"], "evaluated");
+    assert_eq!(result["exports"]["result"].as_f64(), Some(42.0));
+}
+
+#[test]
+fn tsx_without_jsx_uses_the_same_type_erasure_pipeline() {
+    let directory = TestDirectory::new();
+    let source = directory.path().join("main.tsx");
+    let artifact = directory.path().join("program.ogmb");
+    fs::write(
+        &source,
+        include_str!("../../../tests/typescript/fixtures/tsx-type-erasure.tsx"),
+    )
+    .expect("write TSX source");
+
+    let compiled = compile(&source, &artifact, None);
+    assert!(
+        compiled.status.success(),
+        "TSX type-erasure compile failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let executed = cli(&["run", artifact.to_str().expect("UTF-8 path")]);
+    assert!(
+        executed.status.success(),
+        "TSX Runtime execution failed: {}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&executed.stdout).expect("run JSON");
+    assert_eq!(result["exports"]["marker"].as_f64(), Some(7.0));
+}
+
+#[test]
+fn unsupported_typescript_runtime_syntax_fails_with_stable_diagnostic_codes() {
+    let cases = [
+        (
+            "unsupported-enum.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-enum.ts"),
+            "typescript.enum_runtime_not_supported",
+            "1:1",
+        ),
+        (
+            "unsupported-namespace.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-namespace.ts"),
+            "typescript.namespace_runtime_not_supported",
+            "1:1",
+        ),
+        (
+            "unsupported-parameter-property.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-parameter-property.ts"),
+            "typescript.parameter_property_not_supported",
+            "1:25",
+        ),
+        (
+            "unsupported-decorator.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-decorator.ts"),
+            "typescript.decorators_not_supported",
+            "1:1",
+        ),
+        (
+            "unsupported-jsx.tsx",
+            include_str!("../../../tests/typescript/fixtures/unsupported-jsx.tsx"),
+            "typescript.jsx_requires_external_transform",
+            "1:14",
+        ),
+        (
+            "unsupported-import-equals.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-import-equals.ts"),
+            "typescript.import_equals_not_supported",
+            "1:1",
+        ),
+        (
+            "unsupported-export-assignment.ts",
+            include_str!("../../../tests/typescript/fixtures/unsupported-export-assignment.ts"),
+            "typescript.export_assignment_not_supported",
+            "2:1",
+        ),
+    ];
+    for (name, contents, expected_code, expected_position) in cases {
+        let directory = TestDirectory::new();
+        let source = directory.path().join(name);
+        let artifact = directory.path().join("rejected.ogmb");
+        fs::write(&source, contents).expect("write unsupported fixture");
+        let result = compile(&source, &artifact, None);
+        assert_eq!(
+            result.status.code(),
+            Some(4),
+            "{name} should fail as a source compilation error: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains(expected_code),
+            "{name}: missing {expected_code}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(":{expected_position}: error")),
+            "{name}: expected source location {expected_position}: {stderr}"
+        );
+        assert!(
+            !artifact.exists(),
+            "{name}: rejected source must not leave an artifact"
+        );
+    }
+}
+
+#[test]
+fn declaration_files_are_not_executable_compile_inputs() {
+    let directory = TestDirectory::new();
+    for extension in ["d.ts", "d.mts", "d.cts"] {
+        let source = directory.path().join(format!("types.{extension}"));
+        let artifact = directory.path().join(format!("types-{extension}.ogmb"));
+        fs::write(&source, "export interface Shape { value: number }\\n")
+            .expect("write declaration file");
+
+        let result = compile(&source, &artifact, None);
+        assert!(
+            !result.status.success(),
+            "{extension} must not compile as an executable entry point"
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("declaration files"),
+            "{extension}: missing declaration-file rejection diagnostic"
+        );
+        assert!(
+            !artifact.exists(),
+            "{extension}: declaration input must not produce an artifact"
+        );
+    }
+}

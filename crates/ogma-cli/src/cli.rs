@@ -1,7 +1,7 @@
 //! Command parsing and stable process exit-code handling.
 
 use crate::artifact::{artifact_report, read_artifact, read_unit, verify_artifact};
-use crate::compiler::{CompileOptions, SourceGoal, compile_file};
+use crate::compiler::{CompileOptions, SourceGoal, SourceLanguage, compile_file};
 use crate::runner::{RunOptions, run_artifact};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -14,15 +14,15 @@ pub(crate) const EXIT_ARTIFACT: u8 = 5;
 pub(crate) const EXIT_RUNTIME: u8 = 6;
 pub(crate) const EXIT_INTERRUPTED: u8 = 7;
 
-const HELP: &str = r#"Ogma M1 command-line tool
+const HELP: &str = r#"Ogma command-line tool
 
 USAGE:
-  ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]
+  ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]
   ogma inspect <program.ogmb>
   ogma run <program.ogmb> [resource options]
 
 COMMANDS:
-  compile   Compile JavaScript through the production frontend/compiler to verified OGMB v1.
+  compile   Compile JavaScript or the pinned TypeScript subset through the production frontend/compiler to verified OGMB v1.
   inspect   Validate and display OGMB container, function and source/debug metadata.
   run       Verify persisted OGMB and execute it through the production Runtime/interpreter.
 
@@ -30,7 +30,8 @@ COMPILE OPTIONS:
   -o, --output <file>   Output portable bytecode artifact (required).
   --module              Parse source using the ECMAScript Module goal.
   --script              Parse source using the Script goal.
-  .mjs defaults to --module; .js defaults to --script.
+  .mjs/.ts/.tsx default to --module; .js defaults to --script.
+  TypeScript types are erased; TSX JSX must be lowered by the consumer build tool first.
 
 RUN RESOURCE OPTIONS:
   --heap-bytes <n>      Aggregate managed Runtime heap quota in bytes.
@@ -49,11 +50,11 @@ EXIT CODES:
   6 JavaScript exception or Runtime execution failure
   7 cancellation, deadline, fuel, stack, call-depth or job-budget interruption
 
-M1 LIMITS:
-  Only the implemented M1 JavaScript subset and static ESM profile are supported.
-  ESM imports must use explicit relative .js/.mjs paths within the entry directory.
-  There is no Node.js package.json, CommonJS or package-manager resolution.
-  TypeScript/TSX, REPL, test runner and native AOT commands belong to later milestones.
+CURRENT LIMITS:
+  Only the implemented JavaScript/Core IR subset and the pinned TypeScript type-erasure profile are supported.
+  ESM imports must use explicit relative .js/.mjs paths within the entry directory; package resolution belongs to OGM-59.
+  There is no Node.js package.json or CommonJS resolution. JSX, decorators, runtime enums/namespaces and TS parameter properties are rejected.
+  REPL, test runner and native AOT commands belong to later milestones.
 "#;
 
 pub(crate) fn run(args: Vec<String>) -> u8 {
@@ -79,7 +80,9 @@ pub(crate) fn run(args: Vec<String>) -> u8 {
 
 fn compile_command(args: &[String]) -> u8 {
     if args == ["--help"] || args == ["-h"] {
-        println!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]");
+        println!(
+            "ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]"
+        );
         return EXIT_SUCCESS;
     }
     let parsed = match parse_compile_args(args) {
@@ -118,7 +121,9 @@ fn compile_command(args: &[String]) -> u8 {
 
 fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     if args == ["--help"] || args == ["-h"] {
-        println!("ogma compile <source.js|source.mjs> -o <program.ogmb> [--module|--script]");
+        println!(
+            "ogma compile <source.js|source.mjs|source.ts|source.tsx> -o <program.ogmb> [--module|--script]"
+        );
         return Err(String::new());
     }
     let mut source = None;
@@ -162,20 +167,28 @@ fn parse_compile_args(args: &[String]) -> Result<CompileOptions, String> {
     if output.extension().and_then(|value| value.to_str()) != Some("ogmb") {
         return Err("compile output must use the .ogmb extension".to_owned());
     }
-    let inferred_goal = match source.extension().and_then(|value| value.to_str()) {
-        Some("mjs") => SourceGoal::Module,
-        Some("js") => SourceGoal::Script,
-        Some("ts" | "tsx") => {
-            return Err(
-                "TypeScript/TSX compilation is not part of M1; use JavaScript input".to_owned(),
-            );
-        }
-        _ => return Err("M1 compile input must have a .js or .mjs extension".to_owned()),
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if [".d.ts", ".d.mts", ".d.cts"]
+        .iter()
+        .any(|suffix| file_name.ends_with(suffix))
+    {
+        return Err("TypeScript declaration files do not produce executable output".to_owned());
+    }
+    let (inferred_goal, language) = match source.extension().and_then(|value| value.to_str()) {
+        Some("mjs") => (SourceGoal::Module, SourceLanguage::JavaScript),
+        Some("js") => (SourceGoal::Script, SourceLanguage::JavaScript),
+        Some("ts") => (SourceGoal::Module, SourceLanguage::TypeScript),
+        Some("tsx") => (SourceGoal::Module, SourceLanguage::TypeScriptJsx),
+        _ => return Err("compile input must use .js, .mjs, .ts or .tsx".to_owned()),
     };
     Ok(CompileOptions {
         source,
         output,
         goal: goal.unwrap_or(inferred_goal),
+        language,
     })
 }
 
@@ -413,10 +426,37 @@ mod tests {
     }
 
     #[test]
-    fn compile_rejects_typescript_and_conflicting_goals() {
+    fn compile_accepts_typescript_and_rejects_conflicting_goals() {
+        let ts = parse_compile_args(&[
+            "sample.ts".to_owned(),
+            "-o".to_owned(),
+            "out.ogmb".to_owned(),
+        ])
+        .expect("TypeScript input");
+        assert_eq!(ts.goal, SourceGoal::Module);
+        assert_eq!(ts.language, SourceLanguage::TypeScript);
+
+        let tsx = parse_compile_args(&[
+            "sample.tsx".to_owned(),
+            "-o".to_owned(),
+            "out.ogmb".to_owned(),
+        ])
+        .expect("TSX input");
+        assert_eq!(tsx.goal, SourceGoal::Module);
+        assert_eq!(tsx.language, SourceLanguage::TypeScriptJsx);
+
+        let script = parse_compile_args(&[
+            "sample.ts".to_owned(),
+            "-o".to_owned(),
+            "out.ogmb".to_owned(),
+            "--script".to_owned(),
+        ])
+        .expect("explicit TypeScript Script goal");
+        assert_eq!(script.goal, SourceGoal::Script);
+
         assert!(
             parse_compile_args(&[
-                "sample.ts".to_owned(),
+                "types.d.ts".to_owned(),
                 "-o".to_owned(),
                 "out.ogmb".to_owned(),
             ])

@@ -18,7 +18,8 @@ oxc_diagnostics = "=0.158.0"
 oxc_parser = { version = "=0.158.0", default-features = true }
 oxc_semantic = "=0.158.0"
 oxc_span = "=0.158.0"
-oxc_syntax = "=0.158.0"
+oxc_syntax = { version = "=0.158.0", features = ["to_js_string"] }
+oxc_transformer = "=0.158.0"
 serde_json = "1.0"
 
 [lints]
